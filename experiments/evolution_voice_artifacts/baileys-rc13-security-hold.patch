@@ -1,58 +1,94 @@
 diff --git a/Docker/scripts/deploy_database.sh b/Docker/scripts/deploy_database.sh
-index fea58ff..202bedd 100755
+index fea58ff..c972382 100755
 --- a/Docker/scripts/deploy_database.sh
 +++ b/Docker/scripts/deploy_database.sh
-@@ -9,7 +9,6 @@ fi
+@@ -6,20 +6,22 @@ if [ "$DOCKER_ENV" != "true" ]; then
+     export_env_vars
+ fi
+ 
++node scripts/validate-db-config.cjs || exit 1
++
  if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" || "$DATABASE_PROVIDER" == "psql_bouncer" ]]; then
-     export DATABASE_URL
+-    export DATABASE_URL
      echo "Deploying migrations for $DATABASE_PROVIDER"
 -    echo "Database URL: $DATABASE_URL"
      # rm -rf ./prisma/migrations
      # cp -r ./prisma/$DATABASE_PROVIDER-migrations ./prisma/migrations
-     npm run db:deploy
-diff --git a/Docker/scripts/generate_database.sh b/Docker/scripts/generate_database.sh
-index 248c6cf..07140cb 100644
---- a/Docker/scripts/generate_database.sh
-+++ b/Docker/scripts/generate_database.sh
-@@ -9,7 +9,6 @@ fi
- if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" || "$DATABASE_PROVIDER" == "psql_bouncer" ]]; then
-     export DATABASE_URL
-     echo "Generating database for $DATABASE_PROVIDER"
--    echo "Database URL: $DATABASE_URL"
-     npm run db:generate
+-    npm run db:deploy
++    # Prisma/child tools may echo connection details on failure. Until a
++    # reviewed redactor exists, never forward their output to service logs.
++    npm run db:deploy >/dev/null 2>&1
+     if [ $? -ne 0 ]; then
+         echo "Migration failed"
+         exit 1
+     else
+         echo "Migration succeeded"
+     fi
+-    npm run db:generate
++    npm run db:generate >/dev/null 2>&1
      if [ $? -ne 0 ]; then
          echo "Prisma generate failed"
-@@ -20,4 +19,4 @@ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" ||
+         exit 1
+@@ -27,6 +29,6 @@ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" ||
+         echo "Prisma generate succeeded"
+     fi
  else
-     echo "Error: Database provider $DATABASE_PROVIDER invalid."
+-    echo "Error: Database provider $DATABASE_PROVIDER invalid."
++    echo "Invalid database configuration; migrations not started." >&2
+     exit 1
+ fi
+diff --git a/Docker/scripts/generate_database.sh b/Docker/scripts/generate_database.sh
+index 248c6cf..1b2c1e1 100644
+--- a/Docker/scripts/generate_database.sh
++++ b/Docker/scripts/generate_database.sh
+@@ -7,10 +7,8 @@ if [ "$DOCKER_ENV" != "true" ]; then
+ fi
+ 
+ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" || "$DATABASE_PROVIDER" == "psql_bouncer" ]]; then
+-    export DATABASE_URL
+     echo "Generating database for $DATABASE_PROVIDER"
+-    echo "Database URL: $DATABASE_URL"
+-    npm run db:generate
++    npm run db:generate >/dev/null 2>&1
+     if [ $? -ne 0 ]; then
+         echo "Prisma generate failed"
+         exit 1
+@@ -18,6 +16,6 @@ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" ||
+         echo "Prisma generate succeeded"
+     fi
+ else
+-    echo "Error: Database provider $DATABASE_PROVIDER invalid."
++    echo "Invalid database configuration." >&2
      exit 1
 -fi
 \ No newline at end of file
 +fi
 diff --git a/Dockerfile b/Dockerfile
-index 24c4e3b..81f3948 100644
+index 24c4e3b..758b778 100644
 --- a/Dockerfile
 +++ b/Dockerfile
-@@ -12,8 +12,10 @@ WORKDIR /evolution
+@@ -12,8 +12,11 @@ WORKDIR /evolution
  COPY ./package*.json ./
  COPY ./tsconfig.json ./
  COPY ./tsup.config.ts ./
 +COPY ./scripts/patch-baileys-curve.cjs ./scripts/patch-baileys-curve.cjs
++COPY ./scripts/validate-db-config.cjs ./scripts/validate-db-config.cjs
  
  RUN npm ci --silent
 +RUN node scripts/patch-baileys-curve.cjs --apply
  
  COPY ./src ./src
  COPY ./public ./public
-@@ -42,6 +44,7 @@ WORKDIR /evolution
+@@ -42,6 +45,8 @@ WORKDIR /evolution
  
  COPY --from=builder /evolution/package.json ./package.json
  COPY --from=builder /evolution/package-lock.json ./package-lock.json
 +COPY --from=builder /evolution/scripts/patch-baileys-curve.cjs ./scripts/patch-baileys-curve.cjs
++COPY --from=builder /evolution/scripts/validate-db-config.cjs ./scripts/validate-db-config.cjs
  
  COPY --from=builder /evolution/node_modules ./node_modules
  COPY --from=builder /evolution/dist ./dist
-@@ -57,4 +60,4 @@ ENV DOCKER_ENV=true
+@@ -57,4 +62,4 @@ ENV DOCKER_ENV=true
  
  EXPOSE 8080
  
@@ -146,10 +182,10 @@ index 0000000..591e8fe
 +tests and independent security review remain necessary before a release.
 diff --git a/compat-tests/SECURITY_ASSESSMENT.md b/compat-tests/SECURITY_ASSESSMENT.md
 new file mode 100644
-index 0000000..bd15365
+index 0000000..3b76c11
 --- /dev/null
 +++ b/compat-tests/SECURITY_ASSESSMENT.md
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,101 @@
 +# Bounded security assessment — local review only
 +
 +As of 2026-11-03 this is not an approved production change. Findings are
@@ -195,10 +231,32 @@ index 0000000..bd15365
 +No environment values or production logs were read. It is not established
 +whether the variable was populated, printed in any actual run or exposed.
 +
++Current Railway metadata lists the service variable names `DATABASE_PROVIDER`
++and `DATABASE_CONNECTION_URI`, but not `DATABASE_URL`; this is not an exhaustive
++proof of a running process environment. In the pinned public image metadata,
++the name `DOCKER_ENV` exists while `DATABASE_PROVIDER`, `DATABASE_URL` and
++`DATABASE_CONNECTION_URI` do not. Only names, not values, were inspected.
++The image script contains a bare `export DATABASE_URL`, not an assignment from
++`DATABASE_CONNECTION_URI`, and its echo precedes `npm run db:deploy` (where
++`runWithProvider` later invokes dotenv in a child). The shell helper reads an
++environment file only when `DOCKER_ENV` is not `true`. The live value and actual
++branch are unknown. Railway service metadata showed no explicit start-command
++override; that is not proof of the live process invocation. Available local
++Railway SSH credentials were absent; no access was created and no SSH attempt,
++production environment read or log read was made.
++
 +This local candidate moves the integrity guard before the migration step and
-+removes DATABASE_URL echo from both local build and deploy scripts. A synthetic
++removes DATABASE_URL echo from both local build and deploy scripts. It validates
++the provider and minimal expected connection URI scheme before migration,
++without printing inputs, then suppresses migration/generation child stdout and
++stderr to avoid accidentally forwarding connection strings to service logs. This
++deliberately trades detailed migration diagnostics for confidentiality; it is not
++a complete audit of third-party telemetry or every logging destination. The
++validation does not prove a database target, schema or migration is safe. Synthetic
 +entrypoint test uses fake migration/start commands and confirms an invalid guard
-+prevents both. This does not repair the deployed image, investigate actual logs,
++prevents both; separate fake npm tests ensure malformed config starts no migration
++and a synthetic URI printed by a failing child is not emitted. This does not
++repair the deployed image, investigate actual logs,
 +rotate credentials, or authorize any production action.
 +
 +## Bounded next steps and decision required
@@ -383,6 +441,49 @@ index 0000000..d02ab77
 +const tampered=Buffer.from(previousSignature);tampered[0]^=1;
 +assert.equal(next.Curve.verify(a.public,material,tampered),false);
 +console.log('PASS synthetic rc9 ↔ rc13 HKDF, md5, ECDH and signatures');
+diff --git a/compat-tests/db-logging-guard.test.cjs b/compat-tests/db-logging-guard.test.cjs
+new file mode 100644
+index 0000000..7e77e27
+--- /dev/null
++++ b/compat-tests/db-logging-guard.test.cjs
+@@ -0,0 +1,37 @@
++// All configuration, commands and credentials below are synthetic.
++const {test}=require('node:test');
++const assert=require('node:assert/strict');
++const fs=require('node:fs');
++const os=require('node:os');
++const path=require('node:path');
++const {spawnSync}=require('node:child_process');
++
++test('database preflight and quiet migration do not print synthetic secrets or run on invalid input',()=>{
++  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'voice-db-guard-'));
++  try{
++    for(const sub of ['Docker/scripts','scripts','bin'])fs.mkdirSync(path.join(dir,sub),{recursive:true});
++    for(const file of ['Docker/scripts/deploy_database.sh','Docker/scripts/env_functions.sh','scripts/validate-db-config.cjs'])
++      fs.copyFileSync(file,path.join(dir,file));
++    const fake=path.join(dir,'bin/npm');
++    fs.writeFileSync(fake,'#!/bin/sh\nprintf "%s\\n" "$2" >> "$TEST_MARKER"\nprintf "fake sensitive output: %s\\n" "$DATABASE_CONNECTION_URI"\nprintf "fake sensitive error: %s\\n" "$DATABASE_URL" >&2\nexit "${TEST_NPM_STATUS:-0}"\n');
++    fs.chmodSync(fake,0o755);
++    const marker=path.join(dir,'marker'),canary='synthetic-secret-canary',uri='postgresql://'+canary+'@localhost/synthetic';
++    const run=overrides=>spawnSync('/bin/bash',['Docker/scripts/deploy_database.sh'],{cwd:dir,encoding:'utf8',
++      env:{PATH:path.join(dir,'bin')+path.delimiter+process.env.PATH,DOCKER_ENV:'true',TEST_MARKER:marker,
++        DATABASE_PROVIDER:'postgresql',DATABASE_CONNECTION_URI:uri,DATABASE_URL:canary,...overrides}});
++    for(const invalid of [{DATABASE_PROVIDER:canary},{DATABASE_CONNECTION_URI:''},{DATABASE_CONNECTION_URI:'mysql://'+canary},
++      {DATABASE_CONNECTION_URI:uri+'\n'+canary}]){
++      const out=run(invalid);assert.notEqual(out.status,0);assert.doesNotMatch(out.stdout+out.stderr,/synthetic-secret-canary/);
++      assert.equal(fs.existsSync(marker),false,'invalid input must not execute migration');
++    }
++    let out=run({});assert.equal(out.status,0,out.stderr);assert.doesNotMatch(out.stdout+out.stderr,/synthetic-secret-canary/);
++    assert.equal(fs.readFileSync(marker,'utf8'),'db:deploy\ndb:generate\n');
++    for(const [provider,connection] of [['mysql','mysql://'+canary+'@localhost/synthetic'],['psql_bouncer',uri]]){
++      fs.rmSync(marker);out=run({DATABASE_PROVIDER:provider,DATABASE_CONNECTION_URI:connection});
++      assert.equal(out.status,0,out.stderr);assert.doesNotMatch(out.stdout+out.stderr,/synthetic-secret-canary/);
++      assert.equal(fs.readFileSync(marker,'utf8'),'db:deploy\ndb:generate\n');
++    }
++    fs.rmSync(marker);out=run({TEST_NPM_STATUS:'1'});assert.notEqual(out.status,0);assert.doesNotMatch(out.stdout+out.stderr,/synthetic-secret-canary/);
++    assert.equal(fs.readFileSync(marker,'utf8'),'db:deploy\n');
++  }finally{fs.rmSync(dir,{recursive:true,force:true});}
++});
 diff --git a/compat-tests/patch-guard.test.cjs b/compat-tests/patch-guard.test.cjs
 new file mode 100644
 index 0000000..9659f84
@@ -2041,3 +2142,19 @@ index 0000000..6e981a0
 +const result = source.replace(before, after);
 +if (hash(result) !== patched) throw Error('invalid_baileys_curve_patch');
 +fs.writeFileSync(file, result);
+diff --git a/scripts/validate-db-config.cjs b/scripts/validate-db-config.cjs
+new file mode 100644
+index 0000000..d2fe031
+--- /dev/null
++++ b/scripts/validate-db-config.cjs
+@@ -0,0 +1,10 @@
++// Validate only the minimum needed before migrations. Never log input values.
++const provider=process.env.DATABASE_PROVIDER;
++const uri=process.env.DATABASE_CONNECTION_URI;
++const postgres=provider==='postgresql'||provider==='psql_bouncer';
++const mysql=provider==='mysql';
++const scheme=postgres?/^postgres(?:ql)?:\/\/\S+$/i:mysql?/^mysql:\/\/\S+$/i:null;
++if(!scheme || typeof uri!=='string' || uri.length>8192 || /[\x00-\x1f\x7f]/.test(uri) || !scheme.test(uri)){
++  process.stderr.write('Invalid database configuration; migrations not started.\n');
++  process.exit(1);
++}

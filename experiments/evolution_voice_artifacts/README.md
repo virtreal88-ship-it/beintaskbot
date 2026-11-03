@@ -9,10 +9,12 @@ and this branch does not alter Evolution or any production service.
   the scoped reserved-ID experiment, offline tests and deployment/rollback
   plan. The actual correlation gate remains unconditionally disabled. Its
   synthetic bypass exists only in the test harness.
-* `baileys-rc13-security-hold.patch` corresponds to local commit `41b6190`.
+* `baileys-rc13-security-hold.patch` corresponds to local commit `38dbc69`.
   It updates dependencies and proposes an isolated check of Baileys signature
   verification. It also moves the guard before database operations and removes
-  database URL logging in the candidate. A separate `libsignal` initialization signature path remains
+  database URL logging in the candidate. It suppresses migration command
+  output, reducing diagnostics; this tradeoff needs review. The actual deployed
+  environment values and whether URL logging occurred remain unknown. A separate `libsignal` initialization signature path remains
   uncorrected, alternative startup can bypass the guard, and the full runtime
   image and real provider behavior have not been established. Do not deploy.
 
