@@ -41,7 +41,8 @@ class Store(unittest.TestCase):
         self.module=loaders.load('tenant_chat_history_store',{'_connect':self.connect,'ensure_schema':Mock(),
             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda _:self.policy},
             {'tenant_platform','tenant_chat_history_schema','tenant_policy'})
-        self.cur.fetchone.side_effect=[{**SESSION,'active':True,'tenant_status':'active'}, {'tenant_id':TENANT}]
+        self.cur.fetchone.side_effect=[{'ready':True},{'status':'active','modules':{}},
+            {**SESSION,'active':True}, {'tenant_id':TENANT}]
         self.cur.fetchall.return_value=[]
 
     def row(self, external):
@@ -74,14 +75,26 @@ class Store(unittest.TestCase):
 
     def test_inactive_membership_blocks_message_query(self):
         for profile in [None,{**SESSION,'active':False,'tenant_status':'active'},{**SESSION,'active':True,'tenant_status':'disabled'}]:
-            self.cur.fetchone.side_effect=[profile]
-            with self.assertRaises(TenantLinearError):self.module.page(SESSION,7)
-        self.cur.fetchall.assert_not_called()
+            self.cur.fetchone.side_effect=[{'ready':True},
+                {'status':profile.get('tenant_status','active') if profile else 'active','modules':{}},profile]
+            with self.assertRaises(TenantLinearError) as denied:self.module.page(SESSION,7)
+            self.assertEqual(denied.exception.status,403)
+        self.assertFalse(any('FROM saas_crm_messages' in call.args[0] for call in self.cur.execute.call_args_list))
 
     def test_deal_policy_denied_before_message_read(self):
         self.policy.can_access_deal.return_value=False
-        with self.assertRaises(TenantLinearError):self.module.page(SESSION,7)
-        self.cur.fetchall.assert_not_called()
+        with self.assertRaises(TenantLinearError) as denied:self.module.page(SESSION,7)
+        self.assertEqual(denied.exception.status,403)
+        self.assertFalse(any('FROM saas_crm_messages' in call.args[0] for call in self.cur.execute.call_args_list))
+
+    def test_missing_storage_fails_unavailable_without_schema_repair(self):
+        self.cur.fetchone.side_effect=[{'ready':False}]
+        with self.assertRaises(TenantLinearError) as unavailable:self.module.page(SESSION,7)
+        self.assertEqual(unavailable.exception.status,503)
+        self.module.ensure_schema.assert_not_called()
+        self.conn.commit.assert_not_called()
+        self.assertEqual(self.cur.execute.call_count,1)
+        self.assertIn('to_regclass',self.cur.execute.call_args.args[0])
 
     def test_invalid_cursor_limit_or_lead_before_database(self):
         for lead,cursor,size in [(0,'',120),(2**63,'',120),(7,'bad',120),(7,'',121),(7,'',0)]:
