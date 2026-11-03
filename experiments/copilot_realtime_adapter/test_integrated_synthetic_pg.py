@@ -64,7 +64,11 @@ class IntegratedSynthetic(RealVoiceAuthority):
         self.conn.rollback()
         self.conn.execute('''DROP TABLE IF EXISTS saas_voice_test_hold,saas_voice_test_session,saas_voice_test_grant,
           saas_ai_spend_reservations,saas_operator_copilot_threads,saas_ai_knowledge_sources,saas_ai_knowledge_chunks,
-          saas_knowledge_candidates,saas_knowledge_candidate_sources CASCADE''')
+          saas_knowledge_candidates,saas_knowledge_candidate_sources CASCADE;
+          DELETE FROM saas_crm_messages;
+          ALTER TABLE saas_crm_messages DROP COLUMN IF EXISTS kommo_lead_id,DROP COLUMN IF EXISTS external_id,
+            DROP COLUMN IF EXISTS direction,DROP COLUMN IF EXISTS body,DROP COLUMN IF EXISTS message_type,
+            DROP COLUMN IF EXISTS happened_at,DROP COLUMN IF EXISTS created_at''')
         self.conn.commit();super().tearDown()
 
     def scoped(self):
