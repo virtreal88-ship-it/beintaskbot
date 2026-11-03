@@ -15,6 +15,7 @@ from tenant_linear_policy import TenantLinearError
 # Deliberate code gate as well as disabled-by-default DB grant. There is no
 # environment variable or browser parameter that can make this true.
 ENFORCEMENT_VERIFIED = False
+RECONCILIATION_VERIFIED = False
 GRANT_KEY = 'voice-test-owner-5usd-2026'
 CAP = 5_000_000
 QUOTE = 'mini-2026-11-03-1resp-v1'
@@ -24,8 +25,15 @@ EXPIRES = datetime(2026, 11, 4, tzinfo=timezone.utc)
 
 
 def _ready():
-    if ENFORCEMENT_VERIFIED is not True:
+    if ENFORCEMENT_VERIFIED is not True or RECONCILIATION_VERIFIED is not True:
         raise TenantLinearError('voice_test_enforcement_unverified',409)
+
+
+def _ready_reconciliation():
+    # This independent gate needs trusted billing/identity verification. A kill
+    # switch for new dispatch must never block already verified reconciliation.
+    if RECONCILIATION_VERIFIED is not True:
+        raise TenantLinearError('voice_test_reconciliation_unverified',409)
 
 
 def _scope(value):
@@ -158,7 +166,7 @@ def claim(cur,scope):
 
 
 def mark_unknown(cur,scope):
-    _ready();s=_scope(scope)
+    _ready_reconciliation();s=_scope(scope)
     cur.execute("UPDATE saas_voice_test_hold SET state='unknown',updated_at=now() WHERE request_id=%s AND fingerprint=%s AND state='claimed' RETURNING *",
                 (s['request_id'],_fingerprint(s)))
     return cur.fetchone()
@@ -170,7 +178,7 @@ def note_actual(cur,scope,actual_microusd):
     Provider usage authentication and aggregation are not implemented here.
     An overrun freezes the grant but cannot undo already dispatched requests.
     """
-    _ready();s=_scope(scope)
+    _ready_reconciliation();s=_scope(scope)
     if type(actual_microusd) is not int or not 0<=actual_microusd<2**63:
         raise TenantLinearError('voice_test_usage_invalid',409)
     cur.execute('SELECT grant_key FROM saas_voice_test_grant WHERE grant_key=%s FOR UPDATE',(GRANT_KEY,))
@@ -181,9 +189,10 @@ def note_actual(cur,scope,actual_microusd):
     row=cur.fetchone()
     if not row:return None
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
-    cur.execute('''SELECT id FROM saas_ai_spend_reservations WHERE tenant_id=%s AND id=%s AND call_key=%s
-      AND kind='realtime_voice_test' AND model=%s AND reserved_microusd=%s AND state='unknown' FOR UPDATE''',
-      (s['tenant_id'],row['tenant_reservation_id'],'voice-test:'+s['request_id'],row['model'],row['reserved_microusd']))
+    cur.execute('''UPDATE saas_ai_spend_reservations SET reserved_microusd=GREATEST(reserved_microusd,%s)
+      WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_test' AND model=%s
+      AND reserved_microusd>=%s AND state='unknown' RETURNING id''',
+      (row['actual_microusd'],s['tenant_id'],row['tenant_reservation_id'],'voice-test:'+s['request_id'],row['model'],row['reserved_microusd']))
     tenant_valid=bool(cur.fetchone())
     if not tenant_valid or row['actual_microusd']>row['reserved_microusd']:
         cur.execute('UPDATE saas_voice_test_grant SET frozen=true WHERE grant_key=%s',(GRANT_KEY,))
@@ -195,7 +204,7 @@ def note_actual(cur,scope,actual_microusd):
 
 def cancel_before_claim(cur,scope):
     """Release both reservations atomically only while dispatch is impossible."""
-    _ready();s=_scope(scope)
+    _ready_reconciliation();s=_scope(scope)
     cur.execute('SELECT grant_key FROM saas_voice_test_grant WHERE grant_key=%s FOR UPDATE',(GRANT_KEY,))
     if not cur.fetchone(): raise TenantLinearError('voice_test_grant_missing',409)
     cur.execute("UPDATE saas_voice_test_hold SET state='released',updated_at=now() WHERE request_id=%s AND fingerprint=%s AND state='reserved' RETURNING *",
