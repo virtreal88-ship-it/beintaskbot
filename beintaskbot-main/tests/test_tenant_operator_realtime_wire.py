@@ -152,6 +152,22 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         await wire.open(self.snapshot,**self.options)
         self.assertTrue(wire.ready);self.assertEqual(wire.conversation_id,'synthetic-conversation')
 
+    async def test_foreign_conversation_announcement_never_becomes_ready(self):
+        for before_update in (True,False):
+            class ForeignConversation(Socket):
+                def __init__(self):super().__init__();self.announced=False
+                async def receive_json(self):
+                    context_sent=self.sent and self.sent[-1]['type']=='conversation.item.create'
+                    if self.sent and not self.announced and bool(context_sent)!=before_update:
+                        self.announced=True
+                        return {'type':'conversation.created','session_id':'foreign-session',
+                                'conversation':{'id':'synthetic-conversation'}}
+                    return await super().receive_json()
+            wire=SyntheticRealtimeWire(ForeignConversation(),Guard())
+            with self.assertRaisesRegex(ValueError,'provider_conversation_invalid'):
+                await wire.open(self.snapshot,**self.options)
+            self.assertFalse(wire.ready)
+
     async def test_live_factory_cannot_be_enabled(self):
         with self.assertRaises(TenantLinearError):create_production_provider()
         with self.assertRaises(ValueError):SyntheticRealtimeWire(object(),Guard())
