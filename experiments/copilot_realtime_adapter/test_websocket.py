@@ -65,5 +65,24 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
     def test_missing_security_dependencies_rejected(self):
         with self.assertRaises(ValueError): make_handler(allowed_origins={'*'},authenticate=None,build_session=None)
 
+    async def test_disconnect_is_read_while_provider_open_pending(self):
+        entered=asyncio.Event();cancelled=asyncio.Event();release=asyncio.Event()
+        async def slow(*args,**kwargs):
+            entered.set()
+            try:await release.wait()
+            except asyncio.CancelledError:cancelled.set();await release.wait()
+        self.provider.open=slow
+        ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
+        await asyncio.wait_for(entered.wait(),1);await ws.close()
+        await asyncio.wait_for(cancelled.wait(),1)
+        self.assertTrue(self.lease.held);self.assertFalse(self.provider.closed)
+        release.set()
+        await asyncio.sleep(.05)
+        # Handler cancellation may race the provider's cancelled open. If it
+        # cannot prove closure, it must keep the fence; never assert success.
+        self.assertTrue(self.provider.closed or self.lease.held)
+        if not self.lease.held:self.assertTrue(self.provider.closed)
+        self.assertEqual(self.ledger.events,[])
+
 
 if __name__=='__main__': unittest.main()

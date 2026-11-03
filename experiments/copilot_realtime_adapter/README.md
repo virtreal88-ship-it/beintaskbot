@@ -100,11 +100,12 @@ timer cancellation, revoked access handling, and proven teardown after process
 failure. aiohttp exists but the current Worker does not yet expose this path;
 Railway upgrade support has not been established. Client reconnect, playback
 completion, end-to-end barge-in, context handoff, and actual AI interaction
-are not implemented. In particular, `provider.open`/`send` can currently hang;
-`end()` does not fence in-progress startup and disconnect is not read during
-startup. `wait_for` cannot stop a dependency that suppresses cancellation.
-A cancellable opening state, independent disconnect watcher and further
-concurrency review are mandatory. Do not enable
+are not implemented. A startup stop now fences readiness, asks the mock open
+to cancel, and keeps the lease when open has not stopped; the websocket reads
+disconnect independently. If a dependency suppresses cancellation, this
+prototype cannot prove closure or automatically recover its retained lease.
+Real provider cancellation, process-crash recovery, lease expiry/fencing and
+further independent concurrency review remain mandatory. Do not enable
 or deploy this experiment as a feature.
 
 Official references: [Realtime speech conversations and interruption](https://developers.openai.com/api/docs/guides/realtime-conversations),

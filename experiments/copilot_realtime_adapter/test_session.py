@@ -285,5 +285,43 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('ended',[e['type'] for e in self.client.events])
         release.set();await asyncio.sleep(.01);self.assertTrue(self.lease.held)
 
+    async def test_stop_while_open_suppresses_cancel_never_shows_ready(self):
+        entered=asyncio.Event();release=asyncio.Event();cancelled=asyncio.Event();ledger=Ledger();lease=Lease();client=Client()
+        class Slow(Provider):
+            async def open(self,*args,**kwargs):
+                entered.set()
+                try:await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set();await release.wait()
+        provider=Slow(ledger)
+        s=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=ledger,lease=lease,context=Context(),provider=provider,client=client)
+        opening=asyncio.create_task(s.start());await entered.wait()
+        self.assertFalse(await s.end('disconnected'));await cancelled.wait()
+        self.assertTrue(lease.held);self.assertEqual(client.events,[])
+        release.set()
+        with self.assertRaises(Refused):await opening
+        self.assertEqual(client.events,[]);self.assertTrue(provider.closed);self.assertFalse(lease.held)
+
+    async def test_stop_before_late_lease_claim_never_opens_provider(self):
+        entered=asyncio.Event();release=asyncio.Event();ledger=Ledger();client=Client()
+        class SlowLease(Lease):
+            async def claim(self,scope):entered.set();await release.wait();return await super().claim(scope)
+        lease=SlowLease();provider=Provider(ledger)
+        s=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=ledger,lease=lease,context=Context(),provider=provider,client=client)
+        opening=asyncio.create_task(s.start());await entered.wait();self.assertFalse(await s.end('disconnected'))
+        release.set()
+        with self.assertRaises(Refused):await opening
+        self.assertFalse(lease.held);self.assertIsNone(provider.config);self.assertEqual(client.events,[])
+
+    async def test_revocation_during_open_prevents_ready(self):
+        entered=asyncio.Event();release=asyncio.Event();ledger=Ledger();lease=Lease();client=Client();auth=Authority()
+        class Slow(Provider):
+            async def open(self,*args,**kwargs):entered.set();await release.wait()
+        provider=Slow(ledger)
+        s=Session(('tenant',42,'channel','conversation'),authority=auth,ledger=ledger,lease=lease,context=Context(),provider=provider,client=client)
+        opening=asyncio.create_task(s.start());await entered.wait();auth.allowed=False;release.set()
+        with self.assertRaises(Refused):await opening
+        self.assertTrue(provider.closed);self.assertEqual(client.events,[]);self.assertFalse(lease.held)
+
 
 if __name__ == '__main__': unittest.main()

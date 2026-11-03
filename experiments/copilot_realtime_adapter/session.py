@@ -56,6 +56,9 @@ class Session:
         self.client_lock = asyncio.Lock()
         self.shutdown_timeout = .5
         self._end_task = None
+        self._opening = False
+        self._stop_requested = False
+        self._open_task = None
 
     async def _send_provider(self, event):
         async with self.io_lock:
@@ -70,38 +73,61 @@ class Session:
             await self.client.send(event)
 
     async def start(self):
-        if self.open_attempted:
+        if self.open_attempted or self._stop_requested:
             raise Refused('session_already_started')
         self.open_attempted = True
+        self._opening = True
         # These calls are deliberately abstract and must fail closed.  In
         # particular, reserve must be atomic across all voice-test executors.
-        await self.authority.check(self.scope, 'start')
-        snapshot = await self.context.read_authorized(self.scope)
-        if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
-            raise Refused('existing_copilot_context_unavailable')
         try:
+            await self.authority.check(self.scope, 'start')
+            if self._stop_requested: raise Refused('session_stopped_during_start')
+            snapshot = await self.context.read_authorized(self.scope)
+            if self._stop_requested: raise Refused('session_stopped_during_start')
+            if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
+                raise Refused('existing_copilot_context_unavailable')
             self.fence = await self.lease.claim(self.scope)
             if not self.fence:
                 raise Refused('session_already_active')
+            if self._stop_requested: raise Refused('session_stopped_during_start')
             await self.authority.check(self.scope, 'dispatch')
+            if self._stop_requested: raise Refused('session_stopped_during_start')
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
-            await asyncio.wait_for(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=True,
-                                                     transcription=False, reconnect=False), timeout=3)
+            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=True,
+                                                                    transcription=False, reconnect=False))
+            done, pending = await asyncio.wait({self._open_task}, timeout=3)
+            if pending:
+                self._open_task.cancel()
+                raise Refused('provider_open_timeout')
+            await self._open_task
+            if self._stop_requested: raise Refused('session_stopped_during_start')
+            await self.authority.check(self.scope, 'post_open')
+            await self.lease.assert_current(self.scope, self.fence)
+            if self._stop_requested: raise Refused('session_stopped_during_start')
             self.closed = False
             self.started = self.activity = time.monotonic()
             self.watchdog = asyncio.create_task(self._watch())
             await self._send_client({'type': 'ready'})
+            if self._stop_requested: raise Refused('session_stopped_during_start')
         except BaseException:
-            closed = False
-            try:
-                await asyncio.wait_for(self.provider.close(), timeout=2)
-                closed = True
-            except BaseException:
-                pass
-            if self.fence and closed:
-                await self.lease.release(self.scope, self.fence)
+            if self._open_task and not self._open_task.done():
+                self._open_task.cancel()
+                self._open_task.add_done_callback(self._consume_task)
+                # A cancellation-suppressing open may resurrect a connection.
+                # Keep the lease; an external reconciler must fence it.
+            elif not self.closed:
+                self._opening = False
+                await self.end('startup_failed')
+            elif self.fence:
+                # No open in flight. A failed or completed open must be
+                # closed and drained before releasing the acquired lease.
+                closed = not self._open_task or await self._bounded(self.provider.close(), self._drain(self.io_lock), self._drain(self.client_lock))
+                if closed:
+                    await self._bounded(self.lease.release(self.scope, self.fence))
             raise
+        finally:
+            self._opening = False
 
     @staticmethod
     def _check_receipt(receipt, scope, state):
@@ -305,6 +331,13 @@ class Session:
         # clients by default.  History integration is intentionally absent.
 
     async def end(self, reason):
+        self._stop_requested = True
+        if self._opening and self.closed:
+            if self._open_task and not self._open_task.done():
+                self._open_task.cancel()
+            # start() owns the eventual cleanup. Never release a lease or
+            # claim a confirmed end while its open may still be in flight.
+            return False
         if self._end_task is not None:
             return await asyncio.shield(self._end_task)
         if self.closed:
