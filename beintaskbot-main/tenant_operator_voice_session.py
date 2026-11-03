@@ -87,6 +87,11 @@ class Session:
         self.lock = asyncio.Lock()
         self.io_lock = asyncio.Lock()
         self.receive_lock = asyncio.Lock()
+        # Drain complete event handlers before releasing the distributed lease.
+        # receive_lock only protects the websocket read itself; the handler is
+        # intentionally run after that lock is released by the gateway.
+        self.provider_event_lock = asyncio.Lock()
+        self.client_event_lock = asyncio.Lock()
         self.client_lock = asyncio.Lock()
         self.shutdown_timeout = .5
         self._end_task = None
@@ -283,8 +288,14 @@ class Session:
             pass
 
     async def receive_client(self, event):
-        try:
+        # End is the operation that closes the session and waits for the other
+        # in-flight handlers. It must not hold client_event_lock while doing so.
+        if isinstance(event,dict) and event.get('type')=='end':
             await self._receive_client(event)
+            return
+        try:
+            async with self.client_event_lock:
+                await self._receive_client(event)
         except Exception:
             await self.end('client_or_authority_error')
             raise
@@ -298,6 +309,8 @@ class Session:
             return
         await self.authority.check(self.scope, 'input')
         await self.lease.assert_current(self.scope, self.fence)
+        if self.closed:
+            raise Refused('session_closed')
         if kind == 'mute' and set(event) == {'type', 'muted'} and type(event['muted']) is bool:
             async with self.lock:
                 self.muted = event['muted']
@@ -343,7 +356,8 @@ class Session:
 
     async def receive_provider(self, event):
         try:
-            await self._receive_provider(event)
+            async with self.provider_event_lock:
+                await self._receive_provider(event)
         except Exception:
             await self.end('provider_or_budget_error')
             raise
@@ -353,6 +367,8 @@ class Session:
             raise Refused('session_closed')
         await self.authority.check(self.scope, 'output')
         await self.lease.assert_current(self.scope, self.fence)
+        if self.closed:
+            raise Refused('session_closed')
         kind = event.get('type')
         if kind == 'input_audio_buffer.speech_started':
             async with self.lock:
@@ -646,6 +662,7 @@ class Session:
         # close and both drains are independent: close can unblock a running
         # send, but the lease remains held until *all* I/O is really drained.
         drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
+                                    self._drain(self.provider_event_lock),self._drain(self.client_event_lock),
                                     self._drain(self.client_lock),hold_unknown())
         async def terminal(event):
             async with self.client_lock:

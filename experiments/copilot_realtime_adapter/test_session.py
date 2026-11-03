@@ -424,9 +424,32 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             await original(scope,stage)
         self.auth.check=slow
         pending=asyncio.create_task(self.session.receive_client({'type':'audio','pcm':bytes(480)}))
-        await entered.wait();await self.session.end('user_end');release.set()
+        await entered.wait();closing=asyncio.create_task(self.session.end('user_end'))
+        await asyncio.sleep(.03)
+        self.assertTrue(self.lease.held)
+        self.assertFalse(closing.done())
+        release.set()
         with self.assertRaises(Refused): await pending
+        self.assertTrue(await closing)
         self.assertNotIn('input_audio_buffer.append',[item['type'] for item in self.provider.events])
+
+    async def test_shutdown_drains_inflight_provider_event_before_releasing_lease(self):
+        entered=asyncio.Event();release=asyncio.Event();original=self.auth.check
+        async def slow(scope,stage):
+            if stage=='output':entered.set();await release.wait()
+            await original(scope,stage)
+        self.auth.check=slow
+        self.session.response_inflight=True
+        pending=asyncio.create_task(self.session.receive_provider(
+            {'type':'response.created','response':{'id':'late-response'}}))
+        await entered.wait();closing=asyncio.create_task(self.session.end('user_end'))
+        await asyncio.sleep(.03)
+        self.assertTrue(self.lease.held)
+        self.assertFalse(closing.done())
+        release.set()
+        with self.assertRaises(Refused):await pending
+        self.assertTrue(await closing)
+        self.assertIsNone(self.session.provider_response_id)
 
     async def test_shutdown_drains_provider_send_before_releasing_lease(self):
         entered=asyncio.Event();release=asyncio.Event();original=self.provider.send
