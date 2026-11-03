@@ -81,7 +81,7 @@
           if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent='AI отвечает';}
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
-              if(done && version===generation)send({type:'played_all',item_id:event.item_id});
+              if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});
             }).catch(()=>{if(version===generation && !ending)void stop(playbackFailure);});
           }
           else if(event.type==='interrupt'){
@@ -109,7 +109,8 @@
     if(!channel){void stop(uncertain);return;}
     try{audio?.stopNow?.();}catch(_){}
     muted=true;ending=true;end.disabled=true;status.textContent='Завершение разговора…';
-    send({type:'end'});endTimer=setTimeout(()=>stop(uncertain),2000);
+    const endingVersion=generation;
+    send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
   });
   mute.addEventListener('click',()=>{
     if(!audio||!channel)return;

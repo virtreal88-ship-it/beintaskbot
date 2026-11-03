@@ -170,3 +170,13 @@ test('late send failure from previous session cannot stop a new one',async()=>{
   assert.equal(opens,2);assert.match(x.root.children[0].textContent,/Слушаю/);
   await x.view.stop();
 });
+
+test('playback completion after End does not send a late acknowledgement',async()=>{
+  let finish;const pending=new Promise(resolve=>{finish=resolve;});
+  const x=setup();await x.view.start();x.audio.finished=()=>pending;
+  await x.emit({type:'audio_done',item_id:'a'});
+  x.root.children[3].handlers.click();finish(true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(x.sent,[{type:'end'}]);
+  await x.emit({type:'end_unconfirmed'});
+});
