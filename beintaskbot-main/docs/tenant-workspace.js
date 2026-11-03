@@ -157,7 +157,24 @@
   };
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
-  document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
+  function applyBoardCatalog(profile) {
+    const projected = profile?.capabilities?.deal_board;
+    catalog = Array.isArray(projected) ? projected : [];
+    $('workspacePipeline').disabled = false;
+  }
+  function clearBoardCatalog() {
+    catalog = []; pipelineFilter = '';
+    const select = $('workspacePipeline'), all = select.options[0]?.cloneNode(true);
+    select.replaceChildren(...(all ? [all] : [])); select.value = ''; select.disabled = true;
+    // No refresh here: the following auth listener conceals/resets the lists.
+  }
+  document.addEventListener('tenant-profile', e => {applyBoardCatalog(e.detail);updateIcons();showSettings();refresh();});
+  document.addEventListener('tenant-auth-pending', clearBoardCatalog);
+  document.addEventListener('tenant-auth-invalid', clearBoardCatalog);
+  // /me may finish before this blocking asset loads. Hydrate only the board;
+  // retain the existing Settings effects exclusively on their original paths.
+  if (!document.documentElement.hasAttribute('data-tenant-panels-pending') && window.tenantProfileSnapshot) applyBoardCatalog(window.tenantProfileSnapshot);
+  else if (document.documentElement.hasAttribute('data-tenant-panels-pending')) clearBoardCatalog();
   document.addEventListener('tenant-staff-management-ready', () => {if(document.getElementById('staffManagement')?.closest('#view-settings')){section='employees';showSettings();}});
   document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');

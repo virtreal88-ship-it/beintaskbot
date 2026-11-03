@@ -381,6 +381,7 @@ def test_window_is_bounded_but_exact_old_object_is_not_lost(company_deal_lists,e
     ('ready',11,360,'ru'),('ready',181,390,'az'),('ready',182,768,'en'),('ready',184,1440,'ru'),
     ('company_states',185,390,'en'),('deal_states',181,390,'en'),
     ('tenant_late',188,390,'en'),('workflow_revoke',182,390,'en'),
+    ('catalog_profile_first',181,390,'az'),('catalog_workspace_first',181,390,'en'),
 ])
 def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists,monkeypatch,mode,actor,width,language):
     from tenant_web_assets import register_assets
@@ -418,11 +419,13 @@ def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists
             response=await handler(request)
             resource=next((key for key,path in paths.items() if request.path==path),None)
             exact=request.path.startswith(paths['company']+'/') or request.path.startswith(paths['native']+'/') or request.path=='/api/platform/crm/deal'
-            if resource or exact or request.path=='/api/platform/crm/chat':
+            if resource or exact or request.path in ('/api/platform/crm/chat','/api/platform/me'):
                 state['reads'].append(request.path_qs)
-                selected='card' if exact else resource
+                selected='profile' if request.path=='/api/platform/me' else 'card' if exact else resource
                 if state['hold'] is not None and state['hold']==selected:
-                    state['hold']=None
+                    # Hold every profile response in the controlled initial
+                    # loading window; all retain the actual handler body.
+                    if selected!='profile':state['hold']=None
                     held_id=uuid.uuid4().hex
                     streamed=web.StreamResponse(status=response.status,headers={**{key:value for key,value in response.headers.items() if key.lower()!='content-length'},'X-Isolated-CRM-Held':held_id})
                     await streamed.prepare(request)
@@ -464,7 +467,9 @@ def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists
                 response.set_cookie(COOKIE_NAME,token,httponly=True,samesite='Lax',path='/')
                 return response
             if command=='hold':state['hold']=request.query['resource'];state['release'].clear()
-            elif command=='release':state['release'].set()
+            elif command=='release':
+                if state['hold']=='profile':state['hold']=None
+                state['release'].set()
             elif command=='fault':state['fault']=request.query['resource']
             elif command=='restore':state['fault']=None
             elif command=='empty':
