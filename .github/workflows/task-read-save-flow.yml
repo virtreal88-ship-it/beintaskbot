@@ -1,0 +1,99 @@
+name: Task read and confirmed save regression
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/task-read-save-flow.yml'
+      - 'beintaskbot-main/*task*.py'
+      - 'beintaskbot-main/tenant_crm_request_context.py'
+      - 'beintaskbot-main/tenant_policy.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/*task*.js'
+      - 'beintaskbot-main/docs/tenant-crm-sync.js'
+      - 'beintaskbot-main/ui/src/**'
+      - 'beintaskbot-main/tests/*task*'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  task-read-save:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Select installed Chromium
+        run: |
+          node -e "const fs=require('node:fs');fs.appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Rebuild the production app bundle
+        run: |
+          npm ci --prefix ui
+          npm run build --prefix ui
+          git diff --exit-code -- docs/tenant-chakra-ui.js docs/tenant-chakra-ui.css
+      - name: PostgreSQL, current cookie HTTP and actual app task journeys
+        run: >-
+          python -m pytest -q -rs
+          tests/test_task_read_save_flow_postgres.py
+          tests/test_task_read_save_flow_bounds.py
+          tests/test_native_task_assignee_access.py
+          tests/test_crm_native_tasks.py
+          tests/test_crm_native_task_api.py
+          tests/test_tenant_task_api.py
+          tests/test_tenant_tasks.py
+          tests/test_task_assignment_no_move.py
+          tests/test_tenant_task_completion.py
+          tests/test_tenant_task_approvals.py
+          tests/test_tenant_task_decision.py
+          tests/test_tenant_web_routes.py
+      - name: Task states, interrupted saves and retained native task form
+        run: |
+          node tests/test_task_read_save_flow_ui.cjs
+          node tests/test_native_task_assignee_ui.cjs
+          node tests/test_native_task_assignee_browser.cjs
+          node tests/test_tenant_tasks_ui.cjs
+          node tests/test_tenant_task_completion_ui.cjs
+          node tests/test_tenant_task_approvals_ui.cjs
+          node tests/test_task_dates_modal.cjs
+      - name: Retained contacts, employee navigation and confirmed manual draft
+        run: |
+          node tests/test_contacts_directory_ui.cjs
+          node tests/test_company_employees_entry_ui.cjs
+          node tests/test_employee_card_ui.cjs
+          node tests/test_tenant_crm_native_workflow_ui.cjs
+          node tests/test_tenant_crm_native_modal_ui.cjs
+          node tests/test_tenant_crm_sync_ui.cjs
+          node tests/test_app_loading_performance.cjs
+          node tests/test_tenant_app_syntax.cjs
+          node tests/test_operator_case_recovery_ui.cjs
+          node tests/case-deeplink-smoke.cjs

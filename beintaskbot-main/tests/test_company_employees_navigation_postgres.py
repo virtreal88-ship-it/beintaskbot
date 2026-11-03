@@ -308,12 +308,20 @@ def test_switching_real_company_cookies_keeps_same_actor_members_and_contacts_te
     ('revoked', 31, 390, 'ru'), ('tenant_switch', 37, 390, 'en'),
     ('actor_switch', 31, 390, 'ru'),
 ])
-def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, mode, actor, width, language):
+def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, monkeypatch, mode, actor, width, language):
     """Required built /app bridge; member/session/capability APIs stay real."""
     import tenant_crm_native_task_api as task_api
+    import tenant_task_api as external_task_api
+    import tenant_task_commands as task_commands
+    import tenant_task_flow as task_flow
     from tenant_web_assets import register_assets
 
     f = staff
+    # CRM02's common task entry reads real source capabilities before offering
+    # the existing native form. Keep this consumer on the same isolated DB as
+    # native task options; a generic empty /crm/tasks response is no longer a
+    # valid task API envelope. Shared staff/auth fixture imports stay unchanged.
+    monkeypatch.setattr(task_flow, '_connect', f['factory'])
     assert (ROOT / '.support-test-deps/node_modules/playwright').exists(), 'Required Chromium bridge dependency is missing'
     tokens = {name: f['session'].issue(tenant, identity) for name, tenant, identity in (
         ('initial', A, actor), ('company_b', B, 37), ('ordinary', A, 32))}
@@ -342,6 +350,15 @@ def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, 
 
         app = web.Application(middlewares=[read_only])
         auth, employee = _apis(f, origin)
+        task_reads = external_task_api.handlers(external_task_api.TaskApiContext(
+            member=f['session'].profile, policy=TenantPolicy,
+            sync_crm=f['forbidden'], list_tasks=f['forbidden'],
+            executor_profiles=f['forbidden'], list_deals=f['forbidden'],
+            create_task=f['forbidden'], complete_task=f['forbidden'],
+            approval_page=f['forbidden'], decide_approval=f['forbidden'],
+            crm_request=f['forbidden'], origin=origin,
+            platform_error=TenantPlatformError,
+            pending_error=task_commands.TaskCommandPending, logger=LOGGER))
 
         async def index(_request):
             return web.FileResponse(ROOT / 'docs/tenant-app.html')
@@ -403,7 +420,7 @@ def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, 
         async def unrelated_empty_read(request):
             # Only unrelated startup modules use empty fixture data. Current
             # session, employee listing and the task-link consumer stay real.
-            if any(part in request.path for part in ('/platform/me', '/platform/members', '/native/tasks')):
+            if any(part in request.path for part in ('/platform/me', '/platform/members', '/native/tasks', '/crm/tasks')):
                 raise web.HTTPNotFound()
             if request.path == '/api/platform/ai/dialogs':
                 return web.json_response({'success': True, 'result': {
@@ -419,6 +436,8 @@ def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, 
         app.router.add_get('/api/platform/members', employee_list)
         app.router.add_get('/api/platform/account', auth['account'])
         app.router.add_get('/api/platform/sessions', auth['sessions'])
+        app.router.add_get('/api/platform/crm/tasks', task_reads['tasks'])
+        app.router.add_get('/api/platform/crm/tasks/options', task_reads['options'])
         app.router.add_get('/api/platform/crm/native/tasks', task_api.handler(f['session'].profile, origin, LOGGER))
         app.router.add_get('/test/session', select_session)
         app.router.add_get('/test/hold-members', hold_members)

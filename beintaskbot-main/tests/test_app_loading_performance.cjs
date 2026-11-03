@@ -111,7 +111,8 @@ async function bootstrapTests(){
   const full={...profile,capabilities:{modules:{dialogs:true,tasks:true,deals:true,customers:true}}};
   requests[1].resolve(response(full));await settle();
   const paths=requests.slice(2).map(request=>request.url);
-  for(const expected of ['/api/platform/crm/tasks?refresh=1','/api/platform/crm/deals','/api/platform/crm/native/deals?options=1','/api/platform/crm/native/companies'])assert.ok(paths.includes(expected),`independent bootstrap started before any CRM response: ${expected}; got ${paths}`);
+  for(const expected of ['/api/platform/crm/tasks','/api/platform/crm/deals','/api/platform/crm/native/deals?options=1','/api/platform/crm/native/companies'])assert.ok(paths.includes(expected),`independent bootstrap started before any CRM response: ${expected}; got ${paths}`);
+  assert.equal(paths.some(value=>{const url=new URL(value,'https://fixture.test');return url.pathname==='/api/platform/crm/tasks'&&url.searchParams.has('refresh');}),false,'ordinary task bootstrap never enqueues provider synchronization');
   const nativeTaskOptions=paths.map(url=>new URL(url,'https://fixture.test')).filter(url=>url.pathname==='/api/platform/crm/native/tasks'&&url.searchParams.get('options')==='1');
   assert.equal(nativeTaskOptions.length,1,'native task options start independently before any CRM response');assert.equal(nativeTaskOptions[0].searchParams.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(nativeTaskOptions[0].searchParams.get('expected_user_id'),String(profile.member.telegram_id));
   assert.equal(paths.filter(url=>url==='/api/platform/crm/native/companies').length,1,'options and list join the same independent company read');

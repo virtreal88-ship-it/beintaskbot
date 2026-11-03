@@ -258,21 +258,33 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
 class TaskCommandStorageTests(unittest.TestCase):
     def test_advisory_lock_failure_closes_connection(self):
         from unittest.mock import MagicMock
-        conn=MagicMock();conn.cursor.return_value.__enter__.return_value.fetchone.return_value={'locked':False}
-        with patch.object(commands,'_connect',return_value=conn),patch.object(commands,'_ensure_schema'):
+        conn=MagicMock();conn.cursor.return_value.__enter__.return_value.fetchone.side_effect=[{'ready':True},{'locked':False}]
+        with patch.object(commands,'_connect',return_value=conn):
             with self.assertRaises(TaskCommandPending):TaskCommandStore('tenant',20,str(uuid.uuid4()),'hash')
         conn.close.assert_called_once();conn.commit.assert_not_called()
 
     def test_checkpoints_commit_without_dropping_session_lock(self):
         from unittest.mock import MagicMock
         conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
-        cur.fetchone.side_effect=[{'locked':True},{'fingerprint':'hash','state':{}}]
-        with patch.object(commands,'_connect',return_value=conn),patch.object(commands,'_ensure_schema'):
+        cur.fetchone.side_effect=[{'ready':True},{'locked':True},{'fingerprint':'hash','state':{}}]
+        with patch.object(commands,'_connect',return_value=conn):
             store=TaskCommandStore('tenant',20,str(uuid.uuid4()),'hash')
             store.save({'step':'task_creating'});store.close()
         self.assertEqual(conn.commit.call_count,2);conn.close.assert_called_once()
-        self.assertIn('pg_try_advisory_lock',cur.execute.call_args_list[0].args[0])
+        self.assertIn('to_regclass',cur.execute.call_args_list[0].args[0])
+        self.assertIn('pg_try_advisory_lock',cur.execute.call_args_list[1].args[0])
         self.assertFalse(any('unlock' in call.args[0] for call in cur.execute.call_args_list))
+
+    def test_missing_command_schema_fails_before_any_command_or_schema_write(self):
+        from unittest.mock import MagicMock
+        conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value={'ready':False}
+        with patch.object(commands,'_connect',return_value=conn),patch.object(commands,'_ensure_schema') as migrate:
+            with self.assertRaises(commands.TaskCommandUnavailable):
+                TaskCommandStore('tenant',20,str(uuid.uuid4()),'hash')
+        migrate.assert_not_called();conn.commit.assert_not_called();conn.close.assert_called_once()
+        self.assertEqual(len(cur.execute.call_args_list),1)
+        self.assertTrue(cur.execute.call_args.args[0].startswith('SELECT '))
 
 
 if __name__=='__main__':unittest.main()
