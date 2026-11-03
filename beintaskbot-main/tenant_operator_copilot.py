@@ -359,7 +359,23 @@ def _hash(command, *, media_selection_version='current-episode-v6-shared-media-c
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_rows=None):
+def _present_history_result(result,notice_version):
+    """Keep presentation capability out of the operation's idempotency hash.
+
+    Older clients cannot show the explicit cleared-history warning. Return a
+    terminal, non-replaying error without placing a warning inside a draft.
+    The completed receipt remains available to an upgraded client retrying
+    the *same* request ID; a fresh request would be a separate paid operation.
+    """
+    if (isinstance(result,dict) and result.get('history_status')=='cleared' and
+        not (type(notice_version) is int and notice_version==1)):
+        error=TenantLinearError('Контекст очищен во время ответа. Ответ не показан и не сохранён в истории. Обновите страницу; новый запрос может расходовать лимит.',409)
+        error.keep_request=True
+        raise error
+    return result
+
+
+def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_rows=None,*,history_schema_ready=None):
     thread_key=(tenant,actor,command['channel_id'],command['conversation_id'])
     cur.execute('''SELECT external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,channel,raw,
                           raw->'voice_transcription' AS voice_transcription
@@ -375,10 +391,17 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
     from tenant_media_evidence import annotate_rows
     annotate_rows(cur, tenant, rows)
-    cur.execute("SELECT turns,clear_revision,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
+    if history_schema_ready is None:
+        from tenant_operator_copilot_threads import revision_schema
+        history_schema_ready=revision_schema(cur)
+    if history_schema_ready:
+        cur.execute("SELECT turns,clear_revision,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
+    else:
+        cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE',thread_key)
     turns_row = cur.fetchone() or {}
-    command['_thread_clear_revision'] = turns_row.get('clear_revision', 0)
-    if type(command['_thread_clear_revision']) is not int or command['_thread_clear_revision'] < 0:
+    command['_thread_schema_version']=1 if history_schema_ready else 0
+    command['_thread_clear_revision'] = turns_row.get('clear_revision',0) if history_schema_ready else None
+    if history_schema_ready and (type(command['_thread_clear_revision']) is not int or command['_thread_clear_revision'] < 0):
         raise TenantLinearError('История AI недоступна.',503)
     # Some read-only consumers cannot scrub rows. Never provide expired text
     # to them even before the next normal writer performs retention cleanup.
@@ -551,6 +574,7 @@ def run(profile, data, *, consultation_reply_id=None):
         if consultation_reply_id is not None:raise TenantLinearError('Saved-only mode cannot replace consultation evidence.',409)
         from tenant_saved_only_copilot import execute
         return execute(profile,data)
+    notice_version=data.get('history_notice_version') if isinstance(data,dict) else None
     command = _clean(data)
     with _connect() as conn:
         ensure_schema(conn)
@@ -580,8 +604,10 @@ def run(profile, data, *, consultation_reply_id=None):
             thread_key = (tenant, actor, command['channel_id'], command['conversation_id'])
             if command['mode'] == 'clear':
                 _assigned_context(cur,tenant,command)
-                from tenant_operator_copilot_threads import clear
-                clear(cur,*thread_key)
+                from tenant_operator_copilot_threads import clear,revision_schema
+                if revision_schema(cur):clear(cur,*thread_key)
+                else:
+                    cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s',thread_key)
                 conn.commit()
                 return {'cleared': True, 'text': ''}
             from tenant_connect_identity import conflicted
@@ -649,7 +675,7 @@ def run(profile, data, *, consultation_reply_id=None):
                         except TenantLinearError as error:
                             error.keep_request=False
                             raise
-                    return existing['result']
+                    return _present_history_result(existing['result'],notice_version)
                 error = TenantLinearError('Результат предыдущего AI-запроса неизвестен; он не будет отправлен повторно.', 409)
                 error.keep_request = True
                 raise error
@@ -672,12 +698,18 @@ def run(profile, data, *, consultation_reply_id=None):
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
             # Scrub before snapshot so this request does not capture expired
             # context or invalidate its own generation after reading it.
-            from tenant_operator_copilot_threads import cleanup_expired
-            cleanup_expired(cur,tenant)
-            rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
+            from tenant_operator_copilot_threads import cleanup_expired,revision_schema
+            history_schema_ready=revision_schema(cur)
+            if history_schema_ready:cleanup_expired(cur,tenant)
+            rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None,history_schema_ready=history_schema_ready)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
+            if not history_schema_ready:
+                # A pre-expansion request keeps the original text cleanup and
+                # writer behavior. Voice gates remain closed until all such
+                # in-flight work and old workers are proven drained.
+                cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid",(tenant,))
 
         conn.commit()
     context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
@@ -729,7 +761,7 @@ def run(profile, data, *, consultation_reply_id=None):
         _finish(tenant,command,actor,None,turns,request,'')
         raise
     if manifest:result['media_coverage']=manifest.proof()
-    return result
+    return _present_history_result(result,notice_version)
 
 
 
@@ -767,26 +799,32 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending' RETURNING request_id",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))
             claimed_finish=cur.fetchone() is not None
-            if result is not None and status == 'completed' and not claimed_finish:
+            legacy_history=command.get('_thread_schema_version')==0
+            if result is not None and status == 'completed' and not claimed_finish and not legacy_history:
                 error=TenantLinearError('Статус AI-запроса изменился; результат не сохранён. Повторная отправка заблокирована.',409)
                 error.keep_request=True
                 raise error
-            if status == 'completed' and claimed_finish and not command.get('_consultation_evidence'):
+            if status == 'completed' and (claimed_finish or legacy_history) and not command.get('_consultation_evidence'):
                 from tenant_operator_copilot_threads import append,ThreadCleared
                 entries=[{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']},
                          {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}]
-                try:
-                    append(cur,tenant,actor,command['channel_id'],command['conversation_id'],
-                           command.get('_thread_clear_revision'),command['_agent_binding'],entries)
-                except ThreadCleared:
-                    # Return the generated answer, but never resurrect a
-                    # private thread the user cleared while it was running.
-                    # Persist the same explicit status in the idempotent
-                    # receipt so a retry cannot silently hide this outcome.
-                    result['history_status']='cleared'
-                    stored['history_status']='cleared'
-                    cur.execute("UPDATE saas_chat_ai_runs SET result=%s::jsonb WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='completed'",
-                                (json.dumps(stored,ensure_ascii=False),tenant,command['request_id']))
+                if legacy_history:
+                    legacy_turns=(turns+entries)[-20:]
+                    cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)
+                      VALUES(%s::uuid,%s,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
+                      DO UPDATE SET turns=EXCLUDED.turns,updated_at=now()''',
+                      (tenant,actor,command['channel_id'],command['conversation_id'],json.dumps(legacy_turns,ensure_ascii=False)))
+                else:
+                    try:
+                        append(cur,tenant,actor,command['channel_id'],command['conversation_id'],
+                               command.get('_thread_clear_revision'),command['_agent_binding'],entries)
+                    except ThreadCleared:
+                        # Preserve the response but report the missing history
+                        # atomically in both the returned value and receipt.
+                        result['history_status']='cleared'
+                        stored['history_status']='cleared'
+                        cur.execute("UPDATE saas_chat_ai_runs SET result=%s::jsonb WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='completed'",
+                                    (json.dumps(stored,ensure_ascii=False),tenant,command['request_id']))
         conn.commit()
     if result is not None and status != 'completed':
         raise TenantLinearError('Настройки или доступ изменились. Результат AI скрыт.', 409)

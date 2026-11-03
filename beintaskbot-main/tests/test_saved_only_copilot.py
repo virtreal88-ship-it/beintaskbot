@@ -84,6 +84,27 @@ def test_saved_only_filters_expired_thread_without_writing(saved,monkeypatch):
     http.assert_not_called();forbidden.assert_not_called()
 
 
+def test_saved_only_strict_schema_still_rejects_unrelated_notice_capability(saved):
+    _db,data,http,forbidden=saved
+    with pytest.raises(TenantLinearError):gate.preflight(PROFILE,{**data,'history_notice_version':1})
+    http.assert_not_called();forbidden.assert_not_called()
+
+
+def test_saved_only_preflight_remains_read_only_before_history_expansion(saved,monkeypatch):
+    db,data,http,forbidden=saved
+    db.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision');db.commit()
+    try:
+        sql=[];query=db.query
+        def recorded(statement,params=()):sql.append(statement);return query(statement,params)
+        monkeypatch.setattr(db,'query',recorded)
+        preview=gate.preflight(PROFILE,data)
+        assert preview['state']=='ready'
+        assert not any(statement.lstrip().upper().startswith(('CREATE ','ALTER ','INSERT ','UPDATE ','DELETE ')) for statement in sql)
+        http.assert_not_called();forbidden.assert_not_called()
+    finally:
+        db.rollback();db.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN clear_revision bigint NOT NULL DEFAULT 0');db.commit()
+
+
 def test_provider_unknown_never_replays_with_same_or_new_uuid(saved):
     import requests
     db,data,http,forbidden=saved;preview=gate.preflight(PROFILE,data)

@@ -7,10 +7,31 @@ row lock while waiting for an external provider.
 """
 import json
 import uuid
+from tenant_linear_policy import TenantLinearError
 
 
 class ThreadCleared(Exception):
     pass
+
+
+def revision_schema(cur):
+    """Absent means legacy; malformed schema refuses before a write.
+
+    The first SELECT takes AccessShare until transaction end so concurrent DDL
+    cannot invalidate the decision. Voice admission remains separately off.
+    """
+    cur.execute('SELECT 1 FROM saas_operator_copilot_threads LIMIT 0')
+    cur.execute('''SELECT a.atttypid='pg_catalog.int8'::regtype AS correct_type,
+      a.attnotnull,pg_get_expr(d.adbin,d.adrelid) AS default_expr
+      FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+      WHERE a.attrelid='saas_operator_copilot_threads'::regclass AND a.attname='clear_revision'
+        AND a.attnum>0 AND NOT a.attisdropped''')
+    row=cur.fetchone()
+    if row is None:return False
+    if (row.get('correct_type') is not True or row.get('attnotnull') is not True or
+        row.get('default_expr') not in ('0','0::bigint','(0)::bigint')):
+        raise TenantLinearError('Версия схемы истории AI несовместима.',503)
+    return True
 
 
 def _validated_entries(expected_binding, entries):

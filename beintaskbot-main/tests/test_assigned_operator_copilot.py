@@ -71,7 +71,7 @@ def test_private_employee_command_returns_text_without_sending_or_learning(ready
 def test_clear_during_generation_returns_answer_with_cached_history_warning(ready):
     from tenant_operator_copilot_threads import clear
     db,_other,generated,data=ready
-    data.update(mode='chat',prompt='Synthetic private question')
+    data.update(mode='chat',prompt='Synthetic private question',history_notice_version=1)
     def respond(*_args,**_kwargs):
         with db.cursor() as cur:clear(cur,A,11,CA,'client')
         db.commit()
@@ -83,6 +83,59 @@ def test_clear_during_generation_returns_answer_with_cached_history_warning(read
     assert copilot.run(PROFILE,data)==result
     assert generated.call_count==1
     assert db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]=={'turns':[],'clear_revision':1}
+
+
+@pytest.mark.parametrize('mode',['chat','reply'])
+def test_legacy_client_gets_terminal_error_and_upgraded_same_id_recovers_without_new_provider(ready,mode):
+    from tenant_operator_copilot_threads import clear
+    db,_other,generated,data=ready
+    data.update(mode=mode,prompt='Synthetic private question' if mode=='chat' else '')
+    def respond(*_args,**_kwargs):
+        with db.cursor() as cur:clear(cur,A,11,CA,'client')
+        db.commit()
+        return 'Synthetic answer for private draft',{'total_tokens':10}
+    generated.side_effect=respond
+    for capability in (None,True,'1',0,2,{'unexpected':1}):
+        payload={**data}
+        if capability is not None:payload['history_notice_version']=capability
+        with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,payload)
+        assert caught.value.status==409 and caught.value.keep_request is True
+        assert 'не сохранён' in str(caught.value)
+        assert 'Synthetic answer' not in str(caught.value)
+    assert generated.call_count==1
+    row=db.execute('SELECT status,result FROM saas_chat_ai_runs WHERE request_id=%s::uuid',(data['request_id'],))[0]
+    assert row['status']=='completed' and row['result']['history_status']=='cleared'
+    upgraded=copilot.run(PROFILE,{**data,'history_notice_version':1})
+    assert upgraded['text']=='Synthetic answer for private draft' and upgraded['history_status']=='cleared'
+    assert generated.call_count==1
+    assert copilot.run(PROFILE,{**data,'history_notice_version':1})==upgraded
+    assert generated.call_count==1
+    assert db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]=={'turns':[],'clear_revision':1}
+
+
+def test_recovery_rechecks_current_access_before_revealing_cached_answer(ready):
+    from tenant_operator_copilot_threads import clear
+    db,_other,generated,data=ready
+    data.update(mode='chat',prompt='Synthetic private question')
+    def respond(*_args,**_kwargs):
+        with db.cursor() as cur:clear(cur,A,11,CA,'client')
+        db.commit()
+        return 'Synthetic private answer',{'total_tokens':10}
+    generated.side_effect=respond
+    with pytest.raises(TenantLinearError) as first:copilot.run(PROFILE,data)
+    assert first.value.keep_request is True
+    db.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit()
+    with pytest.raises(TenantLinearError) as denied:copilot.run(PROFILE,{**data,'history_notice_version':1})
+    assert 'Synthetic private answer' not in str(denied.value)
+    assert generated.call_count==1
+
+
+def test_notice_capability_does_not_change_operation_hash(ready):
+    _db,_other,generated,data=ready
+    data.update(mode='chat',prompt='Synthetic question')
+    legacy=copilot.run(PROFILE,data)
+    assert copilot.run(PROFILE,{**data,'history_notice_version':1})==legacy
+    assert generated.call_count==1
 
 
 def test_expired_history_is_scrubbed_before_generation_and_new_reply_saved(ready):
@@ -105,7 +158,7 @@ def test_expired_history_is_scrubbed_before_generation_and_new_reply_saved(ready
 
 def test_history_expiring_during_generation_is_scrubbed_and_reported(ready):
     db,_other,generated,data=ready
-    data.update(mode='chat',prompt='Synthetic private question')
+    data.update(mode='chat',prompt='Synthetic private question',history_notice_version=1)
     with db.cursor() as cur:
         agent=copilot._assigned_context(cur,A,data)
     binding=copilot._agent_binding(agent)
@@ -121,6 +174,50 @@ def test_history_expiring_during_generation_is_scrubbed_and_reported(ready):
     assert db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]=={'turns':[],'clear_revision':1}
     assert copilot.run(PROFILE,data)==result and generated.call_count==1
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidates')[0]['n'] == 0
+
+
+def test_pre_expansion_text_and_clear_use_legacy_schema_without_failure(ready):
+    db,_other,generated,data=ready
+    db.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision');db.commit()
+    try:
+        data.update(mode='chat',prompt='Synthetic pre-expansion question')
+        first=copilot.run(PROFILE,data)
+        assert first['text'] and 'history_status' not in first
+        assert copilot.run(PROFILE,data)==first and generated.call_count==1
+        assert len(db.execute('SELECT turns FROM saas_operator_copilot_threads')[0]['turns'])==2
+        result=copilot.run(PROFILE,{**data,'mode':'clear'})
+        assert result['cleared'] is True
+        assert db.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads')[0]['n']==0
+    finally:
+        db.rollback();db.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN clear_revision bigint NOT NULL DEFAULT 0');db.commit()
+
+
+def test_pre_expansion_inflight_writer_is_still_legacy_after_expansion(ready):
+    db,_other,generated,data=ready
+    db.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision');db.commit()
+    try:
+        data.update(mode='chat',prompt='Synthetic in-flight question')
+        def respond(*_args,**_kwargs):
+            db.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN clear_revision bigint NOT NULL DEFAULT 0');db.commit()
+            return 'Synthetic answer',{'total_tokens':10}
+        generated.side_effect=respond
+        assert copilot.run(PROFILE,data)['text']=='Synthetic answer'
+        saved=db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]
+        assert saved['clear_revision']==0 and len(saved['turns'])==2
+    finally:
+        db.rollback();db.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS clear_revision bigint NOT NULL DEFAULT 0');db.commit()
+
+
+def test_malformed_history_column_refuses_before_generation(ready):
+    db,_other,generated,data=ready
+    db.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision')
+    db.execute("ALTER TABLE saas_operator_copilot_threads ADD COLUMN clear_revision text NOT NULL DEFAULT '0'");db.commit()
+    try:
+        with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+        assert caught.value.status==503
+        generated.assert_not_called()
+    finally:
+        db.rollback();db.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision');db.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN clear_revision bigint NOT NULL DEFAULT 0');db.commit()
 
 
 def test_no_assignment_blocks_generation_and_reservation(ready):
