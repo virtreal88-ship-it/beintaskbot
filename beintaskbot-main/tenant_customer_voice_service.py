@@ -162,10 +162,17 @@ def record_acceptance(session, item, receipt):
             status = receipt['delivery_state']
             if ranks.get(previous, 0) > ranks.get(status, 0):
                 status = previous
-            facts = {'source': 'connect', 'id': receipt['message_id'], 'connect_operation_id':receipt['operation_id'],
+            facts = {'source': 'connect', 'id': receipt['message_id'],
                      'externalMessageId': receipt['provider_message_id'],
                      'originClientMessageId': request_id, 'verified_employee_id': actor,
                      'voice_receipt_request_id': request_id, 'fromMe': True, 'status': status}
+            # Older Connect versions return the exact message ID but have no
+            # separate operation journal ID. Preserve compatibility without
+            # inventing an operation ID for those receipts.
+            operation_id=receipt.get('operation_id')
+            if isinstance(operation_id,str):
+                try:facts['connect_operation_id']=str(uuid.UUID(operation_id))
+                except ValueError:pass
             author = str(profile.get('display_name') or 'Operator')[:120]
             if existing:
                 cur.execute('''UPDATE saas_crm_messages SET author_name=%s,message_type='audio',raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb
