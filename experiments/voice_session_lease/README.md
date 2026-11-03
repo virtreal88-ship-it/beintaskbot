@@ -19,13 +19,31 @@ A DB transaction commits before `claim` returns its token.
 `assert_current` performs the existing Copilot authority checks, compares the
 full server-derived VoiceScope (including agent binding and configuration), and
 renews a live matching heartbeat with database wall clock. A *detected*
-authorization failure commits quarantine before returning an error; subsequent
-regrant cannot restart that observed-revoked session. An expiry prevents any
-later renewal but does **not** delete or release the row. Neither timeout,
+authorization failure attempts to commit quarantine before returning an error;
+if committed, subsequent regrant cannot restart that session. Any error,
+unknown commit or cancellation makes the individual adapter terminal in memory,
+preventing it from retrying the old fence. An observed expiry is committed as
+quarantine before returning denial, so a later wall-clock reversal cannot revive
+that committed state. An expiry does **not** delete or release the row. Neither timeout,
 crashed process, cancelled Python task, disconnect, local websocket closure nor
 a user-supplied statement is evidence that upstream compute or billing stopped.
 Consequently a lost session may block this employee's voice mode indefinitely.
 This is a safety limitation, not an acceptable finished UX.
+
+Local terminal state is not durable or distributed revocation. If quarantine
+rolls back, the record can remain active; a newly constructed adapter handed
+the original fence can renew it after access returns. A synthetic test explicitly
+reproduces this blocker. A gateway must end/fence on **any** error and never
+transfer or retry that capability, including across workers and restart. A
+future design needs durable independent fencing when the quarantine commit
+fails or is unknown, before enabling this feature.
+
+There is also a time-source limitation: an expiry which has not yet been
+observed and committed can appear unexpired if the database wall clock moves
+backward. This experiment has no durable monotonic-time service or independent
+process fence and cannot rule that out. The clock test modifies only the
+synthetic deadline to simulate the ordering after a backwards step; it does
+not change a host clock or establish fleet clock guarantees.
 
 The heartbeat is only a liveness hint: no DB write can stop an old worker in
 another process from directly using already acquired network resources. Each
@@ -35,6 +53,18 @@ revocation. Membership re-enabled before the next poll may not be observed at
 all. The actual authority checks and this lease do not provide the missing
 source-version/revocation linearization proof, remote cancellation or provider
 billing limit. Release must account for those independently.
+
+The current prototype gateway invokes `assert_current` on input and output
+events, and this adapter opens a DB connection and performs authorization and
+an UPDATE each time. At 1,024 input samples per 24 kHz frame this is roughly
+23.4 DB checks per second per active session before output events. This is a
+calculation from the capture frame size, not a production load measurement;
+buffering can alter the rate. It may harm existing AI and other workloads. No
+performance or capacity guarantee is claimed. Before integration, separately
+design and test bounded/coalesced heartbeats **and** an independently reviewed
+revocation fence with a specified maximum delay; simple caching would weaken
+revocation and has not been implemented. Measure under realistic concurrency
+against representative DB pools and verify behavior on loss of authority.
 
 `ServerLease` matches the prototype async `claim(scope)`,
 `assert_current(scope, fence)`, `release(scope, fence)` interface. The test-only

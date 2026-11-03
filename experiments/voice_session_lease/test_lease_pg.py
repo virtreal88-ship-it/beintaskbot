@@ -82,6 +82,18 @@ class LeasePostgres(RealVoiceAuthority):
             with self.scoped() as conn:
                 self.assertEqual(conn.execute('SELECT count(*) AS n FROM experiment_voice_session_lease').fetchone()['n'],1)
 
+    def test_observed_expiry_stays_quarantined_even_if_wall_clock_moves_back(self):
+        with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True):
+            fence=self.claim()
+            with self.scoped() as conn:conn.execute("UPDATE experiment_voice_session_lease SET heartbeat_until=clock_timestamp()-interval '1 second'")
+            with self.assertRaisesRegex(lease.LeaseUnavailable,'expired_or_unverified'):self.beat(fence)
+            # Equivalent ordering relation to a backwards clock step. This
+            # changes only a synthetic row, never host or database time.
+            with self.scoped() as conn:
+                state=conn.execute("UPDATE experiment_voice_session_lease SET heartbeat_until=clock_timestamp()+interval '1 hour' RETURNING state").fetchone()['state']
+            self.assertEqual(state,'quarantined')
+            with self.assertRaisesRegex(lease.LeaseUnavailable,'expired_or_unverified'):self.beat(fence)
+
     def test_heartbeat_waiting_on_lock_cannot_extend_expired_lease(self):
         with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True):
             fence=self.claim();started=threading.Event()
@@ -195,7 +207,36 @@ class LeasePostgres(RealVoiceAuthority):
                     if count:break
                     await asyncio.sleep(.01)
                 self.assertEqual(count,1)
-                with self.assertRaisesRegex(lease.LeaseUnavailable,'already_active_or_unverified'):
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
                     await adapter.claim(self.scope)
+                fresh=lease.ServerLease(self.profile,self.route,self.expected,str(uuid.uuid4()))
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'already_active_or_unverified'):
+                    await fresh.claim(self.scope)
         try:asyncio.run(run())
         finally:proceed.set()
+
+    def test_revocation_rollback_fences_adapter_but_not_a_recreated_adapter(self):
+        """The last assertion demonstrates an outstanding distributed gap."""
+        class RollbackConnection:
+            def __init__(self,conn):self.conn=conn
+            def __enter__(self):return self.conn
+            def __exit__(self,*_):
+                self.conn.rollback();self.conn.close()
+                raise RuntimeError('synthetic_commit_failure')
+        async def run():
+            with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(lease,'_connect',self.scoped):
+                sid=str(uuid.uuid4());adapter=lease.ServerLease(self.profile,self.route,self.expected,sid)
+                fence=await adapter.claim(self.scope)
+                with self.scoped() as conn:conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                with patch.object(lease,'_connect',lambda:RollbackConnection(self.scoped())):
+                    with self.assertRaisesRegex(RuntimeError,'synthetic_commit_failure'):
+                        await adapter.assert_current(self.scope,fence)
+                with self.scoped() as conn:conn.execute('UPDATE saas_tenant_members SET active=true WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
+                    await adapter.assert_current(self.scope,fence)
+                # No durable quarantine was committed. If trusted code
+                # improperly transfers the fence to a recreated adapter, it
+                # can be reused. This is a blocker, not a supported recovery.
+                recreated=lease.ServerLease(self.profile,self.route,self.expected,sid)
+                await recreated.assert_current(self.scope,fence)
+        asyncio.run(run())

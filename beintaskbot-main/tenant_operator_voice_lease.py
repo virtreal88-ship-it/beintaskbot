@@ -8,6 +8,7 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 import secrets
+import threading
 import uuid
 
 from tenant_platform import _connect
@@ -85,7 +86,16 @@ def _heartbeat(cur,profile,route,expected,scope,fence):
         AND session_id=%s::uuid AND fence_hash=%s AND state='active' AND heartbeat_until>clock_timestamp()
       RETURNING session_id''',
       (HEARTBEAT_SECONDS,*scope,fence.session_id,hashlib.sha256(fence.secret).digest()))
-    if cur.fetchone() is None:raise LeaseUnavailable('voice_session_expired_or_unverified')
+    if cur.fetchone() is None:
+        # Persist observed expiry before exposing the denial. A later backwards
+        # wall-clock step cannot revive an already quarantined lease. If this
+        # transaction fails, adapter-local terminal state still fails closed;
+        # distributed fencing after unknown COMMIT remains a release blocker.
+        cur.execute('''UPDATE experiment_voice_session_lease SET state='quarantined'
+          WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid AND conversation_id=%s
+            AND session_id=%s::uuid AND fence_hash=%s AND state='active' AND heartbeat_until<=clock_timestamp()''',
+          (*scope,fence.session_id,hashlib.sha256(fence.secret).digest()))
+        return 'voice_session_expired_or_unverified'
 
 
 def _release(*_args,**_kwargs):
@@ -102,6 +112,14 @@ class ServerLease:
     """
     def __init__(self,profile,route,expected,session_id):
         self._profile=dict(profile);self._route=dict(route);self._expected=expected;self._session_id=session_id
+        self._terminal=False;self._state_lock=threading.Lock()
+
+    def _mark_terminal(self):
+        with self._state_lock:self._terminal=True
+
+    def _ensure_live(self):
+        with self._state_lock:
+            if self._terminal:raise LeaseUnavailable('voice_session_terminal')
 
     def _run(self,operation,*args):
         _ready()
@@ -113,13 +131,26 @@ class ServerLease:
             raise LeaseUnavailable(value)
         return value
 
+    async def _invoke(self,operation,*args):
+        self._ensure_live()
+        try:
+            result=await asyncio.to_thread(self._run,operation,*args)
+            # A concurrent failure/cancellation fences this adapter even if
+            # another background operation eventually succeeded or committed.
+            self._ensure_live()
+            return result
+        except BaseException:
+            self._mark_terminal()
+            raise
+
     async def claim(self,scope):
-        return await asyncio.to_thread(self._run,_claim,scope,self._session_id)
+        return await self._invoke(_claim,scope,self._session_id)
 
     async def assert_current(self,scope,fence):
-        return await asyncio.to_thread(self._run,_heartbeat,scope,fence)
+        return await self._invoke(_heartbeat,scope,fence)
 
     async def release(self,scope,fence):
+        self._mark_terminal()
         return _release(scope,fence)
 
 
