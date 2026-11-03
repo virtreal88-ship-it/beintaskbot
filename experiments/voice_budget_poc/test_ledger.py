@@ -1,6 +1,8 @@
 """Disposable PostgreSQL tests. Never point this module at a real database."""
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import json
+import itertools
 import os
 from pathlib import Path
 import subprocess
@@ -8,11 +10,15 @@ import sys
 import unittest
 import uuid
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
-from ledger import Ledger, SCHEMA, local_connect, RESERVE_MICROUSD, CAP_MICROUSD
+from ledger import Ledger, SCHEMA, local_connect, reject_libpq_env, RESERVE_MICROUSD, CAP_MICROUSD
+import tenant_ai_spend_budget as tenant_spend
+import tenant_voice_test_grant as candidate
+from tenant_linear_policy import TenantLinearError
 
 
 def u(): return str(uuid.uuid4())
@@ -23,9 +29,14 @@ def scope(**overrides):
     return {**s,**overrides}
 
 
+def server_scope(**overrides):
+    return {**scope(**overrides),'channel_id':u(),'conversation_id':'synthetic-dialog'}
+
+
 class LedgerPostgresTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        reject_libpq_env()
         dsn = os.environ.get('VOICE_BUDGET_POC_ADMIN_URL', '')
         parsed = urlsplit(dsn)
         parsed_pg = conninfo_to_dict(dsn)
@@ -33,11 +44,13 @@ class LedgerPostgresTests(unittest.TestCase):
             parsed.hostname not in ('localhost','127.0.0.1','::1') or parsed_pg.get('host') not in ('localhost','127.0.0.1','::1')):
             raise RuntimeError('localhost_admin_only')
         cls.name = 'test_voice_budget_' + uuid.uuid4().hex
-        cls.admin = psycopg.connect(dsn, autocommit=True)
+        cls.admin = psycopg.connect(dsn, hostaddr='::1' if parsed.hostname=='::1' else '127.0.0.1', autocommit=True)
         cls.admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(cls.name)))
         cls.dsn = parsed._replace(path='/'+cls.name).geturl()
         with local_connect(cls.dsn) as conn:
             conn.execute(SCHEMA)
+            tenant_spend.ensure_schema(conn)
+            conn.execute((Path(__file__).parent/'voice_test_grant.sql').read_text())
         cls.l = Ledger(cls.dsn)
 
     @classmethod
@@ -49,6 +62,8 @@ class LedgerPostgresTests(unittest.TestCase):
         with local_connect(self.dsn) as conn:
             conn.execute('TRUNCATE poc_voice_reservations')
             conn.execute('UPDATE poc_voice_budget SET frozen=false WHERE id=1')
+            conn.execute('TRUNCATE saas_voice_test_hold,saas_voice_test_session,saas_ai_spend_reservations')
+            conn.execute('UPDATE saas_voice_test_grant SET enabled=false,frozen=false')
 
     def test_quote_and_admin_guards(self):
         self.assertEqual(RESERVE_MICROUSD,2_112_000)
@@ -56,6 +71,24 @@ class LedgerPostgresTests(unittest.TestCase):
         for dsn in (self.dsn+'?host=example.invalid',self.dsn+'?options=-csearch_path=x',
                     self.dsn.replace('127.0.0.1','example.invalid'),self.dsn.replace('test_voice_budget_','prod_')):
             with self.assertRaisesRegex(ValueError,'local_test_database_only'): local_connect(dsn)
+        with patch.dict(os.environ,{'PGHOSTADDR':'192.0.2.1'}), patch('ledger.psycopg.connect') as connect:
+            with self.assertRaisesRegex(ValueError,'unexpected_libpq_environment'):local_connect(self.dsn)
+            connect.assert_not_called()
+
+    def test_expired_or_changed_quote_cannot_be_claimed(self):
+        s=scope();self.l.reserve(s)
+        with patch('ledger.datetime') as clock:
+            clock.now.return_value=datetime(2026,11,4,tzinfo=timezone.utc)
+            with self.assertRaisesRegex(ValueError,'quote_expired'):self.l.claim(s)
+        with local_connect(self.dsn) as conn:
+            conn.execute("UPDATE poc_voice_reservations SET quote_version='changed' WHERE request_id=%s",(s['request_id'],))
+        with self.assertRaisesRegex(ValueError,'quote_policy_mismatch'):self.l.claim(s)
+
+    def test_old_claim_can_be_reconciled_after_quote_update(self):
+        s=scope();self.l.reserve(s);self.l.claim(s)
+        with patch('ledger.QUOTE_VERSION','new-quote'), patch('ledger.MODEL','new-model'), patch('ledger.RESERVE_MICROUSD',3_000_000):
+            self.assertEqual(self.l.note_actual(s,2_112_001)['actual_microusd'],2_112_001)
+            with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):self.l.reserve(scope())
 
     def test_shared_atomic_cap_for_concurrent_executors(self):
         requests=[scope(executor=f'worker_{n}') for n in range(32)]
@@ -135,11 +168,194 @@ class LedgerPostgresTests(unittest.TestCase):
         self.l.claim(b);self.l.note_actual(b,RESERVE_MICROUSD+1)
         with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):self.l.reserve(scope())
 
+    def test_overrun_after_other_reservation_blocks_claim(self):
+        a,b=scope(),scope();self.l.reserve(a);self.l.reserve(b);self.l.claim(a)
+        self.l.note_actual(a,RESERVE_MICROUSD+1)
+        with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):self.l.claim(b)
+        with local_connect(self.dsn) as conn:
+            self.assertEqual(conn.execute('SELECT state FROM poc_voice_reservations WHERE request_id=%s',(b['request_id'],)).fetchone()['state'],'reserved')
+
+    def test_freeze_and_claim_serialize_on_budget_row(self):
+        a=scope();self.l.reserve(a)
+        with local_connect(self.dsn) as conn:
+            conn.execute('SELECT id FROM poc_voice_budget WHERE id=1 FOR UPDATE')
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                pending=worker.submit(self.l.claim,a)
+                conn.execute('UPDATE poc_voice_budget SET frozen=true WHERE id=1')
+                conn.commit()
+                with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):pending.result(timeout=5)
+        with local_connect(self.dsn) as conn:
+            conn.execute('UPDATE poc_voice_budget SET frozen=false WHERE id=1')
+        self.assertIsNotNone(self.l.claim(a))
+        # Claims that commit first cannot be recalled by a later freeze.
+        self.l.note_actual(a,RESERVE_MICROUSD+1)
+        with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):self.l.claim(a)
+
+    def test_late_usage_correction_monotonic_and_freezes(self):
+        a,b=scope(),scope();self.l.reserve(a);self.l.reserve(b);self.l.claim(a)
+        self.assertEqual(self.l.note_actual(a,100)['actual_microusd'],100)
+        self.assertEqual(self.l.note_actual(a,40)['actual_microusd'],100)
+        self.assertEqual(self.l.note_actual(a,RESERVE_MICROUSD+2)['actual_microusd'],RESERVE_MICROUSD+2)
+        with self.assertRaisesRegex(ValueError,'budget_frozen_or_invalid'):self.l.claim(b)
+
     def test_invalid_scope_does_not_create_reservation(self):
         for changes in ({'actor_id':True},{'response_number':3},{'executor':'../../secret'},{'tenant_id':'bad'}, {'cost':1}):
             with self.assertRaises((ValueError,TypeError)):self.l.reserve({**scope(),**changes})
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute('SELECT count(*) AS n FROM poc_voice_reservations').fetchone()['n'],0)
+
+    def test_server_candidate_closed_before_any_sql(self):
+        with local_connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                with self.assertRaises(TenantLinearError):candidate.reserve(cur,server_scope())
+            self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True):
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,server_scope())
+
+    def test_server_candidate_reserves_tenant_and_global_in_one_transaction(self):
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        def reserve_one(s):
+            try:
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:return candidate.reserve(cur,s)['state']
+            except TenantLinearError as exc:return str(exc)
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with ThreadPoolExecutor(max_workers=12) as workers:
+                results=list(workers.map(reserve_one,[server_scope(executor=f'worker_{n}') for n in range(16)]))
+        self.assertEqual(results.count('reserved'),2,results)
+        with local_connect(self.dsn) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],2)
+            tenant=conn.execute('SELECT count(*) AS n,sum(reserved_microusd) AS held FROM saas_ai_spend_reservations').fetchone()
+        self.assertEqual(tenant,{'n':2,'held':4_224_000})
+
+    def test_server_candidate_rolls_back_global_if_tenant_budget_denies(self):
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,server_scope())
+        with local_connect(self.dsn) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
+            self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_ai_spend_reservations').fetchone()['n'],0)
+
+    def test_server_candidate_claim_freeze_and_late_usage_correction(self):
+        a,b=server_scope(),server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            for s in (a,b):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.claim(cur,a)['state'],'claimed')
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,a,20)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,a,RESERVE_MICROUSD+3)
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,b)
+            with local_connect(self.dsn) as conn:
+                row=conn.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()
+            self.assertEqual(row,{'state':'unknown','actual_microusd':None})
+
+    def test_server_candidate_cancel_is_atomic_and_claim_cannot_be_cancelled(self):
+        a,b=server_scope(),server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            for s in (a,b):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.cancel_before_claim(cur,a)['state'],'released')
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.claim(cur,b)['state'],'claimed')
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.cancel_before_claim(cur,b))
+        with local_connect(self.dsn) as conn:
+            global_state=conn.execute('SELECT state FROM saas_voice_test_hold WHERE request_id=%s',(a['request_id'],)).fetchone()['state']
+            tenant_state=conn.execute('SELECT state FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()['state']
+        self.assertEqual((global_state,tenant_state),('released','released'))
+
+    def test_server_claim_rechecks_tenant_hold_and_changed_limit(self):
+        s=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,s)
+        with local_connect(self.dsn) as conn:
+            conn.execute("UPDATE saas_ai_spend_reservations SET state='released' WHERE tenant_id=%s",(s['tenant_id'],))
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,s)
+        with local_connect(self.dsn) as conn:
+            self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold WHERE request_id=%s',(s['request_id'],)).fetchone()['state'],'reserved')
+
+    def test_server_candidate_reconciles_old_quote_without_refunding(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            with patch.object(candidate,'QUOTE','changed'),patch.object(candidate,'MODEL','changed'),patch.object(candidate,'HOLD',3_000_000):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,a,10)
+        with local_connect(self.dsn) as conn:
+            row=conn.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()
+        self.assertEqual(row,{'state':'unknown','actual_microusd':None})
+
+    def test_server_session_immutable_across_actor_channel_dialog_executor_and_tenant(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            for delta in ({'tenant_id':u()},{'actor_id':2},{'channel_id':u()},{'conversation_id':'other'},{'executor':'other'}):
+                b={**a,**delta,'request_id':u(),'response_number':2}
+                with self.assertRaises(TenantLinearError):
+                    with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,b)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                self.assertEqual(candidate.reserve(cur,{**a,'request_id':u(),'response_number':2})['state'],'reserved')
+
+    def test_server_generic_release_and_settle_cannot_free_claimed_hold(self):
+        a=server_scope();key='voice-test:'+a['request_id']
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            tenant_spend.release(a['tenant_id'],key,track_uncapped=True)
+            tenant_spend.settle(a['tenant_id'],key,{'input_tokens':0,'output_tokens':0},track_uncapped=True,reserved_prices=(1,1))
+            tenant_spend.settle_media(a['tenant_id'],key,operation='asr',attempted_units=0)
+        with local_connect(self.dsn) as conn:
+            row=conn.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()
+        self.assertEqual(row,{'state':'unknown','actual_microusd':None})
+
+    def test_server_claim_and_generic_release_race_cannot_dispatch_without_hold(self):
+        for kind, _ in itertools.product(('release','settle'),range(8)):
+            a=server_scope();key='voice-test:'+a['request_id']
+            with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true,frozen=false')
+            with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+                def claim():
+                    try:
+                        with local_connect(self.dsn) as conn,conn.cursor() as cur:return bool(candidate.claim(cur,a))
+                    except TenantLinearError:return False
+                def generic_finish():
+                    if kind=='release':return tenant_spend.release(a['tenant_id'],key,track_uncapped=True)
+                    return tenant_spend.settle(a['tenant_id'],key,{'input_tokens':0,'output_tokens':0},track_uncapped=True,reserved_prices=(1,1))
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    claim_f=workers.submit(claim);release_f=workers.submit(generic_finish)
+                    claimed=claim_f.result();release_f.result()
+            with local_connect(self.dsn) as conn:
+                row=conn.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()
+                self.assertEqual(row['state'],'unknown' if claimed else ('released' if kind=='release' else 'settled'))
+                self.assertEqual(row['actual_microusd'],None if claimed else 0)
+                conn.execute('TRUNCATE saas_voice_test_hold,saas_voice_test_session,saas_ai_spend_reservations')
+
+    def test_server_inconsistent_tenant_hold_quarantines_overrun_and_commits_evidence(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            # Simulated inconsistent database state: generic API cannot do this
+            # after claim, but manual corruption must still freeze and persist.
+            with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0 WHERE tenant_id=%s",(a['tenant_id'],))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                row=candidate.note_actual(cur,a,RESERVE_MICROUSD+7)
+                self.assertEqual((row['state'],row['actual_microusd']),('quarantined',RESERVE_MICROUSD+7))
+        with local_connect(self.dsn) as conn:
+            self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
+            self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'quarantined')
 
 
 if __name__=='__main__': unittest.main()

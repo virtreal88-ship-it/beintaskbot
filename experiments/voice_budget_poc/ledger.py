@@ -6,6 +6,7 @@ provider admission, or a deployed global spending limit.
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import re
 import uuid
 from urllib.parse import urlsplit
@@ -44,8 +45,17 @@ CREATE TABLE poc_voice_reservations (
 '''
 
 
+def reject_libpq_env():
+    # libpq environment settings can override otherwise validated DSN fields,
+    # including PGHOSTADDR, PGSERVICE and PGOPTIONS. Synthetic tests require a
+    # clean PG* environment; never print values.
+    if any(name.startswith('PG') for name in os.environ):
+        raise ValueError('unexpected_libpq_environment')
+
+
 def local_connect(dsn):
     """Reject remote hosts and URL parameters, including pg host overrides."""
+    reject_libpq_env()
     parsed = urlsplit(dsn)
     if parsed.scheme not in ('postgres', 'postgresql') or parsed.query or parsed.fragment:
         raise ValueError('local_test_database_only')
@@ -54,7 +64,8 @@ def local_connect(dsn):
         args.get('host') not in ('localhost', '127.0.0.1', '::1') or
         not TEST_DB.fullmatch(parsed.path.removeprefix('/'))):
         raise ValueError('local_test_database_only')
-    return psycopg.connect(dsn, row_factory=dict_row)
+    address = '::1' if parsed.hostname == '::1' else '127.0.0.1'
+    return psycopg.connect(dsn, hostaddr=address, row_factory=dict_row)
 
 
 def _id(value):
@@ -79,7 +90,9 @@ def _scope(scope):
 
 
 def _fingerprint(scope):
-    payload = {'scope': scope, 'model': MODEL, 'quote': QUOTE_VERSION, 'reserved_microusd': RESERVE_MICROUSD}
+    # Stable identity is separate from versioned quote. Old reservations must
+    # remain reconcilable after a tariff update without granting a new claim.
+    payload = {'scope': scope, 'fingerprint_schema': 1}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -105,6 +118,9 @@ class Ledger:
             if previous:
                 if previous['fingerprint'] != fingerprint:
                     raise ValueError('request_scope_conflict')
+                if (previous['quote_version'] != QUOTE_VERSION or previous['model'] != MODEL or
+                    previous['reserved_microusd'] != RESERVE_MICROUSD):
+                    raise ValueError('quote_policy_mismatch')
                 if previous['state'] == 'released':
                     raise ValueError('reservation_released')
                 return previous
@@ -130,7 +146,27 @@ class Ledger:
     def claim(self, scope):
         # Claim must commit before any hypothetical provider action. Reclaiming
         # a claimed/unknown/settled intent is forbidden, including on restart.
-        return self._transition(scope, 'reserved', 'claimed')
+        s = _scope(scope)
+        with local_connect(self.dsn) as conn, conn.cursor() as cur:
+            # Serialize with both overrun freeze and reserve. The freeze cannot
+            # retract a claim that committed earlier or stop an in-flight call.
+            cur.execute('SELECT cap_microusd,frozen FROM poc_voice_budget WHERE id=1 FOR UPDATE')
+            budget=cur.fetchone()
+            if not budget or budget['cap_microusd'] != CAP_MICROUSD or budget['frozen']:
+                raise ValueError('budget_frozen_or_invalid')
+            if datetime.now(timezone.utc) >= QUOTE_EXPIRES:
+                raise ValueError('quote_expired')
+            cur.execute('SELECT quote_version,model,reserved_microusd,state FROM poc_voice_reservations WHERE request_id=%s AND fingerprint=%s FOR UPDATE',
+                        (s['request_id'],_fingerprint(s)))
+            row=cur.fetchone()
+            if not row or row['state'] != 'reserved':
+                return None
+            if row['quote_version'] != QUOTE_VERSION or row['model'] != MODEL or row['reserved_microusd'] != RESERVE_MICROUSD:
+                raise ValueError('quote_policy_mismatch')
+            cur.execute('''UPDATE poc_voice_reservations SET state='claimed',updated_at=now()
+              WHERE request_id=%s AND fingerprint=%s AND state='reserved' RETURNING *''',
+              (s['request_id'],_fingerprint(s)))
+            return cur.fetchone()
 
     def cancel_before_claim(self, scope):
         return self._transition(scope, 'reserved', 'released')
@@ -148,10 +184,10 @@ class Ledger:
             cur.execute('SELECT id FROM poc_voice_budget WHERE id=1 FOR UPDATE')
             if not cur.fetchone():
                 raise ValueError('budget_missing')
-            cur.execute('''UPDATE poc_voice_reservations SET state='settled',actual_microusd=%s,updated_at=now()
-              WHERE request_id=%s AND fingerprint=%s AND state IN ('claimed','unknown') RETURNING *''',
+            cur.execute('''UPDATE poc_voice_reservations SET state='settled',actual_microusd=GREATEST(COALESCE(actual_microusd,0),%s),updated_at=now()
+              WHERE request_id=%s AND fingerprint=%s AND state IN ('claimed','unknown','settled') RETURNING *''',
               (actual_microusd,s['request_id'],_fingerprint(s)))
             row = cur.fetchone()
-            if row and actual_microusd > row['reserved_microusd']:
+            if row and row['actual_microusd'] > row['reserved_microusd']:
                 cur.execute('UPDATE poc_voice_budget SET frozen=true WHERE id=1')
             return row
