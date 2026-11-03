@@ -15,7 +15,10 @@ class Ledger:
     async def reserve(self, scope):
         if self.deny: raise Refused('budget')
         self.events.append(('reserve', scope.copy()))
-    async def claim(self, scope): self.events.append(('claim', scope.copy()))
+        return {**scope,'state':'reserved','reserved_microusd':1}
+    async def claim(self, scope):
+        self.events.append(('claim', scope.copy()))
+        return {**scope,'state':'claimed','reserved_microusd':1}
     async def mark_unknown(self, scope): self.events.append(('unknown', scope.copy()))
 
 
@@ -34,6 +37,7 @@ class Context:
 
 
 class Provider:
+    mock_only=True
     def __init__(self, ledger): self.events=[];self.config=None;self.closed=False;self.ledger=ledger
     async def open(self, snapshot, **config): self.config=config
     async def send(self, event):
@@ -63,6 +67,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
         await self.session.receive_client({'type':'audio','pcm':bytes(4800)})
         await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        await self.session.receive_provider({'type':'response.created','response':{'id':'response-'+str(self.session.response_number)}})
 
     async def test_existing_policy_and_disabled_automatic_spend(self):
         self.assertEqual(self.provider.config,{'tools':[],'create_response':False,'interrupt_response':True,'transcription':False,'reconnect':False})
@@ -70,26 +75,26 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.turn()
         self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim'])
         self.assertEqual(self.provider.events[-1],{'type':'response.create'})
-        await self.session.receive_provider({'type':'response.done'})
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1'}})
         self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim','unknown'])
 
     async def test_interrupt_truncates_heard_audio_before_new_response(self):
         await self.turn()
-        await self.session.receive_provider({'type':'response.output_audio.delta','item_id':'item-1','content_index':0,
+        await self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'item-1','content_index':0,
                                             'delta':base64.b64encode(bytes(4800)).decode()})
         await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
         self.assertEqual(self.client.events[-1],{'type':'interrupt','item_id':'item-1'})
         await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
-        await self.session.receive_provider({'type':'response.done'})
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1'}})
         self.assertEqual(len(self.ledger.events),3)  # response waits for playback ack
-        await self.session.receive_client({'type':'played','item_id':'item-1','played_ms':50})
-        self.assertEqual(self.provider.events[-2],{'type':'conversation.item.truncate','item_id':'item-1','content_index':0,'audio_end_ms':50})
+        await self.session.receive_client({'type':'played','item_id':'item-1','played_ms':0})
+        self.assertEqual(self.provider.events[-2],{'type':'conversation.item.truncate','item_id':'item-1','content_index':0,'audio_end_ms':0})
         self.assertEqual(self.provider.events[-1],{'type':'response.create'})
         self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim','unknown','reserve','claim'])
 
     async def test_bad_playback_ack_fails_closed(self):
         await self.turn()
-        await self.session.receive_provider({'type':'response.output_audio.delta','item_id':'i','content_index':0,'delta':base64.b64encode(bytes(4800)).decode()})
+        await self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'i','content_index':0,'delta':base64.b64encode(bytes(4800)).decode()})
         await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
         with self.assertRaises(Refused): await self.session.receive_client({'type':'played','item_id':'i','played_ms':1000})
         self.assertTrue(self.provider.closed)
@@ -134,13 +139,90 @@ class Tests(unittest.IsolatedAsyncioTestCase):
     async def test_end_during_budget_claim_never_dispatches_late_response(self):
         entered=asyncio.Event();release=asyncio.Event();original=self.ledger.claim
         async def slow_claim(scope):
-            entered.set();await release.wait();await original(scope)
+            entered.set();await release.wait();return await original(scope)
         self.ledger.claim=slow_claim
         pending=asyncio.create_task(self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'}))
         await entered.wait();await self.session.end('user_end');release.set()
         with self.assertRaises(Refused): await pending
         self.assertNotIn({'type':'response.create'},self.provider.events)
         self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim','unknown'])
+
+    async def test_missing_or_wrong_claim_refuses_before_response(self):
+        for receipt in [None, {'state':'claimed'}, {'state':'reserved'}]:
+            s=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=Ledger(),lease=Lease(),
+                      context=Context(),provider=Provider(Ledger()),client=Client())
+            async def bad_claim(scope): return receipt
+            s.ledger.claim=bad_claim
+            await s.start()
+            with self.assertRaises(Refused): await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            self.assertNotIn({'type':'response.create'},s.provider.events)
+            self.assertTrue(s.provider.closed)
+
+    async def test_wrong_scope_claim_refused(self):
+        async def bad_claim(scope): return {**scope,'channel_id':'different','state':'claimed','reserved_microusd':1}
+        self.ledger.claim=bad_claim
+        with self.assertRaises(Refused): await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        self.assertNotIn({'type':'response.create'},self.provider.events)
+
+    async def test_bad_reservation_refused(self):
+        async def bad_reserve(scope): return {**scope,'state':'claimed','reserved_microusd':1}
+        self.ledger.reserve=bad_reserve
+        with self.assertRaises(Refused): await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        self.assertNotIn({'type':'response.create'},self.provider.events)
+
+    async def test_two_completed_turns_and_conservative_history(self):
+        await self.turn()
+        delta={'type':'response.output_audio.delta','response_id':'response-1','item_id':'a','content_index':0,
+               'delta':base64.b64encode(bytes(480)).decode()}
+        await self.session.receive_provider(delta)
+        await self.session.receive_provider({'type':'response.output_audio.done','response_id':'response-1','item_id':'a','content_index':0})
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1'}})
+        await asyncio.sleep(.02)
+        await self.session.receive_client({'type':'played_all','item_id':'a'})
+        self.assertEqual(self.provider.events[-1]['audio_end_ms'],0)
+        await self.turn()
+        await self.session.receive_provider({**delta,'response_id':'response-2','item_id':'b'})
+        self.assertEqual(self.client.events[-1]['item_id'],'b')
+
+    async def test_duplicate_response_or_wrong_id_closes(self):
+        await self.turn()
+        with self.assertRaises(Refused): await self.session.receive_provider({'type':'response.created','response':{'id':'another'}})
+        self.assertTrue(self.provider.closed)
+
+    async def test_wrong_response_id_closes(self):
+        await self.turn()
+        with self.assertRaises(Refused):
+            await self.session.receive_provider({'type':'response.output_audio.delta','response_id':'different','item_id':'a','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+        self.assertTrue(self.provider.closed)
+
+    async def test_missing_playback_ack_cannot_start_next_response(self):
+        await self.turn()
+        await self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'a','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+        await self.session.receive_provider({'type':'response.output_audio.done','response_id':'response-1','item_id':'a','content_index':0})
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1'}})
+        await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        self.assertEqual(sum(e['type']=='response.create' for e in self.provider.events),1)
+        self.assertEqual(len(self.ledger.events),3)
+
+    async def test_open_failure_and_unknown_close_keeps_lease(self):
+        class BrokenProvider(Provider):
+            async def open(self,*args,**kwargs): raise RuntimeError('failed')
+            async def close(self): raise RuntimeError('unknown')
+        lease=Lease();p=BrokenProvider(self.ledger)
+        s=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=self.ledger,lease=lease,context=Context(),provider=p,client=Client())
+        with self.assertRaises(RuntimeError): await s.start()
+        self.assertTrue(lease.held)
+
+    async def test_audio_after_delayed_authority_check_does_not_send_on_closed_session(self):
+        entered=asyncio.Event();release=asyncio.Event();original=self.auth.check
+        async def slow(scope,stage):
+            if stage=='input':entered.set();await release.wait()
+            await original(scope,stage)
+        self.auth.check=slow
+        pending=asyncio.create_task(self.session.receive_client({'type':'audio','pcm':bytes(480)}))
+        await entered.wait();await self.session.end('user_end');release.set()
+        with self.assertRaises(Refused): await pending
+        self.assertNotIn('input_audio_buffer.append',[item['type'] for item in self.provider.events])
 
 
 if __name__ == '__main__': unittest.main()

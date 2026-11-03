@@ -21,7 +21,7 @@
         if(typeof msg.pcm_base64!=='string'||msg.pcm_base64.length>12800)throw new Error('invalid_audio');
         const raw=env.atob(msg.pcm_base64),pcm=Uint8Array.from(raw,ch=>ch.charCodeAt(0));
         onEvent({type:'audio',item_id:msg.item_id,pcm});
-      }else if(['ready','interrupt','ended'].includes(msg.type))onEvent(msg);
+      }else if(['ready','interrupt','audio_done','ended'].includes(msg.type))onEvent(msg);
       else if(msg.type==='error')onEvent({type:'ended'});
     }catch(_){socket.close();onEvent({type:'ended'});}
   };
@@ -32,7 +32,7 @@
       if(event.type==='audio' && event.pcm instanceof Uint8Array && event.pcm.byteLength<=9600){
         socket.send(event.pcm.buffer.slice(event.pcm.byteOffset,event.pcm.byteOffset+event.pcm.byteLength));return;
       }
-      if(['mute','played','end'].includes(event.type)){socket.send(JSON.stringify(event));return;}
+      if(['mute','played','played_all','end'].includes(event.type)){socket.send(JSON.stringify(event));return;}
       throw new Error('voice_event_invalid');
     },
     async close(){socket.onclose=null;socket.close();},

@@ -22,12 +22,19 @@
     generation++; running=false; start.disabled=false; mute.hidden=true; end.hidden=true;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
-    try { if(oldAudio) await oldAudio.close(); } catch (_) {}
-    try { if(pendingAudio){const pending=await pendingAudio;if(pending && pending!==oldAudio)await pending.close();} } catch (_) {}
-    if(oldRelease) oldRelease();
-    try { if(oldChannel) await oldChannel.close(); } catch (_) {}
+    // Stop the server and microphone independently; permission dialogs and
+    // AudioContext.close may hang. Keep the shared lease until media is closed.
+    const channelStop=Promise.resolve().then(()=>oldChannel?.close()).catch(()=>{});
+    try { oldAudio?.stopNow?.(); } catch (_) {}
+    const mediaStop=(async()=>{
+      if(oldAudio)await oldAudio.close();
+      if(pendingAudio){let pending;try{pending=await pendingAudio;}catch(_){}
+        if(pending && pending!==oldAudio){pending.stopNow?.();await pending.close();}}
+      if(oldRelease)oldRelease();
+    })().catch(()=>{});
     muted=false;mute.textContent='Выключить микрофон';
     if(!destroyed) status.textContent=reason==='ended'?'Разговор завершён':reason;
+    await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
   async function begin() {
     if(running || destroyed)return;
@@ -47,6 +54,11 @@
         if(version!==generation)return;
         try {
           if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent='AI отвечает';}
+          else if(event.type==='audio_done'){
+            Promise.resolve(audio.finished(event.item_id)).then(done=>{
+              if(done && version===generation)send({type:'played_all',item_id:event.item_id});
+            }).catch(()=>stop('Ошибка воспроизведения'));
+          }
           else if(event.type==='interrupt'){
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});

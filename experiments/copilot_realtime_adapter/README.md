@@ -40,13 +40,15 @@ lease fencing, or any production implementation of these methods.
 
 The intended shared budget interface is `reserve(scope)` then `claim(scope)`
 before each server-originated `response.create`, where scope contains unique
-`request_id`, `tenant_id`, `session_id`, `actor_id`, `response_number`, and
-`executor`. A `mark_unknown(scope)` retains a conservative hold after unknown or
+`request_id`, `tenant_id`, `session_id`, `actor_id`, `channel_id`,
+`conversation_id`, `response_number`, and `executor`. The async adapter must
+return newly committed matching `reserved` and then `claimed` receipts; absent,
+replayed or wrong-scope receipts fail closed. A `mark_unknown(scope)` retains a conservative hold after unknown or
 unreconciled use. No in-memory or per-executor account is sufficient. No
 connection from the browser to a provider is allowed, and VAD auto-response,
 transcription, tools and reconnect are disabled in the provider contract. The
-prototype assumes `provider.open` really enforces those settings but does not
-verify them. Its mock ledger does not enforce $5. Real upstream enforcement,
+prototype only accepts an explicitly `mock_only` provider; it cannot verify real
+upstream configuration. Its mock ledger does not enforce $5. Real upstream enforcement,
 current tariff and maximum token charges, a shared durable ledger, reconciliation,
 crash handling and limits must be proven before a paid call.
 
@@ -71,6 +73,9 @@ on real iOS/Android and uses deprecated ScriptProcessor. Do not ship it without
 an AudioWorklet, resampling, echo-cancellation and mobile/browser validation.
 On interruption it deliberately reports **0 ms** played because a browser
 cannot prove what reached a speaker; no unverified spoken prefix is preserved.
+For the same reason even normal playback completion discards the response audio
+from upstream context. This loses assistant context and does not satisfy the
+real conversational acceptance criteria.
 
 `websocket.py` provides an unregistered aiohttp boundary with explicit
 origin allowlisting, an injected pre-upgrade authentication callback, a 9,600
@@ -87,7 +92,10 @@ failure. aiohttp exists but the current Worker does not yet expose this path;
 Railway upgrade support has not been established. Client reconnect, playback
 completion, end-to-end barge-in, context handoff, and actual AI interaction
 are not implemented. In particular, `provider.open`/`send` can currently hang;
-the lifecycle requires further independent concurrency review. Do not enable
+`end()` does not fence in-progress startup and disconnect is not read during
+startup. `wait_for` cannot stop a dependency that suppresses cancellation.
+A cancellable opening state, independent disconnect watcher and further
+concurrency review are mandatory. Do not enable
 or deploy this experiment as a feature.
 
 Official references: [Realtime speech conversations and interruption](https://developers.openai.com/api/docs/guides/realtime-conversations),

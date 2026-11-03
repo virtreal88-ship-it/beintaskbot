@@ -43,3 +43,11 @@ test('unavailable shared lease prevents microphone opening',async()=>{
   const view=mount(root,{acquireMicrophone:async()=>null,openAudio:async()=>{opened++;},connect:async()=>{}});
   await view.start();assert.equal(opened,0);assert.match(root.children[0].textContent,/другом режиме/);
 });
+
+test('server closes promptly even if audio shutdown is stuck; lease stays held',async()=>{
+  let finish;const pending=new Promise(resolve=>finish=resolve);let stopped=0;
+  const x=setup({open:async()=>({stopNow(){stopped++;},close:()=>pending,mute(){}})});
+  await x.view.start();await x.view.stop();
+  assert.equal(stopped,1);assert.equal(x.channelClosed(),1);assert.equal(x.released(),0);
+  finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(x.released(),1);
+});
