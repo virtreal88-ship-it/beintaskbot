@@ -14,6 +14,7 @@ on:
       - 'beintaskbot-main/tests/test_customer_memory*.py'
       - 'beintaskbot-main/tests/customer_memory_browser_fixture.py'
       - 'beintaskbot-main/tests/customer_memory_http_browser.cjs'
+      - 'beintaskbot-main/tests/customer_memory_erasure_model.py'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_crm_identity.py'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
