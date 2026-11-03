@@ -37,9 +37,13 @@ def ensure_schema(conn):
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id),
               FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
-            # Additive-only expansion for existing text-history rows. The
+            # Additive-only expansion for existing text-history rows. Older
+            # installations predate all three revision/provenance columns; add
+            # clear_revision here as well as in CREATE TABLE so their existing
+            # rows remain readable by the revision-aware Copilot path. The
             # voice writer remains hard-gated until the separate legacy-writer
             # guard migration and process cutover are verified.
+            cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS clear_revision BIGINT NOT NULL DEFAULT 0')
             cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS history_revision BIGINT NOT NULL DEFAULT 0')
             cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS voice_history_seen BOOLEAN NOT NULL DEFAULT false')
             cur.execute('CREATE INDEX IF NOT EXISTS saas_chat_ai_copilot_usage_idx ON saas_chat_ai_runs(tenant_id,requested_by,provider,channel_id,conversation_id,usage_day)')
