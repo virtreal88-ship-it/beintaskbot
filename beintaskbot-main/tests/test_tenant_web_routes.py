@@ -33,6 +33,7 @@ EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.cs
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
 EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
+EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
