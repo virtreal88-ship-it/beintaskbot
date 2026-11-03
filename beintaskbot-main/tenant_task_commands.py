@@ -12,12 +12,24 @@ class TaskCommandPending(TenantPlatformError):
     """An external write may have succeeded; do not change the request key."""
 
 
+class TaskCommandUnavailable(TenantPlatformError):
+    """Startup has not installed the existing command table."""
+
+
+def _require_command_schema(conn):
+    """Core startup installs command storage; a request never migrates it."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('saas_task_commands') IS NOT NULL AS ready")
+        if not (cur.fetchone() or {}).get('ready'):
+            raise TaskCommandUnavailable('Task command storage unavailable.')
+
+
 class TaskCommandStore:
     def __init__(self, tenant_id: str, actor_id: int, request_id: str, fingerprint: str):
         self.key = (tenant_id, actor_id, request_id)
         self.conn = _connect()
         try:
-            _ensure_schema(self.conn)
+            _require_command_schema(self.conn)
             with self.conn.cursor() as cur:
                 cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s, 0)) AS locked',
                             (':'.join(map(str, self.key)),))
