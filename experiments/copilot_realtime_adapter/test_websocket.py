@@ -4,7 +4,8 @@ import unittest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from session import Session
-from websocket import make_handler
+from websocket import make_handler, SocketClient
+from unittest.mock import patch
 from test_session import Authority, Ledger, Lease, Context, Provider
 
 
@@ -83,6 +84,24 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.provider.closed or self.lease.held)
         if not self.lease.held:self.assertTrue(self.provider.closed)
         self.assertEqual(self.ledger.events,[])
+
+    async def test_frame_after_visible_ready_is_queued_before_ready_send_returns(self):
+        ready_sent=asyncio.Event();release=asyncio.Event();original=SocketClient.send
+        async def slow_send(client,event):
+            await original(client,event)
+            if event.get('type')=='ready':ready_sent.set();await release.wait()
+        with patch.object(SocketClient,'send',slow_send):
+            ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
+            self.assertEqual((await ws.receive_json())['type'],'ready');await ready_sent.wait()
+            await ws.send_bytes(bytes(480))
+            await asyncio.sleep(.03)
+            self.assertFalse(self.sessions[0].closed)
+            release.set()
+            for _ in range(50):
+                if self.provider.events:break
+                await asyncio.sleep(.01)
+            self.assertEqual(self.provider.events[0]['type'],'input_audio_buffer.append')
+            await ws.close()
 
 
 if __name__=='__main__': unittest.main()
