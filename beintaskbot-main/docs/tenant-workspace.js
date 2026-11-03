@@ -55,6 +55,9 @@
     refresh();
   });
   window.tenantDealBoard = {
+    presentation:()=>({mode:mode==='board'?'kanban':'table',pipeline:pipelineFilter}),
+    setPresentation(value={}){if(['kanban','table'].includes(value.mode))mode=value.mode==='kanban'?'board':'list';if(value.pipeline!==undefined)pipelineFilter=String(value.pipeline);toolbar.querySelectorAll('[data-workspace-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.workspaceMode===mode)));$('workspacePipeline').value=pipelineFilter;},
+    controls:()=>({toolbar,catalog:catalog.map(item=>({...item}))}),
     render(target, rows, openDeal) {
       target.classList.toggle('workspace-board', mode === 'board');
       const all = columns(rows,catalog);

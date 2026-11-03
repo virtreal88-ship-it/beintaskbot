@@ -47,7 +47,8 @@ assert(app.includes('data-task-tab=\"related\"') && app.includes('başqa sövdə
 assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}'), 'CRM action rows wrap at mobile widths without horizontal overflow');
 assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');
 assert(contacts.includes("action:'link_contact'") && contacts.includes("action:'unlink_contact'") && app.includes("action:'link_deal'") && app.includes("action:'unlink_deal'"), 'contact and deal relations retain their existing tenant-scoped company APIs in the current controllers');
-for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
+for (const type of ['company', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
+assert(app.includes(`data-native-open="'+(kind==='contact'?'contact':'deal')+':`), 'company relation rows retain exact contact/deal card targets');
 assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
 assert(!view('deals').includes('externalCrmSyncPanel'));
 assert(!app.includes('Beintaskbot UUID:') && !app.includes('nativeContactKommoId'));
