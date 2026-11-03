@@ -55,6 +55,14 @@ class Session:
         self.executor = executor
         self.response_number = 0
         self.input_turns = {}
+        # Monotonic local observation fence, advanced by the provider reader
+        # before any awaited authorization or ordered processing.
+        self.speech_epoch = 0
+        self.unprocessed_speech = 0
+        self.dispatch_sending = False
+        # Without an audio-to-VAD watermark even silence sent before mute can
+        # become a late speech event. Keep this sticky for the whole session.
+        self.audio_may_be_pending = False
         self.response_inflight = False
         self.cancel_requested = False
         self.response_pending = False
@@ -76,11 +84,37 @@ class Session:
         self._stop_requested = False
         self._open_task = None
 
-    async def _send_provider(self, event):
+    async def _send_provider(self, event, *, dispatch_epoch=None):
         async with self.io_lock:
             if self.closed:
                 raise Refused('session_closed')
-            await self.provider.send(event)
+            if event.get('type')=='response.create' and (dispatch_epoch is None or dispatch_epoch != self.speech_epoch):
+                raise Refused('speech_changed_before_dispatch')
+            if event.get('type')=='response.create':
+                self.dispatch_sending=True
+                try:
+                    await self.provider.send(event)
+                finally:
+                    self.dispatch_sending=False
+            else:
+                await self.provider.send(event)
+
+    def observe_provider_event(self,event):
+        """Called by the single reader immediately, before enqueue/awaits.
+
+        Observation is only a local fence, not proof of remote silence. A
+        provider event not yet read or an in-flight send cannot be fenced by
+        this method; production admission remains closed.
+        """
+        if isinstance(event,dict) and event.get('type')=='input_audio_buffer.speech_started':
+            self.speech_epoch += 1
+            self.unprocessed_speech += 1
+            if self.dispatch_sending and not self.closed:
+                # A write already in progress cannot be recalled. Begin close
+                # immediately; the I/O drain retains the lease if it stalls.
+                self._stop_requested=True
+                task=asyncio.create_task(self.end('speech_during_dispatch'))
+                task.add_done_callback(self._consume_task)
 
     async def _send_client(self, event):
         async with self.client_lock:
@@ -175,9 +209,10 @@ class Session:
         # Caller holds lock. VAD detects turns only; it must never launch an
         # unbudgeted response. The reservation authority is shared externally.
         if (not self.response_pending or self.interrupt_pending or self.truncate_pending or self.response_inflight or
-            self.item is not None or self.closed or any(not (turn['stopped'] and turn['committed'] and turn['added'])
+            self.item is not None or self.closed or self.unprocessed_speech or any(not (turn['stopped'] and turn['committed'] and turn['added'])
                                                        for turn in self.input_turns.values())):
             return
+        dispatch_epoch=self.speech_epoch
         self.response_number += 1
         if self.response_number > 2:
             raise Refused('session_response_limit')
@@ -191,6 +226,10 @@ class Session:
                        'response_number': self.response_number, 'executor': self.executor}
         reserved=await self.ledger.reserve(reservation)
         self._check_receipt(reserved,reservation,'reserved')
+        # A reservation may already have committed; retain it conservatively
+        # on this refusal rather than assume it can be safely released.
+        if self.closed or dispatch_epoch != self.speech_epoch:
+            raise Refused('speech_changed_before_claim')
         claimed=await self.ledger.claim(reservation)  # MUST commit before return
         self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
@@ -209,7 +248,7 @@ class Session:
             await self.provider.bind_claim(reservation,claimed)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
-            await self._send_provider({'type': 'response.create'})
+            await self._send_provider({'type': 'response.create'},dispatch_epoch=dispatch_epoch)
         except BaseException:
             marked=await self.ledger.mark_unknown(reservation)
             if isinstance(marked,dict) and marked.get('state')=='unknown':
@@ -272,6 +311,9 @@ class Session:
         if kind == 'mute' and set(event) == {'type', 'muted'} and type(event['muted']) is bool:
             self.muted = event['muted']
             if self.muted:
+                if self.audio_may_be_pending:
+                    await self.end('mute_with_unfenced_audio')
+                    return
                 await self._send_provider({'type': 'input_audio_buffer.clear'})
                 # A clear can race VAD/commit. Until we can prove that a
                 # partially recorded item is absent from upstream context,
@@ -287,6 +329,7 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
+                self.audio_may_be_pending=True
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
                 if any(not turn['stopped'] for turn in self.input_turns.values()):
                     self.activity=time.monotonic()
@@ -321,8 +364,10 @@ class Session:
             return
         raise Refused('client_event_not_allowed')
 
-    async def receive_provider(self, event):
+    async def receive_provider(self, event, *, observed=False):
         try:
+            if not observed:
+                self.observe_provider_event(event)
             await self._receive_provider(event)
         except Exception:
             await self.end('provider_or_budget_error')
@@ -335,10 +380,11 @@ class Session:
         await self.lease.assert_current(self.scope, self.fence)
         kind = event.get('type')
         if kind == 'input_audio_buffer.speech_started':
-            if self.muted:return
+            if self.muted:raise Refused('speech_observed_while_muted')
             self.activity = time.monotonic()
             async with self.lock:
                 await self._note_input_item(event.get('item_id'),'started')
+                self.unprocessed_speech -= 1
                 if self.response_inflight and not self.cancel_requested:
                     event={'type':'response.cancel'}
                     if self.provider_response_id:event['response_id']=self.provider_response_id

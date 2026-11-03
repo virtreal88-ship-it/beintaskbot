@@ -291,6 +291,25 @@ unconfirmed utterance also ends the session to avoid resuming with uncertain
 upstream audio. These fail-closed limitations do not satisfy the required voice
 UX and must be resolved before the voice feature is enabled.
 
+## Experimental local VAD observation fence
+
+The local gateway reads provider events independently of its ordered processor,
+with a 32-event bounded queue. Queue overflow closes the session. A locally
+observed `speech_started` advances a generation before authorization, and a
+pending observed event or changed generation prevents a new response dispatch.
+A change after a reservation is conservatively retained; a change after claim
+is marked unknown. If speech is observed while a provider send is already in
+flight, shutdown begins and a failed or undrained close retains the lease.
+
+This is not a remote silence, billing, cancellation, or network-delivery fence:
+events not yet received cannot be observed, an already-started provider write
+may complete after speech begins, and real event shapes/order remain unproven.
+Until an authoritative audio-to-VAD watermark exists, pressing mute after any
+PCM frame was sent ends the session; this is a temporary unacceptable UX, not
+a completed mute feature. Multiple unanswered turns still fail closed. The
+reservation cleanup path, bounded shutdown and ordering need independent
+review, and production and live-provider admission remain hard disabled.
+
 ## Source fingerprints and remaining fence
 
 The candidate captures server-derived scope, the allowlisted context and

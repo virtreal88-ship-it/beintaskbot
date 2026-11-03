@@ -7,6 +7,7 @@ from session import Session
 from websocket import make_handler, SocketClient
 from unittest.mock import patch
 from test_session import Authority, Ledger, Lease, Context, Provider, begin_input, finish_input
+from test_vad_fence import BlockReserve
 
 
 class GatewayTest(unittest.IsolatedAsyncioTestCase):
@@ -86,6 +87,57 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await asyncio.wait_for(ws.receive_json(),1))['type'],'audio')
         await ws.close();await asyncio.sleep(.03)
         self.assertTrue(self.provider.closed);self.assertFalse(self.lease.held)
+
+    async def test_reader_observes_speech_while_processor_waits_for_reserve(self):
+        class QueueProvider(Provider):
+            def __init__(self,ledger):super().__init__(ledger);self.queue=asyncio.Queue()
+            async def receive(self):return await self.queue.get()
+            async def close(self):self.closed=True;self.queue.put_nowait(None)
+        self.ledger=BlockReserve();self.provider=QueueProvider(self.ledger)
+        ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
+        await ws.receive_json()
+        for kind in ('input_audio_buffer.speech_started','input_audio_buffer.speech_stopped','input_audio_buffer.committed'):
+            await self.provider.queue.put({'type':kind,'item_id':'A'})
+        await self.provider.queue.put({'type':'conversation.item.added','item':{'id':'A','type':'message','role':'user','content':[{'type':'input_audio'}]}})
+        try:
+            await asyncio.wait_for(self.ledger.enter.wait(),1)
+            await self.provider.queue.put({'type':'input_audio_buffer.speech_started','item_id':'B'})
+            for _ in range(100):
+                if self.sessions[0].speech_epoch==2:break
+                await asyncio.sleep(.005)
+            self.assertEqual(self.sessions[0].speech_epoch,2)
+            self.ledger.go.set()
+            for _ in range(100):
+                if self.sessions[0].closed:break
+                await asyncio.sleep(.005)
+            self.assertTrue(self.sessions[0].closed)
+            self.assertNotIn('response.create',[e['type'] for e in self.provider.events])
+        finally:
+            self.ledger.go.set();await ws.close()
+
+    async def test_provider_queue_overflow_closes_without_dispatch(self):
+        class QueueProvider(Provider):
+            def __init__(self,ledger):super().__init__(ledger);self.queue=asyncio.Queue()
+            async def receive(self):return await self.queue.get()
+            async def close(self):self.closed=True;self.queue.put_nowait(None)
+        self.ledger=BlockReserve();self.provider=QueueProvider(self.ledger)
+        ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
+        await ws.receive_json()
+        for kind in ('input_audio_buffer.speech_started','input_audio_buffer.speech_stopped','input_audio_buffer.committed'):
+            await self.provider.queue.put({'type':kind,'item_id':'A'})
+        await self.provider.queue.put({'type':'conversation.item.added','item':{'id':'A','type':'message','role':'user','content':[{'type':'input_audio'}]}})
+        try:
+            await asyncio.wait_for(self.ledger.enter.wait(),1)
+            for _ in range(40):await self.provider.queue.put({'type':'rate_limits.updated'})
+            for _ in range(100):
+                if self.sessions[0].closed:break
+                await asyncio.sleep(.005)
+            self.assertTrue(self.sessions[0].closed)
+            self.ledger.go.set()
+            await asyncio.sleep(.02)
+            self.assertNotIn('response.create',[e['type'] for e in self.provider.events])
+        finally:
+            self.ledger.go.set();await ws.close()
 
     def test_missing_security_dependencies_rejected(self):
         with self.assertRaises(ValueError): make_handler(allowed_origins={'*'},authenticate=None,build_session=None)

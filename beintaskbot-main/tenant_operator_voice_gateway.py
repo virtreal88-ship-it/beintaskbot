@@ -48,7 +48,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         session=None
         reader=None
         provider_reader=None
+        provider_processor=None
         incoming=asyncio.Queue(maxsize=60)
+        provider_events=asyncio.Queue(maxsize=32)
         try:
             session=build_session(scope, SocketClient(ws))
             async def read_frames():
@@ -78,14 +80,28 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 try:
                     while not session.closed:
                         event=await session.next_provider_event()
-                        await session.receive_provider(event)
+                        # Fence new speech before the ordered processor can
+                        # block on budget, authority, or transport operations.
+                        session.observe_provider_event(event)
+                        provider_events.put_nowait(event)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     await session.end('provider_disconnected')
                     await ws.close()
+            async def process_provider():
+                try:
+                    while not session.closed:
+                        event=await provider_events.get()
+                        await session.receive_provider(event,observed=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await session.end('provider_event_error')
+                    await ws.close()
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
+                provider_processor=asyncio.create_task(process_provider())
             while True:
                 message=await incoming.get()
                 if message is None:
@@ -116,12 +132,13 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 if reader is not None:
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
-                if provider_reader is not None:
-                    provider_reader.cancel()
+                tasks=[task for task in (provider_reader,provider_processor) if task is not None]
+                for task in tasks:task.cancel()
+                if tasks:
                     # Never block the handler forever on a cancellation-
                     # suppressing provider; Session already retains the lease
                     # unless its receive lock and socket were drained.
-                    done,pending=await asyncio.wait({provider_reader},timeout=.5)
+                    done,pending=await asyncio.wait(tasks,timeout=.5)
                     for task in pending:task.add_done_callback(session._consume_task)
         return ws
     return handler
