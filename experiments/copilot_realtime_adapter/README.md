@@ -244,6 +244,16 @@ existing thread adapter after old-writer cutover. ASR also needs a separate,
 durable upper-bounded reservation and usage reconciliation before it is enabled.
 The mock is not connected to sessions or any database writer.
 
+`VoiceHistory.append` has a separately gated server-only candidate path using
+the existing thread writer, transactional authorization, session binding,
+clear revision, contiguous order and digest-based idempotency. The matching
+`voice_history_candidate.sql` is synthetic test schema, not a migration. No
+call can write while the immutable history gate is present. This candidate is
+not ready to release: legacy writers can overwrite or delete thread rows,
+clear on an absent row may not advance a durable epoch, and migration, mixed
+workers, role privileges, retention and idempotency across rollback remain to
+be designed and independently reviewed. It is not yet fed by transcript events.
+
 The live connector remains unusable. The candidate now owns a ClientSession
 with `trust_env=False`, an aiohttp pre-redirect trace refusal and connection and
 close deadlines; localhost tests verify that a redirect target is never called

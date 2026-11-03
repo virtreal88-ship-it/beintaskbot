@@ -4,6 +4,7 @@ import base64
 import json
 import threading
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import tenant_ai_spend_budget as spend
@@ -20,6 +21,41 @@ from test_session import Lease,Client
 
 
 class GuardPG(IntegratedSynthetic):
+    def test_gated_voice_history_deduplicates_orders_and_honors_clear(self):
+        sql=Path(__file__).with_name('voice_history_candidate.sql').read_text()
+        self.conn.execute(sql);self.conn.commit()
+        async def run():
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            session_id=str(uuid.uuid4());history=orchestration.VoiceHistory(authority,session_id)
+            entry={'role':'employee','text':'synthetic partial','agent_binding':authority.scope.agent_binding,
+                   'voice_session_id':session_id,'turn_sequence':0,'transcript_status':'partial',
+                   'transcript_quality':'automatic_unverified'}
+            # Gate rejects before touching the new tables even with valid input.
+            with self.assertRaises(TenantLinearError):await history.append(entry,0)
+            with self.assertRaises(TenantLinearError):await asyncio.to_thread(history._append,entry,0)
+            with patch.object(orchestration,'require_history_cutover'):
+                outcomes=await asyncio.gather(history.append(entry,0),history.append(entry,0))
+                self.assertCountEqual(outcomes,['appended','duplicate'])
+                with self.assertRaises(TenantLinearError):await history.append({**entry,'text':'changed'},0)
+                with self.assertRaises(TenantLinearError):await history.append({**entry,'turn_sequence':2},0)
+                with self.assertRaises(ValueError):await history.append({**entry,'audio':'synthetic-bytes'},0)
+                missing={**entry,'turn_sequence':1,'text':'','transcript_status':'unavailable','transcript_quality':'unknown'}
+                self.assertEqual(await history.append(missing,0),'appended')
+                with self.scoped() as conn,conn.cursor() as cur:
+                    saved=conn.execute('SELECT turns FROM saas_operator_copilot_threads').fetchone()['turns']
+                    self.assertEqual([turn['transcript_status'] for turn in saved],['partial','unavailable'])
+                    self.history.clear(cur,self.tenant,7,self.channel,self.conversation)
+                with self.assertRaises(TenantLinearError):await history.append(entry,0)
+                with self.scoped() as conn:
+                    conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                with self.assertRaises(TenantLinearError):await history.append({**entry,'turn_sequence':2},0)
+        try:
+            with patch.object(voice,'_connect',self.scoped),patch.object(orchestration,'_connect',self.scoped):asyncio.run(run())
+        finally:
+            self.conn.rollback()
+            self.conn.execute('DROP TABLE IF EXISTS saas_operator_voice_turns,saas_operator_voice_sessions')
+            self.conn.commit()
+
     def test_actual_http_gateway_provider_pump_and_pg_guard_with_test_gates(self):
         outer=self;profile={'tenant_id':self.tenant,'telegram_id':7};leases=[];sockets=[]
         class FakeSocket:

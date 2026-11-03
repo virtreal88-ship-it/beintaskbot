@@ -6,6 +6,7 @@ public WS path refuses before admission because the legacy text writer can
 overwrite voice history and no real provider/dispatch guard is approved.
 """
 import asyncio
+import hashlib
 import json
 import uuid
 from tenant_linear_policy import TenantLinearError
@@ -275,16 +276,63 @@ class ServerCredentialLoader:
 
 
 class VoiceHistory:
-    def __init__(self,authority):self.authority=authority
+    def __init__(self,authority,session_id=None):self.authority=authority;self.session_id=session_id
     def require_writer_ready(self):require_history_cutover()
-    async def append(self,*_args,**_kwargs):
-        # Do not write even an apparently complete transcript while an old
-        # text worker can overwrite it or after uncertain playback/alignment.
+    def _append(self,entry,clear_revision):
         require_history_cutover()
+        from tenant_operator_copilot_threads import _validated_entries,append
+        if (type(clear_revision) is not int or clear_revision<0 or not isinstance(entry,dict) or
+            not isinstance(self.session_id,str) or str(uuid.UUID(self.session_id))!=self.session_id or
+            entry.get('voice_session_id')!=self.session_id):
+            raise ValueError('voice_history_scope_invalid')
+        s=self.authority.scope
+        _validated_entries(s.agent_binding,[entry])
+        if not {'voice_session_id','turn_sequence','transcript_status','transcript_quality'}.issubset(entry):
+            raise ValueError('voice_history_metadata_required')
+        canonical=json.dumps({'entry':entry,'clear_revision':clear_revision},ensure_ascii=False,
+                             sort_keys=True,separators=(',',':'),allow_nan=False)
+        digest=hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        with _connect() as conn,conn.cursor() as cur:
+            self.authority.recheck(cur)
+            cur.execute('''INSERT INTO saas_operator_voice_sessions
+              (session_id,tenant_id,actor_id,channel_id,conversation_id,agent_binding,clear_revision,next_sequence)
+              VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,0) ON CONFLICT(session_id) DO NOTHING''',
+              (self.session_id,s.tenant,s.actor,s.channel_id,s.conversation_id,s.agent_binding,clear_revision))
+            cur.execute('SELECT * FROM saas_operator_voice_sessions WHERE session_id=%s::uuid FOR UPDATE',(self.session_id,))
+            row=cur.fetchone() or {}
+            if (str(row.get('tenant_id'))!=s.tenant or row.get('actor_id')!=s.actor or row.get('channel_id')!=s.channel_id or
+                row.get('conversation_id')!=s.conversation_id or row.get('agent_binding')!=s.agent_binding or
+                row.get('clear_revision')!=clear_revision):raise TenantLinearError('Голосовая история изменилась.',409)
+            # A clear must be checked even for an idempotent retry.
+            cur.execute('''SELECT clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid
+              AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE''',
+              (s.tenant,s.actor,s.channel_id,s.conversation_id))
+            thread=cur.fetchone();revision=thread['clear_revision'] if thread else 0
+            if revision!=clear_revision:raise TenantLinearError('Голосовая история очищена.',409)
+            sequence=entry['turn_sequence']
+            cur.execute('SELECT digest FROM saas_operator_voice_turns WHERE session_id=%s::uuid AND turn_sequence=%s',
+                        (self.session_id,sequence))
+            previous=cur.fetchone()
+            if previous:
+                if previous['digest']!=digest:raise TenantLinearError('Голосовая реплика изменилась.',409)
+                return 'duplicate'
+            if row.get('next_sequence')!=sequence:raise TenantLinearError('Нарушен порядок голосовых реплик.',409)
+            append(cur,s.tenant,s.actor,s.channel_id,s.conversation_id,clear_revision,s.agent_binding,[entry])
+            cur.execute('INSERT INTO saas_operator_voice_turns(session_id,turn_sequence,digest) VALUES(%s::uuid,%s,%s)',
+                        (self.session_id,sequence,digest))
+            cur.execute('UPDATE saas_operator_voice_sessions SET next_sequence=next_sequence+1 WHERE session_id=%s::uuid',
+                        (self.session_id,))
+        return 'appended'
+
+    async def append(self,entry,clear_revision=None):
+        # Candidate schema/migration and every old text writer must be cut
+        # over before writing, including when a client retries a prior turn.
+        require_history_cutover()
+        return await asyncio.to_thread(self._append,dict(entry),clear_revision)
 
 
 def _compose_server_session(authority,client,lease,session_id):
-    history=VoiceHistory(authority)
+    history=VoiceHistory(authority,session_id)
     history.require_writer_ready()  # intentionally always raises
     context=CopilotContext(authority)
     ledger=ScopedBudget(authority,session_id)
