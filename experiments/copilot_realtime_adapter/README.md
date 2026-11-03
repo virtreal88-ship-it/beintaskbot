@@ -1,0 +1,106 @@
+# Experimental Copilot Realtime adapter (not production)
+
+This directory is a local, disconnected design and test artifact. It does not
+register a route, load UI inside `/app`, instantiate a real provider, read any
+credentials, send customer messages, or make OpenAI calls. The base is Worker
+`fc75c2899b7b86de42bf2cafdbdd116e9717d821`. Shared history and the $5 ledger
+are being developed separately; this artifact is not their integration.
+
+## Existing Copilot reuse and scope
+
+The existing employee/dialog Copilot is `tenant_operator_copilot.py` via
+`tenant_operator_api.py` and `tenant_web_routes.py`. Its `INSTRUCTIONS` forbid
+tools, CRM modifications, customer sends and external actions. It also applies
+`tenant_operator_access.access`/`assert_route`, member policy, consent,
+company integration configuration, assigned-agent binding, historical message
+and published-knowledge/media-evidence checks. A real `context.read_authorized`
+must derive `(tenant, actor, channel, conversation)` from the authenticated
+server request, invoke all equivalent checks, and construct the same authorized
+prompt and context; it must not trust a browser-provided tenant or context.
+Existing `_draft_context` also executes a provider path, so it cannot simply be
+called to prepare context without carefully separating preparation from execution.
+
+The new voice transport can be developed independently of the WhatsApp outbound
+voice transport, but the Copilot may consume WhatsApp history through Evolution.
+The independently identified Baileys advisory means transport success or an
+event's arrival does not establish that the underlying WhatsApp event is
+authentic. Keep all existing source and consent rules, don't claim that history
+is verified, and assess source integrity before allowing affected data into AI.
+
+## Dependencies enforced by the prototype
+
+`Session(scope, authority, ledger, lease, context, provider, client)` rejects
+missing dependencies. All six dependencies are synthetic in tests; production
+must supply trusted implementations. `scope` is server-derived, never read
+from client event data. `authority.check(scope, stage)` and
+`lease.assert_current(scope, fence)` are called on input/output/dispatch and
+periodically. A shared lease must fence concurrent sessions across processes.
+The prototype does not prove atomic revocation around dispatch, or distributed
+lease fencing, or any production implementation of these methods.
+
+The intended shared budget interface is `reserve(scope)` then `claim(scope)`
+before each server-originated `response.create`, where scope contains unique
+`request_id`, `tenant_id`, `session_id`, `actor_id`, `response_number`, and
+`executor`. A `mark_unknown(scope)` retains a conservative hold after unknown or
+unreconciled use. No in-memory or per-executor account is sufficient. No
+connection from the browser to a provider is allowed, and VAD auto-response,
+transcription, tools and reconnect are disabled in the provider contract. The
+prototype assumes `provider.open` really enforces those settings but does not
+verify them. Its mock ledger does not enforce $5. Real upstream enforcement,
+current tariff and maximum token charges, a shared durable ledger, reconciliation,
+crash handling and limits must be proven before a paid call.
+
+Voice/text history is deliberately not written: the existing text writer may
+overwrite concurrent voice turns. A trusted shared history adapter is needed,
+with auth and agent binding, voice session/turn IDs, atomic idempotent ordering,
+clear/revocation fencing, incomplete ASR marking and a documented retention
+policy. User transcripts are not yet handled. Never persist raw voice audio.
+No external-action tools may be introduced. Interrupted assistant output cannot
+be saved as exact speech merely by dividing its transcript by duration.
+
+## Browser and transport
+
+`browser.js` is an unmounted view with start, status, mute and end. It requires
+the existing `acquireTenantMicrophone` helper by injection and fails closed if
+it is unavailable. The helper currently exists in held PR #474 only, so an
+independent AI release must first extract it to a common compatible base; do
+not add another microphone mutex. Its `beintaskbot-microphone-v1` Web Lock is
+origin-wide when supported. `audio.js` is a provisional PCM16 mono 24 kHz Web
+Audio capture/player; it refuses unsupported 24 kHz contexts. It is untested
+on real iOS/Android and uses deprecated ScriptProcessor. Do not ship it without
+an AudioWorklet, resampling, echo-cancellation and mobile/browser validation.
+On interruption it deliberately reports **0 ms** played because a browser
+cannot prove what reached a speaker; no unverified spoken prefix is preserved.
+
+`websocket.py` provides an unregistered aiohttp boundary with explicit
+origin allowlisting, an injected pre-upgrade authentication callback, a 9,600
+byte frame cap and a simple 60-frame/second limit. `channel.js` implements the
+matching same-origin browser transport. The loopback aiohttp test exercises
+synthetic audio, interruptions and a mock provider. Those injected callbacks
+do not establish real production authentication or authorization.
+
+`client`/`provider` are abstract. A real server-side WebSocket gateway needs
+authenticated and origin-checked upgrades, short-lived single-use session
+binding, strict frame/queue limits, backpressure and timeout handling, reliable
+timer cancellation, revoked access handling, and proven teardown after process
+failure. aiohttp exists but the current Worker does not yet expose this path;
+Railway upgrade support has not been established. Client reconnect, playback
+completion, end-to-end barge-in, context handoff, and actual AI interaction
+are not implemented. In particular, `provider.open`/`send` can currently hang;
+the lifecycle requires further independent concurrency review. Do not enable
+or deploy this experiment as a feature.
+
+Official references: [Realtime speech conversations and interruption](https://developers.openai.com/api/docs/guides/realtime-conversations),
+[Voice activity detection](https://developers.openai.com/api/docs/guides/realtime-vad),
+[Realtime cost calculation](https://developers.openai.com/api/docs/guides/voice-latency-cost).
+
+Run isolated tests in this directory:
+
+* `/workspace/.venvs/beintaskbot311/bin/python -m unittest -v test_session test_websocket`
+* `node --test test_browser.cjs test_chromium.cjs`
+
+The Chromium test uses fake audio hardware and the held #474 microphone helper
+from `/workspace/voice-beintaskbot` (override `VOICE_MICROPHONE_HELPER` if
+needed); it confirms two tabs cannot acquire it together and tracks stop on end.
+Tests use mock authority, ledger and provider and do not prove real security,
+cost control, microphone permission recovery, voice quality or delivery.
