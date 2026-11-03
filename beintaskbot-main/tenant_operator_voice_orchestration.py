@@ -34,6 +34,13 @@ def require_sealed_source_snapshot():
     raise TenantLinearError('Контекст голосового режима пока недоступен.',503)
 
 
+def require_voice_history_provenance():
+    # A UUID and shaped transcript are not proof of an active server-owned
+    # session, current lease, event ordering or actual playback. Independent
+    # immutable refusal until those bindings are implemented and reviewed.
+    raise TenantLinearError('Происхождение голосовой истории не подтверждено.',503)
+
+
 class ScopedAuthority:
     def __init__(self,profile,route,scope):
         self.profile={'tenant_id':scope.tenant,'telegram_id':scope.actor}
@@ -280,6 +287,7 @@ class VoiceHistory:
     def require_writer_ready(self):require_history_cutover()
     def _append(self,entry,clear_revision):
         require_history_cutover()
+        require_voice_history_provenance()
         from tenant_operator_copilot_threads import _validated_entries,append
         if (type(clear_revision) is not int or clear_revision<0 or not isinstance(entry,dict) or
             not isinstance(self.session_id,str) or str(uuid.UUID(self.session_id))!=self.session_id or
@@ -287,6 +295,8 @@ class VoiceHistory:
             raise ValueError('voice_history_scope_invalid')
         s=self.authority.scope
         _validated_entries(s.agent_binding,[entry])
+        if entry.get('transcript_status')=='complete' or entry.get('transcript_quality')=='human_verified':
+            raise TenantLinearError('Полнота голосовой реплики не подтверждена.',503)
         if not {'voice_session_id','turn_sequence','transcript_status','transcript_quality'}.issubset(entry):
             raise ValueError('voice_history_metadata_required')
         canonical=json.dumps({'entry':entry,'clear_revision':clear_revision},ensure_ascii=False,

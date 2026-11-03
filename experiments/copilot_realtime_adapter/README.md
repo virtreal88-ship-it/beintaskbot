@@ -261,6 +261,10 @@ not ready to release: legacy writers can overwrite or delete thread rows,
 clear on an absent row may not advance a durable epoch, and migration, mixed
 workers, role privileges, retention and idempotency across rollback remain to
 be designed and independently reviewed. It is not yet fed by transcript events.
+An independent immutable provenance gate additionally rejects all writes
+until server-owned session/lease/event origins are bound and verified. Even in
+isolated tests which override both gates, `complete` and `human_verified` turns
+are rejected until their stronger evidence policy is implemented.
 
 The live connector remains unusable. The candidate now owns a ClientSession
 with `trust_env=False`, an aiohttp pre-redirect trace refusal and connection and

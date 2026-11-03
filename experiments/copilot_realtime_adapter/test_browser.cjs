@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const mount=require('./browser.js');
 
-function setup({open}={}){
+function setup({open,connectOverride}={}){
   const lifecycle={visibilityState:'visible',listeners:{},addEventListener(k,v){this.listeners[k]=v;},removeEventListener(k){delete this.listeners[k];}};
   const document={createElement(){return {hidden:false,textContent:'',disabled:false,handlers:{},setAttribute(){},addEventListener(k,f){this.handlers[k]=f;}};}};
   const root={ownerDocument:document,children:[],append(...xs){this.children.push(...xs);},replaceChildren(){this.children=[];}};
@@ -10,7 +10,7 @@ function setup({open}={}){
   const sent=[],heard=[];
   const audio={play:(id,data)=>heard.push([id,data]),interrupt:()=>0,mute:()=>{},close:async()=>{closed++;}};
   const view=mount(root,{lifecycle,acquireMicrophone:async()=>()=>{released++;},openAudio:open|| (async()=>audio),
-    connect:async onEvent=>{cb=onEvent;return {send:e=>sent.push(e),close:async()=>{channelClosed++;}};}});
+    connect:connectOverride|| (async onEvent=>{cb=onEvent;return {send:e=>sent.push(e),close:async()=>{channelClosed++;}};})});
   return {view,root,lifecycle,sent,heard,audio,emit:e=>cb(e),released:()=>released,closed:()=>closed,channelClosed:()=>channelClosed};
 }
 
@@ -60,4 +60,48 @@ test('unconfirmed shutdown is not shown as a normal end',async()=>{
   assert.match(x.root.children[0].textContent,/не подтверждено; текстовый чат доступен/);
   assert.equal(x.root.children[1].disabled,true);
   assert.equal(x.released(),1);
+});
+
+test('playback failure cannot silently re-enable voice before server stop',async()=>{
+  const x=setup();await x.view.start();
+  x.audio.play=()=>{throw new Error('synthetic playback failure');};
+  await x.emit({type:'audio',item_id:'a',pcm:new Uint8Array(2)});
+  assert.match(x.root.children[0].textContent,/Ошибка воспроизведения.*не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+  assert.equal(x.channelClosed(),1);
+});
+
+test('playback completion failure also keeps voice disabled',async()=>{
+  const x=setup();await x.view.start();
+  x.audio.finished=()=>Promise.reject(new Error('synthetic failure'));
+  await x.emit({type:'audio_done',item_id:'a'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(x.root.children[0].textContent,/Ошибка воспроизведения.*не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+});
+
+test('late output while ending cannot restart playback or change status',async()=>{
+  const x=setup();await x.view.start();x.root.children[3].handlers.click();
+  x.audio.play=()=>{throw new Error('audio engine is stopped');};
+  await x.emit({type:'audio',item_id:'a',pcm:new Uint8Array(2)});
+  assert.match(x.root.children[0].textContent,/Завершение разговора…/);
+  assert.equal(x.root.children[1].disabled,true);
+  await x.emit({type:'end_unconfirmed'});
+  assert.equal(x.root.children[1].disabled,true);
+});
+
+test('local stop after server start requires confirmation before restart',async()=>{
+  const x=setup();await x.view.start();await x.view.stop();
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.released(),1);
+});
+
+test('unknown connect failure keeps voice blocked and releases microphone',async()=>{
+  const x=setup({connectOverride:async()=>{throw new Error('synthetic unknown connect');}});
+  await x.view.start();
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),1);
 });

@@ -34,6 +34,14 @@ class GuardPG(IntegratedSynthetic):
             with self.assertRaises(TenantLinearError):await history.append(entry,0)
             with self.assertRaises(TenantLinearError):await asyncio.to_thread(history._append,entry,0)
             with patch.object(orchestration,'require_history_cutover'):
+                # A copied UUID or shaped transcript is not proof of a
+                # server-owned, live session or the source of a transcript.
+                with self.assertRaises(TenantLinearError):await history.append(entry,0)
+                with self.scoped() as conn:
+                    self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_operator_voice_sessions').fetchone()['n'],0)
+            with patch.object(orchestration,'require_history_cutover'),patch.object(orchestration,'require_voice_history_provenance'):
+                with self.assertRaises(TenantLinearError):await history.append({**entry,'transcript_status':'complete'},0)
+                with self.assertRaises(TenantLinearError):await history.append({**entry,'transcript_quality':'human_verified'},0)
                 outcomes=await asyncio.gather(history.append(entry,0),history.append(entry,0))
                 self.assertCountEqual(outcomes,['appended','duplicate'])
                 with self.assertRaises(TenantLinearError):await history.append({**entry,'text':'changed'},0)

@@ -11,16 +11,21 @@
   const mute = document.createElement('button'); mute.type='button';mute.textContent='Выключить микрофон';mute.hidden=true;
   const end = document.createElement('button'); end.type='button';end.textContent='Завершить разговор';end.hidden=true;
   root.append(status,start,mute,end);
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, endTimer=null;
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null;
+  let serverInitiated=false, voiceBlocked=false;
   const uncertain='Завершение разговора не подтверждено; текстовый чат доступен.';
+  const playbackFailure='Ошибка воспроизведения. '+uncertain;
   function send(event){
     if(!channel)return;
     try { Promise.resolve(channel.send(event)).catch(()=>stop(uncertain)); }
     catch(_){void stop(uncertain);}
   }
 
-  async function stop(reason='ended') {
-    generation++; running=false; start.disabled=reason===uncertain; mute.hidden=true; end.hidden=true;
+  async function stop(reason='ended',confirmed=false) {
+    if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
+    if(reason===uncertain || reason===playbackFailure)voiceBlocked=true;
+    serverInitiated=false;
+    generation++; running=false; ending=false; start.disabled=voiceBlocked; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -39,7 +44,7 @@
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
   async function begin() {
-    if(running || destroyed)return;
+    if(running || destroyed || voiceBlocked)return;
     running=true;start.disabled=true;end.hidden=false;status.textContent='Подключение…';
     const version=++generation;
     try {
@@ -52,23 +57,25 @@
       if(opening===currentOpening)opening=null;
       if(version!==generation){await engine.close();return;}
       audio=engine;
+      serverInitiated=true;
       const socket=await connect(async event=>{
         if(version!==generation)return;
+        if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
           if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent='AI отвечает';}
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation)send({type:'played_all',item_id:event.item_id});
-            }).catch(()=>stop('Ошибка воспроизведения'));
+            }).catch(()=>stop(playbackFailure));
           }
           else if(event.type==='interrupt'){
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});
             status.textContent='Слушаю';
           } else if(event.type==='ready')status.textContent='Слушаю';
-          else if(event.type==='ended')await stop('Соединение завершено');
+          else if(event.type==='ended')await stop('Соединение завершено',true);
           else if(event.type==='end_unconfirmed')await stop(uncertain);
-        } catch (_) { await stop('Ошибка воспроизведения'); }
+        } catch (_) { await stop(playbackFailure); }
       });
       if(version!==generation){await socket.close();return;}
       channel=socket;mute.hidden=false;status.textContent='Слушаю';
@@ -84,7 +91,7 @@
   end.addEventListener('click',()=>{
     if(!channel){void stop(uncertain);return;}
     try{audio?.stopNow?.();}catch(_){}
-    muted=true;end.disabled=true;status.textContent='Завершение разговора…';
+    muted=true;ending=true;end.disabled=true;status.textContent='Завершение разговора…';
     send({type:'end'});endTimer=setTimeout(()=>stop(uncertain),2000);
   });
   mute.addEventListener('click',()=>{
