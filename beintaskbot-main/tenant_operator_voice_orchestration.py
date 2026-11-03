@@ -288,7 +288,7 @@ class VoiceHistory:
     def _append(self,entry,clear_revision):
         require_history_cutover()
         require_voice_history_provenance()
-        from tenant_operator_copilot_threads import _validated_entries,append
+        from tenant_operator_copilot_threads import _validated_entries,append,ThreadCleared
         if (type(clear_revision) is not int or clear_revision<0 or not isinstance(entry,dict) or
             not isinstance(self.session_id,str) or str(uuid.UUID(self.session_id))!=self.session_id or
             entry.get('voice_session_id')!=self.session_id):
@@ -302,6 +302,7 @@ class VoiceHistory:
         canonical=json.dumps({'entry':entry,'clear_revision':clear_revision},ensure_ascii=False,
                              sort_keys=True,separators=(',',':'),allow_nan=False)
         digest=hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        cleared=False
         with _connect() as conn,conn.cursor() as cur:
             self.authority.recheck(cur)
             cur.execute('''INSERT INTO saas_operator_voice_sessions
@@ -327,11 +328,18 @@ class VoiceHistory:
                 if previous['digest']!=digest:raise TenantLinearError('Голосовая реплика изменилась.',409)
                 return 'duplicate'
             if row.get('next_sequence')!=sequence:raise TenantLinearError('Нарушен порядок голосовых реплик.',409)
-            append(cur,s.tenant,s.actor,s.channel_id,s.conversation_id,clear_revision,s.agent_binding,[entry])
-            cur.execute('INSERT INTO saas_operator_voice_turns(session_id,turn_sequence,digest) VALUES(%s::uuid,%s,%s)',
-                        (self.session_id,sequence,digest))
-            cur.execute('UPDATE saas_operator_voice_sessions SET next_sequence=next_sequence+1 WHERE session_id=%s::uuid',
-                        (self.session_id,))
+            try:
+                append(cur,s.tenant,s.actor,s.channel_id,s.conversation_id,clear_revision,s.agent_binding,[entry])
+            except ThreadCleared:
+                # Commit any atomic expiry scrub before returning failure.
+                # No turn receipt or sequence increment occurs on this path.
+                cleared=True
+            if not cleared:
+                cur.execute('INSERT INTO saas_operator_voice_turns(session_id,turn_sequence,digest) VALUES(%s::uuid,%s,%s)',
+                            (self.session_id,sequence,digest))
+                cur.execute('UPDATE saas_operator_voice_sessions SET next_sequence=next_sequence+1 WHERE session_id=%s::uuid',
+                            (self.session_id,))
+        if cleared:raise TenantLinearError('Голосовая история очищена или истекла.',409)
         return 'appended'
 
     async def append(self,entry,clear_revision=None):

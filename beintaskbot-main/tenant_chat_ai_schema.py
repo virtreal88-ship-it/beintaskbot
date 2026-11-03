@@ -32,7 +32,8 @@ def ensure_schema(conn):
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_copilot_threads(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
               requested_by BIGINT NOT NULL,channel_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
-              turns JSONB NOT NULL DEFAULT '[]'::jsonb,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              turns JSONB NOT NULL DEFAULT '[]'::jsonb,clear_revision BIGINT NOT NULL DEFAULT 0,
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id),
               FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
             cur.execute('CREATE INDEX IF NOT EXISTS saas_chat_ai_copilot_usage_idx ON saas_chat_ai_runs(tenant_id,requested_by,provider,channel_id,conversation_id,usage_day)')
