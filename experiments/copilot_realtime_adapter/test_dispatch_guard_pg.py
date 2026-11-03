@@ -1,5 +1,7 @@
 """Durable guard and Session on isolated PG; fake socket, no API calls."""
 import asyncio
+import base64
+import json
 import threading
 import uuid
 from unittest.mock import patch
@@ -7,6 +9,9 @@ from unittest.mock import patch
 import tenant_ai_spend_budget as spend
 import tenant_operator_voice_context as voice
 import tenant_operator_voice_orchestration as orchestration
+import tenant_operator_voice_api as voice_api
+from aiohttp import web
+from aiohttp.test_utils import TestClient,TestServer
 from tenant_operator_realtime_wire import SyntheticRealtimeWire
 from tenant_operator_voice_session import Session
 from tenant_linear_policy import TenantLinearError
@@ -15,6 +20,82 @@ from test_session import Lease,Client
 
 
 class GuardPG(IntegratedSynthetic):
+    def test_actual_http_gateway_provider_pump_and_pg_guard_with_test_gates(self):
+        outer=self;profile={'tenant_id':self.tenant,'telegram_id':7};leases=[];sockets=[]
+        class FakeSocket:
+            def __init__(self):self.events=[];self.queue=asyncio.Queue();self.opened=False
+            async def receive_json(self):
+                if not self.opened:self.opened=True;return {'type':'session.created','session':{'id':'synthetic-session'}}
+                if len(self.events)==1:return {'type':'session.updated','session':{**self.events[-1]['session'],'id':'synthetic-session'}}
+                return await self.queue.get()
+            async def send_json(self,event):
+                self.events.append(event)
+                if event['type']=='input_audio_buffer.append':
+                    await self.queue.put({'type':'input_audio_buffer.speech_stopped'})
+                if event['type']=='response.create':
+                    with outer.scoped() as conn:
+                        state=conn.execute('SELECT state FROM saas_voice_test_hold WHERE tenant_id=%s',(outer.tenant,)).fetchone()['state']
+                    assert state=='dispatching'
+                    await self.queue.put({'type':'response.created','response':{'id':'synthetic-r'}})
+                    await self.queue.put({'type':'response.output_audio.delta','response_id':'synthetic-r','item_id':'synthetic-a',
+                                          'content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+            async def close(self):await self.queue.put(None)
+        def create_lease(_authority,_session_id):lease=Lease();leases.append(lease);return lease
+        async def socket(_credential,_owner):
+            result=FakeSocket();sockets.append(result);return result
+        async def fake_context(_self,_scope):
+            return {'existing_copilot_instructions':'Never send messages.','lines':[],'extra_context':{}}
+        async def fake_revalidate(*_):return True
+        async def fake_key(_self):return 'synthetic-key'
+        async def run():
+            app=web.Application()
+            app.router.add_get('/ws',voice_api.handler(lambda _request:profile,'https://crm.pro.az',
+                                                        __import__('logging').getLogger('synthetic-voice'),'ws'))
+            browser=TestClient(TestServer(app));await browser.start_server()
+            try:
+                query={'expected_tenant_id':self.tenant,'expected_user_id':'7','lead_id':'41',
+                       'channel_id':self.channel,'conversation_id':self.conversation}
+                ws=await browser.ws_connect('/ws',params=query,headers={'Origin':'https://crm.pro.az'})
+                self.assertEqual((await ws.receive_json())['type'],'ready')
+                await ws.send_bytes(bytes(480))
+                self.assertEqual((await asyncio.wait_for(ws.receive_json(),2))['type'],'audio')
+                self.assertEqual([x['type'] for x in sockets[0].events],['session.update','conversation.item.create',
+                                                                        'input_audio_buffer.append','response.create'])
+                await ws.close()
+                for _ in range(100):
+                    if not leases[0].held:break
+                    await asyncio.sleep(.01)
+                self.assertFalse(leases[0].held)
+            finally:await browser.close()
+        with patch.object(voice,'_connect',self.scoped),patch.object(orchestration,'_connect',self.scoped),\
+             patch.object(orchestration,'require_history_cutover'),patch.object(orchestration,'_create_server_lease',side_effect=create_lease),\
+             patch('tenant_operator_voice_session._require_live_session_admission'),\
+             patch('tenant_operator_realtime_wire._require_live_admission'),\
+             patch('tenant_operator_realtime_wire._open_openai_socket',side_effect=socket),\
+             patch.object(orchestration.ServerCredentialLoader,'load',fake_key),\
+             patch.object(orchestration.CopilotContext,'read_authorized',fake_context),\
+             patch.object(orchestration.CopilotContext,'revalidate',fake_revalidate),\
+             patch.object(self.grant,'ENFORCEMENT_VERIFIED',True),patch.object(self.grant,'RECONCILIATION_VERIFIED',True),\
+             patch.object(spend,'limit_microusd',return_value=0):asyncio.run(run())
+
+    def test_company_credential_loader_rechecks_scope_and_never_exposes_bad_secret(self):
+        calls=[]
+        class Cipher:
+            def decrypt(self,_value):
+                calls.append('decrypt')
+                return json.dumps({'tenant_id':self_outer.tenant,'provider':'chat_ai','api_key':'synthetic-only'}).encode()
+        self_outer=self
+        async def run():
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            loader=orchestration.ServerCredentialLoader(authority)
+            self.assertEqual(await loader.load(),'synthetic-only')
+            with self.scoped() as conn:
+                conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+            with self.assertRaises(TenantLinearError):await loader.load()
+            self.assertEqual(calls,['decrypt'])
+        with patch.object(voice,'_connect',self.scoped),patch.object(orchestration,'_connect',self.scoped),\
+             patch('tenant_platform._fernet',return_value=Cipher()):asyncio.run(run())
+
     def test_session_dispatch_commits_before_socket_and_replay_fails(self):
         self.exercise_dispatch(False)
 

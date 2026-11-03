@@ -171,6 +171,37 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused): await other.start()
         self.assertTrue(self.lease.held)
 
+    async def test_shielded_socket_cleanup_keeps_lease_until_confirmed(self):
+        from tenant_operator_realtime_wire import AiohttpRealtimeSocket
+        entered=asyncio.Event();release=asyncio.Event()
+        class SlowWS:
+            closed=False
+            async def close(inner):entered.set();await release.wait();inner.closed=True
+        wrapper=AiohttpRealtimeSocket(SlowWS());lease=Lease();provider=Provider(self.ledger)
+        provider.close=wrapper.close
+        other=Session(('tenant',42,'channel','other'),authority=self.auth,ledger=self.ledger,lease=lease,
+                      context=Context(),provider=provider,client=Client())
+        other.shutdown_timeout=.03
+        await other.start();ended=asyncio.create_task(other.end('test'))
+        await entered.wait();self.assertFalse(await ended);self.assertTrue(lease.held)
+        self.assertFalse(wrapper._close_task.done())
+        release.set();await wrapper.close()
+        # Once shutdown was unconfirmed, no late completion may silently
+        # release the old lease; reconciliation must be explicit.
+        self.assertTrue(lease.held)
+
+    async def test_pending_provider_receive_keeps_lease_until_drained(self):
+        entered=asyncio.Event();release=asyncio.Event();lease=Lease();provider=Provider(self.ledger)
+        async def receive():entered.set();await release.wait();return {'type':'late'}
+        provider.receive=receive
+        other=Session(('tenant',42,'channel','receive'),authority=self.auth,ledger=self.ledger,lease=lease,
+                      context=Context(),provider=provider,client=Client())
+        other.shutdown_timeout=.03
+        await other.start();pending=asyncio.create_task(other.next_provider_event());await entered.wait()
+        self.assertFalse(await other.end('test'));self.assertTrue(lease.held)
+        release.set();await pending
+        self.assertTrue(lease.held)
+
     async def test_end_during_budget_claim_never_dispatches_late_response(self):
         entered=asyncio.Event();release=asyncio.Event();original=self.ledger.claim
         async def slow_claim(scope):

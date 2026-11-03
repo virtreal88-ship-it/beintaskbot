@@ -66,7 +66,7 @@ class AiohttpRealtimeSocket:
     obtain a socket through this module while admission is disabled.
     """
     def __init__(self,ws,owned_session=None):
-        self.ws=ws;self.owned_session=owned_session
+        self.ws=ws;self.owned_session=owned_session;self._close_task=None
 
     async def send_json(self,event):
         if not isinstance(event,dict):raise ValueError('wire_event_invalid')
@@ -86,6 +86,12 @@ class AiohttpRealtimeSocket:
         return data
 
     async def close(self):
+        # Multiple callers/cancellations share one cleanup. A caller timing
+        # out must not cancel cleanup or claim that the lease is releasable.
+        if self._close_task is None:self._close_task=asyncio.create_task(self._close_owned())
+        return await asyncio.shield(self._close_task)
+
+    async def _close_owned(self):
         try:
             await asyncio.wait_for(self.ws.close(),CLOSE_DEADLINE)
         finally:
@@ -95,23 +101,31 @@ class AiohttpRealtimeSocket:
         if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
 
 
-async def _open_openai_socket(api_key):
+async def _open_openai_socket(api_key,owner):
     """Future server-only connector. Gate fires before key use or any I/O."""
     _require_live_admission()
     # No caller-supplied session, proxy, endpoint, or trace hooks. This path
     # remains blocked until key source, cancellation and remote billing proof.
     session=_new_owned_session()
+    owner._opening_session=session
     try:
         ws=await _connect_websocket(session,OPENAI_URL+'?model='+MODEL,{'Authorization':'Bearer '+api_key})
     except BaseException:
-        await asyncio.wait_for(session.close(),CLOSE_DEADLINE)
+        await owner._close_opening_session()
         raise
-    return AiohttpRealtimeSocket(ws,owned_session=session)
+    socket=AiohttpRealtimeSocket(ws,owned_session=session)
+    owner.socket=socket
+    return socket
 
 
-def create_production_provider(*_args,**_kwargs):
-    # No environment/config override: wiring has not been independently proven.
-    raise TenantLinearError('Голосовой режим пока недоступен.',503)
+def create_production_provider(*args,**kwargs):
+    # Never accept loader, guard or endpoint from an HTTP request. Imported
+    # lazily to avoid a dependency cycle; types are server-owned implementations.
+    _require_live_admission()
+    from tenant_operator_voice_orchestration import ScopedDispatchGuard, ServerCredentialLoader
+    if kwargs or len(args)!=2 or type(args[0]) is not ScopedDispatchGuard or type(args[1]) is not ServerCredentialLoader:
+        raise ValueError('trusted_provider_dependencies_required')
+    return OpenAIRealtimeProvider(args[1].load,args[0])
 
 
 class _RealtimeWire:
@@ -242,3 +256,58 @@ class SyntheticRealtimeWire(_RealtimeWire):
         if getattr(socket,'synthetic_only',None) is not True:
             raise ValueError('synthetic_socket_and_guard_required')
         super().__init__(socket,claim_guard)
+
+
+class OpenAIRealtimeProvider(_RealtimeWire):
+    """Server-only provider composition. Not admitted by production Session.
+
+    The credential loader must eventually be supplied by the reviewed server
+    factory, never by a request. Both this class and its connector reject
+    before loading credentials while the immutable admission gate is closed.
+    """
+    mock_only=False
+
+    def __init__(self,credential_loader,claim_guard):
+        if not callable(credential_loader):raise ValueError('credential_loader_required')
+        super().__init__(None,claim_guard)
+        self._credential_loader=credential_loader;self._closing=False
+        self._opening_session=None;self._opening_close_task=None
+
+    async def _close_opening_session(self):
+        if self._opening_session is None:return
+        if self._opening_close_task is None:
+            self._opening_close_task=asyncio.create_task(self._opening_session.close())
+        await asyncio.shield(self._opening_close_task)
+        if not self._opening_session.closed:raise ValueError('provider_cleanup_unconfirmed')
+
+    async def open(self,snapshot,**options):
+        _require_live_admission()
+        if self._closing:raise ValueError('provider_closed')
+        try:
+            credential=await asyncio.wait_for(self._credential_loader(),CONNECT_DEADLINE)
+        except Exception:
+            raise ValueError('provider_credential_unavailable') from None
+        try:
+            if not isinstance(credential,str) or not credential:raise ValueError('credential_unavailable')
+            if self._closing:raise ValueError('provider_closed')
+            self.socket=await _open_openai_socket(credential,self)
+        except Exception:
+            raise ValueError('provider_connect_unavailable') from None
+        finally:
+            credential=None
+        try:
+            if self._closing:raise ValueError('provider_closed')
+            await super().open(snapshot,**options)
+        except asyncio.CancelledError:
+            # Session cleanup must still retain its lease if close is unknown.
+            await self.socket.close()
+            raise
+        except Exception:
+            try:await self.socket.close()
+            except Exception:raise ValueError('provider_cleanup_unconfirmed') from None
+            raise ValueError('provider_open_unavailable') from None
+
+    async def close(self):
+        self._closing=True;self.ready=False;self.bound=None
+        if self.socket is not None:await self.socket.close()
+        elif self._opening_session is not None:await self._close_opening_session()

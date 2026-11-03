@@ -42,7 +42,7 @@ def handler(member_from_request,origin,logger,resource):
                 _expected(request.query,profile)
                 # The server-owned orchestrator has an immutable cutover gate;
                 # it refuses before any upgrade or provider/network operation.
-                return await open_server_session(request,profile)
+                return await open_server_session(request,profile,origin)
             raise TenantLinearError('Метод не поддерживается.',405)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)

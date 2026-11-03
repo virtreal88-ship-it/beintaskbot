@@ -15,6 +15,11 @@ class Refused(Exception):
     pass
 
 
+def _require_live_session_admission():
+    # No feature flag or request can bypass source, history and billing gates.
+    raise Refused('real_provider_not_supported')
+
+
 class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
@@ -25,7 +30,9 @@ class Session:
         if any(x is None for x in (authority, ledger, lease, context, provider, client)):
             raise Refused('trusted_dependencies_missing')
         if getattr(provider, 'mock_only', None) is not True:
-            raise Refused('real_provider_not_supported')
+            from tenant_operator_realtime_wire import OpenAIRealtimeProvider
+            if type(provider) is not OpenAIRealtimeProvider:raise Refused('provider_not_trusted')
+            _require_live_session_admission()
         if not callable(getattr(provider,'bind_claim',None)):
             raise Refused('provider_claim_binding_required')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
@@ -60,6 +67,7 @@ class Session:
         self.output_started_at = None
         self.lock = asyncio.Lock()
         self.io_lock = asyncio.Lock()
+        self.receive_lock = asyncio.Lock()
         self.client_lock = asyncio.Lock()
         self.shutdown_timeout = .5
         self._end_task = None
@@ -78,6 +86,11 @@ class Session:
             if self.closed:
                 raise Refused('session_closed')
             await self.client.send(event)
+
+    async def next_provider_event(self):
+        async with self.receive_lock:
+            if self.closed:raise Refused('session_closed')
+            return await self.provider.receive()
 
     async def start(self):
         if self.open_attempted or self._stop_requested:
@@ -103,6 +116,7 @@ class Session:
                 raise Refused('session_already_active')
             if self._stop_requested: raise Refused('session_stopped_during_start')
             await self.authority.check(self.scope, 'dispatch')
+            await self.lease.assert_current(self.scope,self.fence)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
@@ -138,7 +152,7 @@ class Session:
             elif self.fence:
                 # No open in flight. A failed or completed open must be
                 # closed and drained before releasing the acquired lease.
-                closed = not self._open_task or await self._bounded(self.provider.close(), self._drain(self.io_lock), self._drain(self.client_lock))
+                closed = not self._open_task or await self._bounded(self.provider.close(), self._drain(self.io_lock), self._drain(self.receive_lock), self._drain(self.client_lock))
                 if closed:
                     await self._bounded(self.lease.release(self.scope, self.fence))
             raise
@@ -455,7 +469,7 @@ class Session:
                 await self.ledger.mark_unknown(reservation)
         # close and both drains are independent: close can unblock a running
         # send, but the lease remains held until *all* I/O is really drained.
-        drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),
+        drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
                                     self._drain(self.client_lock),hold_unknown())
         if not drained:
             return False

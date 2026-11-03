@@ -6,6 +6,7 @@ public WS path refuses before admission because the legacy text writer can
 overwrite voice history and no real provider/dispatch guard is approved.
 """
 import asyncio
+import json
 import uuid
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect
@@ -249,6 +250,30 @@ class ScopedDispatchGuard:
         return self._valid(dispatched,scope,'dispatching',hold)
 
 
+class ServerCredentialLoader:
+    """Existing company Chat AI credential path, scoped and server-only."""
+    def __init__(self,authority):
+        if type(authority) is not ScopedAuthority:raise ValueError('scoped_authority_required')
+        self.authority=authority
+
+    def _load(self):
+        from tenant_platform import _fernet
+        with _connect() as conn,conn.cursor() as cur:
+            self.authority.recheck(cur)
+            cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",
+                        (self.authority.scope.tenant,))
+            row=cur.fetchone()
+            try:
+                secret=json.loads(_fernet().decrypt(bytes(row['secrets'])))
+                if (secret.get('tenant_id')!=self.authority.scope.tenant or secret.get('provider')!='chat_ai' or
+                    not isinstance(secret.get('api_key'),str) or not secret['api_key']):raise ValueError()
+                return secret['api_key']
+            except Exception:
+                raise TenantLinearError('Проверьте настройки Chat AI компании.',503) from None
+
+    async def load(self):return await asyncio.to_thread(self._load)
+
+
 class VoiceHistory:
     def __init__(self,authority):self.authority=authority
     def require_writer_ready(self):require_history_cutover()
@@ -258,23 +283,29 @@ class VoiceHistory:
         require_history_cutover()
 
 
-async def prepare_server_session(profile,route,client,lease):
-    # All inputs are created by the authenticated server boundary; the
-    # browser cannot choose model, executor, provider, auth, ledger or lease.
-    authority=await ScopedAuthority.create(profile,route)
+def _compose_server_session(authority,client,lease,session_id):
     history=VoiceHistory(authority)
     history.require_writer_ready()  # intentionally always raises
     context=CopilotContext(authority)
-    # Unreachable until both immutable gates are reviewed and replaced.
-    session_id=str(uuid.uuid4())
     ledger=ScopedBudget(authority,session_id)
-    provider=create_production_provider(ScopedDispatchGuard(ledger))  # independently always raises
-    session=Session(authority.session_scope,authority=authority,ledger=ledger,lease=lease,
-                    context=context,provider=provider,client=client,executor=_EXECUTOR,session_id=session_id)
-    return session
+    provider=create_production_provider(ScopedDispatchGuard(ledger),ServerCredentialLoader(authority))  # independently always raises
+    return Session(authority.session_scope,authority=authority,ledger=ledger,lease=lease,
+                   context=context,provider=provider,client=client,executor=_EXECUTOR,session_id=session_id)
 
 
-async def open_server_session(request,profile):
+async def prepare_server_session(profile,route,client,lease):
+    # Internal server/test entry; never bind client or lease to request data.
+    authority=await ScopedAuthority.create(profile,route)
+    return _compose_server_session(authority,client,lease,str(uuid.uuid4()))
+
+
+def _create_server_lease(_authority,_session_id):
+    # The separately developed durable cross-worker lease is not yet reviewed
+    # and integrated. Never replace this refusal with a process-local lock.
+    raise TenantLinearError('Голосовой режим пока недоступен.',503)
+
+
+async def open_server_session(request,profile,origin=None):
     # Fail before WS upgrade, microphone streaming or context loading. The
     # serving path must not accept dependency-injection callbacks from HTTP.
     require_history_cutover()
@@ -284,4 +315,14 @@ async def open_server_session(request,profile):
     # selects a provider, implementation, executor or price.
     route={'provider':'connect','lead_id':request.query.get('lead_id'),
            'channel_id':request.query.get('channel_id'),'conversation_id':request.query.get('conversation_id')}
-    return await prepare_server_session(profile,route,None,None)
+    authority=await ScopedAuthority.create(profile,route)
+    session_id=str(uuid.uuid4())
+    lease=_create_server_lease(authority,session_id)  # independently hard-off
+    from tenant_operator_voice_gateway import make_handler
+    async def authenticate(_request):
+        await authority.check(authority.session_scope,'connect')
+        return authority.session_scope
+    def build(scope,client):
+        if scope!=authority.session_scope:raise TenantLinearError('Доступ изменился.',403)
+        return _compose_server_session(authority,client,lease,session_id)
+    return await make_handler(allowed_origins={origin},authenticate=authenticate,build_session=build)(request)

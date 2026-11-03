@@ -215,9 +215,16 @@ audio is conservatively truncated to zero; no aligned text is invented. The
 voice history writer still refuses until every legacy text writer has cut over.
 Consequently this candidate does not yet provide a working live conversation,
 text-to-voice-to-text continuity, or verified Russian/Azerbaijani behavior.
-The caller must own and close the aiohttp ClientSession as well as the socket;
-the unimplemented live orchestration must prove that no connection or sender
-survives cancellation before releasing its lease.
+`OpenAIRealtimeProvider` composes the wire, trusted credential loader and owned
+aiohttp socket behind separate immutable connector, factory and Session gates.
+The production route now has a real server WebSocket gateway and provider event
+pump, but its distributed lease factory deliberately refuses until the separate
+lease implementation is reviewed and integrated. A local synthetic PG/HTTP
+test overrides gates only inside the test and exercises the actual composition,
+with fake provider/socket/context/lease and committed durable dispatch guard.
+It does not prove real provider, source or billing behavior. Cleanup now uses a
+shared shielded task and the Session drains the provider receive lock before
+lease release; startup/remote close and cancellation still need review.
 
 `transcript_draft.py` is an isolated mock of ordered item registration and
 later input-transcription completion/failure; it only generates candidate
