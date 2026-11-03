@@ -9,6 +9,7 @@ from tenant_operator_access import access, assert_route
 from tenant_operator_copilot import _assigned_context, _agent_binding, _MODEL_ID
 from tenant_connect_identity import conflicted
 from tenant_ai_group_coordination import group_jid
+from tenant_connect_direct_identity import direct_identity
 from tenant_platform import _connect
 
 
@@ -48,12 +49,12 @@ def authorize(cur, profile, data):
     # Group coordination has its own authority and lifecycle. Until voice
     # has an independently reviewed group source/permission fence, do not
     # admit even an otherwise valid group to voice preflight.
-    if group_jid(route_data['conversation_id']):
-        raise TenantLinearError('Голосовой режим для групп пока недоступен.',409)
+    if group_jid(route_data['conversation_id']) or not direct_identity(route_data['conversation_id']):
+        raise TenantLinearError('Голосовой режим пока доступен только для личных диалогов с определённым типом.',409)
     tenant,actor,policy=access(cur,profile,'dialogs')
     route=assert_route(cur,tenant,policy,'connect',route_data['conversation_id'],route_data['channel_id'],route_data['lead_id'])
-    if str(route.get('conversation_kind') or '').strip().casefold()=='group':
-        raise TenantLinearError('Голосовой режим для групп пока недоступен.',409)
+    if str(route.get('conversation_kind') or '').strip().casefold() not in {'contact','direct','personal'}:
+        raise TenantLinearError('Голосовой режим пока доступен только для личных диалогов с определённым типом.',409)
     if int(route.get('lead_id') or 0)!=route_data['lead_id']:
         raise TenantLinearError('Диалог изменился. Обновите его.',409)
     if not policy.can_use_chat_ai():raise TenantLinearError('У сотрудника нет доступа к Chat AI.',403)

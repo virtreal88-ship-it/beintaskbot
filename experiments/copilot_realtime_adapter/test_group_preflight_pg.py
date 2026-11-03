@@ -7,16 +7,6 @@ from test_real_authority_pg import RealVoiceAuthority
 
 
 class GroupPreflight(RealVoiceAuthority):
-    def setUp(self):
-        super().setUp()
-        self.conn.execute("ALTER TABLE saas_connect_conversations ADD COLUMN conversation_kind text DEFAULT ''")
-        self.conn.commit()
-
-    def tearDown(self):
-        self.conn.rollback()
-        self.conn.execute('ALTER TABLE saas_connect_conversations DROP COLUMN conversation_kind')
-        self.conn.commit();super().tearDown()
-
     def scoped(self):
         conn=self.connect();conn.execute('SET search_path TO '+self.schema);return conn
 
@@ -36,5 +26,15 @@ class GroupPreflight(RealVoiceAuthority):
             with self.scoped() as conn:
                 conn.execute("UPDATE saas_connect_conversations SET conversation_kind='direct' WHERE tenant_id=%s AND conversation_id=%s",(self.tenant,self.conversation))
             self.assertEqual(voice.check(profile,self.route),original)
+            for unknown in ('','unknown','group'):
+                with self.scoped() as conn:
+                    conn.execute('UPDATE saas_connect_conversations SET conversation_kind=%s WHERE tenant_id=%s AND conversation_id=%s',(unknown,self.tenant,self.conversation))
+                with self.assertRaises(TenantLinearError):voice.check(profile,self.route)
+            for kind in ('contact','direct','personal'):
+                with self.scoped() as conn:
+                    conn.execute('UPDATE saas_connect_conversations SET conversation_kind=%s WHERE tenant_id=%s AND conversation_id=%s',(kind,self.tenant,self.conversation))
+                self.assertEqual(voice.check(profile,self.route),original)
+            for unknown in ('opaque','123456789-123456789@G.US',''):
+                with self.assertRaises(TenantLinearError):voice.check(profile,{**self.route,'conversation_id':unknown})
             with self.assertRaises(TenantLinearError):voice.context(original)
             with self.assertRaises(TenantLinearError):orchestration.require_history_cutover()
