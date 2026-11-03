@@ -12,7 +12,7 @@
   const end = document.createElement('button'); end.type='button';end.textContent='Завершить разговор';end.hidden=true;
   root.append(status,start,mute,end);
   let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null;
-  let serverInitiated=false, voiceBlocked=false;
+  let serverInitiated=false, voiceBlocked=false, cleanupPending=0;
   const uncertain='Завершение разговора не подтверждено; текстовый чат доступен.';
   const playbackFailure='Ошибка воспроизведения. '+uncertain;
   const microphoneUncertain='Не удалось подтвердить отключение микрофона. Текстовый чат доступен.';
@@ -26,7 +26,8 @@
     if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
     if(reason===uncertain || reason===playbackFailure || reason===microphoneUncertain)voiceBlocked=true;
     serverInitiated=false;
-    generation++; running=false; ending=false; start.disabled=voiceBlocked; mute.hidden=true; end.hidden=true;
+    const stopVersion=++generation;
+    running=false; ending=false; cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -42,15 +43,23 @@
             if(!destroyed)status.textContent=microphoneUncertain;
           }
         }
-        if(pending && pending!==oldAudio){pending.stopNow?.();await pending.close();}}
+        if(pending && pending!==oldAudio){try{pending.stopNow?.();}catch(_){} await pending.close();}}
       if(oldRelease && !retainMicrophone)oldRelease();
-    })().catch(()=>{});
+    })().then(()=>{
+      cleanupPending--;start.disabled=voiceBlocked || cleanupPending>0;
+      if(!destroyed && !voiceBlocked && cleanupPending===0 && generation===stopVersion)
+        status.textContent=reason==='ended'?'Разговор завершён':reason;
+    }).catch(()=>{
+      cleanupPending--;
+      voiceBlocked=true;start.disabled=true;
+      if(!destroyed)status.textContent=microphoneUncertain;
+    });
     muted=false;mute.textContent='Выключить микрофон';
-    if(!destroyed) status.textContent=reason==='ended'?'Разговор завершён':reason;
+    if(!destroyed) status.textContent=voiceBlocked?reason:'Отключаем микрофон…';
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
   async function begin() {
-    if(running || destroyed || voiceBlocked)return;
+    if(running || destroyed || voiceBlocked || cleanupPending>0)return;
     running=true;start.disabled=true;end.hidden=false;status.textContent='Подключение…';
     const version=++generation;
     try {

@@ -122,3 +122,24 @@ test('late unconfirmed capture cleanup never releases shared lease',async()=>{
   assert.equal(x.released(),0);assert.equal(x.root.children[1].disabled,true);
   assert.match(x.root.children[0].textContent,/отключение микрофона/);
 });
+
+test('confirmed server end cannot hide a failed microphone shutdown',async()=>{
+  const x=setup({open:async()=>({stopNow(){throw new Error('synthetic stop failure');},
+                               close:async()=>{throw new Error('microphone_stop_unconfirmed');},mute(){}})});
+  await x.view.start();await x.emit({type:'ended'});
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),0);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+});
+
+test('confirmed server end waits for microphone cleanup before enabling start',async()=>{
+  let finish;const pending=new Promise(resolve=>{finish=resolve;});
+  const x=setup({open:async()=>({stopNow(){},close:()=>pending,mute(){}})});
+  await x.view.start();await x.emit({type:'ended'});
+  assert.equal(x.root.children[1].disabled,true);
+  assert.match(x.root.children[0].textContent,/Отключаем микрофон/);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+  finish();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(x.root.children[1].disabled,false);assert.equal(x.released(),1);
+  assert.match(x.root.children[0].textContent,/Соединение завершено/);
+});
