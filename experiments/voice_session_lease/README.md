@@ -11,9 +11,11 @@ PostgreSQL. Do not enable it as a feature.
 
 The synthetic table has one row per `(tenant, actor)`, across tabs, processes,
 devices and dialogs; channel, conversation, server-generated session UUID and
-hash of a random server-only fence bind the holder. This is deliberately stricter
-than one session per route. It does not block other employees, other tenants or
-text AI. A duplicate or uncertain claim cannot return an existing capability.
+hashes of a random fence and a distinct server-instance owner capability bind
+the holder. This is deliberately stricter than one session per route. The row
+scope does not exclude other employees or tenants; the narrow synthetic lock
+test does not establish that text AI is unaffected under real load. A duplicate
+or uncertain claim cannot return an existing capability.
 A DB transaction commits before `claim` returns its token.
 
 `assert_current` performs the existing Copilot authority checks, compares the
@@ -31,19 +33,25 @@ Consequently a lost session may block this employee's voice mode indefinitely.
 This is a safety limitation, not an acceptable finished UX.
 
 Local terminal state is not durable or distributed revocation. If quarantine
-rolls back, the record can remain active; a newly constructed adapter handed
-the original fence can renew it after access returns. A synthetic test explicitly
-reproduces this blocker. A gateway must end/fence on **any** error and never
-transfer or retry that capability, including across workers and restart. A
-future design needs durable independent fencing when the quarantine commit
-fails or is unknown, before enabling this feature.
+rolls back, the row can remain active. In the current synthetic model, a new
+adapter with the old fence has a different owner capability and cannot renew
+that row, even if its local deadline is artificially supplied. An inherited
+adapter rejects a forked process, and copying/pickling is disabled. These are
+cooperative process protections, not proof against privileged code reading or
+cloning the old instance's entire memory, process/VM snapshots or direct DB or
+provider access. A gateway must end/fence on **any** error and never transfer
+or retry those capabilities across workers and restart. A durable external
+fence for previously authorized network I/O and unknown commit remains required.
 
-There is also a time-source limitation: an expiry which has not yet been
-observed and committed can appear unexpired if the database wall clock moves
-backward. This experiment has no durable monotonic-time service or independent
-process fence and cannot rule that out. The clock test modifies only the
-synthetic deadline to simulate the ordering after a backwards step; it does
-not change a host clock or establish fleet clock guarantees.
+Each live adapter additionally bounds its local activity using Linux
+`CLOCK_BOOTTIME`, including suspend. A heartbeat which finishes after the prior
+local deadline fails closed even if its DB update committed. Database wall
+clock can still move backward before expiry is observed; local time and the
+unshareable owner narrow that case only under the stated process and clock
+assumptions. There is no durable fleet monotonic-time service, proof of behavior
+under VM cloning/restore, or fencing of an already in-flight provider send.
+Clock tests manipulate synthetic timestamps or injected clock readings, not
+the host clock, and do not establish platform clock guarantees.
 
 The heartbeat is only a liveness hint: no DB write can stop an old worker in
 another process from directly using already acquired network resources. Each
@@ -121,7 +129,9 @@ message and operational deadline require product review before activation.
 The test schema is `synthetic_schema.sql`, applied only to a random schema in a
 disposable localhost test DB. Tests cover simultaneous contenders, scope and
 fence binding, heartbeat/expiry, cancellation of a background claim, observed
-revocation and regrant, actor/tenant isolation, and permanent release denial.
+revocation and regrant, actor/tenant isolation, a forked process, unexpected
+commit and permanent release denial. A concurrent synthetic text UPDATE test
+exercises only a narrow row-lock case and does not assess real system impact.
 Real authorization functions use synthetic rows. The tests do not establish
 provider state, a production migration, cross-deployment identity, billing,
 end-to-end revocation, actual browser control or recovery. In particular, no

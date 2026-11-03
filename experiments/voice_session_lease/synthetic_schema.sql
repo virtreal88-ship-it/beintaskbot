@@ -6,6 +6,7 @@ CREATE TABLE experiment_voice_session_lease (
   conversation_id text NOT NULL,
   session_id uuid NOT NULL,
   fence_hash bytea NOT NULL CHECK (octet_length(fence_hash)=32),
+  owner_hash bytea NOT NULL CHECK (octet_length(owner_hash)=32),
   state text NOT NULL DEFAULT 'active' CHECK (state IN ('active','quarantined')),
   heartbeat_until timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),

@@ -1,5 +1,7 @@
 """Distributed lease on isolated localhost PostgreSQL only; provider absent."""
 import asyncio
+import multiprocessing
+import secrets
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +22,7 @@ class LeasePostgres(RealVoiceAuthority):
         self.profile={'tenant_id':self.tenant,'telegram_id':7}
         self.expected=self.admit();self.conn.commit()
         self.scope=(self.tenant,7,self.channel,self.conversation)
+        self.owner=secrets.token_bytes(32)
 
     def tearDown(self):
         self.conn.rollback();self.conn.execute('DROP TABLE IF EXISTS experiment_voice_session_lease');self.conn.commit()
@@ -28,14 +31,14 @@ class LeasePostgres(RealVoiceAuthority):
     def scoped(self):
         conn=self.connect();conn.execute('SET search_path TO '+self.schema);return conn
 
-    def claim(self,session=None,profile=None,route=None,expected=None,scope=None):
+    def claim(self,session=None,profile=None,route=None,expected=None,scope=None,owner=None):
         with self.scoped() as conn,conn.cursor() as cur:
             return lease._claim(cur,profile or self.profile,route or self.route,expected or self.expected,
-                                scope or self.scope,session or str(uuid.uuid4()))
+                                scope or self.scope,session or str(uuid.uuid4()),owner or self.owner)
 
-    def beat(self,fence,profile=None,route=None,expected=None,scope=None):
+    def beat(self,fence,profile=None,route=None,expected=None,scope=None,owner=None):
         with self.scoped() as conn,conn.cursor() as cur:
-            error=lease._heartbeat(cur,profile or self.profile,route or self.route,expected or self.expected,scope or self.scope,fence)
+            error=lease._heartbeat(cur,profile or self.profile,route or self.route,expected or self.expected,scope or self.scope,fence,owner or self.owner)
         if error:raise lease.LeaseUnavailable(error)
 
     def test_gate_and_recovery_are_unconditionally_closed(self):
@@ -171,7 +174,7 @@ class LeasePostgres(RealVoiceAuthority):
     def test_lost_claim_transaction_does_not_leave_lease(self):
         with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True):
             with self.scoped() as conn:
-                lease._claim(conn.cursor(),self.profile,self.route,self.expected,self.scope,str(uuid.uuid4()))
+                lease._claim(conn.cursor(),self.profile,self.route,self.expected,self.scope,str(uuid.uuid4()),self.owner)
                 conn.rollback() # provider has not been opened or exposed
             self.claim()
 
@@ -215,8 +218,7 @@ class LeasePostgres(RealVoiceAuthority):
         try:asyncio.run(run())
         finally:proceed.set()
 
-    def test_revocation_rollback_fences_adapter_but_not_a_recreated_adapter(self):
-        """The last assertion demonstrates an outstanding distributed gap."""
+    def test_revocation_rollback_fences_recreated_adapter_with_old_fence(self):
         class RollbackConnection:
             def __init__(self,conn):self.conn=conn
             def __enter__(self):return self.conn
@@ -234,9 +236,106 @@ class LeasePostgres(RealVoiceAuthority):
                 with self.scoped() as conn:conn.execute('UPDATE saas_tenant_members SET active=true WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
                 with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
                     await adapter.assert_current(self.scope,fence)
-                # No durable quarantine was committed. If trusted code
-                # improperly transfers the fence to a recreated adapter, it
-                # can be reused. This is a blocker, not a supported recovery.
+                # Even if a future integration erroneously supplies a valid
+                # local timer, a fresh owner cannot reuse the old DB fence.
                 recreated=lease.ServerLease(self.profile,self.route,self.expected,sid)
-                await recreated.assert_current(self.scope,fence)
+                recreated._deadline=recreated._clock()+lease.HEARTBEAT_SECONDS
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'expired_or_unverified'):
+                    await recreated.assert_current(self.scope,fence)
         asyncio.run(run())
+
+    def test_old_fence_and_original_owner_cannot_be_reused_after_fork(self):
+        """Exercise separate process, not merely independent adapter objects."""
+        with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(lease,'_connect',self.scoped):
+            sid=str(uuid.uuid4());adapter=lease.ServerLease(self.profile,self.route,self.expected,sid)
+            fence=asyncio.run(adapter.claim(self.scope))
+            ctx=multiprocessing.get_context('fork');receive,send=ctx.Pipe(duplex=False)
+            def child():
+                async def run():
+                    outcomes=[]
+                    for item in (adapter,lease.ServerLease(self.profile,self.route,self.expected,sid)):
+                        try:await item.assert_current(self.scope,fence);outcomes.append('accepted')
+                        except lease.LeaseUnavailable as error:outcomes.append(str(error))
+                    return outcomes
+                try:send.send(asyncio.run(run()))
+                finally:send.close()
+            process=ctx.Process(target=child);process.start();send.close()
+            self.assertTrue(receive.poll(5));outcomes=receive.recv();process.join(5)
+            self.assertEqual(process.exitcode,0)
+            self.assertEqual(outcomes,['voice_session_wrong_process','voice_session_local_deadline_expired'])
+            asyncio.run(adapter.assert_current(self.scope,fence))
+
+    def test_local_monotonic_expiry_denies_even_when_db_deadline_is_future(self):
+        async def run():
+            with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(lease,'_connect',self.scoped):
+                adapter=lease.ServerLease(self.profile,self.route,self.expected,str(uuid.uuid4()))
+                with patch.object(adapter,'_clock',side_effect=[100.0,100.1,111.0]):
+                    fence=await adapter.claim(self.scope)
+                    with self.scoped() as conn:
+                        self.assertTrue(conn.execute('SELECT heartbeat_until>clock_timestamp() AS future FROM experiment_voice_session_lease').fetchone()['future'])
+                    with self.assertRaisesRegex(lease.LeaseUnavailable,'local_deadline_expired'):
+                        await adapter.assert_current(self.scope,fence)
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
+                    await adapter.assert_current(self.scope,fence)
+        asyncio.run(run())
+
+    def test_heartbeat_completed_after_previous_local_deadline_cannot_revive(self):
+        async def run():
+            with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(lease,'_connect',self.scoped):
+                adapter=lease.ServerLease(self.profile,self.route,self.expected,str(uuid.uuid4()))
+                with patch.object(adapter,'_clock',side_effect=[100.0,100.1,109.0,110.1]):
+                    fence=await adapter.claim(self.scope)
+                    with self.assertRaisesRegex(lease.LeaseUnavailable,'local_deadline_expired'):
+                        await adapter.assert_current(self.scope,fence)
+                with self.scoped() as conn:
+                    row=conn.execute('SELECT state FROM experiment_voice_session_lease').fetchone()
+                    self.assertEqual(row['state'],'active')  # uncertain heartbeat remains reserved
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
+                    await adapter.assert_current(self.scope,fence)
+        asyncio.run(run())
+
+    def test_unknown_heartbeat_commit_never_grants_owner_to_recreated_adapter(self):
+        class CommittedButUnknown:
+            def __init__(self,conn):self.conn=conn
+            def __enter__(self):return self.conn
+            def __exit__(self,*_):
+                self.conn.commit();self.conn.close()
+                raise OSError('synthetic_unknown_commit')
+        async def run():
+            with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(lease,'_connect',self.scoped):
+                sid=str(uuid.uuid4());adapter=lease.ServerLease(self.profile,self.route,self.expected,sid)
+                fence=await adapter.claim(self.scope)
+                with patch.object(lease,'_connect',lambda:CommittedButUnknown(self.scoped())):
+                    with self.assertRaisesRegex(OSError,'synthetic_unknown_commit'):
+                        await adapter.assert_current(self.scope,fence)
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'session_terminal'):
+                    await adapter.assert_current(self.scope,fence)
+                recreated=lease.ServerLease(self.profile,self.route,self.expected,sid)
+                recreated._deadline=recreated._clock()+lease.HEARTBEAT_SECONDS
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'expired_or_unverified'):
+                    await recreated.assert_current(self.scope,fence)
+                with self.assertRaisesRegex(lease.LeaseUnavailable,'already_active_or_unverified'):
+                    await lease.ServerLease(self.profile,self.route,self.expected,str(uuid.uuid4())).claim(self.scope)
+        asyncio.run(run())
+
+    def test_owner_capability_in_database_prevents_cross_instance_reuse(self):
+        with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True):
+            fence=self.claim()
+            with self.assertRaisesRegex(lease.LeaseUnavailable,'expired_or_unverified'):
+                self.beat(fence,owner=secrets.token_bytes(32))
+            self.beat(fence)  # original owner remains valid in this synthetic model
+
+    def test_inflight_heartbeat_does_not_lock_synthetic_text_message(self):
+        # A narrow row-lock test only; this is not a throughput or production
+        # isolation proof and does not cover lock queues or resource exhaustion.
+        with patch.object(lease,'LEASE_ENFORCEMENT_VERIFIED',True):
+            fence=self.claim()
+            with self.scoped() as conn:
+                conn.execute("INSERT INTO saas_crm_messages VALUES(%s,%s,'{}')",(self.tenant,'synthetic'))
+            with self.scoped() as heartbeat:
+                self.assertIsNone(lease._heartbeat(heartbeat.cursor(),self.profile,self.route,self.expected,self.scope,fence,self.owner))
+                with self.scoped() as text:
+                    text.execute("SET LOCAL lock_timeout='250ms'")
+                    from tenant_operator_voice_context import authorize
+                    self.assertEqual(authorize(text.cursor(),self.profile,self.route),self.expected)
+                    self.assertEqual(text.execute("UPDATE saas_crm_messages SET raw='{}' WHERE tenant_id=%s",(self.tenant,)).rowcount,1)
