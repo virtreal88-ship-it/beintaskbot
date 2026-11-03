@@ -153,7 +153,7 @@ def issue_open(cur,scope):
     _admission();s=_scope(scope);_global(cur)
     _quote_fresh()
     row=_session(cur,s)
-    if row['state']!='reserved':return None
+    if row['state']!='reserved' or row['accounting_conflict']:return None
     if row['quote_version']!=QUOTE or row['model']!=MODEL or row['reserved_microusd']!=_quote(s):
         raise TenantLinearError('voice_session_quote_changed',409)
     if not _tenant(cur,s,row,'reserved'):return None
@@ -306,7 +306,7 @@ def record_session_actual(cur,scope,actual_microusd):
 
 def cancel_before_open(cur,scope):
     _reconcile();s=_scope(scope);_global(cur,require_enabled=False);row=_session(cur,s)
-    if row['state']!='reserved':return None
+    if row['state']!='reserved' or row['accounting_conflict']:return None
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
     cur.execute("""UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now()
       WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_session_test' AND model=%s
