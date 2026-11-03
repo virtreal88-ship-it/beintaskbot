@@ -32,7 +32,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
         super().setUp()
         self.history=history_candidate
         self.grant=grant_candidate
-        self.conn.execute('''ALTER TABLE saas_crm_messages ADD COLUMN kommo_lead_id bigint,ADD COLUMN external_id text,
+        self.conn.execute('''ALTER TABLE saas_crm_messages ADD COLUMN id uuid DEFAULT gen_random_uuid(),ADD COLUMN kommo_lead_id bigint,ADD COLUMN external_id text,
           ADD COLUMN direction text,ADD COLUMN body text,ADD COLUMN message_type text,ADD COLUMN happened_at timestamptz DEFAULT now(),
           ADD COLUMN created_at timestamptz DEFAULT now();
           CREATE TABLE saas_operator_copilot_threads(tenant_id uuid,requested_by bigint,channel_id text,conversation_id text,
@@ -54,7 +54,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
           saas_ai_spend_reservations,saas_operator_copilot_threads,saas_ai_knowledge_sources,saas_ai_knowledge_chunks,
           saas_knowledge_candidates,saas_knowledge_candidate_sources CASCADE;
           DELETE FROM saas_crm_messages;
-          ALTER TABLE saas_crm_messages DROP COLUMN IF EXISTS kommo_lead_id,DROP COLUMN IF EXISTS external_id,
+          ALTER TABLE saas_crm_messages DROP COLUMN IF EXISTS id,DROP COLUMN IF EXISTS kommo_lead_id,DROP COLUMN IF EXISTS external_id,
             DROP COLUMN IF EXISTS direction,DROP COLUMN IF EXISTS body,DROP COLUMN IF EXISTS message_type,
             DROP COLUMN IF EXISTS happened_at,DROP COLUMN IF EXISTS created_at''')
         self.conn.commit();super().tearDown()
@@ -173,6 +173,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
 
         class Context:
             async def read_authorized(self,_scope):return read_context()
+            async def revalidate(self,_scope):return True
 
         class Budget:
             def __init__(self):self.events=[]
