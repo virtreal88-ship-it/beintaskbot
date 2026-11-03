@@ -47,6 +47,18 @@ def test_admission_uses_scoped_membership_route_consent_and_existing_binding(bou
     with pytest.raises(TenantLinearError):voice.context(scope)
 
 
+def test_voice_preflight_refuses_group_identity_and_group_route(boundaries):
+    group={**ROUTE,'conversation_id':'123456789-123456789@g.us'}
+    with pytest.raises(TenantLinearError):voice.authorize(Cursor(),PROFILE,group)
+    voice.access.assert_not_called()
+    # Also reject a group marked by the stored route, even if its identifier
+    # is opaque and the provider JID predicate cannot identify it.
+    voice.assert_route.return_value={'lead_id':41,'conversation_kind':'GrOuP'}
+    with pytest.raises(TenantLinearError):voice.authorize(Cursor(),PROFILE,ROUTE)
+    voice.assert_route.return_value={'lead_id':41,'conversation_kind':'direct'}
+    assert voice.authorize(Cursor(),PROFILE,ROUTE).conversation_id==ROUTE['conversation_id']
+
+
 @pytest.mark.parametrize('disabled',['enabled','consent','audio_enabled','copilot_enabled'])
 def test_company_flags_fail_closed(boundaries,disabled):
     config={'enabled':True,'consent':True,'audio_enabled':True,'copilot_enabled':True};config[disabled]=False
