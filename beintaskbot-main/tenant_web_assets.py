@@ -56,6 +56,7 @@ ASSETS = (
     ('/assets/tenant-request-coordinator.js', 'tenant-request-coordinator.js', 'no-store'),
     ('/assets/tenant-view-demand.js', 'tenant-view-demand.js', 'no-store'),
     ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
+    ('/assets/tenant-microphone-lease.js', 'tenant-microphone-lease.js', 'no-store'),
     ('/assets/tenant-owner-asr-comparison.js', 'tenant-owner-asr-comparison.js', 'no-store'),
     ('/assets/tenant-saved-only-copilot.js', 'tenant-saved-only-copilot.js', 'no-store'),
     ('/assets/tenant-dialog-consultations.js', 'tenant-dialog-consultations.js', 'no-store'),
