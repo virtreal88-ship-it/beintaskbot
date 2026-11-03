@@ -3,14 +3,42 @@ from pathlib import Path
 import json
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from psycopg.errors import LockNotAvailable,UndefinedColumn
+from psycopg import sql
+from psycopg.errors import LockNotAvailable,UndefinedColumn,InsufficientPrivilege
 from tenant_linear_policy import TenantLinearError
 import tenant_operator_copilot_threads as threads
 from test_rolling_history_pg import RollingHistory
 
 
 class SchemaCompatibility(RollingHistory):
+    def test_catalog_detection_under_restricted_role_and_denied_table(self):
+        # The application role can read a table without owning its schema.
+        # PostgreSQL catalogs, rather than information_schema's filtered
+        # view, supply the schema check. Missing permission must never be
+        # interpreted as a missing revision column.
+        role='voice_compat_'+uuid.uuid4().hex
+        with self.scoped() as conn:
+            schema=conn.execute('SELECT current_schema() AS s').fetchone()['s']
+            conn.execute(sql.SQL('CREATE ROLE {} NOLOGIN').format(sql.Identifier(role)))
+            conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(schema),sql.Identifier(role)))
+            conn.execute(sql.SQL('GRANT SELECT ON saas_operator_copilot_threads TO {}').format(sql.Identifier(role)))
+            conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+            with conn.cursor() as cur:self.assertTrue(threads.revision_schema(cur))
+            conn.execute('RESET ROLE')
+            conn.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision')
+            conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+            with conn.cursor() as cur:self.assertFalse(threads.revision_schema(cur))
+            conn.execute('RESET ROLE')
+            conn.execute(sql.SQL('REVOKE SELECT ON saas_operator_copilot_threads FROM {}').format(sql.Identifier(role)))
+            conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+            with self.assertRaises(InsufficientPrivilege):
+                with conn.cursor() as cur:threads.revision_schema(cur)
+            # Roll back role/GRANT/ALTER even if the expected error aborted the
+            # transaction; no cluster-global test role remains.
+            conn.rollback()
+
     def drop_revision(self):
         with self.scoped() as conn:conn.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision')
 
