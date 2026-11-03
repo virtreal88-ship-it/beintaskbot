@@ -26,9 +26,9 @@ def require_history_cutover():
 
 
 def require_sealed_source_snapshot():
-    # No authorised immutable source/version snapshot is yet connected to the
-    # existing per-response freshness check. Never pass a prompt to a provider
-    # until server-side source and latest-message revalidation is implemented.
+    # Snapshot comparison detects tested changes, but cannot fence ABA changes
+    # or concurrent changes between the final check and external provider I/O.
+    # Do not enable voice until that boundary has a reviewed safe protocol.
     raise TenantLinearError('Контекст голосового режима пока недоступен.',503)
 
 
