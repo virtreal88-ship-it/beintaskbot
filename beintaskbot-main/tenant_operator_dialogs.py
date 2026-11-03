@@ -322,6 +322,13 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                 value['delivery_state'] = status
             elif status in {'accepted', 'queued', 'sending', 'reserved'}:
                 value['delivery_state'] = 'pending'
+            if str(value.get('message_type') or '').lower() == 'audio' and isinstance(raw,dict):
+                try:
+                    uuid.UUID(str(raw['voice_receipt_request_id']))
+                    int(raw['verified_employee_id'])
+                    value['customer_voice_status'] = True
+                except (KeyError, ValueError, TypeError):
+                    pass
         # Only validated provider identifiers leave the server; raw webhook data stays private.
         for key,target in (('externalMessageId','provider_message_id'),('quotedExternalMessageId','quoted_provider_message_id')):
             identifier_value=raw.get(key) if isinstance(raw,dict) else None

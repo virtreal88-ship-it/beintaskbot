@@ -39,6 +39,13 @@ class ConnectWebhookError(TenantPlatformError):
         self.status = status
 
 
+class ConnectPreflightError(TenantPlatformError):
+    """Known refusal returned before a customer voice provider submission."""
+    def __init__(self, code: str):
+        super().__init__('Connect refused the voice send before provider submission.')
+        self.code = code
+
+
 def _safe_label(value, limit=180):
     """Keep provider labels display-safe without manufacturing an identity."""
     if not isinstance(value, str):
@@ -162,6 +169,27 @@ def _outbound_author(data: dict) -> str:
 def _outbound_is_ai(data: dict, existing: dict | None = None) -> bool:
     """Classify AI only on explicit signed/provider or stored run provenance."""
     return (data.get('ai_authored') is True or _is_ai_message(existing))
+
+
+def _pause_unverified_outbound_audio(cur, tenant, channel_id, conversation):
+    """Stop active AI without asserting who sent an ambiguous provider echo.
+
+    Called under the existing dialog lock only for a newly inserted signed
+    outbound audio. Never create or enable an agent or change human state.
+    """
+    cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state,reason)
+      VALUES(%s::uuid,'connect',%s,%s,'paused','unverified_outbound_audio')
+      ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
+        state='paused',reason='unverified_outbound_audio',revision=saas_ai_conversation_state.revision+1,updated_at=now()
+      WHERE saas_ai_conversation_state.state='active'
+        OR (saas_ai_conversation_state.state='paused' AND left(saas_ai_conversation_state.reason,21)='automatic_assignment_')
+      RETURNING conversation_id''',
+                (tenant,channel_id,conversation))
+    if cur.fetchone():
+        cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
+          error_code='unverified_outbound_audio',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
+          AND channel_id=%s AND conversation_id=%s AND state IN ('queued','processing')''',
+                    (tenant,channel_id,conversation))
 
 
 # Keep this preflight aligned with the additive DDL below (including nested schemas).
@@ -305,7 +333,8 @@ def _public_channel(row: dict) -> dict:
     return {**row, 'connect_channel_id': str(row['connect_channel_id'])}
 
 
-def _request(key: str, method: str, path: str, payload: dict | None = None) -> dict:
+def _request(key: str, method: str, path: str, payload: dict | None = None, *,
+             safe_preflight_codes: tuple[str, ...] = ()) -> dict:
     # HTTP header values must be Latin-1 encodable. Connect-generated API keys
     # are ASCII; fail clearly if a copied key contains a look-alike character.
     if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
@@ -316,6 +345,14 @@ def _request(key: str, method: str, path: str, payload: dict | None = None) -> d
     except requests.RequestException as exc:
         raise TenantPlatformError('Connect xidməti əlçatan deyil.') from exc
     if response.status_code not in {200, 201, 202, 204}:
+        if response.status_code == 409 and safe_preflight_codes:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            code = body.get('error') if isinstance(body, dict) else None
+            if code in safe_preflight_codes:
+                raise ConnectPreflightError(code)
         raise TenantPlatformError('Connect API açarı və ya icazələri yoxlanılmadı.')
     if response.status_code == 204:
         return {}
@@ -957,6 +994,11 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     # owner recorded in a paused placeholder.
                     from tenant_ai_agent_connect import bind_unassigned_direct_agent
                     bind_unassigned_direct_agent(cur,tenant,channel_id,conversation)
+                if (message_inserted and not coordinated and not independent_consultation_receipt
+                        and data.get('fromMe') is True and data.get('type') == 'audio'
+                        and data.get('source') == 'unknown' and data.get('authorshipUncertain') is True
+                        and not _outbound_is_ai(data,stored) and data.get('conversationIdentityConflict') is not True):
+                    _pause_unverified_outbound_audio(cur,tenant,channel_id,conversation)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
                 if message_inserted and not independent_consultation_receipt and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):

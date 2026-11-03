@@ -1,4 +1,4 @@
-/* Coordinate cooperative voice modes in one browser storage partition. */
+/* Coordinate cooperative AI and customer voice modes across origin tabs. */
 ((root, make) => {
   if (typeof module === 'object' && module.exports) module.exports = make;
   else root.acquireTenantMicrophone = make;

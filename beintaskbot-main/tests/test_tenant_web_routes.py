@@ -17,6 +17,7 @@ MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += (("GET","/api/platform/crm/chat/quote-receipt"),)
+EXPECTED_API += (("POST","/api/platform/crm/chat/send-voice"),("GET","/api/platform/crm/chat/voice-receipt"),("POST","/api/platform/crm/chat/voice-manual-confirmation"),("GET","/api/platform/crm/chat/voice-capability"),("GET","/api/platform/crm/chat/voice-status"))
 EXPECTED_API += (("GET","/api/platform/notifications"),("POST","/api/platform/notifications/{notification_id}/read"))
 EXPECTED_API += tuple((method,path) for path,methods in [
  ('/api/platform/instructions',('GET','POST')),
@@ -35,6 +36,7 @@ EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
+EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-microphone-lease.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
@@ -124,6 +126,8 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
 ] for method in methods)
 FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_upload_handler',
+    'customer_voice_handler', 'customer_voice_receipt_handler', 'customer_voice_capability_handler', 'customer_voice_status_handler',
+    'customer_voice_manual_confirmation_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 
