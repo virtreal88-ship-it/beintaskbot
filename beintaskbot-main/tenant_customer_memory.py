@@ -51,6 +51,11 @@ def _route(cur, tenant, policy, channel, conversation):
     if not isinstance(conversation,str) or not re.fullmatch(r'[1-9][0-9]{5,22}@(s\.whatsapp\.net|c\.us|lid)',conversation):
         raise TenantLinearError('Ambiguous identity.',409)
     route=assert_route(cur,tenant,policy,'connect',conversation,channel)
+    # The operator history projection requires an existing channel and hides
+    # merged source routes; a tenant-only route lookup is not sufficient.
+    cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid''',(tenant,channel))
+    if not cur.fetchone(): raise TenantLinearError('Source unavailable.',404)
     if route.get('conversation_kind') == 'group' or conflicted(cur,tenant,channel,conversation):
         raise TenantLinearError('Ambiguous identity.',409)
     return channel, route

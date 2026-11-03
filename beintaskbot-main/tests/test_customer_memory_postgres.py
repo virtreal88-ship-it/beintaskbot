@@ -42,6 +42,7 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
                     cur.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,active,permissions) VALUES(%s,%s,'Owner','owner',TRUE,'[]')",(tenant,actor))
                     cur.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'customer_memory','{\"enabled\":true}')",(tenant,))
                 cur.execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name) VALUES(%s,%s,'A'),(%s,%s,'B')",(self.contact,self.tenant,self.contact2,self.tenant))
+                cur.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s,%s,'Fixture')",(self.tenant,self.channel))
                 cur.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind) VALUES(%s,%s,%s,'contact') RETURNING lead_id",(self.tenant,self.channel,self.jid))
                 lead=cur.fetchone()['lead_id']
                 cur.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,body,direction,message_type) VALUES(%s,%s,%s,%s,%s,'Synthetic customer statement','incoming','text')",(self.message,self.tenant,lead,str(uuid.uuid4()),'connect:'+self.channel))
@@ -213,3 +214,11 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
             with conn.cursor() as cur:
                 cur.execute('SELECT count(*) AS n FROM saas_customer_memory_fact_versions WHERE fact_id=%s',(fact['id'],))
                 self.assertEqual(cur.fetchone()['n'],0)
+
+    def test_missing_channel_is_not_a_readable_source(self):
+        from tenant_platform import _connect
+        link=self.link();self.fact(link)
+        with _connect() as conn:
+            with conn.cursor() as cur:cur.execute('DELETE FROM saas_connect_channels WHERE tenant_id=%s AND connect_channel_id=%s',(self.tenant,self.channel))
+            conn.commit()
+        self.assertEqual(self.memory.read(self.profile,self.contact),{'links':[],'facts':[]})

@@ -23,7 +23,11 @@ def handler(member, origin, logger):
                 result=await asyncio.to_thread(memory.read,profile,contact)
             else:
                 require_json_post(request,origin)
-                body=await request.json()
+                if request.content_length is not None and request.content_length>20_000:
+                    raise TenantLinearError('Request too large.',413)
+                raw=await request.read()
+                if len(raw)>20_000: raise TenantLinearError('Request too large.',413)
+                body=json.loads(raw)
                 if not isinstance(body,dict): raise TenantLinearError('Invalid request.',400)
                 action=body.get('action')
                 if action=='confirm_link' and set(body)=={'action','channel_id','conversation_id','confirm'}:
