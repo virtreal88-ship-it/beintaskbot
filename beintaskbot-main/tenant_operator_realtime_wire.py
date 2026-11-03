@@ -1,19 +1,80 @@
-"""Review candidate for a server-owned Realtime wire. Live creation is blocked.
+"""Server-owned Realtime protocol candidate. Live creation is hard disabled.
 
-Only injected synthetic sockets are accepted. This module does not read keys,
-open sockets, issue tokens, or register routes. A production factory requires
-independent budget, context, auth and lifecycle enforcement before admission.
+Only injected sockets reach the wire today. The aiohttp transport is usable in
+isolated tests, but live connection requires a reviewed, immutable admission
+change and proof of the budget, source and history fences.
 """
 import base64
 import binascii
 import json
 import uuid
+import aiohttp
 from tenant_linear_policy import TenantLinearError
 
 MODEL='gpt-realtime-2.1-mini'
 OUTPUT_LIMIT=32000
 QUOTE='mini-2026-11-03-1resp-v1'
 MINIMUM_HOLD=2_112_000
+OPENAI_URL='wss://api.openai.com/v1/realtime'
+MAX_WIRE_MESSAGE=262144
+
+
+def _unique_object(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result:raise ValueError('duplicate_json_key')
+        result[key]=value
+    return result
+
+
+def _require_live_admission():
+    # Never toggle through request arguments, deployment config or env vars.
+    # Claims, pre-open context linearization, writer cutover and billing are
+    # not yet proven with the actual upstream API.
+    raise TenantLinearError('Голосовой режим пока недоступен.',503)
+
+
+class AiohttpRealtimeSocket:
+    """Bounded JSON adapter around an already-open aiohttp WebSocket.
+
+    This wrapper owns no key. Its caller owns the session. Production cannot
+    obtain a socket through this module while admission is disabled.
+    """
+    def __init__(self,ws):
+        self.ws=ws
+
+    async def send_json(self,event):
+        if not isinstance(event,dict):raise ValueError('wire_event_invalid')
+        raw=json.dumps(event,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+        if len(raw.encode('utf-8'))>MAX_WIRE_MESSAGE:raise ValueError('wire_message_too_large')
+        await self.ws.send_str(raw)
+
+    async def receive_json(self):
+        message=await self.ws.receive()
+        if message.type!=aiohttp.WSMsgType.TEXT:raise ValueError('wire_socket_closed_or_nontext')
+        if len(message.data.encode('utf-8'))>MAX_WIRE_MESSAGE:raise ValueError('wire_message_too_large')
+        try:
+            data=json.loads(message.data,object_pairs_hook=_unique_object,
+                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        except (ValueError,TypeError,RecursionError):raise ValueError('wire_json_invalid') from None
+        if not isinstance(data,dict):raise ValueError('wire_event_invalid')
+        return data
+
+    async def close(self):
+        await self.ws.close()
+        if not self.ws.closed:raise ValueError('wire_close_unconfirmed')
+
+
+async def _open_openai_socket(session,api_key):
+    """Future server-only connector. Gate fires before key use or any I/O."""
+    _require_live_admission()
+    # Kept behind the immutable gate; not exercised against OpenAI. A future
+    # release must also prove redirect, timeout and key-source handling.
+    ws=await session.ws_connect(OPENAI_URL,params={'model':MODEL},
+                                headers={'Authorization':'Bearer '+api_key},
+                                timeout=3,
+                                heartbeat=20,max_msg_size=MAX_WIRE_MESSAGE)
+    return AiohttpRealtimeSocket(ws)
 
 
 def create_production_provider(*_args,**_kwargs):
@@ -21,12 +82,10 @@ def create_production_provider(*_args,**_kwargs):
     raise TenantLinearError('Голосовой режим пока недоступен.',503)
 
 
-class SyntheticRealtimeWire:
-    mock_only=True
-
+class _RealtimeWire:
     def __init__(self,socket,claim_guard):
-        if getattr(socket,'synthetic_only',None) is not True or not callable(getattr(claim_guard,'consume',None)):
-            raise ValueError('synthetic_socket_and_guard_required')
+        if not callable(getattr(claim_guard,'consume',None)):
+            raise ValueError('claim_guard_required')
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
@@ -117,3 +176,12 @@ class SyntheticRealtimeWire:
     async def close(self):
         self.ready=False;self.bound=None
         await self.socket.close()
+
+
+class SyntheticRealtimeWire(_RealtimeWire):
+    mock_only=True
+
+    def __init__(self,socket,claim_guard):
+        if getattr(socket,'synthetic_only',None) is not True:
+            raise ValueError('synthetic_socket_and_guard_required')
+        super().__init__(socket,claim_guard)

@@ -183,6 +183,41 @@ they do not bypass the writer gate or establish an active real voice session.
 The older separate prototype test directly inserts a synthetic partial turn to
 exercise the lower-level history helper; it is not the blocked voice writer.
 
+## aiohttp transport candidate
+
+The wire protocol now has a bounded aiohttp WebSocket JSON adapter and a
+server-only OpenAI connection implementation behind an unconditional admission
+refusal. The production factory is separately unconditionally disabled and
+`Session` rejects non-mock providers. No environment variable, browser input,
+or feature flag opens either gate. Local loopback tests exercise real aiohttp
+frames with a fake peer, safe session readback, one-use mock response claims,
+interruption/truncation and cleanup; this is not an OpenAI compatibility test.
+
+The GA protocol shape was checked against the official [WebSocket guide](https://developers.openai.com/api/docs/guides/voice-websockets),
+[Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations),
+and [model documentation](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+The model and quote in this candidate are provisional; real effective session
+readback, immutable model pricing, all billable paths, provider cancellation,
+redirect/connection timeout semantics, and shared dispatch enforcement remain
+unverified. The no-tools/no-transcription/no-automatic-response settings are
+requested and checked against the peer readback before audio is accepted, but
+mock readback cannot prove actual provider behavior or cost prevention.
+The future dispatch guard must atomically validate the complete scope,
+fingerprint, quote and tenant hold, commit a one-use `claimed` to
+`dispatching` transition, and only then permit the socket send. Unknown
+outcomes retain their hold and cannot be retried blindly. The separately
+developed ledger CAS has not been integrated or independently verified here.
+
+Input ASR remains disabled because no separately metered ASR admission exists.
+Output transcripts are not stored or presented as heard. Incomplete/interrupted
+audio is conservatively truncated to zero; no aligned text is invented. The
+voice history writer still refuses until every legacy text writer has cut over.
+Consequently this candidate does not yet provide a working live conversation,
+text-to-voice-to-text continuity, or verified Russian/Azerbaijani behavior.
+The caller must own and close the aiohttp ClientSession as well as the socket;
+the unimplemented live orchestration must prove that no connection or sender
+survives cancellation before releasing its lease.
+
 ## Source fingerprints and remaining fence
 
 The candidate captures server-derived scope, the allowlisted context and
