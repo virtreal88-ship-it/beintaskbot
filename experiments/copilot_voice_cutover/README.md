@@ -23,6 +23,9 @@ that failure. No application-level voice gate can stop that old writer because
 it never checks the gate. Schema compatibility alone does not provide a safe
 mixed-writer deployment.
 
+[Merge and clear counterexamples](MERGE_EVIDENCE.md) describe the tested
+update-trigger alternative and the missing evidence from a zero-row clear.
+
 `observe_receipts` is a read-only aggregate diagnostic only. It exposes no
 prompts or identities, performs no mutations, and cannot open the gate even when
 the counts are zero. It is not a replacement for an authoritative fleet,
