@@ -273,6 +273,15 @@ and a stalled handshake times out. These tests do not prove all redirect,
 DNS/TLS/proxy, cancellation-suppression or cleanup paths, nor establish a remote
 billing-stop guarantee. Local `ws.closed` does not establish that guarantee.
 
+The candidate sends the initial untrusted context with a server-generated
+item ID and waits for an exact matching `conversation.item.added` acknowledgement
+before declaring the provider ready. A mismatch or missing acknowledgement
+fails closed; loopback tests do not prove a live provider's timing or shape.
+This does not fence later changes to the source data, authorize a real call,
+or replace the separate source, history, lease and budget gates. The existing
+session also reacts to `speech_stopped` before observing the matching committed
+input item; ordering and transcript linkage still require implementation.
+
 ## Source fingerprints and remaining fence
 
 The candidate captures server-derived scope, the allowlisted context and

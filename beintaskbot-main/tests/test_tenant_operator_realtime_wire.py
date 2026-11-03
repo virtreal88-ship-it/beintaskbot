@@ -12,6 +12,8 @@ class Socket:
     async def send_json(self,event):self.sent.append(copy.deepcopy(event))
     async def receive_json(self):
         if not self.sent:return {'type':'session.created','session':{'id':'synthetic-session'}}
+        if self.sent[-1]['type']=='conversation.item.create':
+            return {'type':'conversation.item.added','item':copy.deepcopy(self.sent[-1]['item'])}
         config=copy.deepcopy(self.sent[-1]['session'])
         if self.mutate:self.mutate(config)
         return {'type':'session.updated','session':{**config,'id':'synthetic-session'}}
@@ -89,6 +91,51 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SYNTHETIC UNTRUSTED INJECTION',self.socket.sent[0]['session']['instructions'])
         self.assertIn('SYNTHETIC UNTRUSTED INJECTION',self.socket.sent[1]['item']['content'][0]['text'])
         self.assertEqual(self.socket.sent[1]['item']['role'],'user')
+
+    async def test_context_ack_must_match_and_readiness_waits(self):
+        def wrong_id(item):item['id']='wrong-context'
+        def wrong_text(item):item['content'][0]['text']='different context'
+        def wrong_role(item):item['role']='assistant'
+        for change in (wrong_id,wrong_text,wrong_role):
+            class BadAck(Socket):
+                async def receive_json(self):
+                    event=await super().receive_json()
+                    if event['type']=='conversation.item.added':change(event['item'])
+                    return event
+            wire=SyntheticRealtimeWire(BadAck(),Guard())
+            with self.assertRaisesRegex(ValueError,'provider_context_unconfirmed'):
+                await wire.open(self.snapshot,**self.options)
+            with self.assertRaisesRegex(ValueError,'session_not_ready'):
+                await wire.send({'type':'input_audio_buffer.clear'})
+
+    async def test_no_context_ack_never_becomes_ready(self):
+        class DelayedAck(Socket):
+            def __init__(self):super().__init__();self.wait=asyncio.Event()
+            async def receive_json(self):
+                if self.sent and self.sent[-1]['type']=='conversation.item.create':
+                    await self.wait.wait()
+                return await super().receive_json()
+        socket=DelayedAck();wire=SyntheticRealtimeWire(socket,Guard())
+        task=asyncio.create_task(wire.open(self.snapshot,**self.options))
+        for _ in range(20):
+            if len(socket.sent)==2:break
+            await asyncio.sleep(0)
+        self.assertEqual(len(socket.sent),2);self.assertFalse(wire.ready)
+        with self.assertRaisesRegex(ValueError,'session_not_ready'):
+            await wire.send({'type':'input_audio_buffer.clear'})
+        socket.wait.set();await task;self.assertTrue(wire.ready)
+
+    async def test_context_ack_can_follow_conversation_announcement(self):
+        class AnnounceBeforeAck(Socket):
+            def __init__(self):super().__init__();self.announced=False
+            async def receive_json(self):
+                if self.sent and self.sent[-1]['type']=='conversation.item.create' and not self.announced:
+                    self.announced=True
+                    return {'type':'conversation.created','conversation':{'id':'synthetic-conversation'}}
+                return await super().receive_json()
+        wire=SyntheticRealtimeWire(AnnounceBeforeAck(),Guard())
+        await wire.open(self.snapshot,**self.options)
+        self.assertTrue(wire.ready);self.assertEqual(wire.conversation_id,'synthetic-conversation')
 
     async def test_live_factory_cannot_be_enabled(self):
         with self.assertRaises(TenantLinearError):create_production_provider()
