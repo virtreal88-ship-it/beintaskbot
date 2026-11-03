@@ -1,0 +1,28 @@
+name: Customer memory policy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/customer-memory.yml'
+      - 'beintaskbot-main/tenant_customer_memory*.py'
+      - 'beintaskbot-main/tests/test_customer_memory*.py'
+  push:
+    branches: [codex/customer-memory]
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test isolated decision policy
+        run: python -m unittest discover -s tests -p 'test_customer_memory_policy.py' -v
