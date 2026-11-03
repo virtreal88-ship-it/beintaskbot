@@ -38,6 +38,15 @@ periodically. A shared lease must fence concurrent sessions across processes.
 The prototype does not prove atomic revocation around dispatch, or distributed
 lease fencing, or any production implementation of these methods.
 
+On a started mock session, shutdown marks it closed, concurrently closes the
+provider and waits for both provider and client sends to drain. It emits the
+terminal event and releases its lease only after those steps complete. A hung
+send, close or terminal event returns an unconfirmed result and keeps the lease;
+late completion does not automatically release it. The local barrier tests
+cover provider and client sends, and a close that ignores cancellation. This
+does not prove what a real provider closes or whether a distributed lease can
+expire or be stolen while an old process is still running.
+
 The intended shared budget interface is `reserve(scope)` then `claim(scope)`
 before each server-originated `response.create`, where scope contains unique
 `request_id`, `tenant_id`, `session_id`, `actor_id`, `channel_id`,

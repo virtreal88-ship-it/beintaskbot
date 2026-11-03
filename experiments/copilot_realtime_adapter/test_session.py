@@ -224,5 +224,66 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused): await pending
         self.assertNotIn('input_audio_buffer.append',[item['type'] for item in self.provider.events])
 
+    async def test_shutdown_drains_provider_send_before_releasing_lease(self):
+        entered=asyncio.Event();release=asyncio.Event();original=self.provider.send
+        async def slow(event):
+            if event['type']=='input_audio_buffer.append':entered.set();await release.wait()
+            await original(event)
+        self.provider.send=slow
+        sending=asyncio.create_task(self.session.receive_client({'type':'audio','pcm':bytes(480)}))
+        await entered.wait();closing=asyncio.create_task(self.session.end('user_end'))
+        await asyncio.sleep(.03)
+        self.assertTrue(self.lease.held);self.assertNotIn('ended',[e['type'] for e in self.client.events]);self.assertFalse(closing.done())
+        release.set();await sending;self.assertTrue(await closing);self.assertFalse(self.lease.held)
+        self.assertEqual(self.provider.events[-1]['type'],'input_audio_buffer.append')
+        self.assertEqual(self.client.events[-1]['type'],'ended')
+
+    async def test_shutdown_drains_client_send_before_ended(self):
+        await self.turn();entered=asyncio.Event();release=asyncio.Event();original=self.client.send
+        async def slow(event):
+            if event['type']=='audio':entered.set();await release.wait()
+            await original(event)
+        self.client.send=slow
+        sending=asyncio.create_task(self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1',
+            'item_id':'a','content_index':0,'delta':base64.b64encode(bytes(480)).decode()}))
+        await entered.wait();closing=asyncio.create_task(self.session.end('user_end'));await asyncio.sleep(.03)
+        self.assertTrue(self.lease.held);self.assertNotIn('ended',[e['type'] for e in self.client.events])
+        release.set();await sending;self.assertTrue(await closing);self.assertEqual([e['type'] for e in self.client.events][-2:],['audio','ended'])
+
+    async def test_stuck_send_returns_unconfirmed_and_keeps_lease(self):
+        entered=asyncio.Event();release=asyncio.Event();original=self.provider.send
+        async def stuck(event):
+            entered.set();await release.wait();await original(event)
+        self.provider.send=stuck;self.session.shutdown_timeout=.03
+        sending=asyncio.create_task(self.session.receive_client({'type':'audio','pcm':bytes(480)}))
+        await entered.wait();self.assertFalse(await self.session.end('user_end'))
+        self.assertTrue(self.lease.held);self.assertNotIn('ended',[e['type'] for e in self.client.events])
+        release.set();await sending
+        self.assertTrue(self.lease.held);self.assertFalse(await self.session.end('again'))
+
+    async def test_stuck_client_returns_unconfirmed_and_keeps_lease(self):
+        await self.turn();entered=asyncio.Event();release=asyncio.Event();original=self.client.send
+        async def stuck(event):
+            if event['type']=='audio':entered.set();await release.wait()
+            await original(event)
+        self.client.send=stuck;self.session.shutdown_timeout=.03
+        sending=asyncio.create_task(self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1',
+            'item_id':'a','content_index':0,'delta':base64.b64encode(bytes(480)).decode()}))
+        await entered.wait();self.assertFalse(await self.session.end('user_end'))
+        self.assertTrue(self.lease.held);self.assertNotIn('ended',[e['type'] for e in self.client.events])
+        release.set();await sending;self.assertTrue(self.lease.held)
+
+    async def test_cancel_suppressed_by_close_never_releases_lease(self):
+        entered=asyncio.Event();release=asyncio.Event()
+        async def stubborn_close():
+            entered.set()
+            try:await release.wait()
+            except asyncio.CancelledError:await release.wait()
+        self.provider.close=stubborn_close;self.session.shutdown_timeout=.03
+        self.assertFalse(await self.session.end('user_end'))
+        self.assertTrue(entered.is_set());self.assertTrue(self.lease.held)
+        self.assertNotIn('ended',[e['type'] for e in self.client.events])
+        release.set();await asyncio.sleep(.01);self.assertTrue(self.lease.held)
+
 
 if __name__ == '__main__': unittest.main()
