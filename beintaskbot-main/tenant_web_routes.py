@@ -33,6 +33,7 @@ from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
+from tenant_customer_memory_api import handler as customer_memory_handler
 from tenant_dialog_consultations_api import handler as dialog_consultations_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
@@ -60,6 +61,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
+        ('/api/platform/customer-memory/{contact_id}', customer_memory_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}/assets/{asset_id}', instruction_handler(member,origin,logger), ('GET',)),

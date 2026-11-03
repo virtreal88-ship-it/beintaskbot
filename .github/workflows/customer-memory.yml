@@ -1,0 +1,93 @@
+name: Customer memory policy and storage
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/customer-memory.yml'
+      - 'beintaskbot-main/tenant_customer_memory*.py'
+      - 'beintaskbot-main/tenant_platform_schema_crm.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-contacts-directory.js'
+      - 'beintaskbot-main/docs/tenant-customer-memory.js'
+      - 'beintaskbot-main/tests/test_customer_memory*.py'
+      - 'beintaskbot-main/tests/customer_memory_browser_fixture.py'
+      - 'beintaskbot-main/tests/customer_memory_http_browser.cjs'
+      - 'beintaskbot-main/tests/customer_memory_erasure_model.py'
+      - 'beintaskbot-main/tests/customer_memory_event_receipts_prototype.py'
+      - 'beintaskbot-main/tests/customer_memory_local_transport_prototype.py'
+      - 'beintaskbot-main/tests/customer_memory_off_migration_check.py'
+      - 'beintaskbot-main/tests/test_tenant_web_routes.py'
+      - 'beintaskbot-main/tests/test_tenant_crm_identity.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+  push:
+    branches: [codex/customer-memory]
+
+permissions:
+  contents: read
+
+jobs:
+  memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: isolated-fixture
+          POSTGRES_DB: customer_memory_test
+        ports: ['55463:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CUSTOMER_MEMORY_TEST_DSN: postgresql://postgres:isolated-fixture@127.0.0.1:55463/customer_memory_test
+      CUSTOMER_MEMORY_TEST_ISOLATED: "1"
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Verify disabled memory cold-start and real session authentication
+        run: python tests/customer_memory_off_migration_check.py
+      - name: Exercise memory policy, PostgreSQL and HTTP
+        run: python -m unittest discover -s tests -p 'test_customer_memory*.py' -v
+      - name: Exercise existing CRM and route regressions
+        run: python -m pytest -q tests/test_tenant_web_routes.py tests/test_tenant_crm_identity.py
+      - name: Install Chromium test dependencies
+        run: |
+          npm install --prefix .support-test-deps --no-save playwright@1.62.1
+          node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+          node -e "const fs=require('node:fs');fs.appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Real local HTTP and PostgreSQL in Chromium
+        run: |
+          python tests/customer_memory_browser_fixture.py &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 50); do curl -fsS http://127.0.0.1:18765/ >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:18765/ >/dev/null
+          node tests/customer_memory_http_browser.cjs
+      - name: Physical erasure release gate (known blocker)
+        env:
+          CUSTOMER_MEMORY_ENFORCE_ERASURE_GATE: "1"
+        run: |
+          python -m unittest -v \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_inflight_channel_read_allows_eventual_erasure \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_contact_erasure_during_other_subject_memory_read \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_opposite_channel_erasure_transactions_both_commit \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_rr_source_quarantine_fences_already_started_other_subject_read \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_deleted_source_without_fact_cannot_reappear_on_replay \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_contact_erasure_fences_inflight_same_source_on_other_channel \
+            test_customer_memory_local_transport_prototype.LocalTransportPrototypeTests.test_received_erasure_request_prevents_not_yet_started_local_post
