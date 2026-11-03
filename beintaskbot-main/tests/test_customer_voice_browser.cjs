@@ -7,6 +7,11 @@ const { chromium, firefox, webkit } = require('playwright');
 
 const docs = path.resolve(__dirname, '../docs');
 const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
+const appShell = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8');
+const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=1`)]
+  .map(src=>appShell.indexOf(`<script src="${src}"></script>`));
+assert(appScripts.every(position=>position>=0) && appScripts.every((position,index)=>index===0||appScripts[index-1]<position),
+  'app shell must load the recorder dependencies after dialog setup, in order');
 const html = `<!doctype html><meta charset="utf-8"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
  <textarea id="chatText"></textarea><div class="operator-composer-actions"><button id="sendChat">send</button></div></div></div>
  <script>window.tenantI18n={language:'ru'};const lead=new URLSearchParams(location.search).get('lead')||'7';
