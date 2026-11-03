@@ -222,8 +222,13 @@ survives cancellation before releasing its lease.
 `transcript_draft.py` is an isolated mock of ordered item registration and
 later input-transcription completion/failure; it only generates candidate
 entries accepted by the existing thread validator and stores no audio. Empty,
-missing or failed input is unavailable, automatic ASR is unverified, and all
-assistant text is omitted because playback is unproven. Item ordering in a real
+missing or failed input is unavailable and automatic ASR is unverified. The
+mock can retain complete generated text only after a full app-level playback
+signal; it separately marks `device_playback_complete`. A client can forge that
+signal and it does not prove human hearing. The marker is mock-only, not stored
+by the current DB schema; the real Session still truncates to zero. Interruptions
+and unknown playback omit generated text without inventing an aligned prefix.
+Item ordering in a real
 provider stream must additionally be checked against linked previous-item IDs;
 the mock's order assumption is not an upstream guarantee. A future writer must
 accept server-derived scope, session/item idempotency keys, ordered entries,

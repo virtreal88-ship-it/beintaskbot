@@ -11,7 +11,7 @@ class TranscriptDraft:
     def __init__(self,session_id,agent_binding):
         self.session_id=str(uuid.UUID(session_id))
         if not isinstance(agent_binding,str) or not 1<=len(agent_binding)<=128:raise ValueError('binding_invalid')
-        self.binding=agent_binding;self.turns=[];self.items={};self.closed=False
+        self.binding=agent_binding;self.turns=[];self.items={};self.assistant_state={};self.playback_evidence={};self.closed=False
 
     def register(self,item_id,role):
         # Called on ordered provider item creation, NOT on late ASR completion.
@@ -21,6 +21,31 @@ class TranscriptDraft:
         turn={'role':role,'text':'','agent_binding':self.binding,'voice_session_id':self.session_id,
               'turn_sequence':len(self.turns),'transcript_status':'unavailable','transcript_quality':'unknown'}
         self.items[item_id]=turn;self.turns.append(turn)
+        if role=='copilot':self.assistant_state[item_id]={'text':None,'audio_done':False,'played':False,'interrupted':False}
+
+    def assistant_transcript_completed(self,item_id,text):
+        state=self.assistant_state.get(item_id)
+        if (self.closed or state is None or state['interrupted'] or state['text'] is not None or not isinstance(text,str) or
+            not text.strip() or len(text)>6000):raise ValueError('transcript_invalid')
+        state['text']=text
+
+    def assistant_audio_done(self,item_id):
+        state=self.assistant_state.get(item_id)
+        if self.closed or state is None or state['audio_done'] or state['interrupted']:raise ValueError('audio_state_invalid')
+        state['audio_done']=True
+
+    def device_playback_complete(self,item_id):
+        # A trusted app-level queue signal only, NOT proof that a person heard
+        # anything. The real client path and auth are not integrated here.
+        state=self.assistant_state.get(item_id)
+        if self.closed or state is None or not state['audio_done'] or state['played'] or state['interrupted']:
+            raise ValueError('playback_state_invalid')
+        state['played']=True
+
+    def interrupted(self,item_id):
+        state=self.assistant_state.get(item_id)
+        if self.closed or state is None or state['interrupted']:raise ValueError('audio_state_invalid')
+        state['interrupted']=True;state['played']=False;state['text']=None
 
     def input_completed(self,item_id,content_index,text):
         turn=self.items.get(item_id)
@@ -42,7 +67,13 @@ class TranscriptDraft:
     def finalize(self):
         if self.closed:raise ValueError('already_finalized')
         self.closed=True
-        # Assistant text is omitted even when produced: with zero truncation
-        # and untrusted playback a complete heard transcript is unproven.
+        # Only a complete transcript and an app-level full playback signal may
+        # enter this mock projection. This signal cannot prove human hearing or
+        # resist a malicious client; the evidence is separate from DB entries.
+        for item,state in self.assistant_state.items():
+            if state['played'] and not state['interrupted'] and state['text'] is not None:
+                turn=self.items[item]
+                turn.update(text=state['text'],transcript_status='complete',transcript_quality='automatic_unverified')
+                self.playback_evidence[turn['turn_sequence']]='device_playback_complete'
         entries=[dict(turn) for turn in self.turns]
         return _validated_entries(self.binding,entries) if entries else []

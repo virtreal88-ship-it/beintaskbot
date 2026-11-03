@@ -33,3 +33,23 @@ class TranscriptDraftTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.draft.input_completed('u',1,'wrong content')
         with self.assertRaises(ValueError):self.draft.input_completed('u',0,'x'*1601)
         with self.assertRaises(ValueError):self.draft.register('x','system')
+
+    def test_complete_device_playback_retains_generated_text_as_unverified(self):
+        self.draft.register('a','copilot')
+        with self.assertRaises(ValueError):self.draft.device_playback_complete('a')
+        self.draft.assistant_audio_done('a');self.draft.device_playback_complete('a')
+        self.draft.assistant_transcript_completed('a','synthetic generated answer')
+        turn=self.draft.finalize()[0]
+        self.assertEqual(turn['text'],'synthetic generated answer')
+        self.assertEqual(turn['transcript_quality'],'automatic_unverified')
+        self.assertEqual(self.draft.playback_evidence,{0:'device_playback_complete'})
+
+    def test_interruption_or_missing_playback_never_exports_generated_text(self):
+        self.draft.register('a','copilot');self.draft.register('b','copilot')
+        self.draft.assistant_transcript_completed('a','unheard')
+        self.draft.assistant_audio_done('a');self.draft.device_playback_complete('a');self.draft.interrupted('a')
+        self.draft.assistant_transcript_completed('b','unconfirmed')
+        self.draft.assistant_audio_done('b')
+        turns=self.draft.finalize()
+        self.assertEqual([t['text'] for t in turns],['',''])
+        self.assertEqual(self.draft.playback_evidence,{})
