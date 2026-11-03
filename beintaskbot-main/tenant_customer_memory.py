@@ -71,13 +71,13 @@ def _subject(cur,tenant,contact,*,allow_archived=False):
 
 def _source(cur,tenant,link,source_id):
     source_id=identifier(source_id)
-    cur.execute('''SELECT id,body,message_type,direction,happened_at,raw FROM saas_crm_messages
+    cur.execute('''SELECT id,body,message_type,direction,happened_at,raw,xmin::text AS row_revision FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE''',
       (tenant,source_id,link['lead_id'],'connect:'+str(link['channel_id'])))
     row=cur.fetchone()
     if not row or row['message_type'] != 'text' or not row['body']:
         raise TenantLinearError('Source unavailable.',404)
-    payload={k:row.get(k) for k in ('body','message_type','direction','happened_at','raw')}
+    payload={k:row.get(k) for k in ('body','message_type','direction','happened_at','raw','row_revision')}
     version=hashlib.sha256(json.dumps(payload,sort_keys=True,default=str,ensure_ascii=False).encode()).hexdigest()
     return row,version
 

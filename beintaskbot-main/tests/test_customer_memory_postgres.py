@@ -95,6 +95,10 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
             conn.commit()
         self.assertEqual(self.memory.read(self.profile,self.contact)['facts'],[])
         with _connect() as conn:
+            with conn.cursor() as cur:cur.execute("UPDATE saas_crm_messages SET body='Synthetic customer statement' WHERE id=%s",(self.message,))
+            conn.commit()
+        self.assertEqual(self.memory.read(self.profile,self.contact)['facts'],[])
+        with _connect() as conn:
             with conn.cursor() as cur:cur.execute("UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=71",(self.tenant,))
             conn.commit()
         with self.assertRaises(TenantLinearError):self.memory.read(self.profile,self.contact)
