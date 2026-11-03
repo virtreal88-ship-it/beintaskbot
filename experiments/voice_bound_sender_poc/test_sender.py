@@ -83,6 +83,24 @@ class BoundSenderTests(base.SessionBudgetTests):
             self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_bound_sender_receipt').fetchone()['n'],0)
             self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_response').fetchone()['state'],'claimed')
             self.assertEqual(conn.execute('SELECT audio_bytes FROM saas_voice_session_budget').fetchone()['audio_bytes'],0)
+    def test_mutable_wire_buffer_is_snapshotted_before_commit_and_write(self):
+        async def run():
+            s=base.scope();self.ready(s);out=self.make(s);chunk=base.uid();pcm=b'\x01\x02'
+            frame=bytearray(sender._wire({'type':'input_audio_buffer.append','audio':'AQI='}))
+            expected=bytes(frame);entered=asyncio.Event();release=asyncio.Event()
+            original=sender._SyntheticSocket._write
+            async def delayed(socket,wire):
+                entered.set();await release.wait();await original(socket,wire)
+            with patch.object(sender._SyntheticSocket,'_write',delayed):
+                task=asyncio.create_task(out._send('audio',chunk,frame,pcm))
+                await asyncio.wait_for(entered.wait(),2)
+                frame[:]=sender._wire({'type':'response.create'})
+                release.set();self.assertTrue(await task)
+            self.assertEqual(out.evidence(),(expected,))
+            with local_connect(self.dsn) as conn:
+                receipt=conn.execute('SELECT wire_sha256,wire_bytes FROM saas_voice_bound_sender_receipt').fetchone()
+                self.assertEqual(receipt,{'wire_sha256':hashlib.sha256(expected).hexdigest(),'wire_bytes':len(expected)})
+        asyncio.run(run())
     def test_wrong_scope_cannot_consume_response_or_write(self):
         async def run():
             s=base.scope();self.ready(s);response=base.uid();self.call(budget.claim_response,s,response,1)

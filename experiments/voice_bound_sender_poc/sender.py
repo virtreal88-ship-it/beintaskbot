@@ -64,6 +64,8 @@ class SyntheticBoundSender:
     def _commit(self,kind,operation_id,frame,pcm=None,ordinal=None):
         # Validate again inside the transaction worker, rather than relying
         # on its caller to pass a matching PCM frame or a response command.
+        if type(frame) not in (bytes,bytearray):raise ValueError('wire_frame_invalid')
+        frame=bytes(frame)
         if kind=='audio':
             if type(pcm) is not bytes or frame!=_wire({'type':'input_audio_buffer.append','audio':base64.b64encode(pcm).decode('ascii')}):
                 raise ValueError('wire_pcm_mismatch')
@@ -83,6 +85,10 @@ class SyntheticBoundSender:
             # including ambiguous commit; caller marks uncertain and stops.
         return True
     async def _send(self,kind,operation_id,frame,pcm=None,ordinal=None):
+        if type(frame) not in (bytes,bytearray):raise ValueError('wire_frame_invalid')
+        # Snapshot before the first await, so later mutation by the caller
+        # cannot affect either the committed digest or the frame sent.
+        frame=bytes(frame)
         async with self.__lock:
             if self.__poisoned:raise RuntimeError('sender_poisoned')
             try:
