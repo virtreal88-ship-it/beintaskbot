@@ -38,3 +38,23 @@ class ExistingContextTests(unittest.TestCase):
         self.assertNotIn('voice_session_id',unknown)
         self.assertNotIn('turn_sequence',unknown)
         self.assertNotIn('unknown',unknown)
+
+    def test_voice_marker_without_status_never_becomes_unlabelled_text(self):
+        from tenant_operator_copilot import _project_prior_turn
+        voice={'role':'employee','text':'unverified content','agent_binding':'binding',
+               'voice_session_id':'00000000-0000-4000-8000-000000000001'}
+        projected=_project_prior_turn(voice)
+        self.assertEqual(projected['text'],'')
+        self.assertEqual(projected['transcript_status'],'unknown')
+        self.assertEqual(projected['transcript_quality'],'unknown')
+
+    def test_thread_append_rejects_unbound_or_malformed_voice_entries(self):
+        from tenant_operator_copilot_threads import _validated_entries
+        base={'role':'employee','text':'partial','agent_binding':'binding'}
+        voice={**base,'voice_session_id':'00000000-0000-4000-8000-000000000001',
+               'turn_sequence':1,'transcript_status':'partial','transcript_quality':'automatic_unverified'}
+        self.assertEqual(_validated_entries('binding',[base,voice]),[base,voice])
+        for entry in ({**base,'agent_binding':'other'},{**base,'voice_session_id':voice['voice_session_id']},
+                      {**voice,'turn_sequence':True},{**voice,'transcript_status':'unknown'},
+                      {**voice,'forged':'field'}):
+            with self.assertRaises(ValueError): _validated_entries('binding',[entry])

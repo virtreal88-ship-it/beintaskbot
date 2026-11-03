@@ -33,6 +33,22 @@ worker versions still perform snapshot overwrites, so a rolling deployment with
 old and new writers concurrently active does not provide the new guarantee.
 Plan and independently review a compatible cutover before any release.
 
+The experimental on-demand cleanup now replaces expired nonempty thread
+content with an empty incremented-revision fence when a matching text receipt
+is still `sending`; a late text completion with the old revision cannot restore
+that content. This check was exercised on isolated PostgreSQL. Cleanup runs only
+on a later admission for the tenant, not on a timer: it cannot guarantee a
+strict 60-day deletion deadline when there are no requests. Empty thread scope
+metadata can remain while a receipt stays `sending`. A future voice writer must
+participate in the same tenant admission lock and lifecycle; that is unproven.
+
+Separately, completed `saas_chat_ai_runs.result` can contain a saved answer. The
+existing completed-request replay returns this result before checking the thread
+clear revision. Therefore clearing a thread is not proven to delete or make all
+cached results inaccessible, and the retention/deletion semantics for receipts
+are unresolved. We did not change those product semantics. No rollout until they
+are explicitly decided and tested end to end.
+
 The local `_draft_context` now passes allowlisted voice session UUID, sequence,
 partial status and quality through to text context and labels incomplete
 evidence in instructions. Unknown/unavailable transcript text is omitted.

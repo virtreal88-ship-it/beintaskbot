@@ -35,7 +35,8 @@ class ExistingTextWriterRace(unittest.TestCase):
         with psycopg.connect(URL, autocommit=True) as conn:
             conn.execute('CREATE SCHEMA ' + cls.schema)
             conn.execute('''CREATE TABLE ''' + cls.schema + '''.saas_chat_ai_runs(
-                tenant_id uuid, request_id uuid, config_version text, status text, result jsonb, updated_at timestamptz DEFAULT now())''')
+                tenant_id uuid, request_id uuid, config_version text, status text, result jsonb, updated_at timestamptz DEFAULT now(),
+                requested_by bigint,channel_id text,conversation_id text)''')
             conn.execute('''CREATE TABLE ''' + cls.schema + '''.saas_tenant_integrations(
                 tenant_id uuid, provider text, updated_at text)''')
             conn.execute('''CREATE TABLE ''' + cls.schema + '''.saas_operator_copilot_threads(
@@ -242,7 +243,7 @@ class ExistingTextWriterRace(unittest.TestCase):
             with self.connect() as conn:
                 barrier.wait(timeout=5)
                 with conn.cursor() as cur:
-                    append(cur,tenant,actor,channel,dialog,0,[{'text':value,'agent_binding':'binding'}])
+                    append(cur,tenant,actor,channel,dialog,0,'binding',[{'role':'employee','text':value,'agent_binding':'binding'}])
                 conn.commit()
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(writer, ['synthetic-text','synthetic-voice']))
@@ -260,16 +261,36 @@ class ExistingTextWriterRace(unittest.TestCase):
             conn.commit()
         with self.connect() as conn:
             with self.assertRaises(ThreadCleared):
-                with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,0,[{'text':'stale'}])
+                with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,0,'binding',[{'role':'employee','text':'stale','agent_binding':'binding'}])
             conn.rollback()
         with self.connect() as conn:
-            with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,1,[{'text':'new'}])
+            with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,1,'binding',[{'role':'employee','text':'new','agent_binding':'binding'}])
             conn.commit()
             row=conn.execute('''SELECT turns,clear_revision FROM saas_operator_copilot_threads
                 WHERE tenant_id=%s AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
                 (tenant,actor,channel,dialog)).fetchone()
         self.assertEqual(row['clear_revision'],1)
-        self.assertEqual(row['turns'],[{'text':'new'}])
+        self.assertEqual(row['turns'],[{'role':'employee','text':'new','agent_binding':'binding'}])
+
+    def test_expired_pending_content_is_scrubbed_and_old_revision_cannot_restore_it(self):
+        from tenant_operator_copilot_threads import append, cleanup_expired, ThreadCleared
+        tenant, actor, channel, dialog = str(uuid.uuid4()), 9, 'channel', 'dialog'
+        with self.connect() as conn:
+            conn.execute('''INSERT INTO saas_operator_copilot_threads
+              (tenant_id,requested_by,channel_id,conversation_id,turns,updated_at)
+              VALUES(%s,%s,%s,%s,%s::jsonb,now()-interval '61 days')''',
+              (tenant,actor,channel,dialog,json.dumps([{'text':'expired private content'}])))
+            conn.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,status,requested_by,channel_id,conversation_id)
+              VALUES(%s,%s,'sending',%s,%s,%s)''',(tenant,str(uuid.uuid4()),actor,channel,dialog))
+            with conn.cursor() as cur: cleanup_expired(cur,tenant)
+            conn.commit()
+            row=conn.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()
+        self.assertEqual(row,{'turns':[],'clear_revision':1})
+        with self.connect() as conn:
+            with self.assertRaises(ThreadCleared):
+                with conn.cursor() as cur:
+                    append(cur,tenant,actor,channel,dialog,0,'binding',[{'role':'employee','text':'stale','agent_binding':'binding'}])
+            conn.rollback()
 
     def test_actual_additive_schema_upgrade_preserves_legacy_turns(self):
         import tenant_chat_ai_schema as schema

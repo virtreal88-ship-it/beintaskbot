@@ -47,7 +47,7 @@ from tenant_dialog_greeting import GREETING_RULE, greeting_context
 INSTRUCTIONS += GREETING_RULE
 from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
 INSTRUCTIONS += GROUNDING_RULE
-INSTRUCTIONS += ' Voice transcript metadata describes imperfect evidence: partial or unavailable transcripts are incomplete and must never be treated as exact or complete.'
+INSTRUCTIONS += ' Voice transcript metadata describes imperfect evidence: partial or unavailable transcripts are incomplete and must never be treated as exact or complete. A transcript is not a verified quotation unless its quality is human_verified.'
 
 
 
@@ -392,18 +392,21 @@ def _project_prior_turn(turn):
     """Project only known private-thread fields; never guess transcript quality."""
     result = {'role':str(turn.get('role') or '')[:20], 'text':str(turn.get('text') or '')[:800],
               'agent_binding':turn.get('agent_binding')}
-    if 'transcript_status' in turn:
-        status = turn['transcript_status'] if turn['transcript_status'] in ('complete','partial','unavailable','unknown') else 'unknown'
-        result['transcript_status'] = status
-        if status in {'unavailable','unknown'}:
-            result['text'] = ''
-    if 'transcript_quality' in turn:
-        quality = turn['transcript_quality'] if turn['transcript_quality'] in ('automatic_unverified','human_verified','unknown') else 'unknown'
-        result['transcript_quality'] = quality
+    voice_marked = any(key in turn for key in ('voice_session_id','transcript_status','transcript_quality','turn_sequence'))
+    session_id = None
     try:
-        result['voice_session_id'] = str(uuid.UUID(str(turn['voice_session_id'])))
+        session_id = str(uuid.UUID(str(turn['voice_session_id'])))
     except (KeyError, ValueError, TypeError, AttributeError):
         pass
+    if voice_marked:
+        status = turn.get('transcript_status')
+        quality = turn.get('transcript_quality')
+        result['transcript_status'] = status if session_id and status in ('complete','partial','unavailable','unknown') else 'unknown'
+        result['transcript_quality'] = quality if quality in ('automatic_unverified','human_verified','unknown') else 'unknown'
+        if result['transcript_status'] in {'unavailable','unknown'}:
+            result['text'] = ''
+    if session_id:
+        result['voice_session_id'] = session_id
     if type(turn.get('turn_sequence')) is int and 0 <= turn['turn_sequence'] < 2**31:
         result['turn_sequence'] = turn['turn_sequence']
     return result
@@ -654,17 +657,12 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
+            from tenant_operator_copilot_threads import cleanup_expired
+            cleanup_expired(cur, tenant)
             rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
-            # Never remove a clear fence while a text request that may still
-            # complete holds its revision. Retain no message content beyond the
-            # existing 60-day policy unless an in-flight receipt needs the row.
-            cur.execute("""DELETE FROM saas_operator_copilot_threads t WHERE t.updated_at<now()-interval '60 days' AND t.tenant_id=%s::uuid
-              AND NOT EXISTS(SELECT 1 FROM saas_chat_ai_runs r WHERE r.tenant_id=t.tenant_id AND r.requested_by=t.requested_by
-                AND r.channel_id=t.channel_id AND r.conversation_id=t.conversation_id AND r.status='sending')""", (tenant,))
-
         conn.commit()
     context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
     execution=context['execution'];lines=context['lines'];request=context['request'];prompt=context['instructions']
@@ -753,7 +751,7 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
                            {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}]
                 try:
                     append(cur, tenant, actor, command['channel_id'], command['conversation_id'],
-                           command['_thread_clear_revision'], entries)
+                           command['_thread_clear_revision'], command['_agent_binding'], entries)
                 except ThreadCleared:
                     status = 'unknown'
             stored = dict(result or {})

@@ -6,17 +6,56 @@ source validation in the same transaction before appending. Never hold this
 row lock while waiting for an external provider.
 """
 import json
+import uuid
 
 
 class ThreadCleared(Exception):
     pass
 
 
-def append(cur, tenant, actor, channel, conversation, expected_clear_revision, entries):
+def _validated_entries(expected_binding, entries):
+    """Reject unknown fields and unsafe voice metadata before touching a row.
+
+    This establishes a storage shape, not voice authorization, replay or order.
+    A future voice writer must enforce those independently before calling us.
+    """
+    if not isinstance(expected_binding, str) or not 1 <= len(expected_binding) <= 128:
+        raise ValueError('invalid agent binding')
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 20:
+        raise ValueError('invalid thread entries')
+    base = {'role','text','agent_binding'}
+    voice = {'voice_session_id','turn_sequence','transcript_status','transcript_quality'}
+    for entry in entries:
+        if not isinstance(entry,dict) or not base.issubset(entry) or set(entry) - base - voice:
+            raise ValueError('invalid thread entry')
+        role = entry['role']; content = entry['text']
+        if (not isinstance(role,str) or role not in {'employee','copilot'} or not isinstance(content,str) or
+                len(content) > (1600 if role == 'employee' else 6000) or entry['agent_binding'] != expected_binding):
+            raise ValueError('invalid thread entry')
+        marked = bool(set(entry) & voice)
+        if marked:
+            if not voice.issubset(entry):
+                raise ValueError('incomplete voice metadata')
+            try:
+                value = entry['voice_session_id']
+                if not isinstance(value,str) or str(uuid.UUID(value)) != value:
+                    raise ValueError()
+            except (ValueError,AttributeError):
+                raise ValueError('invalid voice session') from None
+            sequence = entry['turn_sequence']
+            status = entry['transcript_status']; quality = entry['transcript_quality']
+            if (type(sequence) is not int or not 0 <= sequence < 2**31 or
+                    status not in ('complete','partial','unavailable','unknown') or
+                    quality not in ('automatic_unverified','human_verified','unknown') or
+                    status in ('unavailable','unknown') and bool(content)):
+                raise ValueError('invalid voice metadata')
+    return entries
+
+
+def append(cur, tenant, actor, channel, conversation, expected_clear_revision, expected_binding, entries):
     if type(expected_clear_revision) is not int or expected_clear_revision < 0:
         raise ValueError('invalid thread revision')
-    if not isinstance(entries, list) or not entries or len(entries) > 20:
-        raise ValueError('invalid thread entries')
+    entries = _validated_entries(expected_binding, entries)
     key = (tenant, actor, channel, conversation)
     # The INSERT establishes a lockable row even for two first-time writers.
     cur.execute('''INSERT INTO saas_operator_copilot_threads
@@ -43,3 +82,21 @@ def clear(cur, tenant, actor, channel, conversation):
       ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
       DO UPDATE SET turns='[]'::jsonb,clear_revision=saas_operator_copilot_threads.clear_revision+1,updated_at=now()''',
                 (tenant, actor, channel, conversation))
+
+
+def cleanup_expired(cur, tenant):
+    """Scrub old content while preserving fences for in-flight text requests.
+
+    Call under the existing tenant-chat-ai admission lock, before reserving or
+    reading a new text request. A future voice writer must share this protocol.
+    Empty scope metadata and completed-run retention have separate policies.
+    """
+    pending = """SELECT 1 FROM saas_chat_ai_runs r WHERE r.tenant_id=t.tenant_id
+      AND r.requested_by=t.requested_by AND r.channel_id=t.channel_id
+      AND r.conversation_id=t.conversation_id AND r.status='sending'"""
+    cur.execute("""UPDATE saas_operator_copilot_threads t SET turns='[]'::jsonb,
+      clear_revision=t.clear_revision+1,updated_at=now()
+      WHERE t.tenant_id=%s::uuid AND t.updated_at<now()-interval '60 days'
+      AND (t.turns IS NULL OR t.turns<>'[]'::jsonb) AND EXISTS("""+pending+")", (tenant,))
+    cur.execute("""DELETE FROM saas_operator_copilot_threads t WHERE t.tenant_id=%s::uuid
+      AND t.updated_at<now()-interval '60 days' AND NOT EXISTS("""+pending+")", (tenant,))
