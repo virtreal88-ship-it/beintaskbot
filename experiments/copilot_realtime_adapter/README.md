@@ -208,6 +208,10 @@ scope, fingerprint, quote and tenant hold. Local PostgreSQL tests cover this
 ordering, replay, revocation, cancellation and uncertain send; global admission,
 old-schema migration and actual upstream cost bounds remain unproven. Unknown
 outcomes retain their hold and cannot be retried blindly.
+The provider receives the initial context and input audio before a response
+dispatch claim. Their billing behavior has not been bounded by the existing
+per-response CAS. A separate session-level reservation and a proven upper bound
+covering every billable phase are required before asserting the shared $5 cap.
 
 Input ASR remains disabled because no separately metered ASR admission exists.
 Output transcripts are not stored or presented as heard. Incomplete/interrupted
