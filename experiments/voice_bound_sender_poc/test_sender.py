@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from unittest.mock import patch
 import uuid
 
@@ -121,6 +122,28 @@ class BoundSenderTests(base.SessionBudgetTests):
             with self.assertRaisesRegex(RuntimeError,'sender_poisoned'):await out.audio(base.uid(),b'\0\1')
             with local_connect(self.dsn) as conn:
                 self.assertEqual(conn.execute('SELECT state,reserved_microusd FROM saas_voice_session_budget').fetchone(),{'state':'uncertain','reserved_microusd':4_224_000})
+        asyncio.run(run())
+    def test_cancel_after_database_commit_before_sender_resumes_never_writes(self):
+        async def run():
+            s=base.scope();self.ready(s);chunk=base.uid();out=self.make(s)
+            committed=threading.Event();release=threading.Event();original=sender.SyntheticBoundSender._commit
+            def delayed(instance,*args,**kwargs):
+                result=original(instance,*args,**kwargs);committed.set()
+                if not release.wait(5):raise RuntimeError('test_barrier_timeout')
+                return result
+            with patch.object(sender.SyntheticBoundSender,'_commit',delayed):
+                task=asyncio.create_task(out.audio(chunk,b'\0\1'*40))
+                self.assertTrue(await asyncio.to_thread(committed.wait,3))
+                task.cancel()
+                try:
+                    with self.assertRaises(asyncio.CancelledError):await task
+                    self.assertEqual(out.evidence(),())
+                    with local_connect(self.dsn) as conn:
+                        self.assertEqual(conn.execute('SELECT state,reserved_microusd FROM saas_voice_session_budget').fetchone(),{'state':'uncertain','reserved_microusd':4_224_000})
+                        self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_bound_sender_receipt').fetchone()['n'],1)
+                finally:release.set()
+            await asyncio.sleep(0.01)
+            self.assertEqual(out.evidence(),())
         asyncio.run(run())
     def test_process_dies_after_committed_receipt_before_any_send(self):
         s=base.scope();self.ready(s);chunk=base.uid()
