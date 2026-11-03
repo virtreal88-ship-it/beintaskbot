@@ -4,6 +4,7 @@ Only injected sockets reach the wire today. The aiohttp transport is usable in
 isolated tests, but live connection requires a reviewed, immutable admission
 change and proof of the budget, source and history fences.
 """
+import asyncio
 import base64
 import binascii
 import json
@@ -17,6 +18,30 @@ QUOTE='mini-2026-11-03-1resp-v1'
 MINIMUM_HOLD=2_112_000
 OPENAI_URL='wss://api.openai.com/v1/realtime'
 MAX_WIRE_MESSAGE=262144
+CONNECT_DEADLINE=4
+CLOSE_DEADLINE=3
+
+
+class RedirectRefused(ValueError):
+    pass
+
+
+async def _deny_redirect(_session,_trace_context,_params):
+    # aiohttp emits this before making the redirected request.
+    raise RedirectRefused('realtime_redirect_forbidden')
+
+
+def _new_owned_session():
+    trace=aiohttp.TraceConfig()
+    trace.on_request_redirect.append(_deny_redirect)
+    return aiohttp.ClientSession(trust_env=False,trace_configs=[trace],
+        timeout=aiohttp.ClientTimeout(total=CONNECT_DEADLINE,connect=3,sock_connect=3))
+
+
+async def _connect_websocket(session,url,headers):
+    # Outer deadline includes the complete HTTP upgrade, not only TCP setup.
+    return await asyncio.wait_for(session.ws_connect(url,headers=headers,timeout=CLOSE_DEADLINE,
+                                  heartbeat=20,max_msg_size=MAX_WIRE_MESSAGE),CONNECT_DEADLINE)
 
 
 def _unique_object(pairs):
@@ -40,8 +65,8 @@ class AiohttpRealtimeSocket:
     This wrapper owns no key. Its caller owns the session. Production cannot
     obtain a socket through this module while admission is disabled.
     """
-    def __init__(self,ws):
-        self.ws=ws
+    def __init__(self,ws,owned_session=None):
+        self.ws=ws;self.owned_session=owned_session
 
     async def send_json(self,event):
         if not isinstance(event,dict):raise ValueError('wire_event_invalid')
@@ -61,20 +86,27 @@ class AiohttpRealtimeSocket:
         return data
 
     async def close(self):
-        await self.ws.close()
+        try:
+            await asyncio.wait_for(self.ws.close(),CLOSE_DEADLINE)
+        finally:
+            if self.owned_session is not None:
+                await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
         if not self.ws.closed:raise ValueError('wire_close_unconfirmed')
+        if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
 
 
-async def _open_openai_socket(session,api_key):
+async def _open_openai_socket(api_key):
     """Future server-only connector. Gate fires before key use or any I/O."""
     _require_live_admission()
-    # Kept behind the immutable gate; not exercised against OpenAI. A future
-    # release must also prove redirect, timeout and key-source handling.
-    ws=await session.ws_connect(OPENAI_URL,params={'model':MODEL},
-                                headers={'Authorization':'Bearer '+api_key},
-                                timeout=3,
-                                heartbeat=20,max_msg_size=MAX_WIRE_MESSAGE)
-    return AiohttpRealtimeSocket(ws)
+    # No caller-supplied session, proxy, endpoint, or trace hooks. This path
+    # remains blocked until key source, cancellation and remote billing proof.
+    session=_new_owned_session()
+    try:
+        ws=await _connect_websocket(session,OPENAI_URL+'?model='+MODEL,{'Authorization':'Bearer '+api_key})
+    except BaseException:
+        await asyncio.wait_for(session.close(),CLOSE_DEADLINE)
+        raise
+    return AiohttpRealtimeSocket(ws,owned_session=session)
 
 
 def create_production_provider(*_args,**_kwargs):

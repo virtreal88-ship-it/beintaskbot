@@ -4,13 +4,15 @@ import base64
 import json
 import unittest
 import uuid
+from unittest.mock import patch
 
 import aiohttp
 from aiohttp import web
 
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_realtime_wire import (
-    AiohttpRealtimeSocket, _RealtimeWire, _open_openai_socket,
+    AiohttpRealtimeSocket, _RealtimeWire, _open_openai_socket, _new_owned_session,
+    _connect_websocket, RedirectRefused,
     MAX_WIRE_MESSAGE, MINIMUM_HOLD, MODEL, QUOTE,
 )
 from tenant_operator_voice_session import Session
@@ -91,13 +93,63 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_live_connector_fails_before_socket_or_key_use(self):
         class Forbidden:
             def __getattr__(self,name):raise AssertionError('I/O attempted')
-        with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),Forbidden())
+        with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden())
+
+    async def test_owned_session_refuses_redirect_before_second_request(self):
+        visited=[]
+        async def destination(_request):
+            visited.append('visited');return web.Response(text='not a websocket')
+        destination_app=web.Application();destination_app.router.add_get('/target',destination)
+        target_runner=web.AppRunner(destination_app);await target_runner.setup()
+        target_site=web.TCPSite(target_runner,'127.0.0.1',0);await target_site.start()
+        target_port=target_site._server.sockets[0].getsockname()[1]
+        async def redirect(_request):raise web.HTTPFound(f'http://127.0.0.1:{target_port}/target')
+        source_app=web.Application();source_app.router.add_get('/redirect',redirect)
+        source_runner=web.AppRunner(source_app);await source_runner.setup()
+        source_site=web.TCPSite(source_runner,'127.0.0.1',0);await source_site.start()
+        source_port=source_site._server.sockets[0].getsockname()[1]
+        try:
+            async with _new_owned_session() as owned:
+                with self.assertRaises(RedirectRefused):
+                    await _connect_websocket(owned,f'http://127.0.0.1:{source_port}/redirect',{'Authorization':'Bearer synthetic-only'})
+            self.assertEqual(visited,[])
+        finally:
+            await source_runner.cleanup();await target_runner.cleanup()
+
+    async def test_stalled_upgrade_has_outer_deadline(self):
+        accepted=asyncio.Event();release=asyncio.Event()
+        async def stalled(reader,writer):
+            accepted.set()
+            try:await release.wait()
+            finally:writer.close();await writer.wait_closed()
+        server=await asyncio.start_server(stalled,'127.0.0.1',0)
+        port=server.sockets[0].getsockname()[1]
+        try:
+            async with _new_owned_session() as owned:
+                with patch('tenant_operator_realtime_wire.CONNECT_DEADLINE',.05):
+                    with self.assertRaises(asyncio.TimeoutError):
+                        await _connect_websocket(owned,f'http://127.0.0.1:{port}/stall',{})
+                    self.assertTrue(accepted.is_set())
+        finally:
+            release.set();server.close();await server.wait_closed()
 
     async def test_peer_disconnect_fails_closed(self):
         await self.socket.receive_json()
         await self.server_socket.close()
         with self.assertRaisesRegex(ValueError,'wire_socket_closed_or_nontext'):
             await asyncio.wait_for(self.socket.receive_json(),1)
+
+    async def test_owned_socket_closes_its_client_session(self):
+        port=self.site._server.sockets[0].getsockname()[1]
+        owned=_new_owned_session()
+        ws=await _connect_websocket(owned,f'http://127.0.0.1:{port}/local',{})
+        wrapped=AiohttpRealtimeSocket(ws,owned_session=owned)
+        try:
+            self.assertEqual((await wrapped.receive_json())['type'],'session.created')
+            await wrapped.close()
+            self.assertTrue(ws.closed);self.assertTrue(owned.closed)
+        finally:
+            await owned.close()
 
     async def test_session_interrupt_and_shutdown_through_local_websocket(self):
         class TestWire(_RealtimeWire): mock_only=True

@@ -237,10 +237,11 @@ existing thread adapter after old-writer cutover. ASR also needs a separate,
 durable upper-bounded reservation and usage reconciliation before it is enabled.
 The mock is not connected to sessions or any database writer.
 
-The live connector remains unusable: aiohttp follows redirects, and its
-WebSocket close timeout alone is not an overall connection deadline. A later
-release must reject redirects before following them, use an owned ClientSession
-with reviewed TLS/proxy and bounded connect/cleanup, and establish a remote
+The live connector remains unusable. The candidate now owns a ClientSession
+with `trust_env=False`, an aiohttp pre-redirect trace refusal and connection and
+close deadlines; localhost tests verify that a redirect target is never called
+and a stalled handshake times out. These tests do not prove all redirect,
+DNS/TLS/proxy, cancellation-suppression or cleanup paths, nor establish a remote
 billing-stop guarantee. Local `ws.closed` does not establish that guarantee.
 
 ## Source fingerprints and remaining fence
