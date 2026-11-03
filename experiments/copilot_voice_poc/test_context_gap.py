@@ -25,3 +25,16 @@ class ExistingContextTests(unittest.TestCase):
         self.assertEqual(projected['voice_session_id'], '00000000-0000-4000-8000-000000000001')
         self.assertEqual(projected['transcript_status'], 'partial')
         self.assertEqual(projected['text'], 'synthetic incomplete transcript')
+
+    def test_projection_preserves_legacy_text_and_filters_unknown_metadata(self):
+        from tenant_operator_copilot import _project_prior_turn
+        legacy={'role':'employee','text':'legacy','agent_binding':'binding','unknown':'secret'}
+        self.assertEqual(_project_prior_turn(legacy),{'role':'employee','text':'legacy','agent_binding':'binding'})
+        unknown=_project_prior_turn({**legacy,'transcript_status':'unexpected','voice_session_id':'not-a-uuid',
+                                    'turn_sequence':True,'transcript_quality':'unexpected'})
+        self.assertEqual(unknown['transcript_status'],'unknown')
+        self.assertEqual(unknown['transcript_quality'],'unknown')
+        self.assertEqual(unknown['text'],'')
+        self.assertNotIn('voice_session_id',unknown)
+        self.assertNotIn('turn_sequence',unknown)
+        self.assertNotIn('unknown',unknown)

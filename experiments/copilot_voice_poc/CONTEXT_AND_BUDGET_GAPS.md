@@ -27,6 +27,11 @@ ordering or transcript correctness. There is no voice writer yet. Every future
 writer must use this protocol and prove those controls in its own transaction.
 The existing 20-turn retention limit can still remove older messages. Test clear,
 replay, migrations, rolling versions and legacy text flows before integration.
+The additive schema upgrade was tested only on disposable local PostgreSQL;
+there was no production migration or full production authorization test. Old
+worker versions still perform snapshot overwrites, so a rolling deployment with
+old and new writers concurrently active does not provide the new guarantee.
+Plan and independently review a compatible cutover before any release.
 
 The local `_draft_context` now passes allowlisted voice session UUID, sequence,
 partial status and quality through to text context and labels incomplete

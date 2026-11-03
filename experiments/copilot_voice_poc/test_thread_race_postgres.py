@@ -129,6 +129,111 @@ class ExistingTextWriterRace(unittest.TestCase):
         self.assertIn(voice, rows)
         self.assertEqual([row['text'] for row in rows], ['previous','synthetic voice','synthetic question','synthetic text answer'])
 
+    def test_clear_during_text_completion_hides_stale_result(self):
+        import tenant_operator_copilot as copilot
+        from tenant_operator_copilot_threads import clear
+        from tenant_linear_policy import TenantLinearError
+        tenant, request = str(uuid.uuid4()), str(uuid.uuid4())
+        channel, conversation, actor, binding = 'channel', 'dialog', 1, 'binding'
+        command = {'lead_id':1,'channel_id':channel,'conversation_id':conversation,
+                   'request_id':request,'_agent_binding':binding,'_thread_clear_revision':0}
+        with self.connect() as conn:
+            conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                         (tenant,request,'v1','sending'))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            with conn.cursor() as cur: clear(cur,tenant,actor,channel,conversation)
+            conn.commit()
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(copilot,'_connect',self.connect), patch.object(copilot,'ensure_schema'), \
+             patch.object(copilot,'access',return_value=(tenant,actor,policy)),patch.object(copilot,'assert_route'), \
+             patch.object(copilot,'_assigned_context',return_value={}),patch.object(copilot,'_agent_binding',return_value=binding), \
+             patch('tenant_episode_media.revalidate_sources'):
+            with self.assertRaises(TenantLinearError):
+                copilot._finish(tenant,command,actor,{'text':'stale'},[],'question','stale')
+        with self.connect() as conn:
+            thread=conn.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()
+            receipt=conn.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s',(tenant,)).fetchone()
+        self.assertEqual(thread,{'turns':[],'clear_revision':1})
+        self.assertEqual(receipt,{'status':'unknown','result':None})
+
+    def test_text_finish_rechecks_permission_and_agent_before_thread_write(self):
+        import tenant_operator_copilot as copilot
+        from tenant_linear_policy import TenantLinearError
+        for denied in ('permission','binding','route'):
+            tenant, request = str(uuid.uuid4()), str(uuid.uuid4())
+            channel, conversation, actor, binding = 'channel', 'dialog', 1, 'binding'
+            command={'lead_id':1,'channel_id':channel,'conversation_id':conversation,
+                     'request_id':request,'_agent_binding':binding,'_thread_clear_revision':0}
+            with self.connect() as conn:
+                conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                             (tenant,request,'v1','sending'))
+                conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+                conn.commit()
+            policy=SimpleNamespace(can_use_chat_ai=lambda:denied!='permission')
+            route_error=TenantLinearError('route revoked',403) if denied=='route' else None
+            with patch.object(copilot,'_connect',self.connect),patch.object(copilot,'ensure_schema'), \
+                 patch.object(copilot,'access',return_value=(tenant,actor,policy)),patch.object(copilot,'assert_route',side_effect=route_error), \
+                 patch.object(copilot,'_assigned_context',return_value={}), \
+                 patch.object(copilot,'_agent_binding',return_value='changed' if denied=='binding' else binding), \
+                 patch('tenant_episode_media.revalidate_sources'):
+                with self.assertRaises(TenantLinearError):
+                    copilot._finish(tenant,command,actor,{'text':'answer'},[],'question','answer')
+            with self.connect() as conn:
+                count=conn.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()['n']
+            self.assertEqual(count,0,denied)
+
+    def test_repeated_finish_does_not_duplicate_thread_turns(self):
+        import tenant_operator_copilot as copilot
+        from tenant_linear_policy import TenantLinearError
+        tenant, request = str(uuid.uuid4()), str(uuid.uuid4())
+        channel, conversation, actor, binding = 'channel', 'dialog', 1, 'binding'
+        command={'lead_id':1,'channel_id':channel,'conversation_id':conversation,
+                 'request_id':request,'_agent_binding':binding,'_thread_clear_revision':0}
+        with self.connect() as conn:
+            conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                         (tenant,request,'v1','sending'))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            conn.commit()
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(copilot,'_connect',self.connect),patch.object(copilot,'ensure_schema'), \
+             patch.object(copilot,'access',return_value=(tenant,actor,policy)),patch.object(copilot,'assert_route'), \
+             patch.object(copilot,'_assigned_context',return_value={}),patch.object(copilot,'_agent_binding',return_value=binding), \
+             patch('tenant_episode_media.revalidate_sources'):
+            copilot._finish(tenant,command,actor,{'text':'answer'},[],'question','answer')
+            with self.assertRaises(TenantLinearError):
+                copilot._finish(tenant,command,actor,{'text':'answer'},[],'question','answer')
+        with self.connect() as conn:
+            turns=conn.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()['turns']
+        self.assertEqual([turn['text'] for turn in turns], ['question','answer'])
+
+    def test_two_concurrent_text_completions_preserve_both_pairs(self):
+        import tenant_operator_copilot as copilot
+        tenant, channel, conversation, actor, binding = str(uuid.uuid4()), 'channel', 'dialog', 1, 'binding'
+        requests=[str(uuid.uuid4()),str(uuid.uuid4())]
+        with self.connect() as conn:
+            for request in requests:
+                conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                             (tenant,request,'v1','sending'))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            conn.commit()
+        barrier=threading.Barrier(2)
+        def finish(index):
+            command={'lead_id':1,'channel_id':channel,'conversation_id':conversation,
+                     'request_id':requests[index],'_agent_binding':binding,'_thread_clear_revision':0}
+            barrier.wait(timeout=5)
+            copilot._finish(tenant,command,actor,{'text':'answer'},[],f'question-{index}',f'answer-{index}')
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(copilot,'_connect',self.connect),patch.object(copilot,'ensure_schema'), \
+             patch.object(copilot,'access',return_value=(tenant,actor,policy)),patch.object(copilot,'assert_route'), \
+             patch.object(copilot,'_assigned_context',return_value={}),patch.object(copilot,'_agent_binding',return_value=binding), \
+             patch('tenant_episode_media.revalidate_sources'):
+            with ThreadPoolExecutor(max_workers=2) as pool: list(pool.map(finish,[0,1]))
+        with self.connect() as conn:
+            turns=conn.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()['turns']
+        values=[turn['text'] for turn in turns]
+        self.assertIn(values,[['question-0','answer-0','question-1','answer-1'],
+                              ['question-1','answer-1','question-0','answer-0']])
+
     def test_two_concurrent_first_writers_preserve_both_turns(self):
         from tenant_operator_copilot_threads import append
         tenant, actor, channel, dialog = str(uuid.uuid4()), 9, 'new-channel', 'new-dialog'
@@ -165,3 +270,28 @@ class ExistingTextWriterRace(unittest.TestCase):
                 (tenant,actor,channel,dialog)).fetchone()
         self.assertEqual(row['clear_revision'],1)
         self.assertEqual(row['turns'],[{'text':'new'}])
+
+    def test_actual_additive_schema_upgrade_preserves_legacy_turns(self):
+        import tenant_chat_ai_schema as schema
+        isolated = 'copilot_poc_' + uuid.uuid4().hex
+        tenant = str(uuid.uuid4())
+        with self.psycopg.connect(URL,autocommit=True) as admin:
+            admin.execute('CREATE SCHEMA '+isolated)
+        try:
+            with self.psycopg.connect(URL,row_factory=type(self).dict_row,options='-csearch_path='+isolated) as conn:
+                conn.execute('CREATE TABLE saas_tenants(id uuid PRIMARY KEY)')
+                conn.execute('CREATE TABLE saas_tenant_members(tenant_id uuid,telegram_id bigint,PRIMARY KEY(tenant_id,telegram_id))')
+                conn.execute('''CREATE TABLE saas_operator_copilot_threads(tenant_id uuid,requested_by bigint,channel_id text,
+                    conversation_id text,turns jsonb,updated_at timestamptz DEFAULT now(),
+                    PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id))''')
+                legacy=[{'role':'employee','text':'legacy','agent_binding':'binding'}]
+                conn.execute('INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns) VALUES(%s,1,%s,%s,%s::jsonb)',
+                             (tenant,'channel','dialog',json.dumps(legacy)))
+                conn.commit()
+                with patch.object(schema,'_ensure_schema'),patch.object(schema,'_ready',False):
+                    schema.ensure_schema(conn)
+                row=conn.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()
+            self.assertEqual(row,{'turns':legacy,'clear_revision':0})
+        finally:
+            with self.psycopg.connect(URL,autocommit=True) as admin:
+                admin.execute('DROP SCHEMA '+isolated+' CASCADE')
