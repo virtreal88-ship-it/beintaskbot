@@ -136,10 +136,12 @@ class _RealtimeWire:
             raise ValueError('claim_guard_required')
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
 
-    def _note_conversation(self,event):
+    def _note_conversation(self,event,session_id=None):
         conversation=event.get('conversation')
         value=conversation.get('id') if isinstance(conversation,dict) else None
-        if self.conversation_id is not None or not isinstance(value,str) or not value or len(value)>128:
+        expected=session_id if session_id is not None else self.session_id
+        if (self.conversation_id is not None or not isinstance(value,str) or not value or len(value)>128 or
+            ('session_id' in event and event['session_id']!=expected)):
             raise ValueError('provider_conversation_invalid')
         self.conversation_id=value
 
@@ -169,7 +171,7 @@ class _RealtimeWire:
         # session.updated. Reject all other interleavings; caller bounds open.
         updated=await self.socket.receive_json()
         if isinstance(updated,dict) and updated.get('type')=='conversation.created':
-            self._note_conversation(updated)
+            self._note_conversation(updated,session_id)
             updated=await self.socket.receive_json()
         self._verify(updated,config,session_id)
         # Existing dialog/customer material stays user-level untrusted input;
@@ -183,7 +185,7 @@ class _RealtimeWire:
         # is present; otherwise the first response might omit Copilot context.
         acknowledged=await self.socket.receive_json()
         if isinstance(acknowledged,dict) and acknowledged.get('type')=='conversation.created':
-            self._note_conversation(acknowledged)
+            self._note_conversation(acknowledged,session_id)
             acknowledged=await self.socket.receive_json()
         item=acknowledged.get('item') if isinstance(acknowledged,dict) else None
         if (not isinstance(acknowledged,dict) or acknowledged.get('type')!='conversation.item.added' or
