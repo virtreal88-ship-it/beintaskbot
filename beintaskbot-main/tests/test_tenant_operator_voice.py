@@ -64,7 +64,8 @@ def test_route_mismatch_permission_conflict_and_emergency_stop(boundaries):
     with pytest.raises(TenantLinearError):voice.authorize(Cursor(stopped=True),PROFILE,ROUTE)
 
 
-@pytest.mark.parametrize('changes',[{'provider':'kommo'},{'channel_id':'wrong'},{'lead_id':True},{'conversation_id':'bad '},{'extra':'x'}])
+@pytest.mark.parametrize('changes',[{'provider':'kommo'},{'channel_id':'wrong'},{'lead_id':True},{'lead_id':41.9},
+                                   {'lead_id':'041'},{'conversation_id':'bad '},{'conversation_id':'bad\x00value'},{'extra':'x'}])
 def test_browser_cannot_inject_or_change_scope(boundaries,changes):
     with pytest.raises(TenantLinearError):voice.authorize(Cursor(),PROFILE,{**ROUTE,**changes})
 
