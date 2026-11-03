@@ -43,7 +43,7 @@ class RealVoiceAuthority(unittest.TestCase):
               CREATE TABLE saas_tenant_pipelines(tenant_id uuid,pipeline_id bigint,name text,active boolean,owner_telegram_id bigint,settings jsonb);
               CREATE TABLE saas_tenant_pipeline_stages(tenant_id uuid,pipeline_id bigint,stage_id bigint,name text,sort_order int,stage_type text,settings jsonb);
               CREATE TABLE saas_tenant_workflow_policies(tenant_id uuid,policy_key text,value jsonb,updated_by bigint,updated_at timestamptz);
-              CREATE TABLE saas_connect_conversations(tenant_id uuid,connect_channel_id uuid,conversation_id text,lead_id bigint);
+              CREATE TABLE saas_connect_conversations(tenant_id uuid,connect_channel_id uuid,conversation_id text,lead_id bigint,conversation_kind text);
               CREATE TABLE saas_connect_identity_conflicts(tenant_id uuid,connect_channel_id uuid,conversation_id text);
               CREATE TABLE saas_connect_direct_identities(tenant_id uuid,connect_channel_id uuid,identity_key text,canonical_conversation_id text);
               CREATE TABLE saas_connect_dialog_links(tenant_id uuid,channel_id uuid,source_id text,canonical_id text,active boolean);
@@ -76,7 +76,7 @@ class RealVoiceAuthority(unittest.TestCase):
                           (self.tenant,self.other,self.tenant,self.tenant))
         self.conn.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)''',
                           (self.tenant,json.dumps({'9':{'ai_enabled':True}})))
-        self.conn.execute('INSERT INTO saas_connect_conversations VALUES(%s,%s,%s,41)',(self.tenant,self.channel,self.conversation))
+        self.conn.execute("INSERT INTO saas_connect_conversations VALUES(%s,%s,%s,41,'contact')",(self.tenant,self.channel,self.conversation))
         self.conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,\'chat_ai\',%s::jsonb,now(),%s)',
                           (self.tenant,json.dumps({'enabled':True,'consent':True,'audio_enabled':True,'copilot_enabled':True}),b'synthetic'))
         self.conn.execute("INSERT INTO saas_ai_agent_settings VALUES(%s,false,'synthetic guidance')",(self.tenant,))
@@ -107,7 +107,7 @@ class RealVoiceAuthority(unittest.TestCase):
         from tenant_linear_policy import TenantLinearError
         for kwargs in [{'tenant':self.other},{'actor':8},{'actor':404},{'route':{**self.route,'lead_id':42}},
                        {'route':{**self.route,'channel_id':str(uuid.uuid4())}},
-                       {'route':{**self.route,'conversation_id':'different@s.whatsapp.net'}}]:
+                       {'route':{**self.route,'conversation_id':'999999999@s.whatsapp.net'}}]:
             with self.subTest(kwargs=kwargs),self.assertRaises(TenantLinearError):self.admit(**kwargs)
 
     def test_revocation_of_membership_role_consent_and_route(self):
@@ -167,7 +167,7 @@ class RealVoiceAuthority(unittest.TestCase):
                 body={**self.route,'expected_tenant_id':self.tenant,'expected_user_id':'7'}
                 response=await client.post('/preflight',headers={'Origin':'https://crm.pro.az'},json=body)
                 self.assertEqual(response.status,200);self.assertEqual((await response.json())['result'],{'available':False})
-                response=await client.post('/preflight',headers={'Origin':'https://crm.pro.az'},json={**body,'conversation_id':'different@s.whatsapp.net'})
+                response=await client.post('/preflight',headers={'Origin':'https://crm.pro.az'},json={**body,'conversation_id':'999999999@s.whatsapp.net'})
                 self.assertEqual(response.status,404)
                 response=await client.get('/ws',headers={'Origin':'https://crm.pro.az'},params={'expected_tenant_id':self.tenant,'expected_user_id':'7'})
                 self.assertEqual(response.status,503);self.assertNotEqual(response.headers.get('Upgrade'),'websocket')
