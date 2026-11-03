@@ -28,6 +28,32 @@ prompts or identities, performs no mutations, and cannot open the gate even when
 the counts are zero. It is not a replacement for an authoritative fleet,
 admission barrier, access checks, or distributed session management.
 
+## Local database barrier experiment
+
+The repository's `_connect()` currently obtains connections from the shared
+`DATABASE_URL`; source code does not establish that old and new writers use
+different database identities or privileges. The new isolated PostgreSQL test
+creates two temporary, non-superuser synthetic roles, holds an old transaction's
+table write open, and verifies that an `ACCESS EXCLUSIVE` table lock waits for
+that transaction. It then revokes the old role's write privileges atomically
+and demonstrates that subsequent old update, delete and actual baseline finish
+are blocked while the new synthetic role can update.
+
+This is **not** a production barrier or a completed cutover. It relies on a
+synthetic privileged database owner, known role grants, and a table created by
+the test. It does not prove the effective privileges of deployed roles, inherited
+or PUBLIC grants, table ownership, superusers, role switching, all write paths,
+or ability to apply an exclusive lock without disruption. Production credentials
+or roles were not inspected, created or changed. A real contract must prove and
+continuously enforce those properties before treating permissions as a fence.
+
+Critically, an old HTTP request waiting on its provider does not hold that table
+lock. The same test resumes its actual baseline `_finish` after the role revoke:
+the operation fails and its synthetic receipt remains `sending`, so the response
+is not saved. A DB-level data fence alone can therefore degrade the text assistant
+and is not evidence of a graceful drain. There is no opening implementation until
+all in-flight work can be identified and drained with independent evidence.
+
 ## Phase 1: compatibility preparation — voice remains closed
 
 * Independently inventory **all** potential writers and clear paths, including
@@ -67,6 +93,31 @@ The gate must fail closed during deployment races, unknown fleet membership,
 worker resurrection, restarts and loss of the evidence source. Rollback requires
 blocking and draining the new workers before any old writer is resumed. This
 investigation cannot yet prove such a barrier or provide safe activation.
+
+## Integration contract for a future implementation
+
+The authoritative write boundary must cover thread insert, update, delete and
+clear, not merely the proposed voice endpoint. An actual DB permission barrier
+would need distinct writer identities and evidence that legacy identities cannot
+write through PUBLIC or inherited grants, ownership, superuser/BYPASS privileges,
+role switching, alternate connections or unexamined helper functions. A privileged
+schema owner must control the barrier; a caller-provided string or session-local
+setting is not a trustworthy authorization boundary. All of these are unproven
+for the deployed system, whose code currently uses a shared database URL.
+
+The future control plane must be able to close admissions for old HTTP and
+background paths, identify in-flight requests that have left their DB transaction,
+and prove they have completed or been safely resolved before fencing legacy
+database permissions. Receipts and heartbeat snapshots are supporting evidence,
+not exhaustive membership. It must keep unknown provider outcomes and existing
+financial holds intact. On missing fleet evidence, untracked code version, lost
+barrier, changed schema/role grants, or failed drain, voice admission stays closed.
+
+The future writer must recheck tenant/member/dialog/agent authorization and
+clear/session fencing in the same transaction as append, use durable session and
+turn idempotency, and coordinate its lifetime with cleanup. Existing text
+behavior, including the unresolved cached-result/clear contract, must remain
+explicitly compatible. No such live integration or proof exists in this branch.
 
 ## Independent release gates
 
