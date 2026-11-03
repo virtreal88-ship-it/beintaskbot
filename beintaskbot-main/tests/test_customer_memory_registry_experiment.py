@@ -34,6 +34,8 @@ class RegistryExperiment(unittest.TestCase):
     @classmethod
     def drop_schema(cls):
         with cls.connect() as db:
+            db.execute("SET LOCAL lock_timeout='2s'")
+            db.execute("SET LOCAL statement_timeout='3s'")
             db.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(cls.schema)))
             db.commit()
 
@@ -120,6 +122,7 @@ class RegistryExperiment(unittest.TestCase):
         try:
             with self.connect() as deleting:
                 deleting.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
+                deleting.execute("SET LOCAL lock_timeout='2s'")
                 deleting.execute(sql.SQL('SELECT count(*) FROM {}.readers').format(sql.Identifier(self.schema))).fetchone()
                 self.register(reader,self.x,token)
                 with self.assertRaises(psycopg.errors.SerializationFailure):self.guard_delete(deleting,self.x)
@@ -127,7 +130,9 @@ class RegistryExperiment(unittest.TestCase):
         finally:reader.close()
 
     def test_orphaned_reader_lock_released_when_session_dies(self):
-        token=uuid.uuid4();reader=self.connect();self.register(reader,self.x,token);reader.close()
+        token=uuid.uuid4();reader=self.connect()
+        try:self.register(reader,self.x,token)
+        finally:reader.close()
         with self.connect() as deleting:
             deleting.execute("SET LOCAL lock_timeout='1s'")
             self.guard_delete(deleting,self.x);deleting.commit()

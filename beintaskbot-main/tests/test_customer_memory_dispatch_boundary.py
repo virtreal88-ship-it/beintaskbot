@@ -34,6 +34,8 @@ class DispatchBoundaryExperiments(unittest.TestCase):
     @classmethod
     def drop_schema(cls):
         with cls.connect() as conn:
+            conn.execute("SET LOCAL lock_timeout='2s'")
+            conn.execute("SET LOCAL statement_timeout='3s'")
             conn.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(cls.schema)))
             conn.commit()
 
