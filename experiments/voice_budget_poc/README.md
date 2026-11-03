@@ -1,8 +1,8 @@
 # Isolated voice-test budget ledger experiment
 
-This directory is **not production code**, does not call OpenAI, does not
-authenticate users, and accepts only a dedicated localhost test database. It
-cannot establish a project-wide spending ceiling. The user has authorized a
+This experiment does not call OpenAI or authenticate users. Its test harness
+accepts only a dedicated localhost test database. It cannot establish a
+project-wide spending ceiling. The user has authorized a
 single $5 ceiling across all executors, not a separate ceiling per person,
 tenant, process or session. This experiment must not be used for live calls.
 
@@ -44,6 +44,33 @@ Realtime can repeatedly charge accumulated context; input transcription is
 separate. [OpenAI project hard limits](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform)
 are not instantaneous and recorded spend may exceed the configured limit.
 
+## Disabled server candidate and migration gate
+
+`beintaskbot-main/tenant_voice_test_grant.py` is a review candidate with no
+importing route, an immutable-in-source `ENFORCEMENT_VERIFIED=False` guard,
+and a database grant whose proposed migration defaults to disabled. It does
+not connect to a database on its own. Its caller supplies an open transaction
+after authorization. `reserve()` locks a cross-tenant singleton first and then
+reuses `tenant_ai_spend_budget.reserve()` under its existing tenant advisory
+lock in the same transaction. A voice session is bound to one tenant, actor,
+channel, dialog and executor. `claim()` rechecks both reservations and the
+current tenant cap, moves the tenant hold to `unknown` atomically, and must
+commit before the caller attempts dispatch. The tested generic release/settle
+methods only act on `reserved` and cannot release a claimed hold. An actual
+provider cost is recorded separately in the voice ledger; the tenant record is
+left `unknown` with a full hold and no false `actual_microusd`. This is a
+temporary conservative accounting limitation, not a complete reporting or
+settlement integration. A tenant-ledger inconsistency preserves the voice
+evidence, quarantines the operation, and freezes admissions. The trusted
+caller must commit that quarantine, not roll it back as an exception.
+
+`voice_test_grant.sql` is a **one-shot review artifact**, not integrated in the
+repository migration runner. A second application fails rather than being
+idempotent. Version handling, partial migration recovery, migration review,
+privilege boundaries and safe deployment/rollback remain release blockers.
+Do not run it in production. Existing tenant budget code is not modified.
+Tests temporarily patch the code gate and enable only a disposable test DB.
+
 ## Remaining work before any paid test
 
 1. Deploy/review **one authoritative** shared ledger and force every executor
@@ -69,8 +96,10 @@ are not instantaneous and recorded spend may exceed the configured limit.
    offers tenant-scoped reservations and shared advisory locking. Its default
    uncapped behavior, tenant scope, text-token pricing and campaign semantics
    do not on their own enforce this specific cross-executor $5 voice-test grant.
-   Integration requires review of interaction with existing tenant limits and a
-   migration plan, not a second independent production accounting system.
+   This candidate's `unknown` tenant holds preserve existing reporting semantics
+   but intentionally over-reserve until a trusted reconciliation method is
+   designed; no false actual costs are written. Accounting integration remains
+   incomplete and the module must remain closed.
 
 ## Isolated tests
 
@@ -80,6 +109,7 @@ the guard rejects URL query parameters, non-local hosts and other DB names.
 
 ```sh
 VOICE_BUDGET_POC_ADMIN_URL='postgresql://testuser:testpass@127.0.0.1:PORT/postgres' \
+  PYTHONPATH=beintaskbot-main \
   /workspace/.venvs/beintaskbot311/bin/python -m unittest discover \
   -s experiments/voice_budget_poc -p 'test_*.py' -v
 ```
