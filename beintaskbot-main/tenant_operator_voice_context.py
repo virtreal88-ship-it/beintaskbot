@@ -27,11 +27,17 @@ def _route(data):
         raise TenantLinearError('Некорректный диалог.',400)
     channel=identifier(data['channel_id'])
     conversation=data['conversation_id']
-    if not isinstance(conversation,str) or not conversation or len(conversation)>160 or conversation!=conversation.strip():
+    if (not isinstance(conversation,str) or not conversation or len(conversation)>160 or conversation!=conversation.strip()
+        or any(ord(char)<32 or ord(char)==127 for char in conversation)):
         raise TenantLinearError('Некорректный диалог.',400)
-    try: lead=int(data['lead_id'])
-    except (ValueError,TypeError):raise TenantLinearError('Некорректный диалог.',400) from None
-    if isinstance(data['lead_id'],bool) or not 1<=lead<2**63:
+    value=data['lead_id']
+    if type(value) is int:
+        lead=value
+    elif isinstance(value,str) and value.isascii() and value.isdecimal() and 1<=len(value)<=19 and value[0]!='0':
+        lead=int(value)
+    else:
+        raise TenantLinearError('Некорректный диалог.',400)
+    if not 1<=lead<2**63:
         raise TenantLinearError('Некорректный диалог.',400)
     return {'channel_id':channel,'conversation_id':conversation,'lead_id':lead}
 
