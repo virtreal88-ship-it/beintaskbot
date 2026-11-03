@@ -1,13 +1,11 @@
-"""Cross-branch synthetic integration; no API, provider credentials or audio storage.
+"""Single-checkout synthetic integration; no API, credentials or audio storage.
 
-Requires the disposable localhost VOICE_AUTH_PG_URL and the two locally pinned
-history/budget commits. All override gates below exist only inside this test.
+Requires disposable localhost VOICE_AUTH_PG_URL. All gate overrides exist only
+inside this test; they are not a production admission or safety guarantee.
 """
 import asyncio
 import base64
 import json
-import subprocess
-import types
 from pathlib import Path
 from unittest.mock import patch
 from test_real_authority_pg import RealVoiceAuthority
@@ -21,29 +19,15 @@ import tenant_operator_voice_context as voice
 import tenant_operator_copilot as copilot
 import tenant_ai_agent_run_store as knowledge_store
 import tenant_ai_spend_budget as tenant_spend
+import tenant_operator_copilot_threads as history_candidate
+import tenant_voice_test_grant as grant_candidate
 
 ROOT=Path(__file__).resolve().parents[2]
-BUDGET_REPO='/workspace/voice-budget-ledger'
-HISTORY_REPO='/workspace/voice-assistant-poc'
-BUDGET_SHA='f299ae5b0b00d03b22743f9487b17b0d7135f0c8'
-HISTORY_SHA='ca1d0884203ff168bbe914285a55bb4d172ad735'
-
-
-def source(repo,sha,path):
-    return subprocess.check_output(['git','-C',repo,'show',sha+':'+path],text=True)
-
-
-def module(repo,sha,path,name):
-    result=types.ModuleType(name)
-    exec(compile(source(repo,sha,path),name,'exec'),result.__dict__)
-    return result
-
-
 class IntegratedSynthetic(RealVoiceAuthority):
     def setUp(self):
         super().setUp()
-        self.history=module(HISTORY_REPO,HISTORY_SHA,'beintaskbot-main/tenant_operator_copilot_threads.py','synthetic_history_candidate')
-        self.grant=module(BUDGET_REPO,BUDGET_SHA,'beintaskbot-main/tenant_voice_test_grant.py','synthetic_grant_candidate')
+        self.history=history_candidate
+        self.grant=grant_candidate
         self.conn.execute('''ALTER TABLE saas_crm_messages ADD COLUMN kommo_lead_id bigint,ADD COLUMN external_id text,
           ADD COLUMN direction text,ADD COLUMN body text,ADD COLUMN message_type text,ADD COLUMN happened_at timestamptz DEFAULT now(),
           ADD COLUMN created_at timestamptz DEFAULT now();
@@ -55,7 +39,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
           CREATE TABLE saas_knowledge_candidates(tenant_id uuid,id uuid,reviewed_by bigint,status text);
           CREATE TABLE saas_knowledge_candidate_sources(tenant_id uuid,candidate_id uuid,source_id uuid,agent_id uuid);''')
         tenant_spend.ensure_schema(self.conn)
-        self.conn.execute(source(BUDGET_REPO,BUDGET_SHA,'experiments/voice_budget_poc/voice_test_grant.sql'))
+        self.conn.execute((ROOT/'experiments/voice_budget_poc/voice_test_grant.sql').read_text())
         self.conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
         self.conn.execute("INSERT INTO saas_crm_messages(tenant_id,channel,raw,kommo_lead_id,external_id,direction,body,message_type) VALUES(%s,%s,'{}',41,'customer-1','incoming','synthetic customer','text')",(self.tenant,'connect:'+self.channel))
         self.conn.commit()

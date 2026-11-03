@@ -137,19 +137,18 @@ is test-only, not a cross-process one-time capability. Production authorization
 and provider factory remain hard-disabled. Direct-dialog checks do not prove
 group or granular deal permissions; they match the existing Connect policy.
 
-The test imports two **local committed snapshots** using `git show`: history
-`ca1d0884203ff168bbe914285a55bb4d172ad735` under
-`/workspace/voice-assistant-poc` and budget
-`f299ae5b0b00d03b22743f9487b17b0d7135f0c8` under
-`/workspace/voice-budget-ledger`. Both grants are force-enabled only inside the
-isolated test transaction. The URL must point to a disposable localhost database
+The cohesive candidate imports the history helper and budget grant directly
+from the same checkout. The helper is not yet connected to the production
+text writer; it does not solve the rolling-version clear/write race. Both
+grant gates are force-enabled only inside the isolated test. The URL must
+point to a disposable localhost database
 named `test_voice_auth_` followed by 32 lowercase hexadecimal digits; the test
 creates and drops a random schema. Example with an existing disposable server:
 
 ```
+cd experiments/copilot_realtime_adapter
 VOICE_AUTH_PG_URL=postgresql://postgres:<synthetic-password>@127.0.0.1:<port>/test_voice_auth_11111111111111111111111111111111 \
-  /workspace/.venvs/beintaskbot311/bin/python -m unittest -v test_real_authority_pg \
-  test_integrated_synthetic_pg.IntegratedSynthetic.test_synthetic_text_voice_interruption_text_with_real_admission_budget_and_history
+  python -m unittest -v test_real_authority_pg test_integrated_synthetic_pg
 ```
 
 The actual UI does not mount this experiment; its separate default-hidden
