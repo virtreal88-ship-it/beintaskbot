@@ -40,7 +40,8 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.provider.events[0]['type'],'input_audio_buffer.append')
         await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
         self.assertEqual([e[0] for e in self.ledger.events],['reserve','claim'])
-        await session.receive_provider({'type':'response.output_audio.delta','item_id':'synthetic','content_index':0,
+        await session.receive_provider({'type':'response.created','response':{'id':'response-1'}})
+        await session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'synthetic','content_index':0,
                                         'delta':base64.b64encode(bytes(4800)).decode()})
         audio=await ws.receive_json();self.assertEqual(audio['item_id'],'synthetic');self.assertEqual(len(base64.b64decode(audio['pcm_base64'])),4800)
         await session.receive_provider({'type':'input_audio_buffer.speech_started'})

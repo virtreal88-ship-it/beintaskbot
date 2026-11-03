@@ -62,7 +62,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         break
                     try: event=json.loads(message.data)
                     except (ValueError,TypeError): break
-                    if not isinstance(event,dict) or event.get('type') not in ('end','mute','played'):
+                    if not isinstance(event,dict) or event.get('type') not in ('end','mute','played','played_all'):
                         break
                     await session.receive_client(event)
                     if event.get('type')=='end': break

@@ -24,6 +24,8 @@ class Session:
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype'):
         if any(x is None for x in (authority, ledger, lease, context, provider, client)):
             raise Refused('trusted_dependencies_missing')
+        if getattr(provider, 'mock_only', None) is not True:
+            raise Refused('real_provider_not_supported')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
             raise Refused('invalid_scope')
         if not 0 < idle_seconds <= max_seconds <= 120 or not 0 < poll_seconds <= 1:
@@ -43,10 +45,27 @@ class Session:
         self.response_inflight = False
         self.response_pending = False
         self.current_reservation = None
+        self.provider_response_id = None
         self.item = None
         self.produced = 0
         self.interrupt_pending = False
+        self.output_finished = False
+        self.output_started_at = None
         self.lock = asyncio.Lock()
+        self.io_lock = asyncio.Lock()
+        self.client_lock = asyncio.Lock()
+
+    async def _send_provider(self, event):
+        async with self.io_lock:
+            if self.closed:
+                raise Refused('session_closed')
+            await self.provider.send(event)
+
+    async def _send_client(self, event):
+        async with self.client_lock:
+            if self.closed:
+                raise Refused('session_closed')
+            await self.client.send(event)
 
     async def start(self):
         if self.open_attempted:
@@ -70,26 +89,45 @@ class Session:
             self.closed = False
             self.started = self.activity = time.monotonic()
             self.watchdog = asyncio.create_task(self._watch())
-            await self.client.send({'type': 'ready'})
+            await self._send_client({'type': 'ready'})
         except BaseException:
+            closed = False
             try:
-                await self.provider.close()
-            finally:
-                if self.fence:
-                    await self.lease.release(self.scope, self.fence)
+                await asyncio.wait_for(self.provider.close(), timeout=2)
+                closed = True
+            except BaseException:
+                pass
+            if self.fence and closed:
+                await self.lease.release(self.scope, self.fence)
             raise
+
+    @staticmethod
+    def _check_receipt(receipt, scope, state):
+        # The injected ledger adapter MUST commit before returning this receipt.
+        # Fail closed for stale/replayed/wrong-scope or missing rows.
+        if not isinstance(receipt, dict) or receipt.get('state') != state:
+            raise Refused('budget_receipt_invalid')
+        if any(str(receipt.get(key)) != str(value) for key,value in scope.items()):
+            raise Refused('budget_scope_mismatch')
+        if type(receipt.get('reserved_microusd')) is not int or receipt['reserved_microusd'] <= 0:
+            raise Refused('budget_receipt_invalid')
 
     async def _dispatch_pending(self):
         # Caller holds lock. VAD detects turns only; it must never launch an
         # unbudgeted response. The reservation authority is shared externally.
-        if not self.response_pending or self.interrupt_pending or self.response_inflight or self.closed:
+        if not self.response_pending or self.interrupt_pending or self.response_inflight or self.item is not None or self.closed:
             return
         self.response_number += 1
-        tenant, actor, _, _ = self.scope
+        if self.response_number > 2:
+            raise Refused('session_response_limit')
+        tenant, actor, channel, conversation = self.scope
         reservation = {'request_id': str(uuid.uuid4()), 'tenant_id': str(tenant), 'session_id': self.session_id,
-                       'actor_id': actor, 'response_number': self.response_number, 'executor': self.executor}
-        await self.ledger.reserve(reservation)
-        await self.ledger.claim(reservation)  # durable before any provider dispatch
+                       'actor_id': actor, 'channel_id':str(channel), 'conversation_id':str(conversation),
+                       'response_number': self.response_number, 'executor': self.executor}
+        reserved=await self.ledger.reserve(reservation)
+        self._check_receipt(reserved,reservation,'reserved')
+        claimed=await self.ledger.claim(reservation)  # MUST commit before return
+        self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
         self.response_pending = False
         self.response_inflight = True
@@ -98,7 +136,7 @@ class Session:
             await self.lease.assert_current(self.scope, self.fence)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
-            await self.provider.send({'type': 'response.create'})
+            await self._send_provider({'type': 'response.create'})
         except BaseException:
             await self.ledger.mark_unknown(reservation)
             raise
@@ -138,25 +176,39 @@ class Session:
         if kind == 'mute' and set(event) == {'type', 'muted'} and type(event['muted']) is bool:
             self.muted = event['muted']
             if self.muted:
-                await self.provider.send({'type': 'input_audio_buffer.clear'})
+                await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
         if kind == 'audio' and set(event) == {'type', 'pcm'} and isinstance(event['pcm'], bytes):
             data = event['pcm']
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
-                await self.provider.send({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
+                await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
             return
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:
             async with self.lock:
                 ms = event['played_ms']
-                max_ms = self.produced * 1000 // (self.SAMPLE_RATE * 2)
-                if not self.interrupt_pending or event['item_id'] != self.item or type(ms) is not int or not 0 <= ms <= max_ms:
+                if not self.interrupt_pending or event['item_id'] != self.item or type(ms) is not int or ms != 0:
                     raise Refused('invalid_playback_ack')
-                await self.provider.send({'type': 'conversation.item.truncate', 'item_id': self.item,
+                await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
                                           'content_index': 0, 'audio_end_ms': ms})
                 self.interrupt_pending = False
                 self.item, self.produced = None, 0
+                self.output_finished, self.output_started_at = False, None
+                await self._dispatch_pending()
+            return
+        if kind == 'played_all' and set(event) == {'type','item_id'}:
+            async with self.lock:
+                if (self.interrupt_pending or not self.item or event['item_id'] != self.item or not self.output_finished or
+                    self.output_started_at is None or time.monotonic()-self.output_started_at < self.produced/(self.SAMPLE_RATE*2)):
+                    raise Refused('invalid_playback_completion')
+                # Client playback acknowledgments cannot prove what a human
+                # heard. Until a trustworthy model exists, remove all audio
+                # from upstream history rather than retain an unverified reply.
+                await self._send_provider({'type':'conversation.item.truncate','item_id':self.item,
+                                          'content_index':0,'audio_end_ms':0})
+                self.item,self.produced=None,0
+                self.output_finished,self.output_started_at=False,None
                 await self._dispatch_pending()
             return
         raise Refused('client_event_not_allowed')
@@ -179,7 +231,7 @@ class Session:
             async with self.lock:
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
-                    await self.client.send({'type': 'interrupt', 'item_id': self.item})
+                    await self._send_client({'type': 'interrupt', 'item_id': self.item})
             return
         if kind == 'input_audio_buffer.speech_stopped':
             if self.muted:
@@ -190,7 +242,7 @@ class Session:
                 await self._dispatch_pending()
             return
         if kind == 'response.output_audio.delta':
-            if not self.response_inflight:
+            if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
                 raise Refused('unreserved_response')
             try:
                 data = base64.b64decode(event.get('delta', ''), validate=True)
@@ -202,28 +254,47 @@ class Session:
             async with self.lock:
                 if self.interrupt_pending:
                     return  # queued unplayed audio must not reach playback
+                if self.output_finished:
+                    raise Refused('audio_after_completion')
                 if self.item not in (None, item):
                     raise Refused('overlapping_output_items')
+                if self.item is None:
+                    self.output_started_at = time.monotonic()
                 self.item = item
                 self.produced += len(data)
                 if self.produced > self.MAX_OUTPUT_BYTES:
                     raise Refused('output_limit')
-                await self.client.send({'type': 'audio', 'item_id': item, 'pcm': data})
+                await self._send_client({'type': 'audio', 'item_id': item, 'pcm': data})
             return
         if kind == 'response.done':
             async with self.lock:
-                if not self.current_reservation or not self.response_inflight:
+                if (not self.current_reservation or not self.response_inflight or not self.provider_response_id or
+                    (event.get('response') or {}).get('id') != self.provider_response_id):
                     raise Refused('unreserved_response')
                 # Until a verified tariff adapter reconciles usage, the
                 # conservative hold remains spent/unknown.
                 await self.ledger.mark_unknown(self.current_reservation)
                 self.current_reservation = None
                 self.response_inflight = False
+                self.provider_response_id = None
                 await self._dispatch_pending()
             return
-        if kind == 'response.created' and not self.response_inflight:
-            raise Refused('unreserved_response')
-        if kind in ('session.created', 'session.updated', 'response.created', 'response.output_audio.done'):
+        if kind == 'response.created':
+            rid=(event.get('response') or {}).get('id')
+            if not self.response_inflight or self.provider_response_id or not isinstance(rid,str) or not rid or len(rid)>128:
+                raise Refused('unreserved_or_duplicate_response')
+            self.provider_response_id=rid
+            return
+        if kind == 'response.output_audio.done':
+            async with self.lock:
+                if (not self.response_inflight or event.get('response_id')!=self.provider_response_id or
+                    event.get('item_id')!=self.item or not self.item or event.get('content_index')!=0):
+                    raise Refused('invalid_audio_completion')
+                if not self.interrupt_pending:
+                    self.output_finished=True
+                    await self._send_client({'type':'audio_done','item_id':self.item})
+            return
+        if kind in ('session.created', 'session.updated'):
             return
         if kind == 'error' or isinstance(kind, str) and kind.startswith('response.function_call'):
             await self.end('provider_event_forbidden')
