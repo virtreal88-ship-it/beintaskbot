@@ -184,6 +184,55 @@ class BoundDispatch(TwoPhase):
                 recorded=conn.execute('SELECT payload_hash FROM synthetic_dispatch WHERE request_id=%s',(scope['request_id'],)).fetchone()['payload_hash']
                 self.assertNotEqual(recorded,hashlib.sha256(received[0]).hexdigest())
 
+    def test_untracked_pipeline_and_stage_do_not_bump_fixture_epoch(self):
+        # Both tables are read by the real workflow loader; this test proves
+        # only this synthetic trigger inventory's omission, not an auth bypass.
+        before=self.snapshot()
+        with self.scoped() as conn:
+            conn.execute("INSERT INTO saas_tenant_pipelines VALUES(%s,101,'synthetic',true,7,'{}')",(self.tenant,))
+            conn.execute("INSERT INTO saas_tenant_pipeline_stages VALUES(%s,101,202,'synthetic',1,'open','{}')",(self.tenant,))
+            after=conn.execute('SELECT epoch FROM experiment_epoch WHERE tenant_id=%s',(self.tenant,)).fetchone()['epoch']
+        self.assertEqual(before,after)
+
+    def test_untracked_identity_event_does_not_bump_fixture_epoch(self):
+        # Illustrative table; full actual identity event semantics are not
+        # recreated here, and no production effect is asserted.
+        before=self.snapshot()
+        self.conn.execute('CREATE TABLE saas_connect_identity_conflict_events(tenant_id uuid,conversation_id text)')
+        self.conn.commit()
+        try:
+            with self.scoped() as conn:
+                conn.execute('INSERT INTO saas_connect_identity_conflict_events VALUES(%s,%s)',(self.tenant,self.conversation))
+                after=conn.execute('SELECT epoch FROM experiment_epoch WHERE tenant_id=%s',(self.tenant,)).fetchone()['epoch']
+            self.assertEqual(before,after)
+        finally:
+            self.conn.execute('DROP TABLE saas_connect_identity_conflict_events');self.conn.commit()
+
+    def test_synthetic_extension_bumps_epoch_for_six_omitted_tables(self):
+        # This isolated fixture extension covers synthetic inserts only.
+        # It does not change TABLES, implement production triggers, fence
+        # zero-row clear or establish an exhaustive writer inventory.
+        extras=('saas_connect_owner_identity_assertions','saas_connect_identity_conflict_events',
+                'saas_crm_native_contact_conversations','saas_crm_native_contact_identities')
+        tracked=('saas_tenant_pipelines','saas_tenant_pipeline_stages')+extras
+        before=self.snapshot()
+        try:
+            for table in extras:self.conn.execute(f'CREATE TABLE {table}(tenant_id uuid,id uuid)')
+            for table in tracked:
+                self.conn.execute(f'CREATE TRIGGER review_extension AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION bump_epoch()')
+            self.conn.commit()
+            with self.scoped() as conn:
+                conn.execute("INSERT INTO saas_tenant_pipelines VALUES(%s,101,'synthetic',true,7,'{}')",(self.tenant,))
+                conn.execute("INSERT INTO saas_tenant_pipeline_stages VALUES(%s,101,202,'synthetic',1,'open','{}')",(self.tenant,))
+                for table in extras:conn.execute(f'INSERT INTO {table} VALUES(%s,%s)',(self.tenant,str(uuid.uuid4())))
+                after=conn.execute('SELECT epoch FROM experiment_epoch WHERE tenant_id=%s',(self.tenant,)).fetchone()['epoch']
+            self.assertEqual(after,before+6)
+        finally:
+            self.conn.rollback()
+            for table in tracked:self.conn.execute(f'DROP TRIGGER IF EXISTS review_extension ON {table}')
+            for table in extras:self.conn.execute(f'DROP TABLE IF EXISTS {table}')
+            self.conn.commit()
+
     def test_revocation_after_arm_cannot_retract_exact_bytes(self):
         scope=self.scope();received=[];a,b,c,d=self.activate_test_only()
         with a,b,c,d:

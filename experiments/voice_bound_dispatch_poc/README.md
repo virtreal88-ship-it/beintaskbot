@@ -104,3 +104,23 @@ barrier must prove every relevant writer and clear event is covered, establish a
 safe lock order with existing work, and measure compatibility. Until then no
 claim of a complete inventory, production-safe freshness fence or safe rollout
 is warranted.
+
+In particular, the synthetic epoch trigger fixture omits both
+`saas_tenant_pipelines` and `saas_tenant_pipeline_stages`, although the real
+authorization path reads them. The production `knowledge_context` also opens
+its own connection; the model does not demonstrate one atomic snapshot of the
+actual prompt, permission decisions and knowledge. Neither omission is closed
+by these tests.
+
+The synthetic `TABLES` trigger list also omits
+`saas_connect_owner_identity_assertions`, `saas_connect_identity_conflict_events`,
+`saas_crm_native_contact_conversations`, and `saas_crm_native_contact_identities`,
+which identity-resolution code can read on some routes. The inherited local
+counterexample demonstrates that an inserted synthetic owner assertion need
+not bump the epoch. It does not establish that any particular production
+route or event experienced a bypass. Completing even these four fixture
+triggers would not cover the other unknown writers or legacy semantic clears.
+An additional test installs temporary triggers for these four illustrative
+tables and the two workflow tables in its isolated schema, and observes six
+epoch increments for six synthetic inserts. This does not change the shared
+fixture `TABLES`, cover actual schemas/writer paths, or fix the other blockers.
