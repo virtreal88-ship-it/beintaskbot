@@ -8,7 +8,7 @@ const { chromium, firefox, webkit } = require('playwright');
 const docs = path.resolve(__dirname, '../docs');
 const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
 const appShell = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8');
-const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=1`)]
+const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=${['tenant-customer-voice-store.js','tenant-customer-voice-ui.js'].includes(s)?2:1}`)]
   .map(src=>appShell.indexOf(`<script src="${src}"></script>`));
 assert(appScripts.every(position=>position>=0) && appScripts.every((position,index)=>index===0||appScripts[index-1]<position),
   'app shell must load the recorder dependencies after dialog setup, in order');
@@ -84,7 +84,11 @@ async function main(){
     await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
     await page.getByText('Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.').waitFor({state:'visible'});
     assert.equal(posts,1,'one explicit send');
+    assert.equal(await page.locator('audio').isVisible(),true,'unknown operation keeps a local playback copy');
+    assert.equal(await page.getByRole('button',{name:'Отправить голосовое'}).isVisible(),false,'unknown recording cannot be resent');
     await page.reload();await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
+    assert.equal(await page.locator('audio').isVisible(),true,'unknown recording remains playable after reload');
+    assert.equal(await page.getByRole('button',{name:'Отправить голосовое'}).isVisible(),false,'unknown receipt remains non-sendable after reload');
     await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);
     accepted=true;await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);
     await page.getByText('Провайдер принял сообщение. Доставка клиенту пока не подтверждена.').waitFor({state:'visible'});
@@ -122,7 +126,7 @@ async function main(){
     assert.equal(await page.evaluate(()=>createTenantVoiceStore().claim('synthetic-storage-race','new-safe-id')),true);
     const activeId='new-safe-id';
     await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');
-      const receipt=await s.getReceipt('synthetic-storage-race',id);if(receipt?.state!=='unknown'||receipt.blob!==null)throw Error('unknown operation not archived separately');
+      const receipt=await s.getReceipt('synthetic-storage-race',id);if(receipt?.state!=='unknown'||await receipt.blob?.text()!=='synthetic')throw Error('unknown operation lost its local playback copy');
       if(await s.get('synthetic-storage-race'))throw Error('unknown operation still blocks a new draft');
       if(!await s.createDraft({key:'synthetic-storage-race',request_id:'next-id',state:'draft',blob:new Blob(['next'])}))throw Error('new draft was blocked by old unknown');
       if(await s.claim('synthetic-storage-race',id))throw Error('old unknown operation was reusable');

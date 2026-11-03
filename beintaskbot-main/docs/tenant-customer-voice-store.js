@@ -64,7 +64,11 @@
         const next=transform(old);if(next===undefined)return;
         if(next===null)drafts.delete(key);else drafts.put(next);
         if(next===null||next.state==='unknown'||next.state==='accepted'){
-          const state=next?.state||'unknown';receipts.put({...old,...(next||{}),receiptKey:JSON.stringify([key,id]),key,request_id:id,state,blob:null});
+          const state=next?.state||'unknown';
+          // Keep an uncertain recording locally for review, but only as a receipt.
+          // The UI never exposes the send action for receipts, so this cannot retry it.
+          const blob=state==='unknown'?(next?.blob??old.blob??null):null;
+          receipts.put({...old,...(next||{}),receiptKey:JSON.stringify([key,id]),key,request_id:id,state,blob});
           if(next&&next!==null)drafts.delete(key);
         }
         changed=true;
