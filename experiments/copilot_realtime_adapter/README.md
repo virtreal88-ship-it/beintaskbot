@@ -117,9 +117,9 @@ Run isolated tests in this directory:
 * `/workspace/.venvs/beintaskbot311/bin/python -m unittest -v test_session test_websocket`
 * `node --test test_browser.cjs test_chromium.cjs`
 
-The Chromium test uses fake audio hardware and the held #474 microphone helper
-from `/workspace/voice-beintaskbot` (override `VOICE_MICROPHONE_HELPER` if
-needed); it confirms two tabs cannot acquire it together and tracks stop on end.
+The Chromium test uses fake audio hardware and the microphone helper from this
+checkout (override `VOICE_MICROPHONE_HELPER` if needed); it confirms two tabs
+cannot acquire it together and tracks stop on end.
 Tests use mock authority, ledger and provider and do not prove real security,
 cost control, microphone permission recovery, voice quality or delivery.
 

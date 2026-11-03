@@ -1,11 +1,11 @@
 // Local Chromium fake-media test; no provider or user data, no network except
-// the loopback fixture server. Optional dependency: sibling held PR helper.
+// the loopback fixture server. Uses the helper in this checkout.
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const http=require('node:http');
 const path=require('node:path');
 const {chromium}=require('playwright');
-const helper=process.env.VOICE_MICROPHONE_HELPER||'/workspace/voice-beintaskbot/beintaskbot-main/docs/tenant-microphone-lease.js';
+const helper=process.env.VOICE_MICROPHONE_HELPER||path.resolve(__dirname,'../../beintaskbot-main/docs/tenant-microphone-lease.js');
 
 test('Chromium fake microphone is exclusive across two tabs and stops',async()=>{
   const server=http.createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/html'});res.end('<!doctype html><body><main></main></body>');});
@@ -13,7 +13,7 @@ test('Chromium fake microphone is exclusive across two tabs and stops',async()=>
   let browser;
   try {
     const origin='http://127.0.0.1:'+server.address().port;
-    browser=await chromium.launch({headless:true,executablePath:'/usr/bin/chromium',args:['--no-sandbox','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
+    browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
     const context=await browser.newContext({permissions:['microphone']});
     const first=await context.newPage(),second=await context.newPage();
     for(const page of [first,second]){
