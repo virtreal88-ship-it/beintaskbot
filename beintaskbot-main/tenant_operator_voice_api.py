@@ -17,11 +17,15 @@ def handler(member_from_request,origin,logger,resource):
                 _origin(request,origin)
                 if request.method!='POST' or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
+                if request.headers.getall('Content-Length',[]) and request.headers.getall('Transfer-Encoding',[]):
+                    raise TenantLinearError('Некорректный запрос.',400)
                 if request.content_length is not None and request.content_length>4096:
                     raise TenantLinearError('Слишком большой запрос.',413)
-                body=await request.read()
-                if len(body)>4096:raise TenantLinearError('Слишком большой запрос.',413)
-                data=json.loads(body)
+                body=bytearray()
+                async for chunk in request.content.iter_chunked(1024):
+                    body.extend(chunk)
+                    if len(body)>4096:raise TenantLinearError('Слишком большой запрос.',413)
+                data=json.loads(bytes(body))
                 if not isinstance(data,dict):raise TenantLinearError('Некорректный запрос.',400)
                 _expected(data,profile)
                 route={k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
