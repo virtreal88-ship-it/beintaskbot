@@ -95,7 +95,11 @@ These remain release blockers.
 repository migration runner. A second application fails rather than being
 idempotent. `migration_dispatch_v2.sql` is a separate candidate versioned,
 transactional, idempotent upgrade for exactly known v1/v2 CHECK definitions;
-it rejects an unknown or inconsistent schema and never edits existing rows.
+it rejects an enabled grant, unknown or inconsistent schema and never edits
+existing rows. It locks schema, grant table/row, then hold table, and installs a
+persistent trigger rejecting grant enable/deletion or enabled insertion. The
+trigger survives rollback; any future activation requires separate review. A
+privileged owner could bypass it, and it does not itself fence raw dispatch SQL.
 `rollback_dispatch_v1.sql` rejects enabled grant, incomplete holds and installed
 provenance, requires externally verified upstream shutdown, and preserves rows.
 Its safety is not proof that old/new workers are compatible. A hardcoded

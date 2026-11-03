@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 import uuid
+from queue import Queue
+import time
 
 import psycopg
 from psycopg import sql
@@ -63,18 +65,33 @@ class MigrationTests(unittest.TestCase):
         with local_connect(self.dsn) as conn,conn.cursor() as cur:grant.reserve(cur,s)
         return s
 
+    def disable_grant(self):
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
+
+    def synthetic_enable_as_db_owner(self):
+        # Local test fixture deliberately bypasses the persistent guard to
+        # exercise dispatch; this is not an authorized production operation.
+        with local_connect(self.dsn) as conn:
+            conn.execute('ALTER TABLE saas_voice_test_grant DISABLE TRIGGER voice_test_block_enable')
+            conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+            conn.execute('ALTER TABLE saas_voice_test_grant ENABLE TRIGGER voice_test_block_enable')
+
     def state(self,s):
         with local_connect(self.dsn) as conn:
             return conn.execute('SELECT state,reserved_microusd,actual_microusd FROM saas_voice_test_hold WHERE request_id=%s',(s['request_id'],)).fetchone()
 
     def test_upgrade_reentrant_and_safe_rollback_without_data_loss(self):
         s=self.create();before=self.state(s)
+        self.disable_grant()
         self.run_sql(UP);self.run_sql(UP)
         self.assertEqual(self.state(s),before)
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute("SELECT version FROM saas_voice_test_schema_versions WHERE component='dispatch'").fetchone()['version'],2)
+        with self.assertRaises(psycopg.IntegrityError):
+            with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        self.synthetic_enable_as_db_owner()
         with self.assertRaises(psycopg.IntegrityError):self.run_sql(DOWN)  # grant enabled
-        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
+        self.disable_grant()
         with self.assertRaises(psycopg.IntegrityError):self.run_sql(DOWN)  # reservation unresolved
         self.assertEqual(self.state(s),before)
         with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(grant.cancel_before_claim(cur,s)['state'],'released')
@@ -85,7 +102,7 @@ class MigrationTests(unittest.TestCase):
         self.run_sql(UP);self.assertEqual(self.state(s)['state'],'released')
 
     def test_dispatching_blocks_rollback_until_synthetic_result_reconciled(self):
-        s=self.create();self.run_sql(UP)
+        s=self.create();self.disable_grant();self.run_sql(UP);self.synthetic_enable_as_db_owner()
         with local_connect(self.dsn) as conn,conn.cursor() as cur:grant.claim(cur,s)
         with local_connect(self.dsn) as conn,conn.cursor() as cur:grant.issue_dispatch(cur,s)
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
@@ -100,6 +117,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_unknown_constraint_and_version_mismatch_fail_closed(self):
         s=self.create();before=self.state(s)
+        self.disable_grant()
         with local_connect(self.dsn) as conn:
             conn.execute('ALTER TABLE saas_voice_test_hold DROP CONSTRAINT saas_voice_test_hold_state_check')
             conn.execute("ALTER TABLE saas_voice_test_hold ADD CONSTRAINT saas_voice_test_hold_state_check CHECK(state <> 'forbidden')")
@@ -110,6 +128,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_recorded_v2_with_old_constraint_is_rejected(self):
         s=self.create();before=self.state(s)
+        self.disable_grant()
         with local_connect(self.dsn) as conn:
             conn.execute('CREATE TABLE saas_voice_test_schema_versions(component TEXT PRIMARY KEY,version SMALLINT NOT NULL)')
             conn.execute("INSERT INTO saas_voice_test_schema_versions(component,version) VALUES('dispatch',2)")
@@ -118,6 +137,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_blocked_table_lock_times_out_without_mutation(self):
         s=self.create();before=self.state(s)
+        self.disable_grant()
         with local_connect(self.dsn) as blocking,ThreadPoolExecutor(max_workers=1) as pool:
             blocking.execute('LOCK TABLE saas_voice_test_hold IN ACCESS SHARE MODE')
             future=pool.submit(self.run_sql,UP)
@@ -127,17 +147,19 @@ class MigrationTests(unittest.TestCase):
 
     def test_provenance_requires_v2_disabled_and_blocks_unreviewed_downgrade(self):
         with self.assertRaises(psycopg.IntegrityError):self.run_sql(PROVENANCE)
+        self.disable_grant()
         self.run_sql(UP)
+        self.synthetic_enable_as_db_owner()
         with self.assertRaises(psycopg.IntegrityError):self.run_sql(PROVENANCE)
-        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
+        self.disable_grant()
         self.run_sql(PROVENANCE)
         with self.assertRaises(psycopg.IntegrityError):self.run_sql(DOWN)
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute("SELECT version FROM saas_voice_test_schema_versions WHERE component='dispatch'").fetchone()['version'],2)
 
     def test_provenance_install_lock_is_bounded_and_retriable(self):
+        self.disable_grant()
         self.run_sql(UP)
-        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
         with local_connect(self.dsn) as blocking,ThreadPoolExecutor(max_workers=1) as pool:
             blocking.execute('LOCK TABLE saas_voice_test_hold IN ROW EXCLUSIVE MODE')
             future=pool.submit(self.run_sql,PROVENANCE)
@@ -149,10 +171,60 @@ class MigrationTests(unittest.TestCase):
 
     def test_concurrent_reentrant_upgrade_keeps_rows(self):
         s=self.create();before=self.state(s)
+        self.disable_grant()
         with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(lambda _:self.run_sql(UP),range(8)))
         self.assertEqual(self.state(s),before)
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute("SELECT version FROM saas_voice_test_schema_versions WHERE component='dispatch'").fetchone()['version'],2)
+
+    def test_enable_cannot_race_upgrade_rollback_or_provenance_install(self):
+        self.disable_grant()
+        def enable(start):
+            with local_connect(self.dsn) as conn:
+                start.put(conn.info.backend_pid);conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        def race(script):
+            start=Queue()
+            with local_connect(self.dsn) as first,ThreadPoolExecutor(max_workers=1) as workers:
+                first.execute(script)
+                pending=workers.submit(enable,start)
+                pid=start.get(timeout=5);blocker=first.info.backend_pid;deadline=time.monotonic()+3
+                observed=False
+                while time.monotonic()<deadline:
+                    with local_connect(self.dsn) as inspector:
+                        observed=inspector.execute('SELECT %s=ANY(pg_blocking_pids(%s)) AS blocked',(blocker,pid)).fetchone()['blocked']
+                    if observed:break
+                    time.sleep(.02)
+                self.assertTrue(observed,'concurrent enable must wait on migration transaction')
+                first.commit()
+                with self.assertRaises(psycopg.IntegrityError):pending.result(timeout=8)
+            with local_connect(self.dsn) as conn:
+                self.assertFalse(conn.execute('SELECT enabled FROM saas_voice_test_grant').fetchone()['enabled'])
+        race(UP)
+        race(DOWN)
+        self.run_sql(UP)
+        race(PROVENANCE)
+
+    def test_up_fails_if_enable_committed_first_and_guard_tampering_fails_closed(self):
+        # setUp starts with enabled=true; migration must not run until disabled.
+        with self.assertRaises(psycopg.IntegrityError):self.run_sql(UP)
+        self.disable_grant();self.run_sql(UP)
+        with local_connect(self.dsn) as conn:
+            conn.execute('ALTER TABLE saas_voice_test_grant DISABLE TRIGGER voice_test_block_enable')
+        with self.assertRaises(psycopg.IntegrityError):self.run_sql(UP)
+        with self.assertRaises(psycopg.IntegrityError):self.run_sql(DOWN)
+        with self.assertRaises(psycopg.IntegrityError):self.run_sql(PROVENANCE)
+
+    def test_guard_rejects_delete_or_enabled_insert_and_survives_rollback(self):
+        self.disable_grant();self.run_sql(UP);self.run_sql(DOWN)
+        for query in (
+            'DELETE FROM saas_voice_test_grant',
+            "INSERT INTO saas_voice_test_grant(grant_key,cap_microusd,enabled) VALUES('voice-test-owner-5usd-2026',5000000,true)",
+            'UPDATE saas_voice_test_grant SET enabled=true',
+        ):
+            with self.assertRaisesRegex(psycopg.IntegrityError,'voice_activation_requires_review'):
+                with local_connect(self.dsn) as conn:conn.execute(query)
+        with local_connect(self.dsn) as conn:
+            self.assertFalse(conn.execute('SELECT enabled FROM saas_voice_test_grant').fetchone()['enabled'])
 
 
 if __name__=='__main__':unittest.main()

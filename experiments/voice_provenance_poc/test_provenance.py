@@ -56,7 +56,10 @@ class ProvenanceTests(unittest.TestCase):
             # TRUNCATE bypasses row triggers: test-only cleanup, not a safe
             # production privilege. Production access control is not proven.
             conn.execute('TRUNCATE saas_voice_provenance,saas_voice_test_hold,saas_voice_test_session,saas_ai_spend_reservations')
+            # Synthetic owner-only bypass to exercise otherwise disabled code.
+            conn.execute('ALTER TABLE saas_voice_test_grant DISABLE TRIGGER voice_test_block_enable')
             conn.execute('UPDATE saas_voice_test_grant SET enabled=true,frozen=false')
+            conn.execute('ALTER TABLE saas_voice_test_grant ENABLE TRIGGER voice_test_block_enable')
         self.p1=patch.object(grant,'ENFORCEMENT_VERIFIED',True);self.p1.start();self.addCleanup(self.p1.stop)
         self.p2=patch.object(grant,'RECONCILIATION_VERIFIED',True);self.p2.start();self.addCleanup(self.p2.stop)
         self.p3=patch.object(spend,'limit_microusd',return_value=0);self.p3.start();self.addCleanup(self.p3.stop)
@@ -105,6 +108,42 @@ class ProvenanceTests(unittest.TestCase):
             spend.release(s['tenant_id'],'unrelated',track_uncapped=True)
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute("SELECT state FROM saas_ai_spend_reservations WHERE call_key='unrelated'").fetchone()['state'],'released')
+
+    def test_nonvoice_limited_role_needs_no_witness_acl_but_voice_fails_closed(self):
+        # Role exists only in this disposable PostgreSQL container.
+        s=scope();self.reserve(s);role='voice_poc_'+uuid.uuid4().hex
+        self.admin.execute(sql.SQL('CREATE ROLE {} NOLOGIN').format(sql.Identifier(role)))
+        try:
+            with local_connect(self.dsn) as conn:
+                conn.execute(sql.SQL('GRANT USAGE ON SCHEMA public TO {}').format(sql.Identifier(role)))
+                conn.execute(sql.SQL('GRANT SELECT,UPDATE,DELETE ON saas_ai_spend_reservations TO {}').format(sql.Identifier(role)))
+                with conn.cursor() as cur:
+                    spend.reserve(cur,s['tenant_id'],'unrelated-role','text','synthetic',1,0,track_uncapped=True,_bounded_prices=(1_000_000,1_000_000))
+            with local_connect(self.dsn) as conn:
+                conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+                row=conn.execute("UPDATE saas_ai_spend_reservations SET completed_at=completed_at WHERE call_key='unrelated-role' RETURNING id").fetchone()
+                self.assertIsNotNone(row)
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                with local_connect(self.dsn) as conn:
+                    conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+                    conn.execute("UPDATE saas_ai_spend_reservations SET reserved_microusd=reserved_microusd WHERE call_key=%s",('voice-test:'+s['request_id'],))
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                with local_connect(self.dsn) as conn:
+                    conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+                    conn.execute("UPDATE saas_ai_spend_reservations SET kind='realtime_voice_test' WHERE call_key='unrelated-role'")
+            with local_connect(self.dsn) as conn:
+                conn.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(role)))
+                self.assertIsNotNone(conn.execute("DELETE FROM saas_ai_spend_reservations WHERE call_key='unrelated-role' RETURNING id").fetchone())
+        finally:
+            with local_connect(self.dsn) as conn:conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
+            self.admin.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+    def test_owner_cannot_forge_nonvoice_to_voice_transition(self):
+        s=scope()
+        with local_connect(self.dsn) as conn,conn.cursor() as cur:
+            spend.reserve(cur,s['tenant_id'],'unrelated-forge','text','synthetic',1,0,track_uncapped=True,_bounded_prices=(1_000_000,1_000_000))
+        with self.assertRaises(psycopg.IntegrityError):
+            with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET kind='realtime_voice_test' WHERE call_key='unrelated-forge'")
 
     def test_preclaim_cancel_frees_only_exact_voice_hold_without_deleting_provenance(self):
         s=scope();self.reserve(s)
@@ -196,6 +235,16 @@ class ProvenanceTests(unittest.TestCase):
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'claimed')
 
+    def test_direct_sql_transition_can_bypass_disabled_grant(self):
+        # Negative proof: local owner-only raw SQL is not the trusted gateway.
+        # The provenance trigger does not provide a durable kill switch.
+        s=scope();self.reserve(s)
+        with local_connect(self.dsn) as conn,conn.cursor() as cur:grant.claim(cur,s)
+        with local_connect(self.dsn) as conn:
+            conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
+            row=conn.execute("UPDATE saas_voice_test_hold SET state='dispatching' WHERE request_id=%s RETURNING state",(s['request_id'],)).fetchone()
+        self.assertEqual(row['state'],'dispatching')
+
     def test_legacy_nonempty_history_blocks_migration_without_partial_ddl(self):
         name='test_voice_budget_'+uuid.uuid4().hex
         self.admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
@@ -204,7 +253,9 @@ class ProvenanceTests(unittest.TestCase):
             with local_connect(dsn) as conn:
                 spend.ensure_schema(conn);conn.execute((ROOT/'voice_budget_poc'/'voice_test_grant.sql').read_text())
                 conn.execute((ROOT/'voice_budget_poc'/'migration_dispatch_v2.sql').read_text())
+                conn.execute('ALTER TABLE saas_voice_test_grant DISABLE TRIGGER voice_test_block_enable')
                 conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+                conn.execute('ALTER TABLE saas_voice_test_grant ENABLE TRIGGER voice_test_block_enable')
             with local_connect(dsn) as conn,conn.cursor() as cur:grant.reserve(cur,scope())
             with local_connect(dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
             with self.assertRaises(psycopg.IntegrityError):

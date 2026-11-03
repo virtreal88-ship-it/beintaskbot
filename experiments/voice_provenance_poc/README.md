@@ -35,12 +35,20 @@ disable/bypass triggers, truncate or rewrite tables/functions and every caller
 uses the intended authenticated transaction. None of these privileges or
 production boundaries has been verified. A privileged local test deliberately
 disables a trigger to verify that mismatched witness is rejected at the seam;
-it is not a production attack demonstration. DB constraints, mandatory
+it is not a production attack demonstration. Another negative test shows a
+database owner can issue raw `claimed -> dispatching` SQL while the grant is
+disabled: provenance triggers are **not** a DB-enforced kill switch. A trusted
+server path and restricted DB privileges remain mandatory. DB constraints, mandatory
 server-side credentials, other worker versions and side effects require
-independent security and operational review. The trigger checks the shared
-tenant reservation table on updates/deletes; although unrelated rows are not
-modified by its logic, performance/privileges/failure regressions for every
-existing AI function have not been established. Do not deploy or activate it.
+independent security and operational review. Conditional triggers inspect the
+shared tenant reservation table only when OLD or NEW kind is voice for UPDATE,
+or OLD kind is voice for DELETE; nonvoice -> voice forgery is rejected. A local
+test-only role without witness privileges can still update/delete an unrelated
+row, while its voice update fails closed. These synthetic grants are not
+representative of production roles. In one local 5,000-row no-op UPDATE
+microbenchmark (7 measured samples), median was 83.26ms without and 87.07ms
+with conditional triggers (ratio 1.046). This is not zero overhead, a production
+benchmark, SLA or proof across all operations. Do not deploy or activate it.
 
 ## Legacy conflicts and migration
 
@@ -55,9 +63,13 @@ usage.
 
 `migration_dispatch_v2.sql` and `rollback_dispatch_v1.sql` are candidates for
 the existing hold state CHECK. The upgrade acquires a schema advisory lock and
-bounded table lock, recognizes only exact known v1/v2 CHECK definitions,
+bounded locks in schema -> grant table/row -> voice table order, recognizes only exact known v1/v2 CHECK definitions,
 version-marks v2, can be reapplied, and does not rewrite existing rows. Unknown
-schema/version fails closed. The rollback refuses enabled grants, unresolved
+schema/version fails closed. An installed persistent voice-grant trigger rejects
+enabling, deletion or enabled insertion even after rollback; activating requires
+a separate reviewed change. Concurrent enable is serialized by the grant table
+lock. This is not proof that a privileged owner cannot bypass the trigger. The
+rollback refuses enabled grants, unresolved
 holds, or an installed provenance table; it does not delete entries. Schema
 rollback does not establish that upstream provider sessions stopped or that
 old workers understand new states. The provenance installer itself is
@@ -89,8 +101,8 @@ VOICE_BUDGET_POC_ADMIN_URL='postgresql://testuser:testpass@127.0.0.1:PORT/postgr
 ```
 
 Tests cover atomic multi-connection provenance, changed fields/deletion,
-unrelated release, cancellation vs claim, single-use dispatch, simulated
+unrelated release and limited-role access, cancellation vs claim, single-use dispatch, simulated
 tampering, legacy refusal, migration reentrancy/rollback/unknown versions,
-bounded locks, and AB/BA behavior. Tests use database owner privileges for
+bounded locks, concurrent enable/installation and AB/BA behavior. Tests use database owner privileges for
 fixture setup and therefore **do not** prove production role separation. The
 old `voice_budget_poc` suite remains separately runnable.
