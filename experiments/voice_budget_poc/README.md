@@ -138,9 +138,12 @@ A broad tenant quarantine fence would require an agreed behavior change and
 auditing/instrumenting all applicable provider admissions, including uncapped
 and old-worker paths. A fence only in `reserve` would not cover the Copilot
 example and would risk an unreviewed interruption of unrelated AI functions.
-It is not implemented. The narrow repair above leaves existing AI operations
-unchanged; if it cannot prove the original hold, voice remains closed instead
-of asserting a tenant-wide guarantee.
+It is not implemented. The narrow repair does not change ordinary AI code or
+add a broad fence, but increasing a tenant's restored reserve can cause its
+existing monetary cap to reject later unrelated AI requests. That product
+effect and the manual-reconciliation process must be reviewed before enabling
+voice. If the repair cannot prove the original hold, voice remains closed
+instead of asserting a tenant-wide guarantee.
 
 ## Isolated tests
 
