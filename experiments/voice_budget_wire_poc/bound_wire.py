@@ -48,7 +48,9 @@ class _BudgetSocket:
     def bind_response(self,scope):
         keys=('tenant_id','session_id','channel_id','actor_id','conversation_id','executor')
         if any(str(scope.get(k))!=str(self._scope[k]) for k in keys):raise ValueError('response_scope_invalid')
-        self._response=str(uuid.UUID(scope['request_id']))
+        if type(scope.get('response_number')) is not int or not 1<=scope['response_number']<=self._scope['response_limit']:
+            raise ValueError('response_scope_invalid')
+        self._response=(str(uuid.UUID(scope['request_id'])),scope['response_number'])
     async def receive_json(self):
         event=await self.__socket.read()
         if self._stage=='config_sent':
@@ -105,11 +107,13 @@ class _BudgetSocket:
             if not isinstance(event['item_id'],str) or event['content_index']!=0 or event['audio_end_ms']!=0:raise ValueError('control_invalid')
             return 'control',None
         raise ValueError('event_forbidden')
-    def _commit(self,kind,operation_id,frame,pcm):
+    def _commit(self,kind,operation_id,frame,pcm,ordinal=None):
         frame=bytes(frame)
         with local_connect(self._dsn) as conn,conn.cursor() as cur:
             if kind=='audio':issued=budget.issue_audio(cur,self._scope,operation_id,pcm)
-            elif kind=='response':issued=budget.issue_response(cur,self._scope,operation_id)
+            elif kind=='response':
+                issued=budget.issue_response(cur,self._scope,operation_id)
+                if issued and issued['ordinal']!=ordinal:raise ValueError('response_ordinal_mismatch')
             else:
                 budget._global(cur);budget._quote_fresh();row=budget._session(cur,self._scope)
                 expected='opening' if kind=='config' else 'ready'
@@ -125,9 +129,9 @@ class _BudgetSocket:
         async with self._lock:
             if self._poisoned:raise ValueError('sender_poisoned')
             kind,pcm=self._validate(snapshot)
-            operation_id=self._response if kind=='response' else str(uuid.uuid4())
+            operation_id,ordinal=self._response if kind=='response' else (str(uuid.uuid4()),None)
             try:
-                if not await asyncio.to_thread(self._commit,kind,operation_id,frame,pcm):raise ValueError('budget_capability_unavailable')
+                if not await asyncio.to_thread(self._commit,kind,operation_id,frame,pcm,ordinal):raise ValueError('budget_capability_unavailable')
                 if kind=='response':self._response=None
                 await asyncio.wait_for(self.__socket.write(frame),0.2)
                 if kind=='config':self._expected_config=snapshot['session'];self._stage='config_sent'

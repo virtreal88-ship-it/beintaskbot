@@ -102,6 +102,18 @@ class WireBudgetTests(base.BoundSenderTests):
             self.assertEqual(len(wire.socket.evidence()),2)
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_response').fetchone()['state'],'claimed')
         asyncio.run(run())
+    def test_mismatched_response_ordinal_rolls_back_dispatch_and_sends_nothing(self):
+        async def run():
+            s=session_tests.scope();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            scope,receipt=self.claim(s);scope['response_number']=2;receipt['response_number']=2
+            await wire.bind_claim(scope,receipt)
+            with self.assertRaisesRegex(ValueError,'response_ordinal_mismatch'):await wire.send({'type':'response.create'})
+            self.assertEqual(len(wire.socket.evidence()),2)
+            with local_connect(self.dsn) as conn:
+                self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_response').fetchone()['state'],'uncertain')
+                self.assertEqual(conn.execute("SELECT count(*) AS n FROM saas_voice_bound_sender_receipt WHERE operation='response'").fetchone()['n'],0)
+        asyncio.run(run())
     def test_audio_cumulative_limit_and_reused_receipt_never_retransmits(self):
         async def run():
             s=session_tests.scope();self.call(budget.reserve_session,s)
