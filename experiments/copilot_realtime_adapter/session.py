@@ -54,6 +54,8 @@ class Session:
         self.lock = asyncio.Lock()
         self.io_lock = asyncio.Lock()
         self.client_lock = asyncio.Lock()
+        self.shutdown_timeout = .5
+        self._end_task = None
 
     async def _send_provider(self, event):
         async with self.io_lock:
@@ -303,29 +305,64 @@ class Session:
         # clients by default.  History integration is intentionally absent.
 
     async def end(self, reason):
+        if self._end_task is not None:
+            return await asyncio.shield(self._end_task)
         if self.closed:
-            return
+            return False
         self.closed = True
         if self.watchdog and self.watchdog is not asyncio.current_task():
             self.watchdog.cancel()
+        self._end_task = asyncio.create_task(self._finish_end(reason))
+        return await asyncio.shield(self._end_task)
+
+    @staticmethod
+    def _consume_task(task):
+        # A cancelled dependency is allowed to ignore cancellation. Keep no
+        # assumption that cancellation stopped I/O, and consume its result.
         try:
-            if self.current_reservation:
-                try:
-                    await asyncio.wait_for(self.ledger.mark_unknown(self.current_reservation), timeout=.5)
-                except Exception:
-                    # Claimed reservations remain held by contract on failure.
-                    pass
-                self.current_reservation = None
+            task.exception()
+        except BaseException:
+            pass
+
+    async def _bounded(self, *coros):
+        tasks=[asyncio.create_task(coro) for coro in coros]
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=self.shutdown_timeout)
+            for task in pending:
+                task.cancel()
+                task.add_done_callback(self._consume_task)
+            if pending:
+                return False
+            return all(not task.cancelled() and task.exception() is None for task in done)
         finally:
-            try:
-                # A failed/hung close cannot prove upstream shutdown; retain
-                # the lease until a server-side reconciler can fence it.
-                await asyncio.wait_for(self.provider.close(), timeout=2)
-            except Exception:
-                await self.client.send({'type': 'ended', 'reason': 'provider_close_unconfirmed'})
-                return
-            finally:
-                pass
-            await self.lease.release(self.scope, self.fence)
-            await self.client.send({'type': 'ended', 'reason': reason})
-        # A real ledger reconciles provider usage; unknown outcomes retain hold.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+    @staticmethod
+    async def _drain(lock):
+        async with lock:
+            pass
+
+    async def _finish_end(self, reason):
+        reservation=self.current_reservation
+        self.current_reservation=None
+        async def hold_unknown():
+            if reservation:
+                await self.ledger.mark_unknown(reservation)
+        # close and both drains are independent: close can unblock a running
+        # send, but the lease remains held until *all* I/O is really drained.
+        drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),
+                                    self._drain(self.client_lock),hold_unknown())
+        if not drained:
+            return False
+        async def ended():
+            async with self.client_lock:
+                await self.client.send({'type':'ended','reason':reason})
+        if not await self._bounded(ended()):
+            return False
+        # Only release after the provider close, the provider/client drains,
+        # and the terminal client event have all completed successfully.
+        if not await self._bounded(self.lease.release(self.scope, self.fence)):
+            return False
+        return True
