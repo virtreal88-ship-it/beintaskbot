@@ -260,6 +260,34 @@ class RollingHistory(IntegratedSynthetic):
             with self.assertRaises(threads.ThreadCleared):
                 threads.append(cur,self.tenant,7,self.channel,self.conversation,0,'synthetic-binding',[self.voice()])
 
+    def test_readonly_snapshot_filters_expired_without_mutating_thread(self):
+        self.insert_voice()
+        with self.scoped() as conn:
+            conn.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
+        command=self.command();self.assertEqual(self.snapshot(command),[])
+        row=self.read_thread();self.assertEqual(row['clear_revision'],0)
+        self.assertEqual(row['turns'][0]['text'],'synthetic voice')
+
+    def test_cleanup_before_snapshot_does_not_clear_its_own_answer(self):
+        self.insert_voice()
+        with self.scoped() as conn,conn.cursor() as cur:
+            cur.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
+            threads.cleanup_expired(cur,self.tenant)
+        command=self.command();old=self.snapshot(command)
+        self.assertEqual(old,[]);self.assertEqual(command['_thread_clear_revision'],1)
+        self.make_run(command);result=self.finish(command,old)
+        self.assertNotIn('history_status',result)
+        self.assertEqual([row['text'] for row in self.read_thread()['turns']],['synthetic prompt','synthetic answer'])
+
+    def test_retention_after_snapshot_reports_cleared_without_resurrection(self):
+        self.insert_voice();command=self.command();old=self.snapshot(command);self.make_run(command)
+        with self.scoped() as conn,conn.cursor() as cur:
+            cur.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
+            threads.cleanup_expired(cur,self.tenant)
+        result=self.finish(command,old)
+        self.assertEqual(result['history_status'],'cleared')
+        self.assertEqual(self.read_thread(),{'turns':[],'clear_revision':1})
+
     def test_expand_ddl_fails_fast_when_old_transaction_holds_lock(self):
         # Disposable schema only. Demonstrates no guaranteed zero-latency DDL.
         with self.scoped() as conn:conn.execute('ALTER TABLE saas_operator_copilot_threads DROP COLUMN clear_revision')

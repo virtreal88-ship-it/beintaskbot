@@ -83,6 +83,24 @@ def test_clear_during_generation_returns_answer_with_cached_history_warning(read
     assert copilot.run(PROFILE,data)==result
     assert generated.call_count==1
     assert db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]=={'turns':[],'clear_revision':1}
+
+
+def test_expired_history_is_scrubbed_before_generation_and_new_reply_saved(ready):
+    db,_other,generated,data=ready
+    data.update(mode='chat',prompt='Synthetic private question')
+    with db.cursor() as cur:
+        agent=copilot._assigned_context(cur,A,data)
+    binding=copilot._agent_binding(agent)
+    stale=[{'role':'employee','text':'expired synthetic private text','agent_binding':binding}]
+    db.execute("INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns,updated_at) VALUES(%s::uuid,11,%s,'client',%s::jsonb,now()-interval '61 days')",
+               (A,CA,json.dumps(stale)))
+    db.commit()
+    result=copilot.run(PROFILE,data)
+    assert 'history_status' not in result
+    assert 'expired synthetic private text' not in json.dumps(generated.call_args.kwargs['extra_context'])
+    saved=db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]
+    assert saved['clear_revision']==1
+    assert [row['text'] for row in saved['turns']]==['Synthetic private question','Müştəri üçün hazır cavab.']
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidates')[0]['n'] == 0
 
 

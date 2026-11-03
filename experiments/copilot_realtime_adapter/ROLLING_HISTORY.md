@@ -23,8 +23,10 @@ The candidate text writer captures `clear_revision` on read and, after the
 provider call, atomically CASes its own `sending` receipt and appends to the
 current thread under the row lock. New clear creates a durable empty row and
 increments its revision, including for an initially absent thread. Retention
-scrubs expired content, increments the revision and retains empty tombstones;
-safe garbage collection and metadata-retention policy remain unsolved. No DB
+scrubs expired content before a normal request snapshots history, increments
+the revision and retains empty tombstones. Read-only consumers filter expired
+turns without writing; a later normal request performs the scrub. Safe garbage
+collection and metadata-retention policy remain unsolved. No DB
 lock is held during provider I/O. If clear wins, the generated answer remains
 available, no thread turn is added, and the same `history_status=cleared` is
 persisted with the receipt and shown by the updated client in RU/AZ/EN. Older

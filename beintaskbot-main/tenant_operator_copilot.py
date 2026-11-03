@@ -375,12 +375,14 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
     from tenant_media_evidence import annotate_rows
     annotate_rows(cur, tenant, rows)
-    cur.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
+    cur.execute("SELECT turns,clear_revision,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
     turns_row = cur.fetchone() or {}
     command['_thread_clear_revision'] = turns_row.get('clear_revision', 0)
     if type(command['_thread_clear_revision']) is not int or command['_thread_clear_revision'] < 0:
         raise TenantLinearError('История AI недоступна.',503)
-    turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
+    # Some read-only consumers cannot scrub rows. Never provide expired text
+    # to them even before the next normal writer performs retention cleanup.
+    turns = turns_row.get('turns') if turns_row.get('expired') is not True and isinstance(turns_row.get('turns'), list) else []
     turns = turns[-10:] if consultation_evidence is None else []
     # A private thread from an older assignment must never become the
     # new agent's memory. Old rows lack a binding and are excluded.
@@ -668,12 +670,14 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
+            # Scrub before snapshot so this request does not capture expired
+            # context or invalidate its own generation after reading it.
+            from tenant_operator_copilot_threads import cleanup_expired
+            cleanup_expired(cur,tenant)
             rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
-            from tenant_operator_copilot_threads import cleanup_expired
-            cleanup_expired(cur,tenant)
 
         conn.commit()
     context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
