@@ -107,6 +107,20 @@ BEGIN
      (OLD.tenant_repair_state='conflict' AND NEW.state='settled') THEN
     RAISE EXCEPTION 'voice_owned_request_immutable' USING ERRCODE='23514';
   END IF;
+  -- Defend the direct CAS path too: the separate test-only wrapper is not
+  -- itself an enforcement boundary. A real deployment still needs DB role
+  -- controls so writers cannot disable the trigger or bypass the gateway.
+  IF OLD.state='claimed' AND NEW.state='dispatching' AND NOT EXISTS(
+    SELECT 1 FROM saas_voice_provenance p JOIN saas_ai_spend_reservations h
+      ON h.tenant_id=p.tenant_id AND h.id=p.reservation_id
+    WHERE p.request_id=OLD.request_id AND p.tenant_id=OLD.tenant_id AND p.reservation_id=OLD.tenant_reservation_id
+      AND p.call_key='voice-test:'||OLD.request_id::text AND p.kind='realtime_voice_test'
+      AND p.model=OLD.model AND p.quote_version=OLD.quote_version AND p.initial_reserved=OLD.reserved_microusd
+      AND p.fingerprint=OLD.fingerprint AND h.call_key=p.call_key AND h.kind=p.kind AND h.model=p.model
+      AND h.state='unknown' AND h.reserved_microusd=p.initial_reserved AND h.actual_microusd IS NULL
+  ) THEN
+    RAISE EXCEPTION 'voice_dispatch_provenance_conflict' USING ERRCODE='23514';
+  END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER voice_provenance_request_guard BEFORE UPDATE OR DELETE ON saas_voice_test_hold

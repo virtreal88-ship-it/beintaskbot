@@ -189,6 +189,10 @@ class ProvenanceTests(unittest.TestCase):
             conn.execute('ALTER TABLE saas_voice_provenance ENABLE TRIGGER voice_provenance_no_change')
         with self.assertRaises(TenantLinearError):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:pinned_dispatch.issue(cur,s)
+        # Direct candidate CAS is also denied by the DB trigger; neither
+        # proves that production credentials cannot disable that trigger.
+        with self.assertRaises(psycopg.IntegrityError):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:grant.issue_dispatch(cur,s)
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'claimed')
 
