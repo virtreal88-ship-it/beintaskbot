@@ -36,7 +36,7 @@ EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
-EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-microphone-lease.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js']
+EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
