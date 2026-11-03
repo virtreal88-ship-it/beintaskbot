@@ -21,6 +21,13 @@ and may prevent further tests even after a cheap result. An amount above the
 quote freezes future admissions and counts the higher amount, although any
 actual overspend may already have happened.
 
+These per-Response holds do **not** bound costs of opening a session or other
+operations before the first Response. A complete session-wide reservation and
+one-use opening boundary are missing. See
+[`SESSION_BILLING_BOUND.md`](../voice_provenance_poc/SESSION_BILLING_BOUND.md)
+for official billing evidence and the transport's output-token compatibility
+question. Do not use this ledger to make any paid connection.
+
 The prototype reserves $2.112 per one hypothetical response and permits no
 more than two responses per synthetic session. This is a deliberately
 conservative arithmetic example, not approval for a live session:
