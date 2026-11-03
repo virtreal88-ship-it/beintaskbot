@@ -75,7 +75,7 @@ def append(cur, tenant, actor, channel, conversation, expected_clear_revision, e
         # callers must catch ThreadCleared inside the transaction to commit
         # the scrub, and must not append under the stale generation.
         cur.execute('''UPDATE saas_operator_copilot_threads SET turns='[]'::jsonb,
-          clear_revision=clear_revision+1,updated_at=now()
+          clear_revision=clear_revision+1,history_revision=history_revision+1,updated_at=now()
           WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',key)
         raise ThreadCleared()
     # Match the existing Copilot rule: only the current assigned agent's
@@ -83,9 +83,11 @@ def append(cur, tenant, actor, channel, conversation, expected_clear_revision, e
     # binding, rather than replacing them with a stale request snapshot.
     prior = [turn for turn in current['turns'] if isinstance(turn,dict) and turn.get('agent_binding') == expected_binding]
     merged = (prior + entries)[-20:]
+    voice_seen = any(set(entry) & {'voice_session_id','turn_sequence','transcript_status','transcript_quality'} for entry in entries)
     cur.execute('''UPDATE saas_operator_copilot_threads SET turns=%s::jsonb,updated_at=now()
+      ,history_revision=history_revision+1,voice_history_seen=voice_history_seen OR %s
       WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
-                (json.dumps(merged, ensure_ascii=False), *key))
+                (json.dumps(merged, ensure_ascii=False), voice_seen, *key))
 
 
 def clear(cur, tenant, actor, channel, conversation):
@@ -93,7 +95,8 @@ def clear(cur, tenant, actor, channel, conversation):
       (tenant_id,requested_by,channel_id,conversation_id,turns,clear_revision)
       VALUES(%s::uuid,%s,%s,%s,'[]'::jsonb,1)
       ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
-      DO UPDATE SET turns='[]'::jsonb,clear_revision=saas_operator_copilot_threads.clear_revision+1,updated_at=now()''',
+      DO UPDATE SET turns='[]'::jsonb,clear_revision=saas_operator_copilot_threads.clear_revision+1,
+        history_revision=saas_operator_copilot_threads.history_revision+1,updated_at=now()''',
                 (tenant, actor, channel, conversation))
 
 
@@ -107,7 +110,7 @@ def cleanup_expired(cur, tenant):
     """
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
     cur.execute("""UPDATE saas_operator_copilot_threads t SET turns='[]'::jsonb,
-      clear_revision=t.clear_revision+1,updated_at=now()
+      clear_revision=t.clear_revision+1,history_revision=t.history_revision+1,updated_at=now()
       WHERE t.tenant_id=%s::uuid AND t.updated_at<now()-interval '60 days'
       AND (t.turns IS NULL OR t.turns<>'[]'::jsonb)""", (tenant,))
     # Do not delete empty rows: a delayed text or voice writer can have read

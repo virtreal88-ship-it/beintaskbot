@@ -1,9 +1,9 @@
 # Copilot history rolling-cutover experiment
 
-This branch is based on draft PR #480 at
-`156ce9ce15d8e4e3cddcbca2006614a827f028e3`. It is an experiment, not an
-approved migration or release. Voice admission, transcript provenance,
-provider, cost and distributed lease gates remain closed.
+This note describes the existing PR #480 candidate. It is not an approved
+production migration or release. Provider and voice admission remain hard
+closed until the schema guard, transcript provenance, budget, server lease and
+worker cutover are verified.
 
 ## Observed writers and protocol
 
@@ -38,14 +38,14 @@ clients still show the answer but ignore the new warning; this is a verified
 mixed-client limitation, not a fully transparent rollout.
 
 `rolling_history_expand.sql` is a manual **review-only** additive expansion.
-It uses a short `lock_timeout` and checks the exact target column's type,
-nullability and default. It does not make a production change and must precede
-deployment of the new reader/writer. The actual lock acquired by ALTER can
-briefly block other traffic: a fail-fast timeout is not proof of zero impact.
-The regular bootstrap includes the column for fresh databases only; it does
-not silently expand existing schemas. Locally, an old writer still reads and
-writes after expansion, and old code works after dropping the added column only
-in the no-voice synthetic rollback case.
+It adds history counters/markers and installs a trigger that blocks unversioned
+legacy overwrites after a clear or voice-session marker; legacy deletes become
+durable scrub tombstones. It uses a short `lock_timeout` and checks the exact
+column types, nullability and defaults. It does not make a production change.
+The trigger must only be installed after every writer process uses the new
+revision-aware writer; old processes then receive a serialization conflict on
+marked threads. The actual locks acquired by ALTER/trigger DDL can briefly
+block traffic: a fail-fast timeout is not proof of zero impact.
 
 ## Fundamental mixed-version boundary
 
@@ -61,12 +61,13 @@ A possible operational sequence requires an independently verified inventory
 of *all* writer processes and database roles, additive schema expansion,
 rolling the upgraded text writer everywhere while voice stays disabled, then
 draining and proving termination of every old process and every old in-flight
-provider completion before allowing voice. The `sending` receipt count alone
-is not proof: the old finalizer can still write after its receipt changed.
-The actual orchestrator, workers, database direct-write permissions, restart
-and job lifecycle have not been attested. If that proof cannot be obtained,
-the voice-history gate must remain closed. Text must not be paused or old
-workforce processes killed merely to satisfy this experiment.
+provider completion before allowing voice. The trigger protects marked
+threads from a rolled-back old writer by rejecting writes, but that can make
+history updates fail on those threads; it does not provide fully functional
+mixed-version rollback. The actual orchestrator, workers, database direct-write
+permissions, restart and job lifecycle have not been attested. If that proof
+cannot be obtained, the voice-history gate must remain closed. Text must not be
+paused or old workforce processes killed merely to satisfy this experiment.
 
 After any voice history is written, rolling back to an old writer is unsafe:
 it can overwrite voice turns or lose clear fences. A safe rollback must keep
@@ -86,6 +87,15 @@ backend termination/rollback, retention, schema expansion/lock timeout and a
 no-voice rollback smoke test. The normal text/saved-only and consultation test
 suite uses synthetic PGlite and a mocked provider. These tests do not prove
 real rolling deployment, request drain, production privileges or performance.
-The example transcript draft still has no live ASR or authoritative playback;
-late input transcription completions must be correlated to their item IDs and
-committed item ordering, never ordered by completion time.
+Input transcription completion events may arrive out of order, so the draft
+uses their committed item IDs and creation order instead of completion time.
+
+The current PR branch now has a production-side *candidate* transcript draft:
+it records only provider text, correlates input transcripts to committed item
+IDs, keeps item-creation order, and writes an assistant transcript only after
+the app reports playback completion. That client signal is stored as
+`automatic_unverified`, never as proof a person heard or understood the answer;
+an interrupted or unplayed assistant reply is omitted. `gpt-transcribe` usage
+is priced from its separate duration receipt and added to the same per-response
+hold. The provider, history, and budget admission gates remain closed pending
+wire/readback, billing-ledger, migration, rollback, and PostgreSQL verification.

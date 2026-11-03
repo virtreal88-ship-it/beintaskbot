@@ -283,8 +283,73 @@ class ServerCredentialLoader:
 
 
 class VoiceHistory:
-    def __init__(self,authority,session_id=None):self.authority=authority;self.session_id=session_id
+    def __init__(self,authority,session_id=None,lease=None):
+        self.authority=authority;self.session_id=session_id;self.lease=lease
+        self.lease_fence=None;self.clear_revision=None
     def require_writer_ready(self):require_history_cutover()
+    def _begin(self,lease_fence):
+        require_history_cutover();require_voice_history_provenance()
+        s=self.authority.scope
+        if type(lease_fence) is not int or lease_fence<1 or self.lease is None or self.lease.fence!=lease_fence:
+            raise TenantLinearError('Владение голосовым сеансом не подтверждено.',409)
+        with _connect() as conn,conn.cursor() as cur:
+            self.authority.recheck(cur)
+            key=(s.tenant,s.actor,s.channel_id,s.conversation_id)
+            cur.execute('''INSERT INTO saas_operator_copilot_threads
+              (tenant_id,requested_by,channel_id,conversation_id,turns,clear_revision)
+              VALUES(%s::uuid,%s,%s,%s,'[]'::jsonb,0)
+              ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id) DO NOTHING''',key)
+            cur.execute('''SELECT clear_revision,turns,updated_at < now()-interval '60 days' AS expired
+              FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s
+              AND channel_id=%s AND conversation_id=%s FOR UPDATE''',key)
+            row=cur.fetchone()
+            if not row or type(row.get('clear_revision')) is not int or not isinstance(row.get('turns'),list):
+                raise TenantLinearError('История AI недоступна.',503)
+            if row.get('expired') is True and row['turns']:
+                cur.execute('''UPDATE saas_operator_copilot_threads SET turns='[]'::jsonb,
+                  clear_revision=clear_revision+1,history_revision=history_revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',key)
+                conn.commit()
+                raise TenantLinearError('История AI истекла. Обновите разговор.',409)
+            revision=row['clear_revision']
+            cur.execute('''UPDATE saas_operator_copilot_threads SET voice_history_seen=true,
+              history_revision=history_revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',key)
+            cur.execute('''INSERT INTO saas_operator_voice_sessions
+              (session_id,tenant_id,actor_id,channel_id,conversation_id,agent_binding,clear_revision,
+               next_sequence,lease_fence,state,started_at)
+              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s,0,%s,'active',now())
+              ON CONFLICT(session_id) DO NOTHING''',
+              (self.session_id,s.tenant,s.actor,s.channel_id,s.conversation_id,s.agent_binding,revision,lease_fence))
+            cur.execute('''SELECT tenant_id::text,actor_id,channel_id::text,conversation_id,agent_binding,
+              clear_revision,lease_fence,state FROM saas_operator_voice_sessions
+              WHERE session_id=%s::uuid FOR UPDATE''',(self.session_id,))
+            session=cur.fetchone()
+            if (not session or session['tenant_id']!=s.tenant or session['actor_id']!=s.actor or
+                session['channel_id']!=s.channel_id or session['conversation_id']!=s.conversation_id or
+                session['agent_binding']!=s.agent_binding or session['clear_revision']!=revision or
+                session['lease_fence']!=lease_fence or session['state']!='active'):
+                raise TenantLinearError('Область голосовой истории не совпадает.',409)
+        self.clear_revision=revision;self.lease_fence=lease_fence
+        return revision
+    async def begin(self,lease_fence):
+        return await asyncio.to_thread(self._begin,lease_fence)
+    def _close(self,lease_fence):
+        if self.clear_revision is None or lease_fence!=self.lease_fence:return False
+        s=self.authority.scope
+        with _connect() as conn,conn.cursor() as cur:
+            self.authority.recheck(cur)
+            cur.execute('''UPDATE saas_operator_voice_sessions SET state='closed',ended_at=now()
+              WHERE session_id=%s::uuid AND tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid
+                AND conversation_id=%s AND agent_binding=%s AND clear_revision=%s AND lease_fence=%s
+                AND state='active' RETURNING session_id''',
+              (self.session_id,s.tenant,s.actor,s.channel_id,s.conversation_id,s.agent_binding,
+               self.clear_revision,lease_fence))
+            return bool(cur.fetchone())
+    async def close(self,lease_fence):
+        result=await asyncio.to_thread(self._close,lease_fence)
+        if result:self.clear_revision=None
+        return result
     def _append(self,entry,clear_revision):
         require_history_cutover()
         require_voice_history_provenance()
@@ -295,8 +360,9 @@ class VoiceHistory:
             raise ValueError('voice_history_scope_invalid')
         s=self.authority.scope
         _validated_entries(s.agent_binding,[entry])
-        if entry.get('transcript_status')=='complete' or entry.get('transcript_quality')=='human_verified':
-            raise TenantLinearError('Полнота голосовой реплики не подтверждена.',503)
+        if (entry.get('transcript_quality')=='human_verified' or
+            entry.get('transcript_status')=='complete' and entry.get('transcript_quality')!='automatic_unverified'):
+            raise TenantLinearError('Происхождение голосовой реплики не подтверждено.',503)
         if not {'voice_session_id','turn_sequence','transcript_status','transcript_quality'}.issubset(entry):
             raise ValueError('voice_history_metadata_required')
         canonical=json.dumps({'entry':entry,'clear_revision':clear_revision},ensure_ascii=False,
@@ -305,15 +371,12 @@ class VoiceHistory:
         cleared=False
         with _connect() as conn,conn.cursor() as cur:
             self.authority.recheck(cur)
-            cur.execute('''INSERT INTO saas_operator_voice_sessions
-              (session_id,tenant_id,actor_id,channel_id,conversation_id,agent_binding,clear_revision,next_sequence)
-              VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,0) ON CONFLICT(session_id) DO NOTHING''',
-              (self.session_id,s.tenant,s.actor,s.channel_id,s.conversation_id,s.agent_binding,clear_revision))
             cur.execute('SELECT * FROM saas_operator_voice_sessions WHERE session_id=%s::uuid FOR UPDATE',(self.session_id,))
             row=cur.fetchone() or {}
             if (str(row.get('tenant_id'))!=s.tenant or row.get('actor_id')!=s.actor or row.get('channel_id')!=s.channel_id or
                 row.get('conversation_id')!=s.conversation_id or row.get('agent_binding')!=s.agent_binding or
-                row.get('clear_revision')!=clear_revision):raise TenantLinearError('Голосовая история изменилась.',409)
+                row.get('clear_revision')!=clear_revision or row.get('lease_fence')!=self.lease_fence or
+                row.get('state')!='active'):raise TenantLinearError('Голосовая история изменилась.',409)
             # A clear must be checked even for an idempotent retry.
             cur.execute('''SELECT clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid
               AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE''',
@@ -346,17 +409,29 @@ class VoiceHistory:
         # Candidate schema/migration and every old text writer must be cut
         # over before writing, including when a client retries a prior turn.
         require_history_cutover()
-        return await asyncio.to_thread(self._append,dict(entry),clear_revision)
+        revision=self.clear_revision if clear_revision is None else clear_revision
+        if self.lease is None or self.lease_fence is None:
+            raise TenantLinearError('Владение голосовым сеансом не подтверждено.',409)
+        await self.lease.assert_current(self.authority.session_scope,self.lease_fence)
+        return await asyncio.to_thread(self._append,dict(entry),revision)
+
+    async def flush(self,entries,lease_fence):
+        if lease_fence!=self.lease_fence or not isinstance(entries,list) or len(entries)>20:
+            return False
+        for entry in entries:
+            await self.append(entry,self.clear_revision)
+        return await self.close(lease_fence)
 
 
 def _compose_server_session(authority,client,lease,session_id):
-    history=VoiceHistory(authority,session_id)
+    history=VoiceHistory(authority,session_id,lease)
     history.require_writer_ready()  # intentionally always raises
     context=CopilotContext(authority)
     ledger=ScopedBudget(authority,session_id)
     provider=create_production_provider(ScopedDispatchGuard(ledger),ServerCredentialLoader(authority))  # independently always raises
     return Session(authority.session_scope,authority=authority,ledger=ledger,lease=lease,
-                   context=context,provider=provider,client=client,executor=_EXECUTOR,session_id=session_id)
+                   context=context,provider=provider,client=client,history=history,
+                   executor=_EXECUTOR,session_id=session_id)
 
 
 async def prepare_server_session(profile,route,client,lease):
@@ -366,9 +441,14 @@ async def prepare_server_session(profile,route,client,lease):
 
 
 def _create_server_lease(_authority,_session_id):
-    # The separately developed durable cross-worker lease is not yet reviewed
-    # and integrated. Never replace this refusal with a process-local lock.
-    raise TenantLinearError('Голосовой режим пока недоступен.',503)
+    # PostgreSQL row ownership and a monotonically increasing fencing token
+    # supersede process-local locks. Missing schema, stale owners and DB errors
+    # all fail closed before provider I/O.
+    from tenant_operator_voice_lease import VoiceSessionLease
+    try:
+        return VoiceSessionLease(_authority,_session_id)
+    except (TypeError,ValueError,AttributeError):
+        raise TenantLinearError('Голосовой режим пока недоступен.',503) from None
 
 
 async def open_server_session(request,profile,origin=None):

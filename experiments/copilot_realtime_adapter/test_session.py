@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import unittest
+from types import SimpleNamespace
 from session import Session, Refused
 
 
@@ -22,6 +23,9 @@ class Ledger:
     async def mark_unknown(self, scope):
         self.events.append(('unknown', scope.copy()))
         return {**scope,'state':'unknown','reserved_microusd':1}
+    async def note_actual(self, scope, amount):
+        self.events.append(('settled', scope.copy(), amount))
+        return {**scope,'state':'settled','actual_microusd':amount}
 
 
 class Lease:
@@ -31,7 +35,7 @@ class Lease:
         self.held=True; return 'fence'
     async def assert_current(self, scope, fence):
         if not self.held or fence != 'fence': raise Refused('lease_lost')
-    async def release(self, scope, fence): self.held=False
+    async def release(self, scope, fence): self.held=False;return True
 
 
 class Context:
@@ -87,10 +91,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_client({'type':'audio','pcm':bytes(4800)})
         await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
         await self.session.receive_provider({'type':'input_audio_buffer.committed','item_id':item_id})
+        await self.session.receive_provider({'type':'conversation.item.input_audio_transcription.completed',
+            'item_id':item_id,'content_index':0,'transcript':'synthetic input','usage':{'type':'duration','seconds':3}})
         await self.session.receive_provider({'type':'response.created','response':{'id':'response-'+str(self.session.response_number)}})
 
     async def test_existing_policy_and_disabled_automatic_spend(self):
-        self.assertEqual(self.provider.config,{'tools':[],'create_response':False,'interrupt_response':False,'transcription':False,'reconnect':False})
+        self.assertEqual(self.provider.config,{'tools':[],'create_response':False,'interrupt_response':False,'transcription':'gpt-transcribe','reconnect':False})
         self.assertEqual(self.ledger.events,[])
         await self.turn()
         self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim'])
@@ -110,6 +116,42 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
         self.assertEqual(sum(event['type']=='response.create' for event in self.provider.events),1)
         self.assertEqual([event[0] for event in self.ledger.events],['reserve','claim'])
+
+    async def test_response_done_settles_only_provider_reported_usage(self):
+        await self.turn()
+        await self.session.receive_provider({'type':'conversation.item.input_audio_transcription.completed',
+            'item_id':'user-1','content_index':0,'transcript':'synthetic input','usage':{'type':'duration','seconds':3}})
+        usage={'input_tokens':10,'output_tokens':10,'total_tokens':20,
+               'input_token_details':{'text_tokens':5,'audio_tokens':5,'image_tokens':0,'cached_tokens':2,
+                                      'cached_tokens_details':{'text_tokens':2,'audio_tokens':0,'image_tokens':0}},
+               'output_token_details':{'text_tokens':3,'audio_tokens':7}}
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1','output':[],'usage':usage}})
+        self.assertEqual(self.ledger.events[-1][0],'settled')
+        self.assertEqual(self.ledger.events[-1][2],426)
+
+    async def test_duplicate_audio_completion_is_not_forwarded_twice(self):
+        await self.turn()
+        event={'type':'response.output_audio.done','response_id':'response-1','item_id':'audio-1','content_index':0}
+        await self.session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1',
+            'item_id':'audio-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+        await self.session.receive_provider(event)
+        await self.session.receive_provider(event)
+        self.assertEqual(sum(item['type']=='audio_done' for item in self.client.events),1)
+
+    async def test_response_waits_for_separate_transcription_usage_before_settlement_or_next_turn(self):
+        await commit_input_turn(self.session,'billable-input')
+        await self.session.receive_provider({'type':'response.created','response':{'id':'response-1'}})
+        usage={'input_tokens':10,'output_tokens':10,'total_tokens':20,
+               'input_token_details':{'text_tokens':5,'audio_tokens':5,'image_tokens':0,'cached_tokens':2,
+                                      'cached_tokens_details':{'text_tokens':2,'audio_tokens':0,'image_tokens':0}},
+               'output_token_details':{'text_tokens':3,'audio_tokens':7}}
+        await self.session.receive_provider({'type':'response.done','response':{'id':'response-1','output':[],'usage':usage}})
+        self.assertIsNotNone(self.session.current_reservation)
+        self.assertEqual([item[0] for item in self.ledger.events],['reserve','claim'])
+        await commit_input_turn(self.session,'next-input')
+        self.assertEqual(sum(event['type']=='response.create' for event in self.provider.events),1)
+        await self.session.end('missing_transcription_usage')
+        self.assertEqual([item[0] for item in self.ledger.events],['reserve','claim','unknown'])
 
     async def test_commit_before_stop_waits_for_matching_vad_turn(self):
         await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
@@ -302,8 +344,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_provider({'type':'response.done','response':{'id':'response-1'}})
         await asyncio.sleep(.02)
         await self.session.receive_client({'type':'played_all','item_id':'a'})
-        self.assertEqual(self.provider.events[-1]['audio_end_ms'],0)
-        await self.session.receive_provider({'type':'conversation.item.truncated','item_id':'a','content_index':0,'audio_end_ms':0})
+        self.assertNotIn('conversation.item.truncate',[event['type'] for event in self.provider.events])
         await self.turn()
         await self.session.receive_provider({**delta,'response_id':'response-2','item_id':'b'})
         self.assertEqual(self.client.events[-1]['item_id'],'b')
@@ -464,6 +505,41 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         release.set()
         with self.assertRaises(Refused):await opening
         self.assertEqual(client.events,[]);self.assertTrue(provider.closed);self.assertFalse(lease.held)
+
+    async def test_text_history_flushes_ordered_transcripts_and_only_completed_assistant_playback(self):
+        class BoundAuthority(Authority):
+            scope=SimpleNamespace(agent_binding='synthetic-binding')
+        class History:
+            def __init__(self):self.clear_revision=None;self.entries=[]
+            async def begin(self,fence):self.clear_revision=0;return 0
+            async def flush(self,entries,fence):self.entries=entries;self.clear_revision=None;return True
+        authority=BoundAuthority();ledger=Ledger();lease=Lease();provider=Provider(ledger);client=Client();history=History()
+        session=Session(('tenant',42,'channel','conversation'),authority=authority,ledger=ledger,lease=lease,
+            context=Context(),provider=provider,client=client,history=history,max_seconds=1,idle_seconds=.8,poll_seconds=.02)
+        await session.start();await commit_input_turn(session,'history-input')
+        await session.receive_provider({'type':'conversation.item.input_audio_transcription.completed','item_id':'history-input',
+            'content_index':0,'transcript':'synthetic RU/AZ transcript','usage':{'type':'duration','seconds':1}})
+        await session.receive_provider({'type':'response.created','response':{'id':'response-history'}})
+        await session.receive_provider({'type':'response.output_item.added','response_id':'response-history',
+            'item':{'id':'assistant-history','type':'message','role':'assistant'}})
+        await session.receive_provider({'type':'response.output_audio_transcript.done','response_id':'response-history',
+            'item_id':'assistant-history','content_index':0,'transcript':'synthetic generated reply'})
+        await session.receive_provider({'type':'response.output_audio.delta','response_id':'response-history',
+            'item_id':'assistant-history','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+        await session.receive_provider({'type':'response.output_audio.done','response_id':'response-history',
+            'item_id':'assistant-history','content_index':0})
+        usage={'input_tokens':10,'output_tokens':10,'total_tokens':20,
+               'input_token_details':{'text_tokens':5,'audio_tokens':5,'image_tokens':0,'cached_tokens':2,
+                                      'cached_tokens_details':{'text_tokens':2,'audio_tokens':0,'image_tokens':0}},
+               'output_token_details':{'text_tokens':3,'audio_tokens':7}}
+        await session.receive_provider({'type':'response.done','response':{'id':'response-history','output':[], 'usage':usage}})
+        await asyncio.sleep(.02)
+        await session.receive_client({'type':'played_all','item_id':'assistant-history'})
+        self.assertTrue(await session.end('test'))
+        self.assertEqual([entry['role'] for entry in history.entries],['employee','copilot'])
+        self.assertEqual([entry['turn_sequence'] for entry in history.entries],[0,1])
+        self.assertEqual([entry['text'] for entry in history.entries],['synthetic RU/AZ transcript','synthetic generated reply'])
+        self.assertTrue(all(entry['transcript_quality']=='automatic_unverified' for entry in history.entries))
 
     async def test_stop_before_late_lease_claim_never_opens_provider(self):
         entered=asyncio.Event();release=asyncio.Event();ledger=Ledger();client=Client()

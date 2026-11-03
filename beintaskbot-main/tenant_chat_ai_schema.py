@@ -33,9 +33,15 @@ def ensure_schema(conn):
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
               requested_by BIGINT NOT NULL,channel_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
               turns JSONB NOT NULL DEFAULT '[]'::jsonb,clear_revision BIGINT NOT NULL DEFAULT 0,
+              history_revision BIGINT NOT NULL DEFAULT 0,voice_history_seen BOOLEAN NOT NULL DEFAULT false,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id),
               FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+            # Additive-only expansion for existing text-history rows. The
+            # voice writer remains hard-gated until the separate legacy-writer
+            # guard migration and process cutover are verified.
+            cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS history_revision BIGINT NOT NULL DEFAULT 0')
+            cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS voice_history_seen BOOLEAN NOT NULL DEFAULT false')
             cur.execute('CREATE INDEX IF NOT EXISTS saas_chat_ai_copilot_usage_idx ON saas_chat_ai_runs(tenant_id,requested_by,provider,channel_id,conversation_id,usage_day)')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_chat_transcripts(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,lead_id BIGINT NOT NULL,

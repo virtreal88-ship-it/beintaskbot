@@ -375,10 +375,14 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
     from tenant_media_evidence import annotate_rows
     annotate_rows(cur, tenant, rows)
-    cur.execute("SELECT turns,clear_revision,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
+    cur.execute("SELECT turns,clear_revision,history_revision,voice_history_seen,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
     turns_row = cur.fetchone() or {}
     command['_thread_clear_revision'] = turns_row.get('clear_revision', 0)
     if type(command['_thread_clear_revision']) is not int or command['_thread_clear_revision'] < 0:
+        raise TenantLinearError('История AI недоступна.',503)
+    command['_thread_history_revision'] = turns_row.get('history_revision', 0)
+    command['_thread_voice_history_seen'] = turns_row.get('voice_history_seen', False)
+    if type(command['_thread_history_revision']) is not int or command['_thread_history_revision'] < 0 or type(command['_thread_voice_history_seen']) is not bool:
         raise TenantLinearError('История AI недоступна.',503)
     # Some read-only consumers cannot scrub rows. Never provide expired text
     # to them even before the next normal writer performs retention cleanup.
@@ -536,7 +540,8 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         agent=str(agent_context.get('instructions') or '')[:20000],
         style=agent_context.get('style'))
     if any('transcript_status' in turn for turn in turns):
-        prompt += ' Voice transcript metadata describes imperfect evidence: partial or unavailable transcripts are incomplete and must never be treated as exact or complete.'
+        prompt += (' Voice transcripts are automatic and unverified; a complete transcript only means the provider marked its text complete, '
+                   'not that a person necessarily heard or understood it. Partial or unavailable transcripts are incomplete and must never be treated as exact.')
     if context_only:
         # Never return ManualExecution (which holds the caller's credential),
         # raw rows, or provider objects across the voice context boundary.

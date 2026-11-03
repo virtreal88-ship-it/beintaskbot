@@ -36,7 +36,8 @@ class IntegratedSynthetic(RealVoiceAuthority):
           ADD COLUMN direction text,ADD COLUMN body text,ADD COLUMN message_type text,ADD COLUMN happened_at timestamptz DEFAULT now(),
           ADD COLUMN created_at timestamptz DEFAULT now();
           CREATE TABLE saas_operator_copilot_threads(tenant_id uuid,requested_by bigint,channel_id text,conversation_id text,
-            turns jsonb,clear_revision bigint NOT NULL DEFAULT 0,updated_at timestamptz DEFAULT now(),
+            turns jsonb,clear_revision bigint NOT NULL DEFAULT 0,history_revision bigint NOT NULL DEFAULT 0,
+            voice_history_seen boolean NOT NULL DEFAULT false,updated_at timestamptz DEFAULT now(),
             PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id));
           CREATE TABLE saas_ai_knowledge_sources(tenant_id uuid,id uuid,title text,active boolean,agent_id uuid,provenance jsonb,updated_at timestamptz);
           CREATE TABLE saas_ai_knowledge_chunks(tenant_id uuid,source_id uuid,content text,search_vector tsvector,chunk_no integer);

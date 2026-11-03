@@ -16,8 +16,8 @@ MODEL='gpt-realtime-2.1-mini'
 # The session API accepts 1..4096 or "inf", regardless of the larger model
 # maximum. Keep the larger existing hold until a full billing bound is proven.
 OUTPUT_LIMIT=4096
-QUOTE='mini-2026-11-03-1resp-v1'
-MINIMUM_HOLD=2_112_000
+QUOTE='realtime-2.1-mini-gpt-transcribe-2026-11-03-v1'
+MINIMUM_HOLD=2_130_018
 OPENAI_URL='wss://api.openai.com/v1/realtime'
 MAX_WIRE_MESSAGE=262144
 CONNECT_DEADLINE=4
@@ -146,7 +146,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not False
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription!='gpt-transcribe'
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -163,7 +163,8 @@ class _RealtimeWire:
         if not isinstance(session_id,str) or not session_id or len(session_id)>128:raise ValueError('session_id_missing')
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
-          'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},'transcription':None,
+          'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
+                            'transcription':{'model':'gpt-transcribe','languages':['ru','az']},
                             'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
@@ -204,7 +205,8 @@ class _RealtimeWire:
             s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
             good=(s['id']==session_id and s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
               and s['tool_choice']=='none' and s['max_output_tokens']==OUTPUT_LIMIT and s['instructions']==expected['instructions']
-              and incoming['format']=={'type':'audio/pcm','rate':24000} and incoming['transcription'] is None
+              and incoming['format']=={'type':'audio/pcm','rate':24000}
+              and incoming['transcription']=={'model':'gpt-transcribe','languages':['ru','az']}
               and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is False
               and vad['idle_timeout_ms'] is None
               and set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'}

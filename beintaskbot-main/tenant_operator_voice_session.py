@@ -25,7 +25,7 @@ class Session:
     MAX_FRAME = 9600  # 200 ms PCM16 mono
     MAX_OUTPUT_BYTES = 4_800_000
 
-    def __init__(self, scope, *, authority, ledger, lease, context, provider, client,
+    def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None):
         if any(x is None for x in (authority, ledger, lease, context, provider, client)):
             raise Refused('trusted_dependencies_missing')
@@ -41,6 +41,8 @@ class Session:
             raise Refused('invalid_limits')
         self.scope = scope  # (tenant, actor, channel, conversation), server-derived
         self.authority, self.ledger, self.lease = authority, ledger, lease
+        self.history = history
+        self.history_clear_revision = None
         self.context, self.provider, self.client = context, provider, client
         self.max_seconds, self.idle_seconds, self.poll_seconds = max_seconds, idle_seconds, poll_seconds
         self.started = self.activity = 0
@@ -52,6 +54,13 @@ class Session:
             self.session_id = str(uuid.UUID(session_id)) if session_id is not None else str(uuid.uuid4())
         except (ValueError,TypeError,AttributeError):
             raise Refused('invalid_session_id') from None
+        self.transcript = None
+        if history is not None:
+            try:
+                from tenant_operator_voice_transcript import TranscriptDraft
+                self.transcript = TranscriptDraft(self.session_id, authority.scope.agent_binding)
+            except (AttributeError,TypeError,ValueError):
+                raise Refused('voice_transcript_scope_invalid') from None
         self.executor = executor
         self.response_number = 0
         self.response_inflight = False
@@ -62,6 +71,12 @@ class Session:
         self.pending_input_item_id = None
         self.seen_input_item_ids = set()
         self.current_reservation = None
+        self.current_input_item_id = None
+        self.current_response_usage_microusd = None
+        self.input_transcription_costs = {}
+        self.input_transcription_events = {}
+        self.seen_assistant_item_ids = set()
+        self.assistant_response_ids = {}
         self.provider_response_id = None
         self.item = None
         self.produced = 0
@@ -119,13 +134,20 @@ class Session:
             if not self.fence:
                 raise Refused('session_already_active')
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            if self.history is not None:
+                # Fence legacy whole-snapshot writers before any provider I/O.
+                # A subsequent context read catches a text turn that won the
+                # row lock just before this marker was committed.
+                await self.lease.assert_current(self.scope,self.fence)
+                self.history_clear_revision=await self.history.begin(self.fence)
+                await self.context.revalidate(self.scope)
             await self.authority.check(self.scope, 'dispatch')
             await self.lease.assert_current(self.scope,self.fence)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
             self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
-                                                                    transcription=False, reconnect=False))
+                                                                    transcription='gpt-transcribe', reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=3)
             if pending:
                 self._open_task.cancel()
@@ -158,7 +180,16 @@ class Session:
                 # closed and drained before releasing the acquired lease.
                 closed = not self._open_task or await self._bounded(self.provider.close(), self._drain(self.io_lock), self._drain(self.receive_lock), self._drain(self.client_lock))
                 if closed:
-                    await self._bounded(self.lease.release(self.scope, self.fence))
+                    if self.history is not None and self.history.clear_revision is not None:
+                        async def finish_history():
+                            if not await self.history.close(self.fence):
+                                raise Refused('history_close_unconfirmed')
+                        closed=await self._bounded(finish_history())
+                    if closed:
+                        async def release_start_lease():
+                            if not await self.lease.release(self.scope, self.fence):
+                                raise Refused('lease_release_unconfirmed')
+                        await self._bounded(release_start_lease())
             raise
         finally:
             self._opening = False
@@ -179,7 +210,8 @@ class Session:
         # response until the exact committed input item has been acknowledged.
         # The reservation authority is shared externally.
         if (not self.response_pending or not self.pending_input_item_id or self.interrupt_pending or
-            self.truncate_pending or self.response_inflight or self.item is not None or self.closed):
+            self.truncate_pending or self.response_inflight or self.current_reservation is not None or
+            self.item is not None or self.closed):
             return
         self.response_number += 1
         if self.response_number > 2:
@@ -189,6 +221,7 @@ class Session:
         # fence; production admission remains hard-disabled.
         await self.context.revalidate(self.scope)
         tenant, actor, channel, conversation = self.scope
+        input_item_id=self.pending_input_item_id
         reservation = {'request_id': str(uuid.uuid4()), 'tenant_id': str(tenant), 'session_id': self.session_id,
                        'actor_id': actor, 'channel_id':str(channel), 'conversation_id':str(conversation),
                        'response_number': self.response_number, 'executor': self.executor}
@@ -197,6 +230,8 @@ class Session:
         claimed=await self.ledger.claim(reservation)  # MUST commit before return
         self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
+        self.current_input_item_id=input_item_id
+        self.current_response_usage_microusd=None
         self.response_pending = False
         self.pending_input_item_id = None
         self.response_inflight = True
@@ -284,6 +319,7 @@ class Session:
                 if not self.interrupt_pending or event['item_id'] != self.item or type(ms) is not int or ms != 0:
                     raise Refused('invalid_playback_ack')
                 self.truncate_pending=self.item
+                if self.transcript is not None:self.transcript.interrupted(self.item)
                 await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
                                           'content_index': 0, 'audio_end_ms': ms})
                 self.interrupt_pending = False
@@ -296,12 +332,9 @@ class Session:
                 if (self.interrupt_pending or not self.item or event['item_id'] != self.item or not self.output_finished or
                     self.output_started_at is None or time.monotonic()-self.output_started_at < self.produced/(self.SAMPLE_RATE*2)):
                     raise Refused('invalid_playback_completion')
-                # Client playback acknowledgments cannot prove what a human
-                # heard. Until a trustworthy model exists, remove all audio
-                # from upstream history rather than retain an unverified reply.
-                self.truncate_pending=self.item
-                await self._send_provider({'type':'conversation.item.truncate','item_id':self.item,
-                                          'content_index':0,'audio_end_ms':0})
+                # This is an app-level playback signal, not proof that a person
+                # heard the answer. The text history marks it unverified.
+                if self.transcript is not None:self.transcript.device_playback_complete(self.item)
                 self.item,self.produced=None,0
                 self.output_finished,self.output_started_at=False,None
                 await self._dispatch_pending()
@@ -347,6 +380,7 @@ class Session:
                         raise Refused('interrupted_before_audio')
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
+                    if self.transcript is not None:self.transcript.interrupted(self.item)
                     await self._send_client({'type': 'interrupt', 'item_id': self.item})
                 self.input_sequence += 1
                 self.input_turn = {'sequence':self.input_sequence,'stopped':False,'item_id':None}
@@ -381,7 +415,42 @@ class Session:
                     raise Refused('multiple_commits_for_input_turn')
                 turn['item_id']=item_id
                 self.seen_input_item_ids.add(item_id)
+                if self.transcript is not None:self.transcript.register(item_id,'employee')
                 await self._accept_committed_input(turn)
+            return
+        if kind == 'conversation.item.input_audio_transcription.completed':
+            item_id=event.get('item_id');content_index=event.get('content_index');text=event.get('transcript')
+            if (item_id not in self.seen_input_item_ids or type(content_index) is not int or content_index!=0 or
+                not isinstance(text,str) or len(text)>1600):
+                raise Refused('unmatched_input_transcript')
+            from tenant_operator_voice_transcript import transcription_cost_microusd
+            amount=transcription_cost_microusd(event.get('usage'))
+            exact=(text,amount)
+            if item_id in self.input_transcription_events:
+                if self.input_transcription_events[item_id]!=exact:
+                    raise Refused('conflicting_input_transcript_usage')
+                if self.transcript is not None:self.transcript.input_completed(item_id,content_index,text)
+                return
+            self.input_transcription_events[item_id]=exact
+            self.input_transcription_costs[item_id]=amount
+            if self.transcript is not None:self.transcript.input_completed(item_id,content_index,text)
+            async with self.lock:
+                await self._settle_response_if_ready()
+                await self._dispatch_pending()
+            return
+        if kind == 'conversation.item.input_audio_transcription.failed':
+            item_id=event.get('item_id');content_index=event.get('content_index')
+            if item_id not in self.seen_input_item_ids or type(content_index) is not int or content_index!=0:
+                raise Refused('unmatched_input_transcript_failure')
+            if item_id in self.input_transcription_events and self.input_transcription_events[item_id]!=(None,None):
+                raise Refused('conflicting_input_transcript_usage')
+            if item_id in self.input_transcription_events:return
+            self.input_transcription_events[item_id]=(None,None)
+            self.input_transcription_costs[item_id]=None
+            if self.transcript is not None:self.transcript.input_failed(item_id,content_index)
+            async with self.lock:
+                await self._settle_response_if_ready()
+                await self._dispatch_pending()
             return
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
@@ -429,12 +498,13 @@ class Session:
                 if (not isinstance(output,list) or any(not isinstance(item,dict) or item.get('type')!='message' or
                     item.get('role')!='assistant' for item in output)):
                     raise Refused('provider_item_forbidden')
-                # Until a verified tariff adapter reconciles usage, the
-                # conservative hold remains spent/unknown.
-                await self.ledger.mark_unknown(self.current_reservation)
-                self.current_reservation = None
+                # The speech model and committed-turn transcription are billed
+                # separately. Reconcile only after both exact receipts arrive.
+                from tenant_operator_realtime_usage import usage_cost_microusd
+                self.current_response_usage_microusd=usage_cost_microusd(response.get('usage'))
                 self.response_inflight = False
                 self.provider_response_id = None
+                await self._settle_response_if_ready()
                 await self._dispatch_pending()
             return
         if kind == 'response.created':
@@ -448,8 +518,11 @@ class Session:
                 if (not self.response_inflight or event.get('response_id')!=self.provider_response_id or
                     event.get('item_id')!=self.item or not self.item or event.get('content_index')!=0):
                     raise Refused('invalid_audio_completion')
+                if self.output_finished:
+                    return
                 if not self.interrupt_pending:
                     self.output_finished=True
+                    if self.transcript is not None:self.transcript.assistant_audio_done(self.item)
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
         if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
@@ -462,15 +535,60 @@ class Session:
         if kind in ('response.output_item.added','response.output_item.done'):
             item=event.get('item')
             if (self.response_inflight and event.get('response_id')==self.provider_response_id and
-                isinstance(item,dict) and item.get('type')=='message' and item.get('role')=='assistant'):
+                isinstance(item,dict) and item.get('type')=='message' and item.get('role')=='assistant' and
+                isinstance(item.get('id'),str) and item['id']):
+                if item['id'] in self.assistant_response_ids and self.assistant_response_ids[item['id']]!=event['response_id']:
+                    raise Refused('assistant_item_response_conflict')
+                self.seen_assistant_item_ids.add(item['id'])
+                self.assistant_response_ids[item['id']]=event['response_id']
+                if self.transcript is not None:self.transcript.register(item['id'],'copilot')
                 return
             raise Refused('provider_item_forbidden')
-        if kind in ('response.content_part.added','response.content_part.done',
-                    'response.output_audio_transcript.delta','response.output_audio_transcript.done'):
+        if kind=='response.output_audio_transcript.done':
+            response_id=event.get('response_id')
+            item_id=event.get('item_id')
+            if (isinstance(item_id,str) and self.assistant_response_ids.get(item_id)==response_id and
+                type(event.get('content_index')) is int and event['content_index']==0 and
+                isinstance(event.get('transcript'),str) and len(event['transcript'])<=6000):
+                if self.transcript is not None:
+                    self.transcript.assistant_transcript_completed(item_id,event['transcript'])
+                return
+            raise Refused('unreserved_response')
+        if kind in ('response.content_part.added','response.content_part.done','response.output_audio_transcript.delta'):
             if self.response_inflight and event.get('response_id')==self.provider_response_id:return
             raise Refused('unreserved_response')
         # Unknown provider events and tool calls never reach the browser.
         raise Refused('provider_event_forbidden')
+
+    async def _settle_response_if_ready(self):
+        reservation=self.current_reservation
+        item_id=self.current_input_item_id
+        if reservation is None or item_id is None or self.response_inflight:
+            return False
+        if self.current_response_usage_microusd is None:
+            receipt=await self.ledger.mark_unknown(reservation)
+            if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
+                raise Refused('budget_unknown_unconfirmed')
+            self.current_reservation=None
+            self.current_input_item_id=None
+            self.current_response_usage_microusd=None
+            return True
+        if item_id not in self.input_transcription_costs:
+            return False
+        transcription_cost=self.input_transcription_costs[item_id]
+        model_cost=self.current_response_usage_microusd
+        if transcription_cost is None or model_cost is None:
+            receipt=await self.ledger.mark_unknown(reservation)
+            if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
+                raise Refused('budget_unknown_unconfirmed')
+        else:
+            receipt=await self.ledger.note_actual(reservation,model_cost+transcription_cost)
+            if not isinstance(receipt,dict) or receipt.get('state') not in {'settled','quarantined'}:
+                raise Refused('usage_reconciliation_unconfirmed')
+        self.current_reservation=None
+        self.current_input_item_id=None
+        self.current_response_usage_microusd=None
+        return True
 
     async def end(self, reason):
         self._stop_requested = True
@@ -535,9 +653,20 @@ class Session:
         if not drained:
             await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
+        if self.history is not None and self.fence is not None:
+            async def finish_history():
+                entries=self.transcript.finalize() if self.transcript is not None else []
+                if not await self.history.flush(entries,self.fence):
+                    raise Refused('history_close_unconfirmed')
+            if not await self._bounded(finish_history()):
+                await self._bounded(terminal({'type':'end_unconfirmed'}))
+                return False
         # Release only after provider close and all I/O drains. A failed or
         # uncertain release must never be reported as a confirmed end.
-        if not await self._bounded(self.lease.release(self.scope, self.fence)):
+        async def release_lease():
+            if not await self.lease.release(self.scope, self.fence):
+                raise Refused('lease_release_unconfirmed')
+        if not await self._bounded(release_lease()):
             await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
         return await self._bounded(terminal({'type':'ended','reason':reason}))

@@ -66,7 +66,7 @@ class LedgerPostgresTests(unittest.TestCase):
             conn.execute('UPDATE saas_voice_test_grant SET enabled=false,frozen=false')
 
     def test_quote_and_admin_guards(self):
-        self.assertEqual(RESERVE_MICROUSD,2_112_000)
+        self.assertEqual(RESERVE_MICROUSD,2_130_018)
         self.assertEqual(CAP_MICROUSD,5_000_000)
         for dsn in (self.dsn+'?host=example.invalid',self.dsn+'?options=-csearch_path=x',
                     self.dsn.replace('127.0.0.1','example.invalid'),self.dsn.replace('test_voice_budget_','prod_')):

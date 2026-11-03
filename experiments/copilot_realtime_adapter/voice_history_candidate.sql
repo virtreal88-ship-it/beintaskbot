@@ -7,6 +7,10 @@ CREATE TABLE saas_operator_voice_sessions (
   conversation_id text NOT NULL,
   agent_binding text NOT NULL,
   clear_revision bigint NOT NULL CHECK (clear_revision >= 0),
+  lease_fence bigint NOT NULL CHECK(lease_fence > 0),
+  state text NOT NULL CHECK(state IN ('active','closed')),
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz,
   next_sequence integer NOT NULL CHECK (next_sequence >= 0)
 );
 CREATE TABLE saas_operator_voice_turns (

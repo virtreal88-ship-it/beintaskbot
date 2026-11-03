@@ -65,7 +65,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         wire=_RealtimeWire(self.socket,OneUseGuard())
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[{'text':'синтетический mətn'}],'extra_context':{}}
-        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
+        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         scope={'request_id':str(uuid.uuid4()),'tenant_id':str(uuid.uuid4()),'session_id':str(uuid.uuid4()),
                'channel_id':str(uuid.uuid4()),'conversation_id':'synthetic','actor_id':7,'response_number':1,'executor':'test'}
         receipt={**scope,'state':'claimed','model':MODEL,'quote_version':QUOTE,'reserved_microusd':MINIMUM_HOLD,
@@ -80,7 +80,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         settings=self.received[0]['session'];vad=settings['audio']['input']['turn_detection']
         self.assertEqual(settings['max_output_tokens'],4096)
         self.assertFalse(vad['create_response']);self.assertFalse(vad['interrupt_response']);self.assertIsNone(vad['idle_timeout_ms'])
-        self.assertIsNone(settings['audio']['input']['transcription'])
+        self.assertEqual(settings['audio']['input']['transcription'],{'model':'gpt-transcribe','languages':['ru','az']})
         self.assertEqual(settings['tools'],[]);self.assertEqual(settings['tool_choice'],'none')
         self.assertNotIn('синтетический',settings['instructions'])
         self.assertEqual(self.received[1]['item']['role'],'user')
@@ -104,7 +104,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         async def credential():called.append(True);return 'synthetic-key'
         provider=OpenAIRealtimeProvider(credential,OneUseGuard())
         with self.assertRaises(TenantLinearError):await provider.open({},tools=[],create_response=False,
-                            interrupt_response=False,transcription=False,reconnect=False)
+                            interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         self.assertEqual(called,[])
 
     async def test_composed_provider_protocol_over_loopback_with_test_connector(self):
@@ -117,7 +117,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                   'lines':[],'extra_context':{}}
         with patch('tenant_operator_realtime_wire._require_live_admission'),\
              patch('tenant_operator_realtime_wire._open_openai_socket',test_connector):
-            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
+            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
             self.assertTrue(provider.ready);self.assertEqual(calls,['credential','connector'])
             self.assertNotIn('synthetic-key-never-log',json.dumps(self.received))
             await provider.close();self.assertTrue(self.ws.closed)
@@ -127,7 +127,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         provider=OpenAIRealtimeProvider(bad_credential,OneUseGuard())
         with patch('tenant_operator_realtime_wire._require_live_admission'):
             with self.assertRaisesRegex(ValueError,'provider_credential_unavailable') as failure:
-                await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
+                await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception))
         async def credential():return 'synthetic-secret-do-not-log'
         async def test_connector(_,_owner):return self.socket
@@ -137,7 +137,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
              patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
             with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
-                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
+                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
 
     async def test_real_provider_session_composition_is_blocked_but_loopback_testable(self):
@@ -151,7 +151,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             held=False
             async def claim(self,_):self.held=True;return 'fence'
             async def assert_current(self,*_):assert self.held
-            async def release(self,*_):self.held=False
+            async def release(self,*_):self.held=False;return True
         class Ledger:
             async def reserve(self,s):return {**s,'state':'reserved','reserved_microusd':MINIMUM_HOLD}
             async def claim(self,s):
@@ -175,7 +175,10 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             session=Session(scope,**deps)
             try:
                 await session.start()
+                await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+                await session.receive_client({'type':'audio','pcm':bytes(480)})
                 await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
                 await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
                 self.assertTrue(session.response_inflight)
                 self.assertTrue(await session.end('test'));self.assertFalse(lease.held)
@@ -271,7 +274,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
              patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
              patch('tenant_operator_realtime_wire._connect_websocket',cancelled_connect):
             task=asyncio.create_task(provider.open({},tools=[],create_response=False,
-                                         interrupt_response=False,transcription=False,reconnect=False))
+                                         interrupt_response=False,transcription='gpt-transcribe',reconnect=False))
             await entered.wait();task.cancel()
             with self.assertRaises(asyncio.CancelledError):await task
             closing=asyncio.create_task(provider.close());await asyncio.sleep(0)
@@ -291,7 +294,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             held=False
             async def claim(self,_):self.held=True;return 'fence'
             async def assert_current(self,*_):assert self.held
-            async def release(self,*_):self.held=False
+            async def release(self,*_):self.held=False;return True
         class Ledger:
             events=[]
             async def reserve(self,s):
@@ -310,13 +313,20 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         try:
             await session.start()
             await session.receive_client({'type':'audio','pcm':bytes(480)})
+            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+            await session.receive_provider({'type':'conversation.item.input_audio_transcription.completed','item_id':'input-1',
+                                            'content_index':0,'transcript':'synthetic input','usage':{'type':'duration','seconds':1}})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
             prior=list(client.events)
             # Generated transcripts are not proven heard and are neither
             # exposed nor stored by the currently blocked history path.
-            await session.receive_provider({'type':'response.output_audio_transcript.done',
-                                            'response_id':'synthetic-response','transcript':'synthetic unverified text'})
+            await session.receive_provider({'type':'response.output_item.added','response_id':'synthetic-response',
+                                            'item':{'id':'audio-1','type':'message','role':'assistant'}})
+            await session.receive_provider({'type':'response.output_audio_transcript.done','content_index':0,
+                                            'item_id':'audio-1','response_id':'synthetic-response',
+                                            'transcript':'synthetic unverified text'})
             self.assertEqual(client.events,prior)
             await self.server_socket.send_json({'type':'response.output_audio.delta','response_id':'synthetic-response',
                                                'item_id':'audio-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
@@ -324,6 +334,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             self.assertEqual(client.events[-1],{'type':'interrupt','item_id':'audio-1'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-2'})
             await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response'}})
             await session.receive_client({'type':'played','item_id':'audio-1','played_ms':0})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
