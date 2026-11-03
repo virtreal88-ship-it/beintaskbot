@@ -172,6 +172,41 @@ def mark_unknown(cur,scope):
     return cur.fetchone()
 
 
+def _restore_tenant_hold(cur,scope,row):
+    """Restore only this exactly identified hold; tenant advisory lock required.
+
+    This repair cannot retract an operation admitted before repair commits and
+    cannot prove old workers or direct provider paths participate in the lock.
+    """
+    key='voice-test:'+scope['request_id']
+    expected_id=str(row['tenant_reservation_id'])
+    cur.execute('''SELECT id,call_key,kind,model,state FROM saas_ai_spend_reservations
+      WHERE tenant_id=%s AND (id=%s OR call_key=%s) ORDER BY id FOR UPDATE''',
+      (scope['tenant_id'],expected_id,key))
+    matches=cur.fetchall()
+    amount=max(row['reserved_microusd'],row['actual_microusd'])
+    if not matches:
+        # Normally the FK prevents a missing hold. This path is only for a
+        # damaged/incompletely migrated DB: reconstruct exact immutable scope.
+        cur.execute('''INSERT INTO saas_ai_spend_reservations
+          (tenant_id,id,call_key,kind,model,reserved_microusd,state)
+          VALUES(%s,%s,%s,'realtime_voice_test',%s,%s,'unknown')
+          ON CONFLICT DO NOTHING RETURNING id''',
+          (scope['tenant_id'],expected_id,key,row['model'],amount))
+        return 'recreated' if cur.fetchone() else 'conflict'
+    if len(matches)!=1:return 'conflict'
+    existing=matches[0]
+    if (str(existing['id'])!=expected_id or existing['call_key']!=key or
+        existing['kind']!='realtime_voice_test' or existing['model']!=row['model']):
+        return 'conflict'
+    repair='intact' if existing['state']=='unknown' else 'restored'
+    cur.execute('''UPDATE saas_ai_spend_reservations
+      SET state='unknown',reserved_microusd=GREATEST(reserved_microusd,COALESCE(actual_microusd,0),%s)
+      WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_test' AND model=%s RETURNING id''',
+      (amount,scope['tenant_id'],expected_id,key,row['model']))
+    return repair if cur.fetchone() else 'conflict'
+
+
 def note_actual(cur,scope,actual_microusd):
     """Record trusted billing reconciliation; never refund either reserve.
 
@@ -189,16 +224,16 @@ def note_actual(cur,scope,actual_microusd):
     row=cur.fetchone()
     if not row:return None
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
-    cur.execute('''UPDATE saas_ai_spend_reservations SET reserved_microusd=GREATEST(reserved_microusd,%s)
-      WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_test' AND model=%s
-      AND reserved_microusd>=%s AND state='unknown' RETURNING id''',
-      (row['actual_microusd'],s['tenant_id'],row['tenant_reservation_id'],'voice-test:'+s['request_id'],row['model'],row['reserved_microusd']))
-    tenant_valid=bool(cur.fetchone())
-    if not tenant_valid or row['actual_microusd']>row['reserved_microusd']:
+    repair=_restore_tenant_hold(cur,s,row)
+    previous=row['tenant_repair_state']
+    # Preserve prior repair/conflict evidence on later usage corrections.
+    # A conflict requires an explicit reviewed recovery, not an automatic clear.
+    outcome='conflict' if 'conflict' in (repair,previous) else (previous if previous!='intact' else repair)
+    if outcome!='intact' or row['actual_microusd']>row['reserved_microusd']:
         cur.execute('UPDATE saas_voice_test_grant SET frozen=true WHERE grant_key=%s',(GRANT_KEY,))
-    if tenant_valid:
-        cur.execute("UPDATE saas_voice_test_hold SET state='settled' WHERE request_id=%s RETURNING *",(s['request_id'],))
-        row=cur.fetchone()
+    cur.execute("UPDATE saas_voice_test_hold SET state=%s,tenant_repair_state=%s WHERE request_id=%s RETURNING *",
+                ('quarantined' if outcome=='conflict' else 'settled',outcome,s['request_id']))
+    row=cur.fetchone()
     return row
 
 

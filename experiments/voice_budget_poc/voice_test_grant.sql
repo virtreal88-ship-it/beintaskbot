@@ -20,6 +20,7 @@ CREATE TABLE saas_voice_test_hold (
   response_number SMALLINT NOT NULL CHECK(response_number BETWEEN 1 AND 2),
   fingerprint TEXT NOT NULL, quote_version TEXT NOT NULL, model TEXT NOT NULL,
   reserved_microusd BIGINT NOT NULL CHECK(reserved_microusd>0), actual_microusd BIGINT,
+  tenant_repair_state TEXT NOT NULL DEFAULT 'intact' CHECK(tenant_repair_state IN ('intact','restored','recreated','conflict')),
   tenant_reservation_id UUID NOT NULL, state TEXT NOT NULL CHECK(state IN ('reserved','claimed','unknown','settled','released','quarantined')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(tenant_id,session_id,response_number),
