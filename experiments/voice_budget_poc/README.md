@@ -55,8 +55,16 @@ after authorization. `reserve()` locks a cross-tenant singleton first and then
 reuses `tenant_ai_spend_budget.reserve()` under its existing tenant advisory
 lock in the same transaction. A voice session is bound to one tenant, actor,
 channel, dialog and executor. `claim()` rechecks both reservations and the
-current tenant cap, moves the tenant hold to `unknown` atomically, and must
-commit before the caller attempts dispatch. The tested generic release/settle
+current tenant cap and moves the tenant hold to `unknown` atomically. Claim
+alone does not authorize send. A separate `issue_dispatch()` obtains the
+same grant lock, rechecks freeze, the exact immutable scope/fingerprint, quote,
+expiry, tenant hold and current cap, and transitions `claimed -> dispatching`
+exactly once across processes. Its transaction must commit before *any*
+provider send; a crash after commit, timeout, or ambiguous response retains
+the full hold and must never issue/send again. The caller must repeat real
+Copilot authorization within the same transaction and must keep the return
+value server-side. This state machine cannot prevent bypassing it from other
+code or prove a provider-side cost bound. The tested generic release/settle
 methods only act on `reserved` and cannot release a claimed hold. An actual
 provider cost is recorded separately in the voice ledger; the tenant record is
 left `unknown` with a full hold and no false `actual_microusd`. If late cost
@@ -85,7 +93,9 @@ These remain release blockers.
 
 `voice_test_grant.sql` is a **one-shot review artifact**, not integrated in the
 repository migration runner. A second application fails rather than being
-idempotent. Version handling, partial migration recovery, migration review,
+idempotent. Its added `dispatching` state needs an explicitly versioned upgrade
+for any existing schema; the v1 CHECK constraint does not admit it. Version
+handling, partial migration recovery, migration review,
 privilege boundaries and safe deployment/rollback remain release blockers.
 Do not run it in production. Existing tenant budget code is not modified.
 Tests temporarily patch the code gate and enable only a disposable test DB.
@@ -160,6 +170,8 @@ VOICE_BUDGET_POC_ADMIN_URL='postgresql://testuser:testpass@127.0.0.1:PORT/postgr
 
 The tests use synthetic inputs, independent PostgreSQL connections, 32 parallel
 executor reservations, duplicate/fingerprint and claim races, a child process
-that exits after claim and retries from a fresh process, unknown-result holds,
+that exits after claim and retries from a fresh process, 40 simultaneous
+dispatch claims with exactly one winner, a child that exits after committed
+dispatch and a restart that cannot reissue it, unknown-result holds,
 cancel/claim races and overrun freeze. No provider call is made. They do not
 prove live auth, spend controls, actual prices or upstream shutdown.

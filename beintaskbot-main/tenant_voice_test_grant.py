@@ -123,10 +123,9 @@ def reserve(cur, scope):
 
 
 def claim(cur,scope):
-    """Claim exactly once, then COMMIT before any hypothetical provider send.
+    """Reserve the response operation exactly once; does not allow dispatch.
 
-    Caller must repeat Copilot authorization and enforce upstream controls; a
-    claim alone never authorizes network, microphone, tools or billing.
+    A separate, durably committed issue_dispatch() is required before send.
     """
     _ready();s=_scope(scope);_lock(cur)
     if datetime.now(timezone.utc)>=EXPIRES: raise TenantLinearError('voice_test_quote_expired',409)
@@ -165,9 +164,50 @@ def claim(cur,scope):
     return cur.fetchone()
 
 
+def issue_dispatch(cur,scope):
+    """Consume an exact one-use dispatch capability in caller's transaction.
+
+    Trusted server rechecks user/tenant/route/consent/agent authorization in
+    this same transaction and MUST COMMIT before provider I/O.  Return value is
+    internal to the owner of that I/O and must never be sent to the browser.
+    Once committed, crash/timeout/lost response keeps the full hold forever;
+    neither this transition nor a provider send may be retried automatically.
+    This function cannot prevent other code from bypassing the gate.
+    """
+    _ready();s=_scope(scope);_lock(cur)
+    if datetime.now(timezone.utc)>=EXPIRES:raise TenantLinearError('voice_test_quote_expired',409)
+    cur.execute('''SELECT * FROM saas_voice_test_hold WHERE request_id=%s AND fingerprint=%s FOR UPDATE''',
+                (s['request_id'],_fingerprint(s)))
+    row=cur.fetchone()
+    if not row or row['state']!='claimed':return None
+    if (row['quote_version']!=QUOTE or row['model']!=MODEL or row['reserved_microusd']!=HOLD or
+        row['actual_microusd'] is not None or row['tenant_repair_state']!='intact'):
+        raise TenantLinearError('voice_test_dispatch_scope_conflict',409)
+    cur.execute("SELECT COALESCE(sum(GREATEST(reserved_microusd,COALESCE(actual_microusd,0))),0) AS used FROM saas_voice_test_hold WHERE state<>'released'")
+    if int(cur.fetchone()['used'])>CAP:raise TenantLinearError('voice_test_budget_exhausted',429)
+    from tenant_ai_spend_budget import limit_microusd
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
+    cur.execute('''SELECT kind,model,reserved_microusd,state,actual_microusd FROM saas_ai_spend_reservations
+      WHERE tenant_id=%s AND id=%s AND call_key=%s FOR UPDATE''',
+      (s['tenant_id'],row['tenant_reservation_id'],'voice-test:'+s['request_id']))
+    hold=cur.fetchone()
+    if (not hold or hold['kind']!='realtime_voice_test' or hold['model']!=MODEL or
+        hold['reserved_microusd']!=HOLD or hold['state']!='unknown' or hold['actual_microusd'] is not None):
+        raise TenantLinearError('voice_test_tenant_hold_conflict',409)
+    tenant_cap=limit_microusd(s['tenant_id'])
+    if tenant_cap:
+        cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
+          ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations WHERE tenant_id=%s''',
+          (s['tenant_id'],))
+        if int(cur.fetchone()['used'])>tenant_cap:raise TenantLinearError('ai_spend_budget_exhausted',429)
+    cur.execute("UPDATE saas_voice_test_hold SET state='dispatching',updated_at=now() WHERE request_id=%s AND fingerprint=%s AND state='claimed' RETURNING *",
+                (s['request_id'],_fingerprint(s)))
+    return cur.fetchone()
+
+
 def mark_unknown(cur,scope):
     _ready_reconciliation();s=_scope(scope)
-    cur.execute("UPDATE saas_voice_test_hold SET state='unknown',updated_at=now() WHERE request_id=%s AND fingerprint=%s AND state='claimed' RETURNING *",
+    cur.execute("UPDATE saas_voice_test_hold SET state='unknown',updated_at=now() WHERE request_id=%s AND fingerprint=%s AND state IN ('claimed','dispatching') RETURNING *",
                 (s['request_id'],_fingerprint(s)))
     return cur.fetchone()
 
@@ -220,7 +260,7 @@ def note_actual(cur,scope,actual_microusd):
     if not cur.fetchone(): raise TenantLinearError('voice_test_grant_missing',409)
     cur.execute('''UPDATE saas_voice_test_hold SET actual_microusd=GREATEST(COALESCE(actual_microusd,0),%s),
       state='quarantined',updated_at=now() WHERE request_id=%s AND fingerprint=%s
-      AND state IN ('claimed','unknown','settled','quarantined') RETURNING *''',(actual_microusd,s['request_id'],_fingerprint(s)))
+      AND state IN ('claimed','dispatching','unknown','settled','quarantined') RETURNING *''',(actual_microusd,s['request_id'],_fingerprint(s)))
     row=cur.fetchone()
     if not row:return None
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
