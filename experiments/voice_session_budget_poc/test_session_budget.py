@@ -386,6 +386,20 @@ with patch.object(b,'ADMISSION_VERIFIED',True),patch.object(b,'RECONCILIATION_VE
             hold=conn.execute('SELECT state FROM saas_ai_spend_reservations').fetchone()['state']
         self.assertIn((state,hold),{('opening','unknown'),('released','released')})
 
+    def test_cancel_never_releases_corrupt_tenant_hold_and_commits_freeze(self):
+        for column,value in [('model','other-model'),('reserved_microusd',9),('actual_microusd',1)]:
+            s=scope();self.call(budget.reserve_session,s)
+            with local_connect(self.dsn) as conn:
+                conn.execute(sql.SQL('UPDATE saas_ai_spend_reservations SET {}=%s').format(sql.Identifier(column)),(value,))
+                before=conn.execute('SELECT state,model,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations').fetchone()
+            self.assertIsNone(self.call(budget.cancel_before_open,s))
+            with local_connect(self.dsn) as conn:
+                self.assertEqual(conn.execute('SELECT state,model,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations').fetchone(),before)
+                self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
+                self.assertEqual(conn.execute('SELECT state,accounting_conflict FROM saas_voice_session_budget').fetchone(),{'state':'reserved','accounting_conflict':True})
+                conn.execute('TRUNCATE saas_voice_session_audio,saas_voice_session_response,saas_voice_session_budget,saas_voice_test_hold,saas_ai_spend_reservations')
+                conn.execute('UPDATE saas_voice_test_grant SET frozen=false')
+
     def test_expiry_after_open_never_accepts_config_or_releases_hold(self):
         s=scope();self.call(budget.reserve_session,s);self.call(budget.issue_open,s)
         with patch('session_budget.datetime') as clock:

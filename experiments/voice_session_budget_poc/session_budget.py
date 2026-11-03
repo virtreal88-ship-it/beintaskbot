@@ -309,8 +309,14 @@ def cancel_before_open(cur,scope):
     if row['state']!='reserved':return None
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
     cur.execute("""UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now()
-      WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_session_test' AND state='reserved' RETURNING id""",
-      (s['tenant_id'],row['tenant_reservation_id'],'voice-session:'+s['session_id']))
-    if not cur.fetchone():raise TenantLinearError('voice_session_tenant_hold_conflict',409)
+      WHERE tenant_id=%s AND id=%s AND call_key=%s AND kind='realtime_voice_session_test' AND model=%s
+      AND reserved_microusd=%s AND actual_microusd IS NULL AND state='reserved' RETURNING id""",
+      (s['tenant_id'],row['tenant_reservation_id'],'voice-session:'+s['session_id'],row['model'],row['reserved_microusd']))
+    if not cur.fetchone():
+        # As with dispatch and reconciliation, preserve evidence and commit the
+        # voice-only freeze; never repair or release the unrelated tenant row.
+        cur.execute('UPDATE saas_voice_test_grant SET frozen=true WHERE grant_key=%s',(GRANT_KEY,))
+        cur.execute('UPDATE saas_voice_session_budget SET accounting_conflict=true,updated_at=now() WHERE session_id=%s',(s['session_id'],))
+        return None
     cur.execute("UPDATE saas_voice_session_budget SET state='released',updated_at=now() WHERE session_id=%s AND state='reserved' RETURNING *",(s['session_id'],))
     return cur.fetchone()
