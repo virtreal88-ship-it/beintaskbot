@@ -5,6 +5,7 @@ only the external provider boundary is a forbidden transport spy.
 """
 import ast
 import asyncio
+import contextvars
 import importlib
 import json
 import os
@@ -399,14 +400,21 @@ def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists
     from test_contacts_directory_postgres import _observe_sql
     ddl_attempts=[]
     sql_counts={'reader':0,'history':0}
+    request_trace=contextvars.ContextVar('isolated_company_deal_request',default=None)
+    request_sql={}
     for module_name,key in (('tenant_crm_list_states','reader'),('tenant_chat_history_store','history')):
         def observe(sql,_cursor,key=key):
             sql_counts[key]+=1
+            trace_id=request_trace.get()
+            if trace_id is not None:
+                trace=request_sql.setdefault(trace_id,{'statements':0})
+                trace.update(statements=trace['statements']+1,last_sql=sql[:240],backend_pid=_cursor.connection.info.backend_pid)
             if re.match(r'\s*(CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE)\b',sql,re.I):
                 ddl_attempts.append((key,sql))
                 raise AssertionError('New list/read/history attempted runtime DDL: '+sql)
         monkeypatch.setattr(importlib.import_module(module_name),'_connect',_observe_sql(f['factory'],before=observe))
-    state={'hold':None,'pending':0,'released':0,'held_paths':[],'held_ids':[],'fault':None,'changed':False,'reads':[]}
+    state={'hold':None,'pending':0,'released':0,'held_paths':[],'held_ids':[],'fault':None,'changed':False,'reads':[],
+           'request_lifecycle':[],'request_sql':request_sql}
     sock=socket.socket();sock.bind(('127.0.0.1',0))
     origin='http://127.0.0.1:'+str(sock.getsockname()[1])
     loop=asyncio.new_event_loop();ready=threading.Event()
@@ -414,9 +422,33 @@ def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists
     async def start():
         state['release']=asyncio.Event()
         app=_app(f,origin)
+        def trace_response(response,entry):
+            if entry is None:return response
+            response.headers['X-Isolated-CRM-Trace']=entry['id']
+            original=response.write_eof
+            async def observed_eof(*args,**kwargs):
+                try:result=await original(*args,**kwargs)
+                except BaseException as error:
+                    entry['eof_error']=type(error).__name__
+                    raise
+                entry['write_eof']=time.monotonic()
+                return result
+            response.write_eof=observed_eof
+            return response
         @web.middleware
         async def transport_boundary(request,handler):
-            response=await handler(request)
+            entry=None
+            if request.path.startswith('/api/platform/crm/'):
+                entry={'id':str(len(state['request_lifecycle'])+1),'path':request.path_qs,'started':time.monotonic()}
+                state['request_lifecycle'].append(entry)
+            token=request_trace.set(entry['id'] if entry else None)
+            try:response=await handler(request)
+            except BaseException as error:
+                if entry is not None:entry['handler_error']=type(error).__name__
+                raise
+            finally:request_trace.reset(token)
+            if entry is not None:entry.update(handler_done=time.monotonic(),status=response.status)
+            trace_response(response,entry)
             resource=next((key for key,path in paths.items() if request.path==path),None)
             exact=request.path.startswith(paths['company']+'/') or request.path.startswith(paths['native']+'/') or request.path=='/api/platform/crm/deal'
             if resource or exact or request.path in ('/api/platform/crm/chat','/api/platform/me'):
@@ -428,6 +460,7 @@ def test_actual_company_deal_app_uses_current_cookie_postgres(company_deal_lists
                     if selected!='profile':state['hold']=None
                     held_id=uuid.uuid4().hex
                     streamed=web.StreamResponse(status=response.status,headers={**{key:value for key,value in response.headers.items() if key.lower()!='content-length'},'X-Isolated-CRM-Held':held_id})
+                    trace_response(streamed,entry)
                     await streamed.prepare(request)
                     state['pending']+=1;state['held_paths'].append(request.path_qs);state['held_ids'].append(held_id)
                     await state['release'].wait()
