@@ -219,16 +219,36 @@ def _assert_claim_allowed(cur,tenant,contact,value,key_id,source):
             raise TenantLinearError('Memory requires new evidence.',409)
 
 
+def _source_kind_supported(source,kind):
+    """Require evidence of the asserted author; client supplied labels do not count."""
+    raw=source.get('raw')
+    if not isinstance(raw,dict):return False
+    if (raw.get('ai_authored') is not None and raw.get('ai_authored') is not False
+            or raw.get('run_id')
+            or raw.get('authorshipUncertain') is not None and raw.get('authorshipUncertain') is not False
+            or raw.get('conversationIdentityConflict') is not None and raw.get('conversationIdentityConflict') is not False
+            or raw.get('pilot_test_role_override') is not None
+            or str(source.get('author_name') or '').strip().casefold()=='ai agent'):
+        return False
+    employee=raw.get('verified_employee_id')
+    if kind=='customer_statement':
+        return (source.get('direction')=='incoming' and employee is None
+                and (raw.get('fromMe') is None or raw.get('fromMe') is False))
+    if kind=='employee_observation':
+        return type(employee) is int and employee>0 and source.get('direction') in ('incoming','outgoing')
+    return False
+
+
 def _source(cur,tenant,link,source_id):
     source_id=identifier(source_id)
-    cur.execute('''SELECT id,external_id,channel,body,message_type,direction,happened_at,created_at,raw,xmin::text AS row_revision FROM saas_crm_messages
+    cur.execute('''SELECT id,external_id,channel,body,message_type,direction,author_name,happened_at,created_at,raw,xmin::text AS row_revision FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE''',
       (tenant,source_id,link['lead_id'],'connect:'+str(link['channel_id'])))
     row=cur.fetchone()
     if (not row or row['message_type'] != 'text' or not row['body']
             or not str(row['external_id']).startswith('connect:') or row['external_id']=='connect:'):
         raise TenantLinearError('Source unavailable.',404)
-    payload={k:row.get(k) for k in ('body','message_type','direction','happened_at','raw','row_revision')}
+    payload={k:row.get(k) for k in ('body','message_type','direction','author_name','happened_at','raw','row_revision')}
     version=hashlib.sha256(json.dumps(payload,sort_keys=True,default=str,ensure_ascii=False).encode()).hexdigest()
     return row,version
 
@@ -377,8 +397,9 @@ def add_fact(profile,contact,data):
                     _lock_identities(cur,tenant,chan,sorted({r['conversation_id'] for r in routes if str(r['channel_id'])==chan}))
                 _lock_contact(cur,tenant,contact)
                 group_link=_link(cur,tenant,policy,contact,str(existing_group['link_id']),prelocked=True)
-                _,group_source_version=_source(cur,tenant,group_link,str(existing_group['source_message_id']))
-                if group_source_version!=existing_group['source_version'] or existing_group['value']!=value or existing_group['category']!=data['category']:
+                group_source,group_source_version=_source(cur,tenant,group_link,str(existing_group['source_message_id']))
+                if (group_source_version!=existing_group['source_version'] or not _source_kind_supported(group_source,existing_group['source_kind'])
+                        or existing_group['value']!=value or existing_group['category']!=data['category']):
                     raise TenantLinearError('Fact changed.',409)
                 group_id=str(existing_group['claim_group_id'])
                 link=_link(cur,tenant,policy,contact,data['link_id'],lock='UPDATE',prelocked=True)
@@ -393,10 +414,7 @@ def add_fact(profile,contact,data):
             if cur.fetchone():raise TenantLinearError('Memory requires review.',409)
             _assert_claim_allowed(cur,tenant,contact,value,key_id,source)
             _,claim_token=_claim_token(tenant,value)
-            raw=source.get('raw') if isinstance(source.get('raw'),dict) else {}
-            if data['source_kind']=='customer_statement' and (source['direction']!='incoming'
-                    or raw.get('verified_employee_id') is not None or raw.get('fromMe') is True
-                    or raw.get('ai_authored') is True or raw.get('run_id')):
+            if not _source_kind_supported(source,data['source_kind']):
                 raise TenantLinearError('Source direction mismatch.',400)
             # A key rotation cannot make existing facts or suppressions
             # incomparable. Require migration before any new fact.
@@ -491,7 +509,7 @@ def read(profile,contact):
                     if cur.fetchone(): continue
                     try: source,version=_source(cur,tenant,link,str(fact['source_message_id']))
                     except TenantLinearError: continue
-                    if version!=fact['source_version']:continue
+                    if version!=fact['source_version'] or not _source_kind_supported(source,fact['source_kind']):continue
                     if cutoff:
                         try:_assert_claim_allowed(cur,tenant,contact,fact['value'],fact['token_key_id'],source)
                         except TenantLinearError:continue
@@ -530,7 +548,7 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
             contact=_subject(cur,tenant,contact,allow_archived=owner_delete)
             subject_revision=_subject_revision(cur,tenant,contact)
             fact_id=identifier(fact_id)
-            cur.execute('''SELECT link_id,source_message_id,source_version,category,value,claim_token,token_key_id,claim_group_id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
+            cur.execute('''SELECT link_id,source_message_id,source_version,source_kind,category,value,claim_token,token_key_id,claim_group_id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
               AND contact_id=%s::uuid AND id=%s::uuid''',(tenant,contact,fact_id))
             ref=cur.fetchone()
             if not ref:raise TenantLinearError('Fact unavailable.',404)
@@ -557,7 +575,7 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                 # Source delete takes the message lock before its cleanup trigger
                 # locks facts. Use the same order to avoid a deletion/edit cycle.
                 source,source_version=_source(cur,tenant,link,str(ref['source_message_id']))
-                if source_version!=ref['source_version']:raise TenantLinearError('Source changed.',409)
+                if source_version!=ref['source_version'] or not _source_kind_supported(source,ref['source_kind']):raise TenantLinearError('Source changed.',409)
                 if action=='edit' and evidence_quote not in source['body']:
                     raise TenantLinearError('Quote is not in source.',400)
             cur.execute('''SELECT * FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid

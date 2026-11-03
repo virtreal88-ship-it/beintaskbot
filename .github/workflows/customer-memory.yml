@@ -7,7 +7,13 @@ on:
       - 'beintaskbot-main/tenant_customer_memory*.py'
       - 'beintaskbot-main/tenant_platform_schema_crm.py'
       - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-contacts-directory.js'
+      - 'beintaskbot-main/docs/tenant-customer-memory.js'
       - 'beintaskbot-main/tests/test_customer_memory*.py'
+      - 'beintaskbot-main/tests/customer_memory_browser_fixture.py'
+      - 'beintaskbot-main/tests/customer_memory_http_browser.cjs'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_crm_identity.py'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
@@ -67,3 +73,11 @@ jobs:
           for attempt in $(seq 1 50); do curl -fsS http://127.0.0.1:18765/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:18765/ >/dev/null
           node tests/customer_memory_http_browser.cjs
+      - name: Physical erasure release gate (known blocker)
+        env:
+          CUSTOMER_MEMORY_ENFORCE_ERASURE_GATE: "1"
+        run: |
+          python -m unittest -v \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_inflight_channel_read_allows_eventual_erasure \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_contact_erasure_during_other_subject_memory_read \
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_opposite_channel_erasure_transactions_both_commit
