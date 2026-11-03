@@ -4,8 +4,10 @@ starts with copilot_voice_poc; this suite creates/drops one random schema.
 """
 import json
 import os
+import subprocess
 import sys
 import threading
+import types
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -291,6 +293,137 @@ class ExistingTextWriterRace(unittest.TestCase):
                 with conn.cursor() as cur:
                     append(cur,tenant,actor,channel,dialog,0,'binding',[{'role':'employee','text':'stale','agent_binding':'binding'}])
             conn.rollback()
+
+    def test_expired_without_pending_is_deleted_but_other_tenant_is_untouched(self):
+        from tenant_operator_copilot_threads import cleanup_expired
+        tenant,other = str(uuid.uuid4()), str(uuid.uuid4())
+        with self.connect() as conn:
+            for owner in (tenant,other):
+                conn.execute('''INSERT INTO saas_operator_copilot_threads
+                  (tenant_id,requested_by,channel_id,conversation_id,turns,updated_at)
+                  VALUES(%s,9,'channel','dialog',%s::jsonb,now()-interval '61 days')''',
+                  (owner,json.dumps([{'text':'synthetic'}])))
+            with conn.cursor() as cur: cleanup_expired(cur,tenant)
+            conn.commit()
+            rows=conn.execute('SELECT tenant_id::text AS tenant FROM saas_operator_copilot_threads WHERE tenant_id IN (%s,%s)',
+                              (tenant,other)).fetchall()
+        self.assertEqual(rows,[{'tenant':other}])
+
+    def test_cleanup_waits_for_shared_admission_lock(self):
+        from tenant_operator_copilot_threads import cleanup_expired
+        tenant=str(uuid.uuid4());started=threading.Event();finished=threading.Event()
+        def cleanup():
+            with self.connect() as conn:
+                started.set()
+                with conn.cursor() as cur: cleanup_expired(cur,tenant)
+                conn.commit()
+                finished.set()
+        with self.connect() as admission:
+            admission.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+tenant,))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending=pool.submit(cleanup)
+                self.assertTrue(started.wait(5))
+                self.assertFalse(finished.wait(.25),'cleanup did not honor admission lock')
+                admission.commit()
+                pending.result(timeout=5)
+        self.assertTrue(finished.is_set())
+
+    def test_unknown_receipt_cannot_recreate_thread(self):
+        import tenant_operator_copilot as copilot
+        from tenant_linear_policy import TenantLinearError
+        tenant,request=str(uuid.uuid4()),str(uuid.uuid4())
+        command={'lead_id':1,'channel_id':'channel','conversation_id':'dialog',
+                 'request_id':request,'_agent_binding':'binding','_thread_clear_revision':0}
+        with self.connect() as conn:
+            conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                         (tenant,request,'v1','unknown'))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            conn.commit()
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(copilot,'_connect',self.connect),patch.object(copilot,'ensure_schema'), \
+             patch.object(copilot,'access',return_value=(tenant,1,policy)),patch.object(copilot,'assert_route'), \
+             patch.object(copilot,'_assigned_context',return_value={}),patch.object(copilot,'_agent_binding',return_value='binding'), \
+             patch('tenant_episode_media.revalidate_sources'):
+            with self.assertRaises(TenantLinearError):
+                copilot._finish(tenant,command,1,{'text':'stale'},[],'question','stale')
+        with self.connect() as conn:
+            n=conn.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()['n']
+            receipt=conn.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s',(tenant,)).fetchone()
+        self.assertEqual(n,0)
+        self.assertEqual(receipt,{'status':'unknown','result':None})
+
+    def test_concurrent_cleanup_and_text_finish_fence_expired_content(self):
+        import tenant_operator_copilot as copilot
+        from tenant_operator_copilot_threads import cleanup_expired
+        from tenant_linear_policy import TenantLinearError
+        tenant,request=str(uuid.uuid4()),str(uuid.uuid4())
+        actor,channel,dialog,binding=1,'channel','dialog','binding'
+        command={'lead_id':1,'channel_id':channel,'conversation_id':dialog,'request_id':request,
+                 '_agent_binding':binding,'_thread_clear_revision':0}
+        with self.connect() as conn:
+            conn.execute('''INSERT INTO saas_operator_copilot_threads
+              (tenant_id,requested_by,channel_id,conversation_id,turns,updated_at)
+              VALUES(%s,%s,%s,%s,%s::jsonb,now()-interval '61 days')''',
+              (tenant,actor,channel,dialog,json.dumps([{'text':'expired'}])))
+            conn.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status,requested_by,channel_id,conversation_id)
+              VALUES(%s,%s,'v1','sending',%s,%s,%s)''',(tenant,request,actor,channel,dialog))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            conn.commit()
+        cleaned,release,started=threading.Event(),threading.Event(),threading.Event()
+        def cleaning():
+            with self.connect() as conn:
+                with conn.cursor() as cur: cleanup_expired(cur,tenant)
+                cleaned.set()
+                if not release.wait(5):raise RuntimeError('test barrier timed out')
+                conn.commit()
+        def finishing():
+            if not cleaned.wait(5):raise RuntimeError('test barrier timed out')
+            started.set()
+            try: copilot._finish(tenant,command,actor,{'text':'stale'},[],'question','stale')
+            except TenantLinearError:return 'fenced'
+            return 'unexpected-completion'
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(copilot,'_connect',self.connect),patch.object(copilot,'ensure_schema'), \
+             patch.object(copilot,'access',return_value=(tenant,actor,policy)),patch.object(copilot,'assert_route'), \
+             patch.object(copilot,'_assigned_context',return_value={}),patch.object(copilot,'_agent_binding',return_value=binding), \
+             patch('tenant_episode_media.revalidate_sources'):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                cleaner=pool.submit(cleaning);finisher=pool.submit(finishing)
+                self.assertTrue(started.wait(5));release.set()
+                cleaner.result(timeout=5);self.assertEqual(finisher.result(timeout=5),'fenced')
+        with self.connect() as conn:
+            row=conn.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()
+            receipt=conn.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s',(tenant,)).fetchone()
+        self.assertEqual(row,{'turns':[],'clear_revision':1})
+        self.assertEqual(receipt,{'status':'unknown','result':None})
+
+    def test_baseline_worker_can_still_overwrite_new_writer_in_mixed_deployment(self):
+        """Passing reproduces the mixed-version hazard; it is not a safety pass."""
+        from tenant_operator_copilot_threads import append
+        baseline='fc75c2899b7b86de42bf2cafdbdd116e9717d821'
+        source=subprocess.run(['git','show',baseline+':beintaskbot-main/tenant_operator_copilot.py'],
+                              cwd=ROOT,check=True,text=True,capture_output=True).stdout
+        legacy=types.ModuleType('synthetic_baseline_copilot')
+        exec(compile(source,'<baseline-copilot>','exec'),legacy.__dict__)
+        tenant,request=str(uuid.uuid4()),str(uuid.uuid4())
+        channel,dialog,actor,binding='channel','dialog',1,'binding'
+        command={'lead_id':1,'channel_id':channel,'conversation_id':dialog,'request_id':request,'_agent_binding':binding}
+        with self.connect() as conn:
+            conn.execute('INSERT INTO saas_chat_ai_runs(tenant_id,request_id,config_version,status) VALUES(%s,%s,%s,%s)',
+                         (tenant,request,'v1','sending'))
+            conn.execute('INSERT INTO saas_tenant_integrations VALUES(%s,%s,%s)',(tenant,'chat_ai','v1'))
+            with conn.cursor() as cur:
+                append(cur,tenant,actor,channel,dialog,0,binding,[{'role':'employee','text':'newer','agent_binding':binding}])
+            conn.commit()
+        policy=SimpleNamespace(can_use_chat_ai=lambda:True)
+        with patch.object(legacy,'_connect',self.connect),patch.object(legacy,'ensure_schema'), \
+             patch.object(legacy,'access',return_value=(tenant,actor,policy)),patch.object(legacy,'assert_route'), \
+             patch.object(legacy,'_assigned_context',return_value={}),patch.object(legacy,'_agent_binding',return_value=binding), \
+             patch('tenant_episode_media.revalidate_sources'):
+            legacy._finish(tenant,command,actor,{'text':'legacy answer'},[],'legacy question','legacy answer')
+        with self.connect() as conn:
+            turns=conn.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s',(tenant,)).fetchone()['turns']
+        self.assertEqual([turn['text'] for turn in turns],['legacy question','legacy answer'])
 
     def test_actual_additive_schema_upgrade_preserves_legacy_turns(self):
         import tenant_chat_ai_schema as schema

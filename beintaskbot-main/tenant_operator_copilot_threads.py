@@ -87,10 +87,12 @@ def clear(cur, tenant, actor, channel, conversation):
 def cleanup_expired(cur, tenant):
     """Scrub old content while preserving fences for in-flight text requests.
 
-    Call under the existing tenant-chat-ai admission lock, before reserving or
-    reading a new text request. A future voice writer must share this protocol.
+    Acquire the existing tenant-chat-ai admission lock before cleanup. Call
+    before reserving or reading a new text request. A future voice writer must
+    share this protocol.
     Empty scope metadata and completed-run retention have separate policies.
     """
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
     pending = """SELECT 1 FROM saas_chat_ai_runs r WHERE r.tenant_id=t.tenant_id
       AND r.requested_by=t.requested_by AND r.channel_id=t.channel_id
       AND r.conversation_id=t.conversation_id AND r.status='sending'"""

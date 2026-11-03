@@ -31,7 +31,21 @@ The additive schema upgrade was tested only on disposable local PostgreSQL;
 there was no production migration or full production authorization test. Old
 worker versions still perform snapshot overwrites, so a rolling deployment with
 old and new writers concurrently active does not provide the new guarantee.
-Plan and independently review a compatible cutover before any release.
+The local mixed-version test executes the actual baseline `_finish` from
+`fc75c289` after a new writer commits: the baseline overwrites the newer turn.
+That test passes by reproducing the unsafe behavior, not by proving a safe mixed
+deployment. The additive column is compatible to read on its own; it does not
+fence legacy writers.
+
+A possible cutover requires a proven maintenance gate over *every* Copilot
+writer and clear path, including background work, then draining all old in-flight
+requests and confirming that no old worker can access the write path. Apply and
+verify the additive schema while writes remain blocked; start only the exact new
+version and resume only after verifying schema/version and the gate. The current
+experiment has not implemented or validated such a gate, fleet inventory, drain,
+or production deployment, so the steps are a release precondition, not an
+executable rollout plan. A rollback must first block and drain new writers too;
+restarting an old writer alongside a new one can reintroduce data loss.
 
 The experimental on-demand cleanup now replaces expired nonempty thread
 content with an empty incremented-revision fence when a matching text receipt
@@ -41,6 +55,12 @@ on a later admission for the tenant, not on a timer: it cannot guarantee a
 strict 60-day deletion deadline when there are no requests. Empty thread scope
 metadata can remain while a receipt stays `sending`. A future voice writer must
 participate in the same tenant admission lock and lifecycle; that is unproven.
+The cleanup helper now takes the same transaction-scoped tenant admission lock
+as the text path; isolated tests cover lock contention and an overlapping text
+finish. A stale `unknown` receipt cannot write a new thread through the new
+`_finish`, even if a prior empty thread was removed; a local test verifies the
+transaction rollback. Do not transition or repeat an unknown receipt merely to
+remove a fence: the external outcome may still be uncertain.
 
 Separately, completed `saas_chat_ai_runs.result` can contain a saved answer. The
 existing completed-request replay returns this result before checking the thread
