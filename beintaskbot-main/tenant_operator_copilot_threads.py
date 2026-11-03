@@ -62,12 +62,21 @@ def append(cur, tenant, actor, channel, conversation, expected_clear_revision, e
       (tenant_id,requested_by,channel_id,conversation_id,turns,clear_revision)
       VALUES(%s::uuid,%s,%s,%s,'[]'::jsonb,0)
       ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id) DO NOTHING''', key)
-    cur.execute('''SELECT turns,clear_revision FROM saas_operator_copilot_threads
+    cur.execute('''SELECT turns,clear_revision,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads
       WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE''', key)
     current = cur.fetchone()
     if not current or type(current.get('clear_revision')) is not int or not isinstance(current.get('turns'), list):
         raise ValueError('invalid stored thread')
     if current['clear_revision'] != expected_clear_revision:
+        raise ThreadCleared()
+    if current.get('expired') is True and current['turns']:
+        # A read-only snapshot may have filtered this expired content without
+        # mutating the row. Scrub under this same lock and advance the fence;
+        # callers must catch ThreadCleared inside the transaction to commit
+        # the scrub, and must not append under the stale generation.
+        cur.execute('''UPDATE saas_operator_copilot_threads SET turns='[]'::jsonb,
+          clear_revision=clear_revision+1,updated_at=now()
+          WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',key)
         raise ThreadCleared()
     # Match the existing Copilot rule: only the current assigned agent's
     # private turns survive a write. Include concurrent turns of that same

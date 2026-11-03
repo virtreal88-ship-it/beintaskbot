@@ -27,6 +27,10 @@ scrubs expired content before a normal request snapshots history, increments
 the revision and retains empty tombstones. Read-only consumers filter expired
 turns without writing; a later normal request performs the scrub. Safe garbage
 collection and metadata-retention policy remain unsolved. No DB
+append may refresh an expired nonempty row: it scrubs it under the row lock,
+increments the generation and refuses the stale append, so read-only filtering
+cannot resurrect old turns. Callers must catch the refusal within their DB
+transaction to commit that scrub. No DB
 lock is held during provider I/O. If clear wins, the generated answer remains
 available, no thread turn is added, and the same `history_status=cleared` is
 persisted with the receipt and shown by the updated client in RU/AZ/EN. Older

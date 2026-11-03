@@ -4,6 +4,7 @@ The legacy SQL below is copied from the old deployed Copilot writer. Tests
 assert both counterexamples and new-writer properties; no provider is called.
 """
 import ast
+import asyncio
 import json
 from pathlib import Path
 import queue
@@ -19,6 +20,8 @@ import tenant_episode_media
 import tenant_media_evidence
 import tenant_operator_copilot as copilot
 import tenant_operator_copilot_threads as threads
+import tenant_operator_voice_context as voice_context
+import tenant_operator_voice_orchestration as voice_orchestration
 from tenant_linear_policy import TenantLinearError
 from test_integrated_synthetic_pg import IntegratedSynthetic
 
@@ -267,6 +270,74 @@ class RollingHistory(IntegratedSynthetic):
         command=self.command();self.assertEqual(self.snapshot(command),[])
         row=self.read_thread();self.assertEqual(row['clear_revision'],0)
         self.assertEqual(row['turns'][0]['text'],'synthetic voice')
+
+    def test_append_cannot_refresh_and_resurrect_expired_content(self):
+        self.insert_voice()
+        with self.scoped() as conn:
+            conn.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
+        command=self.command();self.assertEqual(self.snapshot(command),[])
+        with self.scoped() as conn,conn.cursor() as cur:
+            with self.assertRaises(threads.ThreadCleared):
+                threads.append(cur,self.tenant,7,self.channel,self.conversation,0,'synthetic-binding',[self.entry('new voice')])
+        self.assertEqual(self.read_thread(),{'turns':[],'clear_revision':1})
+        self.assertEqual(self.snapshot(self.command()),[])
+        with self.scoped() as conn,conn.cursor() as cur:threads.cleanup_expired(cur,self.tenant)
+        with self.scoped() as conn,conn.cursor() as cur:
+            threads.append(cur,self.tenant,7,self.channel,self.conversation,1,'synthetic-binding',[self.entry('new voice')])
+        self.assertEqual([turn['text'] for turn in self.read_thread()['turns']],['new voice'])
+
+    def test_gated_voice_writer_commits_expiry_scrub_without_turn_receipt(self):
+        sql=Path(__file__).with_name('voice_history_candidate.sql').read_text()
+        self.conn.execute(sql);self.conn.commit()
+        self.insert_voice()
+        with self.scoped() as conn:
+            conn.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
+        async def run():
+            authority=await voice_orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            session_id=str(uuid.uuid4());history=voice_orchestration.VoiceHistory(authority,session_id)
+            entry={'role':'employee','text':'synthetic voice','agent_binding':authority.scope.agent_binding,
+                   'voice_session_id':session_id,'turn_sequence':0,'transcript_status':'partial',
+                   'transcript_quality':'automatic_unverified'}
+            with self.assertRaises(TenantLinearError):await history.append(entry,0)
+        try:
+            with patch.object(voice_context,'_connect',self.scoped),patch.object(voice_orchestration,'_connect',self.scoped),\
+                 patch.object(voice_orchestration,'require_history_cutover'),patch.object(voice_orchestration,'require_voice_history_provenance'):
+                asyncio.run(run())
+            self.assertEqual(self.read_thread(),{'turns':[],'clear_revision':1})
+            with self.scoped() as conn:
+                self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_operator_voice_turns').fetchone()['n'],0)
+        finally:
+            self.conn.rollback();self.conn.execute('DROP TABLE IF EXISTS saas_operator_voice_turns,saas_operator_voice_sessions');self.conn.commit()
+
+    def test_expiry_scrub_serializes_with_clear_and_other_cleanup(self):
+        self.insert_voice()
+        for operation in ('clear','cleanup'):
+            with self.subTest(operation=operation):
+                with self.scoped() as conn:
+                    conn.execute("UPDATE saas_operator_copilot_threads SET turns=%s::jsonb,clear_revision=0,updated_at=now()-interval '61 days' WHERE tenant_id=%s",
+                                 (json.dumps([self.voice()]),self.tenant))
+                writer=self.scoped();channel=queue.Queue()
+                with writer.cursor() as cur:
+                    with self.assertRaises(threads.ThreadCleared):
+                        threads.append(cur,self.tenant,7,self.channel,self.conversation,0,'synthetic-binding',[self.entry('new voice')])
+                def other():
+                    with self.scoped() as conn,conn.cursor() as cur:
+                        channel.put(conn.execute('SELECT pg_backend_pid() AS pid').fetchone()['pid'])
+                        if operation=='clear':threads.clear(cur,self.tenant,7,self.channel,self.conversation)
+                        else:threads.cleanup_expired(cur,self.tenant)
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        future=pool.submit(other);pid=channel.get(timeout=2)
+                        deadline=time.monotonic()+2;waiting=False
+                        while time.monotonic()<deadline:
+                            with self.scoped() as conn:
+                                state=conn.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s',(pid,)).fetchone()
+                            if state and state['wait_event_type']=='Lock':waiting=True;break
+                            time.sleep(.01)
+                        self.assertTrue(waiting,'concurrent operation must wait for the expiry scrub')
+                        writer.commit();future.result(timeout=3)
+                    self.assertEqual(self.read_thread(),{'turns':[],'clear_revision':2 if operation=='clear' else 1})
+                finally:writer.close()
 
     def test_cleanup_before_snapshot_does_not_clear_its_own_answer(self):
         self.insert_voice()
