@@ -66,6 +66,23 @@ def test_private_employee_command_returns_text_without_sending_or_learning(ready
     assert 'ASSIGNED_AGENT_RULES' in generated.call_args.kwargs['instructions']
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n'] == 0
     assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources')[0]['n'] == 0
+
+
+def test_clear_during_generation_returns_answer_with_cached_history_warning(ready):
+    from tenant_operator_copilot_threads import clear
+    db,_other,generated,data=ready
+    data.update(mode='chat',prompt='Synthetic private question')
+    def respond(*_args,**_kwargs):
+        with db.cursor() as cur:clear(cur,A,11,CA,'client')
+        db.commit()
+        return 'Synthetic answer',{'total_tokens':10}
+    generated.side_effect=respond
+    result=copilot.run(PROFILE,data)
+    assert result['text']=='Synthetic answer'
+    assert result['history_status']=='cleared'
+    assert copilot.run(PROFILE,data)==result
+    assert generated.call_count==1
+    assert db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]=={'turns':[],'clear_revision':1}
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidates')[0]['n'] == 0
 
 

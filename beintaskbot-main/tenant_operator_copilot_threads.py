@@ -69,7 +69,11 @@ def append(cur, tenant, actor, channel, conversation, expected_clear_revision, e
         raise ValueError('invalid stored thread')
     if current['clear_revision'] != expected_clear_revision:
         raise ThreadCleared()
-    merged = (current['turns'] + entries)[-20:]
+    # Match the existing Copilot rule: only the current assigned agent's
+    # private turns survive a write. Include concurrent turns of that same
+    # binding, rather than replacing them with a stale request snapshot.
+    prior = [turn for turn in current['turns'] if isinstance(turn,dict) and turn.get('agent_binding') == expected_binding]
+    merged = (prior + entries)[-20:]
     cur.execute('''UPDATE saas_operator_copilot_threads SET turns=%s::jsonb,updated_at=now()
       WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
                 (json.dumps(merged, ensure_ascii=False), *key))
@@ -85,7 +89,7 @@ def clear(cur, tenant, actor, channel, conversation):
 
 
 def cleanup_expired(cur, tenant):
-    """Scrub old content while preserving fences for in-flight text requests.
+    """Scrub old content while preserving durable clear fences.
 
     Acquire the existing tenant-chat-ai admission lock before cleanup. Call
     before reserving or reading a new text request. A future voice writer must
@@ -93,12 +97,10 @@ def cleanup_expired(cur, tenant):
     Empty scope metadata and completed-run retention have separate policies.
     """
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
-    pending = """SELECT 1 FROM saas_chat_ai_runs r WHERE r.tenant_id=t.tenant_id
-      AND r.requested_by=t.requested_by AND r.channel_id=t.channel_id
-      AND r.conversation_id=t.conversation_id AND r.status='sending'"""
     cur.execute("""UPDATE saas_operator_copilot_threads t SET turns='[]'::jsonb,
       clear_revision=t.clear_revision+1,updated_at=now()
       WHERE t.tenant_id=%s::uuid AND t.updated_at<now()-interval '60 days'
-      AND (t.turns IS NULL OR t.turns<>'[]'::jsonb) AND EXISTS("""+pending+")", (tenant,))
-    cur.execute("""DELETE FROM saas_operator_copilot_threads t WHERE t.tenant_id=%s::uuid
-      AND t.updated_at<now()-interval '60 days' AND NOT EXISTS("""+pending+")", (tenant,))
+      AND (t.turns IS NULL OR t.turns<>'[]'::jsonb)""", (tenant,))
+    # Do not delete empty rows: a delayed text or voice writer can have read
+    # their prior generation. Safe tombstone GC requires a separate proven
+    # admission/retention protocol and is deliberately not implemented.
