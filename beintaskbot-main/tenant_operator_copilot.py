@@ -386,7 +386,35 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     return rows,turns
 
 
-def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False):
+def _project_prior_turn(turn):
+    """Project only known private-thread fields; never guess transcript quality."""
+    result = {'role':str(turn.get('role') or '')[:20], 'text':str(turn.get('text') or '')[:800],
+              'agent_binding':turn.get('agent_binding')}
+    voice_marked = any(key in turn for key in ('voice_session_id','transcript_status','transcript_quality','turn_sequence'))
+    session_id = None
+    try:
+        session_id = str(uuid.UUID(str(turn['voice_session_id'])))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        pass
+    if voice_marked:
+        status = turn.get('transcript_status')
+        quality = turn.get('transcript_quality')
+        result['transcript_status'] = status if session_id and status in ('complete','partial','unavailable','unknown') else 'unknown'
+        result['transcript_quality'] = quality if quality in ('automatic_unverified','human_verified','unknown') else 'unknown'
+        if result['transcript_status'] in {'unavailable','unknown'}:
+            result['text'] = ''
+    if session_id:
+        result['voice_session_id'] = session_id
+    if type(turn.get('turn_sequence')) is int and 0 <= turn['turn_sequence'] < 2**31:
+        result['turn_sequence'] = turn['turn_sequence']
+    return result
+
+
+def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False,context_only=False):
+    # Voice context preparation must never enter reply/media execution paths.
+    # Existing text callers keep their original behavior.
+    if context_only and (command.get('mode') != 'chat' or consultation_evidence is not None or saved_only):
+        raise TenantLinearError('Контекст голосового режима недоступен.',409)
     from tenant_episode_media import ManualExecution
     execution=ManualExecution(tenant,actor,command,config,connection['updated_at'],secret['api_key'],model,
                               agent_context.get('language') or 'auto',rows)
@@ -432,10 +460,10 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
             latest_customer=str(receipt['transcript'])
         else:
             latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('_copilot_context_body',latest_row.get('body') or '') or '')
-        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4,**({'_read_only':True} if saved_only else {}))
+        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4,**({'_read_only':True} if saved_only or context_only else {}))
         knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
     except Exception as error:
-        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         if isinstance(error,TenantLinearError):raise
         raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
     audio_coverage=manifest.coverage if manifest else {}
@@ -443,13 +471,13 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
     incomplete=next((row for row in required_media if not audio_coverage[id(row)]),None)
     if incomplete is not None:
         error=_episode_evidence_error(command,incomplete,agent_context,context_limit=True)
-        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         raise error
     if manifest:
         try:manifest.seal(bounded_lines)
         except CoverageError as failure:
             error=_episode_evidence_error(command,failure.row or required_media[0],agent_context,context_limit=failure.context_limit)
-            if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+            if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
             raise error
     if saved_only:
         supplied={line['source_id']:line['text'] for line in bounded_lines}
@@ -486,7 +514,7 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         'solution':'Find a solution for the customer issue. Explain uncertainty and missing facts.',
         "instruction":"Follow the employee's private instruction about the case and answer the employee, not the customer."}.get(command['mode'], '')
     # Published knowledge is supplied in extra_context below.
-    turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
+    turns=[_project_prior_turn(turn) for turn in turns[-6:] if isinstance(turn,dict)]
     extra = {'copilot_action': command['mode'], 'employee_request': request,
              'untrusted_developer_consultation_evidence':consultation_evidence,
              'assigned_agent_id': command['_agent_id'],
@@ -502,6 +530,12 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         company=str(agent_context.get('company_instructions') or '')[:20000],
         agent=str(agent_context.get('instructions') or '')[:20000],
         style=agent_context.get('style'))
+    if any('transcript_status' in turn for turn in turns):
+        prompt += ' Voice transcript metadata describes imperfect evidence: partial or unavailable transcripts are incomplete and must never be treated as exact or complete.'
+    if context_only:
+        # Never return ManualExecution (which holds the caller's credential),
+        # raw rows, or provider objects across the voice context boundary.
+        return {'instructions':prompt,'lines':lines,'extra_context':extra}
     return {'execution':execution,'coverage_manifest':manifest,'lines':lines,'request':request,'instructions':prompt,'extra_context':extra,
             'images':images,'context_usage':context_usage,'knowledge':knowledge,'turns':turns}
 

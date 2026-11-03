@@ -168,6 +168,13 @@ class Session:
             await self.lease.assert_current(self.scope, self.fence)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
+            # A production transport must independently consume a committed
+            # one-use dispatch capability. Only the local mock protocol below
+            # implements this contract; the public provider is hard-disabled.
+            if hasattr(self.provider,'bind_claim'):
+                await self.provider.bind_claim(reservation,claimed)
+            if self.closed:
+                raise Refused('session_closed_before_dispatch')
             await self._send_provider({'type': 'response.create'})
         except BaseException:
             await self.ledger.mark_unknown(reservation)

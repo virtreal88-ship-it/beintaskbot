@@ -122,3 +122,39 @@ from `/workspace/voice-beintaskbot` (override `VOICE_MICROPHONE_HELPER` if
 needed); it confirms two tabs cannot acquire it together and tracks stop on end.
 Tests use mock authority, ledger and provider and do not prove real security,
 cost control, microphone permission recovery, voice quality or delivery.
+
+## Synthetic cross-component integration
+
+`test_real_authority_pg.py` uses actual membership, policy, direct-route,
+configuration and assignment code against random synthetic tenant records.
+`test_integrated_synthetic_pg.py` joins real authorization, text history reader,
+`_draft_context(context_only=True)` with an explicit placeholder and allowlist,
+the pinned shared history append, the pinned global+tenant budget grant, the
+server WebSocket protocol and an injected synthetic Realtime socket. The test
+supplies a synthetic partial transcript itself; there is no real ASR, no speech
+model, and no raw audio persistence. The in-memory dispatch-consumption guard
+is test-only, not a cross-process one-time capability. Production authorization
+and provider factory remain hard-disabled. Direct-dialog checks do not prove
+group or granular deal permissions; they match the existing Connect policy.
+
+The test imports two **local committed snapshots** using `git show`: history
+`ca1d0884203ff168bbe914285a55bb4d172ad735` under
+`/workspace/voice-assistant-poc` and budget
+`f299ae5b0b00d03b22743f9487b17b0d7135f0c8` under
+`/workspace/voice-budget-ledger`. Both grants are force-enabled only inside the
+isolated test transaction. The URL must point to a disposable localhost database
+named `test_voice_auth_` followed by 32 lowercase hexadecimal digits; the test
+creates and drops a random schema. Example with an existing disposable server:
+
+```
+VOICE_AUTH_PG_URL=postgresql://postgres:<synthetic-password>@127.0.0.1:<port>/test_voice_auth_11111111111111111111111111111111 \
+  /workspace/.venvs/beintaskbot311/bin/python -m unittest -v test_real_authority_pg \
+  test_integrated_synthetic_pg.IntegratedSynthetic.test_synthetic_text_voice_interruption_text_with_real_admission_budget_and_history
+```
+
+The actual UI does not mount this experiment; its separate default-hidden
+placeholder cannot acquire the microphone or start a call. OpenAI GA effective
+session readback and one-use dispatch binding are tested only with an injected
+synthetic socket. The real provider factory always rejects. Even a successful
+readback is not proof that a real provider cannot charge before policy attests,
+nor proof of a conservative tariff bound or durable dispatch fencing.
