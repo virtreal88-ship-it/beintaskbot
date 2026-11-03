@@ -143,3 +143,30 @@ test('confirmed server end waits for microphone cleanup before enabling start',a
   assert.equal(x.root.children[1].disabled,false);assert.equal(x.released(),1);
   assert.match(x.root.children[0].textContent,/Соединение завершено/);
 });
+
+test('late playback failure from previous session cannot stop a new one',async()=>{
+  let rejectOld;const oldFinished=new Promise((_resolve,reject)=>{rejectOld=reject;});
+  const x=setup();await x.view.start();x.audio.finished=()=>oldFinished;
+  await x.emit({type:'audio_done',item_id:'old'});
+  await x.emit({type:'ended'});await x.view.start();
+  assert.match(x.root.children[0].textContent,/Слушаю/);
+  rejectOld(new Error('synthetic late rejection'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(x.root.children[0].textContent,/Слушаю/);
+  assert.equal(x.channelClosed(),1);
+  await x.view.stop();
+});
+
+test('late send failure from previous session cannot stop a new one',async()=>{
+  let rejectOld,callback;const oldSend=new Promise((_resolve,reject)=>{rejectOld=reject;});let opens=0;
+  const x=setup({connectOverride:async onEvent=>{
+    callback=onEvent;opens++;
+    return {send:()=>oldSend,close:async()=>{}};
+  }});
+  await x.view.start();x.root.children[2].handlers.click();
+  await callback({type:'ended'});await x.view.start();
+  rejectOld(new Error('synthetic late send failure'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(opens,2);assert.match(x.root.children[0].textContent,/Слушаю/);
+  await x.view.stop();
+});

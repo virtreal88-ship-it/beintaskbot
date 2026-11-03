@@ -18,8 +18,9 @@
   const microphoneUncertain='Не удалось подтвердить отключение микрофона. Текстовый чат доступен.';
   function send(event){
     if(!channel)return;
-    try { Promise.resolve(channel.send(event)).catch(()=>stop(uncertain)); }
-    catch(_){void stop(uncertain);}
+    const version=generation;
+    try { Promise.resolve(channel.send(event)).catch(()=>{if(version===generation)void stop(uncertain);}); }
+    catch(_){if(version===generation)void stop(uncertain);}
   }
 
   async function stop(reason='ended',confirmed=false,retainMicrophone=false) {
@@ -81,7 +82,7 @@
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation)send({type:'played_all',item_id:event.item_id});
-            }).catch(()=>stop(playbackFailure));
+            }).catch(()=>{if(version===generation && !ending)void stop(playbackFailure);});
           }
           else if(event.type==='interrupt'){
             const ms=audio.interrupt(event.item_id);
