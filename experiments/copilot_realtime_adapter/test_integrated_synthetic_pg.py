@@ -252,6 +252,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
                 await asyncio.sleep(.01)
             self.assertTrue(any(e.get('type')=='input_audio_buffer.append' for e in socket.sent))
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'synthetic-input'})
             await session.receive_provider({'type':'response.created','response':{'id':'synthetic-response'}})
             await session.receive_provider({'type':'response.output_audio.delta','response_id':'synthetic-response','item_id':'synthetic-item',
                                             'content_index':0,'delta':base64.b64encode(bytes(480)).decode()})

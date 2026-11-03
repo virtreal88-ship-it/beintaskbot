@@ -34,12 +34,14 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
         self.assertEqual((await ws.receive_json())['type'],'ready')
         session=self.sessions[0]
+        await session.receive_provider({'type':'input_audio_buffer.speech_started'})
         await ws.send_bytes(bytes(4800))
         for _ in range(50):
             if self.provider.events: break
             await asyncio.sleep(.01)
         self.assertEqual(self.provider.events[0]['type'],'input_audio_buffer.append')
         await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'user-1'})
         self.assertEqual([e[0] for e in self.ledger.events],['reserve','claim'])
         await session.receive_provider({'type':'response.created','response':{'id':'response-1'}})
         await session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'synthetic','content_index':0,
@@ -71,7 +73,9 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.provider=QueueProvider(self.ledger)
         ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
         self.assertEqual((await ws.receive_json())['type'],'ready')
+        await self.provider.queue.put({'type':'input_audio_buffer.speech_started'})
         await self.provider.queue.put({'type':'input_audio_buffer.speech_stopped'})
+        await self.provider.queue.put({'type':'input_audio_buffer.committed','item_id':'user-pump'})
         for _ in range(100):
             if self.ledger.events:break
             await asyncio.sleep(.005)

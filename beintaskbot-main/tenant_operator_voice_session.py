@@ -57,6 +57,10 @@ class Session:
         self.response_inflight = False
         self.cancel_requested = False
         self.response_pending = False
+        self.input_sequence = 0
+        self.input_turn = None
+        self.pending_input_item_id = None
+        self.seen_input_item_ids = set()
         self.current_reservation = None
         self.provider_response_id = None
         self.item = None
@@ -172,8 +176,10 @@ class Session:
 
     async def _dispatch_pending(self):
         # Caller holds lock. VAD detects turns only; it must never launch an
-        # unbudgeted response. The reservation authority is shared externally.
-        if not self.response_pending or self.interrupt_pending or self.truncate_pending or self.response_inflight or self.item is not None or self.closed:
+        # response until the exact committed input item has been acknowledged.
+        # The reservation authority is shared externally.
+        if (not self.response_pending or not self.pending_input_item_id or self.interrupt_pending or
+            self.truncate_pending or self.response_inflight or self.item is not None or self.closed):
             return
         self.response_number += 1
         if self.response_number > 2:
@@ -192,6 +198,7 @@ class Session:
         self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
         self.response_pending = False
+        self.pending_input_item_id = None
         self.response_inflight = True
         self.cancel_requested = False
         try:
@@ -212,6 +219,17 @@ class Session:
             if isinstance(marked,dict) and marked.get('state')=='unknown':
                 self.current_reservation=None
             raise
+
+    async def _accept_committed_input(self, turn):
+        """Dispatch only after VAD stop and provider commit identify one item."""
+        if self.input_turn is not turn or not turn['stopped'] or not turn['item_id']:
+            return
+        if self.pending_input_item_id is not None or self.response_pending:
+            raise Refused('input_response_pending')
+        self.input_turn=None
+        self.pending_input_item_id=turn['item_id']
+        self.response_pending=True
+        await self._dispatch_pending()
 
     async def _watch(self):
         try:
@@ -246,9 +264,12 @@ class Session:
         await self.authority.check(self.scope, 'input')
         await self.lease.assert_current(self.scope, self.fence)
         if kind == 'mute' and set(event) == {'type', 'muted'} and type(event['muted']) is bool:
-            self.muted = event['muted']
-            if self.muted:
-                await self._send_provider({'type': 'input_audio_buffer.clear'})
+            async with self.lock:
+                self.muted = event['muted']
+                if self.muted:
+                    # Do not turn a late VAD stop into a response after mute.
+                    self.input_turn=None
+                    await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
         if kind == 'audio' and set(event) == {'type', 'pcm'} and isinstance(event['pcm'], bytes):
             data = event['pcm']
@@ -301,8 +322,19 @@ class Session:
         await self.lease.assert_current(self.scope, self.fence)
         kind = event.get('type')
         if kind == 'input_audio_buffer.speech_started':
-            self.activity = time.monotonic()
             async with self.lock:
+                if self.muted:
+                    return
+                # Duplicate VAD starts for the same live buffer are harmless.
+                # A new buffer cannot replace a stopped or already committed
+                # turn that is still waiting to dispatch.
+                if self.input_turn is not None:
+                    if not self.input_turn['stopped']:
+                        return
+                    raise Refused('input_turn_commit_pending')
+                if self.pending_input_item_id is not None or self.response_pending:
+                    raise Refused('input_response_pending')
+                self.activity = time.monotonic()
                 if self.response_inflight and not self.cancel_requested:
                     event={'type':'response.cancel'}
                     if self.provider_response_id:event['response_id']=self.provider_response_id
@@ -316,14 +348,40 @@ class Session:
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
                     await self._send_client({'type': 'interrupt', 'item_id': self.item})
+                self.input_sequence += 1
+                self.input_turn = {'sequence':self.input_sequence,'stopped':False,'item_id':None}
             return
         if kind == 'input_audio_buffer.speech_stopped':
-            if self.muted:
-                return
-            self.activity = time.monotonic()
             async with self.lock:
-                self.response_pending = True
-                await self._dispatch_pending()
+                if self.muted or self.input_turn is None:
+                    # Replayed stop events must not enqueue another response.
+                    return
+                turn=self.input_turn
+                if turn['stopped']:
+                    return
+                turn['stopped']=True
+                self.activity = time.monotonic()
+                await self._accept_committed_input(turn)
+            return
+        if kind == 'input_audio_buffer.committed':
+            item_id=event.get('item_id')
+            if not isinstance(item_id,str) or not item_id or len(item_id)>128:
+                raise Refused('invalid_committed_input')
+            async with self.lock:
+                if item_id in self.seen_input_item_ids:
+                    return
+                if self.muted:
+                    # A commit racing with mute is deliberately discarded.
+                    self.seen_input_item_ids.add(item_id)
+                    return
+                turn=self.input_turn
+                if turn is None or not turn['sequence']:
+                    raise Refused('unmatched_committed_input')
+                if turn['item_id'] not in (None,item_id):
+                    raise Refused('multiple_commits_for_input_turn')
+                turn['item_id']=item_id
+                self.seen_input_item_ids.add(item_id)
+                await self._accept_committed_input(turn)
             return
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
@@ -394,7 +452,7 @@ class Session:
                     self.output_finished=True
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
-        if kind in ('input_audio_buffer.committed','input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
+        if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
             return
         if kind in ('conversation.item.added','conversation.item.done'):
             item=event.get('item')
