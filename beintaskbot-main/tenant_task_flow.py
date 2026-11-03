@@ -180,7 +180,7 @@ def _native_where(profile):
     return clause, args
 
 
-def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None):
+def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None):
     if source == 'native':
         where, args = _native_where(profile)
         if task_id:
@@ -188,6 +188,10 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None):
         if request_id:
             where += ' AND t.idempotency_key=%s AND t.created_by=%s'
             args.extend(['manual:'+request_id, profile['telegram_id']])
+        if search:
+            needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
+            where += " AND (t.text ILIKE %s ESCAPE '\\' OR d.title ILIKE %s ESCAPE '\\')"
+            args.extend([needle, needle])
         sql = '''SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
           t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
           t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id
@@ -255,7 +259,7 @@ def _command(cur, profile, source, request_id):
     return result
 
 
-def read(profile, *, source=None, task_id=None, request_id=None):
+def read(profile, *, source=None, task_id=None, request_id=None, search=None):
     if source not in (None, 'native', 'kommo') or (task_id and request_id):
         raise TaskFlowError('task_invalid_query')
     if request_id:
@@ -277,7 +281,7 @@ def read(profile, *, source=None, task_id=None, request_id=None):
                 raise TaskFlowError('task_not_found', 404)
             result['task'] = rows[0]
         else:
-            rows = _rows(cur, current, selected, limit=result['limit']+1)
+            rows = _rows(cur, current, selected, limit=result['limit']+1, search=search)
             result.update(tasks=rows[:result['limit']], shown=min(len(rows), result['limit']),
                           has_more=len(rows)>result['limit'], state='ready' if rows else 'empty')
         return result

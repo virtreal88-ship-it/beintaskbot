@@ -194,6 +194,11 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
           if (await crmGroup.getAttribute('aria-expanded') === 'false') await crmGroup.click();
           await tasks.click();
           await page.locator('#nativeTaskCreate').click();
+          // The single CRM02 entry deliberately asks for a source first.
+          // Exercise that real choice before the unchanged native Staff link.
+          await page.locator('#taskSourceModal.show').waitFor();
+          assert.equal(await page.locator('#nativeTaskModal.show').count(), 0);
+          await page.locator('[data-task-create-source="native"]').click();
           await page.locator('#nativeTaskStaff:not([hidden])').waitFor();
           await page.locator('#nativeTaskStaff').click();
           await visibleStaff(tenantA);

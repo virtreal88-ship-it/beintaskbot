@@ -50,7 +50,7 @@ def handler(member_from_request,origin,logger):
                       deal_id=request.query.get('deal_id'),task_id=request.query.get('task_id'))
                     return web.json_response({'success':True,**_jsonable(options)},headers={'Cache-Control':'no-store'})
                 if 'expected_tenant_id' in params:
-                    result=await asyncio.to_thread(read_flow,profile,source='native',task_id=task_id)
+                    result=await asyncio.to_thread(read_flow,profile,source='native',task_id=task_id,search=request.query.get('search',''))
                     return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store'})
                 if task_id:
                     row=await asyncio.to_thread(get_task,tenant,task_id)
