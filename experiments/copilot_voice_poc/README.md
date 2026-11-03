@@ -5,12 +5,17 @@ endpoint, deployment, provider adapter, security approval, or proof of delivery.
 It has no network calls and accepts only injected synthetic callbacks. No API
 keys, browser tokens, audio files, real customers or paid calls are involved.
 
-Run `python -m unittest discover -s experiments/copilot_voice_poc -v` from the
+With the project's Python dependencies installed, run
+`python -m unittest discover -s experiments/copilot_voice_poc -v` from the
 repository root. The unit tests exercise a scoped server-owned event boundary,
 client-event allowlist, PCM framing/size limits, revocation, duration/idle checks,
 and cancellation of unplayed assistant audio. Time checks require a transport
 that calls `tick` even when no events arrive. Client playback reports are
 untrusted estimates, not proof of what was heard.
+
+The separate [context and budget investigation](CONTEXT_AND_BUDGET_GAPS.md)
+includes tests which deliberately reproduce current defects. A passing
+reproduction is evidence that those defects exist, not a release approval.
 
 ## Existing assistant and mandatory reuse
 
