@@ -341,7 +341,7 @@ class LedgerPostgresTests(unittest.TestCase):
                 self.assertEqual(row['actual_microusd'],None if claimed else 0)
                 conn.execute('TRUNCATE saas_voice_test_hold,saas_voice_test_session,saas_ai_spend_reservations')
 
-    def test_server_inconsistent_tenant_hold_quarantines_overrun_and_commits_evidence(self):
+    def test_server_exact_released_hold_is_restored_and_overrun_freezes_voice(self):
         a=server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
         with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
@@ -352,10 +352,89 @@ class LedgerPostgresTests(unittest.TestCase):
             with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0 WHERE tenant_id=%s",(a['tenant_id'],))
             with local_connect(self.dsn) as conn,conn.cursor() as cur:
                 row=candidate.note_actual(cur,a,RESERVE_MICROUSD+7)
-                self.assertEqual((row['state'],row['actual_microusd']),('quarantined',RESERVE_MICROUSD+7))
+                self.assertEqual((row['state'],row['tenant_repair_state'],row['actual_microusd']),('settled','restored',RESERVE_MICROUSD+7))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                row=candidate.note_actual(cur,a,RESERVE_MICROUSD+8)
+                self.assertEqual(row['tenant_repair_state'],'restored')
         with local_connect(self.dsn) as conn:
             self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
-            self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'quarantined')
+            self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'settled')
+            hold=conn.execute('SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations').fetchone()
+            self.assertEqual(hold,{'state':'unknown','reserved_microusd':RESERVE_MICROUSD+8,'actual_microusd':0})
+
+    def test_server_mismatched_scope_is_not_modified_and_is_quarantined(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET kind='other',state='released',actual_microusd=0 WHERE tenant_id=%s",(a['tenant_id'],))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                row=candidate.note_actual(cur,a,RESERVE_MICROUSD+7)
+                self.assertEqual((row['state'],row['tenant_repair_state']),('quarantined','conflict'))
+        with local_connect(self.dsn) as conn:
+            self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
+            row=conn.execute('SELECT kind,state,actual_microusd FROM saas_ai_spend_reservations').fetchone()
+            self.assertEqual(row,{'kind':'other','state':'released','actual_microusd':0})
+        with patch.object(candidate,'RECONCILIATION_VERIFIED',True):
+            with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET kind='realtime_voice_test',state='unknown' WHERE tenant_id=%s",(a['tenant_id'],))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                row=candidate.note_actual(cur,a,RESERVE_MICROUSD+8)
+                self.assertEqual((row['state'],row['tenant_repair_state']),('quarantined','conflict'))
+
+    def test_server_recreates_exact_missing_hold_in_same_transaction(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                # Simulate a damaged constraint in the disposable DB only.
+                cur.execute("SELECT conname FROM pg_constraint WHERE conrelid='saas_voice_test_hold'::regclass AND confrelid='saas_ai_spend_reservations'::regclass")
+                constraint=cur.fetchone()['conname']
+                cur.execute(sql.SQL('ALTER TABLE saas_voice_test_hold DROP CONSTRAINT {}').format(sql.Identifier(constraint)))
+                cur.execute('DELETE FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],))
+                row=candidate.note_actual(cur,a,RESERVE_MICROUSD+9)
+                self.assertEqual((row['state'],row['tenant_repair_state']),('settled','recreated'))
+                cur.execute(sql.SQL('ALTER TABLE saas_voice_test_hold ADD CONSTRAINT {} FOREIGN KEY (tenant_id,tenant_reservation_id) REFERENCES saas_ai_spend_reservations(tenant_id,id)').format(sql.Identifier(constraint)))
+        with local_connect(self.dsn) as conn:
+            hold=conn.execute('SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations').fetchone()
+            self.assertEqual(hold,{'state':'unknown','reserved_microusd':RESERVE_MICROUSD+9,'actual_microusd':None})
+            self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
+
+    def test_server_conflicting_id_and_call_key_never_mutates_either_row(self):
+        a=server_scope();key='voice-test:'+a['request_id']
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            with local_connect(self.dsn) as conn:
+                conn.execute("UPDATE saas_ai_spend_reservations SET call_key='tampered' WHERE tenant_id=%s",(a['tenant_id'],))
+                conn.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,kind,model,reserved_microusd,state) VALUES(%s,%s,%s,'other','other',100,'released')",(a['tenant_id'],u(),key))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                self.assertEqual(candidate.note_actual(cur,a,RESERVE_MICROUSD+3)['tenant_repair_state'],'conflict')
+        with local_connect(self.dsn) as conn:
+            rows=conn.execute('SELECT call_key,kind,state,reserved_microusd FROM saas_ai_spend_reservations ORDER BY call_key').fetchall()
+            self.assertEqual({(r['call_key'],r['kind'],r['state'],r['reserved_microusd']) for r in rows},
+                             {('tampered','realtime_voice_test','unknown',RESERVE_MICROUSD),(key,'other','released',100)})
+
+    def test_server_exact_hold_repair_races_real_generic_release(self):
+        for _ in range(8):
+            a=server_scope();key='voice-test:'+a['request_id']
+            with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true,frozen=false')
+            with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+                with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET state='reserved' WHERE tenant_id=%s",(a['tenant_id'],))
+                def repair():
+                    with local_connect(self.dsn) as conn,conn.cursor() as cur:return candidate.note_actual(cur,a,RESERVE_MICROUSD+3)
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    repaired=workers.submit(repair);released=workers.submit(tenant_spend.release,a['tenant_id'],key,track_uncapped=True)
+                    self.assertIn(repaired.result()['tenant_repair_state'],('restored','intact'));released.result()
+            with local_connect(self.dsn) as conn:
+                hold=conn.execute('SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s',(a['tenant_id'],)).fetchone()
+                self.assertEqual(hold,{'state':'unknown','reserved_microusd':RESERVE_MICROUSD+3})
+                conn.execute('TRUNCATE saas_voice_test_hold,saas_voice_test_session,saas_ai_spend_reservations')
 
     def test_server_overrun_increases_tenant_hold_without_false_actual_and_blocks_other_ai(self):
         a=server_scope();cap=2_200_000;actual=2_300_000

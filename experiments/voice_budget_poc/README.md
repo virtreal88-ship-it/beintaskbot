@@ -67,12 +67,21 @@ trusted reconciliation so that later usage is still recorded and can freeze
 the grant. Both code gates default closed and the actual trusted reconciliation
 entry point/authentication is not implemented. This is a
 temporary conservative accounting limitation, not a complete reporting or
-settlement integration. A tenant-ledger inconsistency preserves the voice
-evidence, quarantines the operation, and freezes **voice** admissions. A
-corrupt/missing tenant hold cannot safely be repaired by this candidate; in
-that case ordinary tenant AI admissions may still undercount the cost until
-reconciled. This is a release blocker. The trusted
-caller must commit that quarantine, not roll it back as an exception.
+settlement integration. On an inconsistent tenant hold, reconciliation locks
+the global grant then the tenant advisory lock, and attempts repair only when
+tenant, reservation ID, call key, kind and pinned model all match. It can also
+recreate a missing exact ID from the voice row if there are no collisions.
+Under normal constraints the foreign key prevents deletion; the missing-row
+test disables that constraint only in the disposable database. Repair preserves
+any existing `actual_microusd`, never lowers the hold, records a permanent
+repair status, and freezes **voice** admissions. An immutable scope mismatch or
+ID/call-key collision leaves the unrelated row untouched and quarantines the
+voice operation. The trusted caller must commit that quarantine, not roll it
+back as an exception. These proofs depend on a trusted, intact voice row and
+one shared database; they do not protect calls admitted before the repair or
+database writers that bypass the tenant advisory lock. If scope cannot be
+proven, ordinary tenant AI may still undercount until manual reconciliation.
+These remain release blockers.
 
 `voice_test_grant.sql` is a **one-shot review artifact**, not integrated in the
 repository migration runner. A second application fails rather than being
@@ -110,6 +119,28 @@ Tests temporarily patch the code gate and enable only a disposable test DB.
    but intentionally over-reserve until a trusted reconciliation method is
    designed; no false actual costs are written. Accounting integration remains
    incomplete and the module must remain closed.
+
+### Path inventory and fence boundary
+
+The review identified `reserve`/`reserve_media` consumers in agent run store,
+simulation, testing, saved-only Copilot, media transcription, knowledge and
+expert services. Their generic financial operations share `tenant-ai-spend`
+advisory locks only when their code actually reserves. In particular, those
+functions return immediately on an uncapped path unless explicitly tracking a
+reservation. The ordinary `tenant_operator_copilot.run` has its own daily-call
+limits and invokes `tenant_chat_ai_provider.generate` without this monetary
+reservation. `tenant_chat_ai_service`, news provider and legacy `bot.py` expose
+additional provider entrypoints whose relationship to tenant scope requires
+further review. This is an inventory of observed paths, not proof that every
+route reaches a live provider.
+
+A broad tenant quarantine fence would require an agreed behavior change and
+auditing/instrumenting all applicable provider admissions, including uncapped
+and old-worker paths. A fence only in `reserve` would not cover the Copilot
+example and would risk an unreviewed interruption of unrelated AI functions.
+It is not implemented. The narrow repair above leaves existing AI operations
+unchanged; if it cannot prove the original hold, voice remains closed instead
+of asserting a tenant-wide guarantee.
 
 ## Isolated tests
 
