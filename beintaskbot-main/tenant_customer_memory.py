@@ -13,6 +13,7 @@ import re
 import uuid
 import unicodedata
 import time
+import psycopg
 
 from tenant_platform import _connect, _ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
@@ -26,17 +27,23 @@ _STATUSES = {'confirmed','needs_review','outdated','refuted'}
 _SECRET = re.compile(r'(?i)(?:\b(?:password|passwd|passcode|pin|recovery|seed|mnemonic|secret|token|api[ _-]?key|bearer|authorization|iban|парол\w*|токен\w*|şifrə|sifre|kart\s+nömrəsi|cvv|cvc)\b|\bsk-[a-z0-9_-]{12,}|\b[A-Z]{2}\d{2}[A-Z0-9 ]{11,30}\b|(?:\d[ -]?){13,19})')
 
 
-def _guard(cur, profile, action):
+def _guard(cur, profile, action, *, erasure_recovery=False):
     tenant, actor, policy = access(cur, profile, 'dialogs')
-    if os.environ.get('CUSTOMER_MEMORY_ENABLED') != '1':
-        raise TenantLinearError('Customer memory unavailable.', 404)
-    cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='customer_memory'",(tenant,))
-    row=cur.fetchone()
-    if not row or not isinstance(row['value'],dict) or set(row['value']) != {'enabled'} or row['value']['enabled'] is not True:
-        raise TenantLinearError('Customer memory unavailable.', 404)
+    cur.execute("SELECT current_setting('transaction_isolation') AS isolation")
+    if cur.fetchone()['isolation']!='read committed':
+        raise TenantLinearError('Memory isolation unavailable.',503)
+    if not erasure_recovery:
+        if os.environ.get('CUSTOMER_MEMORY_ENABLED') != '1':
+            raise TenantLinearError('Customer memory unavailable.', 404)
+        cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='customer_memory'",(tenant,))
+        row=cur.fetchone()
+        if not row or not isinstance(row['value'],dict) or set(row['value']) != {'enabled'} or row['value']['enabled'] is not True:
+            raise TenantLinearError('Customer memory unavailable.', 404)
     if policy.profile.get('role') != 'owner' and not isinstance(policy.profile.get('permissions'),list):
         raise TenantLinearError('Customer memory unavailable.',404)
     if not policy.allows_action('customers',action):
+        raise TenantLinearError('Customer memory unavailable.', 404)
+    if erasure_recovery and (action!='delete' or policy.profile.get('role')!='owner'):
         raise TenantLinearError('Customer memory unavailable.', 404)
     return tenant,actor,policy
 
@@ -50,6 +57,18 @@ def _text(value):
             or any(unicodedata.category(ch) in {'Cf','Cc'} and ch not in '\n\t' for ch in value)):
         raise TenantLinearError('Sensitive or invalid fact.',400)
     return value
+
+
+def _lock_fact_ids(cur,tenant,ids):
+    # Every new writer locks the same tenant/fact IDs in sorted order. This
+    # prevents a reused client request_id from restoring an erased fact ID.
+    for fact_id in sorted(set(ids)):
+        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                    ('customer-memory-fact:'+tenant+':'+fact_id,))
+
+
+def _erasure_request_id(tenant,contact,fact_id,version):
+    return str(uuid.uuid5(uuid.UUID(tenant),f'customer-memory-erasure:{contact}:{fact_id}:{version}'))
 
 
 def _identity_closure(cur,tenant,channel,identities):
@@ -121,6 +140,17 @@ def _subject(cur,tenant,contact,*,allow_archived=False):
     return contact
 
 
+def _erasure_pending(cur,tenant,contact):
+    cur.execute('''SELECT 1 FROM saas_customer_memory_erasure_requests
+      WHERE tenant_id=%s::uuid AND contact_id=%s::uuid AND state='pending' LIMIT 1''',(tenant,contact))
+    return bool(cur.fetchone())
+
+
+def _require_no_erasure_pending(cur,tenant,contact):
+    if _erasure_pending(cur,tenant,contact):
+        raise TenantLinearError('Memory erasure pending.',409)
+
+
 def _lock_contact(cur,tenant,contact,*,allow_archived=False):
     # Call only after acquiring all relevant Connect identity locks.
     cur.execute('''SELECT 1 FROM saas_crm_native_contacts WHERE tenant_id=%s::uuid
@@ -155,7 +185,7 @@ def _bump_subject_revision(cur,tenant,contact,expected,*,erasure=False):
 
 def _crm_link_revision(cur,tenant,contact,channel,conversation):
     cur.execute('''SELECT contact_id FROM saas_crm_native_contact_conversations WHERE tenant_id=%s::uuid
-      AND provider='connect' AND channel_id=%s::uuid AND conversation_id=%s FOR SHARE''',
+      AND provider='connect' AND channel_id=%s::uuid AND conversation_id=%s FOR SHARE NOWAIT''',
       (tenant,channel,conversation))
     mapping=cur.fetchone()
     if mapping and str(mapping['contact_id'])!=contact:raise TenantLinearError('Ambiguous identity.',409)
@@ -181,6 +211,40 @@ def _source_token(tenant,channel,external):
     tenant_key=hmac.new(key,('customer-memory-source:'+tenant).encode(),hashlib.sha256).digest()
     token=hmac.new(tenant_key,json.dumps([channel,external],ensure_ascii=True).encode(),hashlib.sha256).hexdigest()
     return key_id,token
+
+
+def _source_gate(tenant):return 'customer-memory-source-tenant:'+tenant
+
+
+def _source_external_token(tenant,source):
+    return _source_token(tenant,'customer-memory-external',source['external_id'])
+
+
+def _source_read_guard(cur,tenant,source):
+    """Fail closed if source erasure is in flight or already committed."""
+    cur.execute("SELECT current_setting('transaction_isolation') AS isolation")
+    if cur.fetchone()['isolation']!='read committed':
+        raise TenantLinearError('Memory isolation unavailable.',503)
+    key_id,token=_source_token(tenant,source['channel'],source['external_id'])
+    external_key,external_token=_source_external_token(tenant,source)
+    if external_key!=key_id:raise TenantLinearError('Memory key changed.',503)
+    cur.execute('SELECT pg_try_advisory_xact_lock_shared(hashtextextended(%s,0)) AS ok',(_source_gate(tenant),))
+    if not cur.fetchone()['ok']:raise TenantLinearError('Memory temporarily unavailable.',503)
+    cur.execute('''SELECT 1 FROM saas_customer_memory_erased_sources WHERE tenant_id=%s::uuid
+      AND (token_key_id<>%s OR source_token='' OR external_token='' OR source_token IN (%s,%s)
+           OR external_token IN (%s,%s))
+      UNION ALL SELECT 1 FROM saas_customer_memory_source_erasure_events WHERE tenant_id=%s::uuid
+      AND (token_key_id<>%s OR source_token='' OR source_token IN (%s,%s)) LIMIT 1''',
+      (tenant,key_id,token,external_token,token,external_token,tenant,key_id,token,external_token))
+    if cur.fetchone():raise TenantLinearError('Source suppressed.',409)
+    return key_id,token
+
+
+def _lock_sources_for_erasure(cur,tenant,pairs):
+    # This is deliberately tenant-wide while mixed/legacy key generations may
+    # exist. A per-token lock alone lets concurrent key rotations bypass it.
+    # No model/network call may execute while this transaction is open.
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(_source_gate(tenant),))
 
 
 def _route_token(tenant,channel,identity):
@@ -241,9 +305,12 @@ def _source_kind_supported(source,kind):
 
 def _source(cur,tenant,link,source_id):
     source_id=identifier(source_id)
-    cur.execute('''SELECT id,external_id,channel,body,message_type,direction,author_name,happened_at,created_at,raw,xmin::text AS row_revision FROM saas_crm_messages
-      WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE''',
-      (tenant,source_id,link['lead_id'],'connect:'+str(link['channel_id'])))
+    try:
+        cur.execute('''SELECT id,external_id,channel,body,message_type,direction,author_name,happened_at,created_at,raw,xmin::text AS row_revision FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE NOWAIT''',
+          (tenant,source_id,link['lead_id'],'connect:'+str(link['channel_id'])))
+    except psycopg.errors.LockNotAvailable as exc:
+        raise TenantLinearError('Memory temporarily unavailable.',503) from exc
     row=cur.fetchone()
     if (not row or row['message_type'] != 'text' or not row['body']
             or not str(row['external_id']).startswith('connect:') or row['external_id']=='connect:'):
@@ -271,7 +338,7 @@ def _link(cur,tenant,policy,contact,link_id,*,lock='SHARE',prelocked=False):
       (tenant,channel,link_id,current_key,tokens))
     if cur.fetchone() or prior['subject_key_id']!=current_key:raise TenantLinearError('Ambiguous identity.',409)
     cur.execute('''SELECT * FROM saas_customer_memory_links WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
-      AND id=%s::uuid FOR ''' + ('UPDATE' if lock=='UPDATE' else 'SHARE'),(tenant,contact,link_id))
+      AND id=%s::uuid FOR ''' + ('UPDATE NOWAIT' if lock=='UPDATE' else 'SHARE NOWAIT'),(tenant,contact,link_id))
     link=cur.fetchone()
     if (not link or link['state']!='confirmed' or link['version']!=prior['version']
             or str(link['channel_id'])!=str(prior['channel_id']) or link['conversation_id']!=prior['conversation_id']
@@ -291,6 +358,7 @@ def confirm_link(profile, contact, channel, conversation, confirm):
             tenant,actor,policy=_guard(cur,profile,'update')
             if policy.profile.get('role')!='owner': raise TenantLinearError('Owner required.',403)
             contact=_subject(cur,tenant,contact)
+            _require_no_erasure_pending(cur,tenant,contact)
             subject_key_id,subject_token=_source_token(tenant,'customer-memory-subject',contact)
             cur.execute('''SELECT 1 FROM saas_customer_memory_erased_subjects WHERE tenant_id=%s::uuid
               AND (token_key_id<>%s OR subject_token='' OR subject_token=%s) LIMIT 1''',
@@ -373,11 +441,18 @@ def add_fact(profile,contact,data):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout='150ms'")
             tenant,actor,policy=_guard(cur,profile,'update'); contact=_subject(cur,tenant,contact)
+            _require_no_erasure_pending(cur,tenant,contact)
             subject_revision=_subject_revision(cur,tenant,contact)
             # Client request identifiers never address another tenant's primary key.
             fact=str(uuid.uuid5(uuid.UUID(tenant),request_id))
+            _lock_fact_ids(cur,tenant,[fact])
+            cur.execute('''SELECT 1 FROM saas_customer_memory_erased_fact_ids
+              WHERE tenant_id=%s::uuid AND fact_id=%s::uuid''',(tenant,fact))
+            if cur.fetchone():raise TenantLinearError('Fact identifier suppressed.',409)
             group_id=fact
+            group_source=None;existing_group=None
             if 'group_fact_id' in data:
                 if type(data['group_version']) is not int:raise TenantLinearError('Invalid version.',400)
                 group_fact=identifier(data['group_fact_id'])
@@ -407,11 +482,15 @@ def add_fact(profile,contact,data):
                 link=_link(cur,tenant,policy,contact,data['link_id'],lock='UPDATE')
             source,source_version=_source(cur,tenant,link,data['source_message_id'])
             if quote not in source['body']:raise TenantLinearError('Quote is not in source.',400)
-            key_id,token=_source_token(tenant,source['channel'],source['external_id'])
+            if group_source:
+                group_key,group_token=_source_read_guard(cur,tenant,group_source)
+                _,group_external=_source_external_token(tenant,group_source)
+                if (group_key!=existing_group['token_key_id'] or group_token!=existing_group['source_token']
+                        or group_external!=existing_group['external_token']):
+                    raise TenantLinearError('Source changed.',409)
+            key_id,token=_source_read_guard(cur,tenant,source)
+            _,external_token=_source_external_token(tenant,source)
             _,quote_token=_source_token(tenant,'customer-memory-quote',quote)
-            cur.execute('''SELECT 1 FROM saas_customer_memory_erased_sources WHERE tenant_id=%s::uuid
-              AND (token_key_id<>%s OR source_token='' OR source_token=%s) LIMIT 1''',(tenant,key_id,token))
-            if cur.fetchone():raise TenantLinearError('Memory requires review.',409)
             _assert_claim_allowed(cur,tenant,contact,value,key_id,source)
             _,claim_token=_claim_token(tenant,value)
             if not _source_kind_supported(source,data['source_kind']):
@@ -425,11 +504,14 @@ def add_fact(profile,contact,data):
               AND contact_id=%s::uuid AND (token_key_id<>%s OR source_message_id=%s::uuid OR source_token=%s)''',
               (tenant,contact,key_id,str(source['id']),token))
             if cur.fetchone(): raise TenantLinearError('Source suppressed.',409)
-            cur.execute('''SELECT id,version,category,value,source_kind,reliability,link_id,source_message_id,evidence_quote_token FROM saas_customer_memory_facts
+            cur.execute('''SELECT id,version,category,value,source_kind,reliability,link_id,source_message_id,
+              source_version,source_token,external_token,token_key_id,evidence_quote_token FROM saas_customer_memory_facts
               WHERE tenant_id=%s::uuid AND id=%s::uuid''',(tenant,fact))
             existing=cur.fetchone()
             if existing:
                 if (str(existing['link_id']) != str(link['id']) or str(existing['source_message_id']) != str(source['id'])
+                        or existing['source_version']!=source_version or existing['source_token']!=token
+                        or existing['external_token']!=external_token or existing['token_key_id']!=key_id
                         or existing['value'] != value or existing['evidence_quote_token']!=quote_token
                         or any(existing[k] != data[k] for k in ('category','source_kind','reliability'))):
                     raise TenantLinearError('Request conflict.',409)
@@ -444,10 +526,10 @@ def add_fact(profile,contact,data):
               AND link_id=%s::uuid''',(tenant,str(link['id'])))
             if cur.fetchone()['n']>=200: raise TenantLinearError('Memory limit reached.',409)
             cur.execute('''INSERT INTO saas_customer_memory_facts(id,tenant_id,contact_id,link_id,link_version,
-              source_message_id,source_version,source_token,token_key_id,claim_token,claim_group_id,evidence_quote_token,category,value,source_kind,reliability,event_at,last_confirmed_at)
-              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s,%s,%s,
+              source_message_id,source_version,source_token,external_token,token_key_id,claim_token,claim_group_id,evidence_quote_token,category,value,source_kind,reliability,event_at,last_confirmed_at)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s,%s,%s,
                 CASE WHEN %s='confirmed' THEN now() END)''',
-              (fact,tenant,contact,str(link['id']),link['version'],str(source['id']),source_version,token,key_id,claim_token,group_id,quote_token,
+              (fact,tenant,contact,str(link['id']),link['version'],str(source['id']),source_version,token,external_token,key_id,claim_token,group_id,quote_token,
                data['category'],value,data['source_kind'],data['reliability'],source['happened_at'],data['reliability']))
             cur.execute('''INSERT INTO saas_customer_memory_fact_versions(fact_id,version,value,reliability,actor,claim_token,evidence_quote_token)
               VALUES(%s::uuid,1,%s,%s,%s,%s,%s)''',(fact,value,data['reliability'],actor,claim_token,quote_token))
@@ -467,6 +549,9 @@ def read(profile,contact):
             cur.execute("SET LOCAL lock_timeout='150ms'")
             cur.execute("SET LOCAL statement_timeout='500ms'")
             tenant,_,policy=_guard(cur,profile,'view');contact=_subject(cur,tenant,contact)
+            # Without proven claim equivalence, do not expose unrelated-looking
+            # duplicates while erasure remains unresolved.
+            if _erasure_pending(cur,tenant,contact):return {'links':[],'facts':[],'incomplete':True}
             cur.execute('''SELECT id,channel_id,conversation_id FROM saas_customer_memory_links WHERE tenant_id=%s::uuid
               AND contact_id=%s::uuid AND state='confirmed' ORDER BY channel_id,conversation_id LIMIT 100''',(tenant,contact))
             candidates=cur.fetchall(); links=[]; facts=[]; scanned=0
@@ -507,8 +592,15 @@ def read(profile,contact):
                       AND contact_id=%s::uuid AND claim_group_id=%s::uuid''',
                       (tenant,contact,str(fact['claim_group_id'])))
                     if cur.fetchone(): continue
-                    try: source,version=_source(cur,tenant,link,str(fact['source_message_id']))
-                    except TenantLinearError: continue
+                    try:
+                        source,version=_source(cur,tenant,link,str(fact['source_message_id']))
+                        key_id,source_token=_source_read_guard(cur,tenant,source)
+                    except TenantLinearError as exc:
+                        if exc.status==503:raise
+                        continue
+                    _,external_token=_source_external_token(tenant,source)
+                    if (key_id!=fact['token_key_id'] or source_token!=fact['source_token']
+                            or external_token!=fact['external_token']):continue
                     if version!=fact['source_version'] or not _source_kind_supported(source,fact['source_kind']):continue
                     if cutoff:
                         try:_assert_claim_allowed(cur,tenant,contact,fact['value'],fact['token_key_id'],source)
@@ -531,7 +623,7 @@ def read(profile,contact):
 
 
 def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evidence_quote=None,evidence_confirmed=None):
-    if type(expected_version) is not int or action not in {'edit','confirm','outdated','refute','delete'}:
+    if type(expected_version) is not int or expected_version<1 or action not in {'edit','confirm','outdated','refute','delete'}:
         raise TenantLinearError('Invalid fact change.',400)
     if action=='edit':
         value=_text(value);evidence_quote=_text(evidence_quote)
@@ -540,19 +632,45 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
     elif value is not None or evidence_quote is not None or evidence_confirmed is not None:
         raise TenantLinearError('Invalid fact change.',400)
     with _connect() as conn:
-        _ensure_schema(conn)
+        # Erasure recovery must never install migrations as a side effect of an
+        # OFF-flag request. The coordinator must already exist.
+        if action!='delete':_ensure_schema(conn)
         with conn.cursor() as cur:
+            # An unresponsive memory operation must not leave a manual erasure
+            # request waiting forever. A timeout rolls back; it is not accepted.
+            cur.execute("SET LOCAL lock_timeout='2s'")
             permission='delete' if action=='delete' else 'update'
-            tenant,actor,policy=_guard(cur,profile,permission)
+            tenant,actor,policy=_guard(cur,profile,permission,erasure_recovery=action=='delete')
+            if action=='delete':
+                cur.execute("SELECT to_regclass('saas_customer_memory_erasure_requests') AS relation")
+                if not cur.fetchone()['relation']:raise TenantLinearError('Erasure unavailable.',404)
             owner_delete=action=='delete' and policy.profile.get('role')=='owner'
+            contact=identifier(contact);fact_id=identifier(fact_id)
+            request_id=_erasure_request_id(tenant,contact,fact_id,expected_version) if owner_delete else None
+            if owner_delete:
+                cur.execute('''SELECT state FROM saas_customer_memory_erasure_requests WHERE id=%s::uuid
+                  AND tenant_id=%s::uuid AND contact_id=%s::uuid''',(request_id,tenant,contact))
+                existing_request=cur.fetchone()
+                if existing_request:return {'request_id':request_id,'status':existing_request['state']}
             contact=_subject(cur,tenant,contact,allow_archived=owner_delete)
+            if not owner_delete:_require_no_erasure_pending(cur,tenant,contact)
             subject_revision=_subject_revision(cur,tenant,contact)
-            fact_id=identifier(fact_id)
-            cur.execute('''SELECT link_id,source_message_id,source_version,source_kind,category,value,claim_token,token_key_id,claim_group_id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
+            if owner_delete:
+                # The subject lock serializes same-contact retries; recheck after
+                # waiting so a committed prior request remains idempotent.
+                cur.execute('''SELECT state FROM saas_customer_memory_erasure_requests WHERE id=%s::uuid
+                  AND tenant_id=%s::uuid AND contact_id=%s::uuid''',(request_id,tenant,contact))
+                existing_request=cur.fetchone()
+                if existing_request:return {'request_id':request_id,'status':existing_request['state']}
+            cur.execute('''SELECT link_id,source_message_id,source_version,source_kind,category,value,claim_token,source_token,external_token,token_key_id,claim_group_id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
               AND contact_id=%s::uuid AND id=%s::uuid''',(tenant,contact,fact_id))
             ref=cur.fetchone()
             if not ref:raise TenantLinearError('Fact unavailable.',404)
             if owner_delete:
+                cur.execute('''SELECT id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                  AND ((%s::uuid IS NOT NULL AND claim_group_id=%s::uuid) OR (%s::uuid IS NULL AND id=%s::uuid))''',
+                  (tenant,contact,ref['claim_group_id'],ref['claim_group_id'],ref['claim_group_id'],fact_id))
+                _lock_fact_ids(cur,tenant,[str(row['id']) for row in cur.fetchall()])
                 _lock_contact(cur,tenant,contact,allow_archived=True)
                 cur.execute('''SELECT * FROM saas_customer_memory_links WHERE tenant_id=%s::uuid
                   AND contact_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,contact,str(ref['link_id'])))
@@ -569,12 +687,22 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                 cur.execute('''SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid
                   AND id=ANY(%s::uuid[]) ORDER BY id FOR SHARE NOWAIT''',(tenant,source_ids))
                 cur.fetchall()
+                cur.execute('''SELECT DISTINCT token_key_id,source_token FROM saas_customer_memory_facts
+                  WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                  AND ((%s::uuid IS NOT NULL AND claim_group_id=%s::uuid) OR (%s::uuid IS NULL AND id=%s::uuid))''',
+                  (tenant,contact,ref['claim_group_id'],ref['claim_group_id'],ref['claim_group_id'],fact_id))
+                _lock_sources_for_erasure(cur,tenant,[(row['token_key_id'],row['source_token']) for row in cur.fetchall()])
             else:
                 link=_link(cur,tenant,policy,contact,str(ref['link_id']),lock='UPDATE')
             if not owner_delete:
                 # Source delete takes the message lock before its cleanup trigger
                 # locks facts. Use the same order to avoid a deletion/edit cycle.
                 source,source_version=_source(cur,tenant,link,str(ref['source_message_id']))
+                source_key,source_token=_source_read_guard(cur,tenant,source)
+                _,external_token=_source_external_token(tenant,source)
+                if (source_key!=ref['token_key_id'] or source_token!=ref['source_token']
+                        or external_token!=ref['external_token']):
+                    raise TenantLinearError('Source changed.',409)
                 if source_version!=ref['source_version'] or not _source_kind_supported(source,ref['source_kind']):raise TenantLinearError('Source changed.',409)
                 if action=='edit' and evidence_quote not in source['body']:
                     raise TenantLinearError('Quote is not in source.',400)
@@ -602,6 +730,25 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                 # Only the owner may erase equal values across source routes.
                 # Suppress every known source without retaining the value/hash.
                 if not owner_delete:raise TenantLinearError('Owner required.',403)
+                cur.execute('''INSERT INTO saas_customer_memory_erased_fact_ids(tenant_id,fact_id)
+                  SELECT tenant_id,id FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                    AND ((%s::uuid IS NOT NULL AND claim_group_id=%s::uuid) OR (%s::uuid IS NULL AND id=%s::uuid))
+                  ON CONFLICT DO NOTHING''',
+                  (tenant,contact,fact['claim_group_id'],fact['claim_group_id'],fact['claim_group_id'],fact_id))
+                cur.execute('''INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
+                  SELECT DISTINCT tenant_id,source_token,token_key_id FROM saas_customer_memory_facts
+                  WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                    AND ((%s::uuid IS NOT NULL AND claim_group_id=%s::uuid) OR (%s::uuid IS NULL AND id=%s::uuid))''',
+                  (tenant,contact,fact['claim_group_id'],fact['claim_group_id'],fact['claim_group_id'],fact_id))
+                cur.execute('''INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
+                  SELECT DISTINCT tenant_id,external_token,token_key_id FROM saas_customer_memory_facts
+                  WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                    AND ((%s::uuid IS NOT NULL AND claim_group_id=%s::uuid) OR (%s::uuid IS NULL AND id=%s::uuid))''',
+                  (tenant,contact,fact['claim_group_id'],fact['claim_group_id'],fact['claim_group_id'],fact_id))
+                if fact['claim_group_id']:
+                    cur.execute('''INSERT INTO saas_customer_memory_group_fences(tenant_id,contact_id,claim_group_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid) ON CONFLICT DO NOTHING''',
+                      (tenant,contact,str(fact['claim_group_id'])))
                 claim_key,claim='',''  # subject-wide write fence; no deleted value retained
                 cur.execute('''INSERT INTO saas_customer_memory_claim_suppressions(tenant_id,contact_id,claim_token,token_key_id)
                   VALUES(%s::uuid,%s::uuid,%s,%s) ON CONFLICT(tenant_id,contact_id,claim_token)
@@ -610,14 +757,15 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                     # A legacy value without a stable group cannot be compared
                     # safely: delete only the selected row and fence the subject.
                     cur.execute('''INSERT INTO saas_customer_memory_suppressions
-                      (tenant_id,contact_id,source_message_id,source_token,token_key_id)
-                      VALUES(%s::uuid,%s::uuid,%s::uuid,'','') ON CONFLICT DO NOTHING''',
+                      (tenant_id,contact_id,source_message_id,source_token,external_token,token_key_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,'','','') ON CONFLICT DO NOTHING''',
                       (tenant,contact,str(fact['source_message_id'])))
                     cur.execute('DELETE FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,fact_id))
                 else:
-                    cur.execute('''INSERT INTO saas_customer_memory_suppressions(tenant_id,contact_id,source_message_id,source_token,token_key_id)
+                    cur.execute('''INSERT INTO saas_customer_memory_suppressions(tenant_id,contact_id,source_message_id,source_token,external_token,token_key_id)
                       SELECT f.tenant_id,f.contact_id,f.source_message_id,
                         CASE WHEN count(DISTINCT f.source_token)=1 AND count(DISTINCT f.token_key_id)=1 THEN max(f.source_token) ELSE '' END,
+                        CASE WHEN count(DISTINCT f.external_token)=1 AND count(DISTINCT f.token_key_id)=1 THEN max(f.external_token) ELSE '' END,
                         CASE WHEN count(DISTINCT f.source_token)=1 AND count(DISTINCT f.token_key_id)=1 THEN max(f.token_key_id) ELSE '' END
                         FROM saas_customer_memory_facts f
                       LEFT JOIN saas_customer_memory_fact_versions v ON v.fact_id=f.id
@@ -626,7 +774,8 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                         GROUP BY f.tenant_id,f.contact_id,f.source_message_id
                         ON CONFLICT(tenant_id,contact_id,source_message_id) DO UPDATE SET
                           source_token=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.source_token ELSE '' END,
-                          token_key_id=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.token_key_id ELSE '' END''',
+                          external_token=CASE WHEN saas_customer_memory_suppressions.external_token=EXCLUDED.external_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.external_token ELSE '' END,
+                          token_key_id=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.external_token=EXCLUDED.external_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.token_key_id ELSE '' END''',
                       (tenant,contact,str(fact['claim_group_id'])))
                     cur.execute('''DELETE FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
                       AND contact_id=%s::uuid AND claim_group_id=%s::uuid''',
@@ -649,5 +798,56 @@ def change_fact(profile,contact,fact_id,expected_version,action,*,value=None,evi
                   VALUES(%s::uuid,%s,%s,%s,%s,%s,%s)''',(fact_id,version,new_value,status,actor,new_claim,new_quote_token))
             _audit(cur,tenant,actor,'customer_memory_fact_'+action,'customer_memory_fact',fact_id)
             _bump_subject_revision(cur,tenant,contact,subject_revision,erasure=action=='delete')
+            if owner_delete:
+                cur.execute('''INSERT INTO saas_customer_memory_erasure_requests
+                  (id,tenant_id,contact_id,fact_id,fact_version,requested_by,state)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,'pending')''',
+                  (request_id,tenant,contact,fact_id,expected_version,actor))
         conn.commit()
-    return {'deleted':True} if action=='delete' else {'id':fact_id,'version':version}
+    # Completion is intentionally unavailable until transport fencing exists.
+    return {'request_id':request_id,'status':'pending'} if action=='delete' else {'id':fact_id,'version':version}
+
+
+def erasure_status(profile,contact,request_id):
+    """Owner-only recovery of non-content status, even with memory switched off."""
+    contact=identifier(contact);request_id=identifier(request_id)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_,_=_guard(cur,profile,'delete',erasure_recovery=True)
+            cur.execute("SELECT to_regclass('saas_customer_memory_erasure_requests') AS relation")
+            if not cur.fetchone()['relation']:raise TenantLinearError('Erasure unavailable.',404)
+            cur.execute('''SELECT id,state,requested_at,completed_at FROM saas_customer_memory_erasure_requests
+              WHERE id=%s::uuid AND tenant_id=%s::uuid AND contact_id=%s::uuid''',(request_id,tenant,contact))
+            row=cur.fetchone()
+            if not row:raise TenantLinearError('Erasure unavailable.',404)
+            return {'request_id':str(row['id']),'status':row['state'],
+                    'requested_at':row['requested_at'],'completed_at':row['completed_at']}
+
+
+def erasure_statuses(profile,contact,before=None):
+    """Current owner may page through non-content statuses for this contact."""
+    contact=identifier(contact)
+    if before is not None:before=identifier(before)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_,_=_guard(cur,profile,'delete',erasure_recovery=True)
+            cur.execute("SELECT to_regclass('saas_customer_memory_erasure_requests') AS relation")
+            if not cur.fetchone()['relation']:
+                if before:raise TenantLinearError('Erasure unavailable.',404)
+                return {'requests':[],'next_before':None}
+            cutoff=None
+            if before:
+                cur.execute('''SELECT requested_at,id FROM saas_customer_memory_erasure_requests
+                  WHERE tenant_id=%s::uuid AND contact_id=%s::uuid AND id=%s::uuid''',(tenant,contact,before))
+                cutoff=cur.fetchone()
+                if not cutoff:raise TenantLinearError('Erasure unavailable.',404)
+            cur.execute('''SELECT id,state,requested_at,completed_at FROM saas_customer_memory_erasure_requests
+              WHERE tenant_id=%s::uuid AND contact_id=%s::uuid
+                AND (%s::timestamptz IS NULL OR (requested_at,id)<(%s::timestamptz,%s::uuid))
+              ORDER BY requested_at DESC,id DESC LIMIT 26''',
+              (tenant,contact,cutoff['requested_at'] if cutoff else None,
+               cutoff['requested_at'] if cutoff else None,str(cutoff['id']) if cutoff else None))
+            rows=cur.fetchall();items=[{'request_id':str(row['id']),'status':row['state'],
+                     'requested_at':row['requested_at'],'completed_at':row['completed_at']}
+                    for row in rows[:25]]
+            return {'requests':items,'next_before':items[-1]['request_id'] if len(rows)>25 else None}

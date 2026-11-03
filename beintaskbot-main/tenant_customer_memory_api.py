@@ -12,18 +12,30 @@ import tenant_customer_memory as memory
 def handler(member, origin, logger):
     async def endpoint(request):
         headers={'Cache-Control':'no-store','Vary':'Cookie'}
-        if os.environ.get('CUSTOMER_MEMORY_ENABLED') != '1':
+        enabled=os.environ.get('CUSTOMER_MEMORY_ENABLED')=='1'
+        # Disabled memory remains closed before any database work, except for
+        # the narrow authenticated erasure recovery/status entry points.
+        if not enabled and request.method=='GET' and not ({'erasure_request_id','erasure_status'} & set(request.query)):
             return web.json_response({'success':False,'error':'memory_unavailable'},status=404,headers=headers)
         profile=member(request)
         if not profile:
             return web.json_response({'success':False,'error':'unavailable'},status=403,headers=headers)
         try:
-            if set(request.query)!={'expected_tenant_id','expected_user_id'}:
+            query=set(request.query);base={'expected_tenant_id','expected_user_id'}
+            if query not in (base,base|{'erasure_request_id'},base|{'erasure_status'},base|{'erasure_status','erasure_before'}):
                 raise TenantLinearError('Expected tenant and user required.',400)
+            if request.method!='GET' and query!=base:
+                raise TenantLinearError('Invalid request.',400)
             require_expected_context(request,profile)
             contact=request.match_info['contact_id']
             if request.method=='GET':
-                result=await asyncio.to_thread(memory.read,profile,contact)
+                if 'erasure_request_id' in request.query:
+                    result=await asyncio.to_thread(memory.erasure_status,profile,contact,request.query['erasure_request_id'])
+                elif 'erasure_status' in request.query:
+                    if request.query['erasure_status']!='1':raise TenantLinearError('Invalid request.',400)
+                    result=await asyncio.to_thread(memory.erasure_statuses,profile,contact,request.query.get('erasure_before'))
+                else:
+                    result=await asyncio.to_thread(memory.read,profile,contact)
             else:
                 require_json_post(request,origin)
                 if request.content_length is not None and request.content_length>20_000:
@@ -33,6 +45,8 @@ def handler(member, origin, logger):
                 body=json.loads(raw)
                 if not isinstance(body,dict): raise TenantLinearError('Invalid request.',400)
                 action=body.get('action')
+                if not enabled and action!='delete':
+                    return web.json_response({'success':False,'error':'memory_unavailable'},status=404,headers=headers)
                 if action=='confirm_link' and set(body)=={'action','channel_id','conversation_id','confirm'}:
                     result=await asyncio.to_thread(memory.confirm_link,profile,contact,body['channel_id'],body['conversation_id'],body['confirm'])
                 elif action=='revoke_link' and set(body)=={'action','link_id','expected_version'}:
@@ -46,7 +60,7 @@ def handler(member, origin, logger):
         except CRMContextError as exc:
             return web.json_response({'success':False,'error':'context_changed'},status=exc.status,headers=headers)
         except TenantLinearError as exc:
-            return web.json_response({'success':False,'error':'memory_unavailable' if exc.status in (403,404) else 'memory_conflict' if exc.status==409 else 'memory_invalid'},status=exc.status,headers=headers)
+            return web.json_response({'success':False,'error':'memory_unavailable' if exc.status in (403,404,503) else 'memory_conflict' if exc.status==409 else 'memory_invalid'},status=exc.status,headers=headers)
         except (ValueError,TypeError):
             return web.json_response({'success':False,'error':'memory_invalid'},status=400,headers=headers)
         except Exception:

@@ -96,6 +96,14 @@ class AgentPreviewPostgresTests(unittest.TestCase):
         try:self.assertEqual(self.preview(),{'status':'denied','dispatchable':False})
         finally:os.environ['CUSTOMER_MEMORY_ENABLED']=flag
 
+    def test_pending_erasure_does_not_bypass_agent_assignment_guards(self):
+        link=self.link();fact=self.fact(link,value='Confirmed synthetic',reliability='confirmed')
+        self.memory.change_fact(self.profile,self.contact,fact['id'],1,'delete')
+        self.assertEqual(self.preview()['status'],'no_memory')
+        for kw in ({'agent_id':str(uuid.uuid4())},{'agent_version':2},{'assignment_revision':2},
+                   {'conversation_id':'123456789@g.us'}):
+            self.assertIn(self.preview(**kw)['status'],('denied','ambiguous_identity'))
+
     def test_concurrent_subject_revision_discards_projection(self):
         from unittest.mock import patch
         from tenant_platform import _connect

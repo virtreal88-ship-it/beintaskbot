@@ -1,5 +1,7 @@
 """Additive PostgreSQL migration slice; executed inside the shared transaction."""
 
+import os
+
 from tenant_crm_deletion_schema import migrate_crm_deletions
 from tenant_crm_identity_schema import migrate_crm_identity_schema
 from tenant_crm_native_schema import migrate_native_contacts
@@ -8,7 +10,11 @@ from tenant_customer_memory_schema import migrate as migrate_customer_memory
 def migrate_crm_schema(cur) -> None:
     migrate_crm_identity_schema(cur)
     migrate_native_contacts(cur)
-    migrate_customer_memory(cur)
+    # Session authentication can invoke this shared migration on cold start.
+    # Do not install memory tables or triggers when the process switch is off.
+    # Existing memory tables are left untouched for read-only recovery.
+    if os.environ.get('CUSTOMER_MEMORY_ENABLED') == '1':
+        migrate_customer_memory(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,

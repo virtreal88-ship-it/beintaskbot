@@ -1,7 +1,50 @@
 """Additive schema for explicitly attributed customer memory; no activation."""
 
 
+_VERSIONED_TRIGGERS={
+    'source':('saas_crm_messages','customer_memory_source_deleted','customer_memory_source_deleted_v2()',
+      'CREATE OR REPLACE TRIGGER customer_memory_source_deleted AFTER DELETE ON saas_crm_messages FOR EACH ROW EXECUTE FUNCTION customer_memory_source_deleted_v2()'),
+    'contact':('saas_crm_native_contacts','customer_memory_contact_erased','customer_memory_contact_erased_v2()',
+      'CREATE OR REPLACE TRIGGER customer_memory_contact_erased BEFORE DELETE ON saas_crm_native_contacts FOR EACH ROW EXECUTE FUNCTION customer_memory_contact_erased_v2()'),
+}
+
+
+def _ensure_versioned_trigger(cur,kind):
+    relation,trigger,function,ddl=_VERSIONED_TRIGGERS[kind]
+    cur.execute('''SELECT t.tgfoid=to_regprocedure(%s) AS matches FROM pg_trigger t
+      WHERE t.tgrelid=to_regclass(%s) AND t.tgname=%s AND NOT t.tgisinternal''',
+      (function,relation,trigger))
+    row=cur.fetchone()
+    if not row or not row['matches']:cur.execute(ddl)
+
+
 def migrate(cur):
+    # Non-content coordinator survives contact/tenant cascades. Never interpret
+    # its presence as proof that previously started transport was stopped.
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_erasure_requests (
+      id UUID PRIMARY KEY, tenant_id UUID NOT NULL, contact_id UUID NOT NULL,
+      fact_id UUID NOT NULL, fact_version BIGINT NOT NULL CHECK(fact_version>0),
+      requested_by BIGINT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','completed')),
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ,
+      CHECK((state='pending' AND completed_at IS NULL) OR
+            (state='completed' AND completed_at IS NOT NULL)))''')
+    cur.execute('ALTER TABLE saas_customer_memory_erasure_requests ADD COLUMN IF NOT EXISTS requested_by BIGINT')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_customer_memory_erasure_status_scope
+      ON saas_customer_memory_erasure_requests(tenant_id,contact_id,requested_at DESC,id)''')
+    # Reserve erased fact IDs across future add request IDs and contacts. This
+    # contains opaque identifiers only and survives a contact/tenant cascade.
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_erased_fact_ids (
+      tenant_id UUID NOT NULL, fact_id UUID NOT NULL,
+      PRIMARY KEY(tenant_id,fact_id))''')
+    # Distinct technical events avoid cross-transaction unique-key cycles for
+    # the same source. Tokens are pseudonymous metadata, not anonymous data.
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_source_erasure_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL,
+      source_token TEXT NOT NULL, token_key_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_customer_memory_source_erasure_lookup
+      ON saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_links (
       id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       contact_id UUID NOT NULL, channel_id UUID NOT NULL, conversation_id TEXT NOT NULL,
@@ -29,8 +72,9 @@ def migrate(cur):
       PRIMARY KEY(tenant_id,route_token,token_key_id))''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_erased_sources (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-      source_token TEXT NOT NULL, token_key_id TEXT NOT NULL,
+      source_token TEXT NOT NULL, external_token TEXT NOT NULL DEFAULT '', token_key_id TEXT NOT NULL,
       PRIMARY KEY(tenant_id,source_token,token_key_id))''')
+    cur.execute("ALTER TABLE saas_customer_memory_erased_sources ADD COLUMN IF NOT EXISTS external_token TEXT NOT NULL DEFAULT ''")
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_subject_revisions (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, contact_id UUID NOT NULL,
       revision BIGINT NOT NULL DEFAULT 1, erasure_epoch BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(tenant_id,contact_id),
@@ -79,7 +123,7 @@ def migrate(cur):
       id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       contact_id UUID NOT NULL, link_id UUID NOT NULL, link_version BIGINT NOT NULL,
       source_message_id UUID NOT NULL, source_version TEXT NOT NULL,
-      source_token TEXT NOT NULL DEFAULT '', token_key_id TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', claim_group_id UUID NULL, evidence_quote_token TEXT NOT NULL DEFAULT '',
+      source_token TEXT NOT NULL DEFAULT '', external_token TEXT NOT NULL DEFAULT '', token_key_id TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', claim_group_id UUID NULL, evidence_quote_token TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL CHECK(category IN ('profile','feature','topic','problem','agreement')),
       value TEXT NOT NULL CHECK(length(value) BETWEEN 1 AND 1200),
       source_kind TEXT NOT NULL CHECK(source_kind IN ('customer_statement','employee_observation','technical_result')),
@@ -90,6 +134,7 @@ def migrate(cur):
       FOREIGN KEY (tenant_id,link_id,contact_id) REFERENCES saas_customer_memory_links(tenant_id,id,contact_id) ON DELETE CASCADE,
       CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_to >= valid_from))''')
     cur.execute("ALTER TABLE saas_customer_memory_facts ADD COLUMN IF NOT EXISTS source_token TEXT NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE saas_customer_memory_facts ADD COLUMN IF NOT EXISTS external_token TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE saas_customer_memory_facts ADD COLUMN IF NOT EXISTS token_key_id TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE saas_customer_memory_facts ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE saas_customer_memory_facts ADD COLUMN IF NOT EXISTS claim_group_id UUID NULL")
@@ -109,11 +154,12 @@ def migrate(cur):
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_suppressions (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       contact_id UUID NOT NULL, source_message_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      source_token TEXT NOT NULL DEFAULT '', token_key_id TEXT NOT NULL DEFAULT '',
+      source_token TEXT NOT NULL DEFAULT '', external_token TEXT NOT NULL DEFAULT '', token_key_id TEXT NOT NULL DEFAULT '',
       PRIMARY KEY(tenant_id,contact_id,source_message_id),
       FOREIGN KEY (tenant_id,contact_id) REFERENCES saas_crm_native_contacts(tenant_id,id) ON DELETE CASCADE)''')
 
     cur.execute("ALTER TABLE saas_customer_memory_suppressions ADD COLUMN IF NOT EXISTS source_token TEXT NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE saas_customer_memory_suppressions ADD COLUMN IF NOT EXISTS external_token TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE saas_customer_memory_suppressions ADD COLUMN IF NOT EXISTS token_key_id TEXT NOT NULL DEFAULT ''")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_customer_memory_suppressed_token ON saas_customer_memory_suppressions(tenant_id,contact_id,source_token) WHERE source_token<>''")
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_customer_memory_claim_suppressions (
@@ -128,10 +174,18 @@ def migrate(cur):
       FOREIGN KEY(tenant_id,contact_id) REFERENCES saas_crm_native_contacts(tenant_id,id) ON DELETE CASCADE)''')
     # Deleting source evidence must atomically erase its derivatives. Keep only
     # opaque IDs to fence replay; value history disappears via ON DELETE CASCADE.
-    cur.execute("""CREATE OR REPLACE FUNCTION customer_memory_source_deleted() RETURNS trigger
+    cur.execute("""CREATE OR REPLACE FUNCTION customer_memory_source_deleted_v2() RETURNS trigger
       LANGUAGE plpgsql AS $$ DECLARE item record; BEGIN
+        -- A stale RR/SERIALIZABLE snapshot may miss facts committed after its
+        -- snapshot. Quarantine the tenant without storing source content; a
+        -- reviewed recovery protocol is required before memory can resume.
+        IF current_setting('transaction_isolation') <> 'read committed' AND OLD.channel LIKE 'connect:%' THEN
+          INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
+            VALUES(OLD.tenant_id,'','');
+        END IF;
         FOR item IN SELECT tenant_id,contact_id,source_message_id,
           CASE WHEN count(DISTINCT source_token)=1 AND count(DISTINCT token_key_id)=1 THEN max(source_token) ELSE '' END AS source_token,
+          CASE WHEN count(DISTINCT external_token)=1 AND count(DISTINCT token_key_id)=1 THEN max(external_token) ELSE '' END AS external_token,
           CASE WHEN count(DISTINCT source_token)=1 AND count(DISTINCT token_key_id)=1 THEN max(token_key_id) ELSE '' END AS token_key_id
           FROM saas_customer_memory_facts WHERE tenant_id=OLD.tenant_id AND source_message_id=OLD.id
           GROUP BY tenant_id,contact_id,source_message_id ORDER BY tenant_id,contact_id,source_message_id LOOP
@@ -141,6 +195,10 @@ def migrate(cur):
             PERFORM 1 FROM saas_crm_native_contacts c WHERE c.tenant_id=item.tenant_id
               AND c.id=item.contact_id FOR KEY SHARE;
             IF NOT FOUND THEN CONTINUE; END IF;
+            INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
+              VALUES(item.tenant_id,item.source_token,item.token_key_id);
+            INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
+              VALUES(item.tenant_id,item.external_token,item.token_key_id);
             INSERT INTO saas_customer_memory_subject_revisions(tenant_id,contact_id,revision)
               VALUES(item.tenant_id,item.contact_id,1) ON CONFLICT(tenant_id,contact_id) DO UPDATE
               SET revision=saas_customer_memory_subject_revisions.revision+1,
@@ -155,11 +213,12 @@ def migrate(cur):
               WHERE tenant_id=item.tenant_id AND contact_id=item.contact_id
                 AND source_message_id=item.source_message_id AND claim_group_id IS NOT NULL
               ON CONFLICT DO NOTHING;
-            INSERT INTO saas_customer_memory_suppressions(tenant_id,contact_id,source_message_id,source_token,token_key_id)
-              VALUES(item.tenant_id,item.contact_id,item.source_message_id,item.source_token,item.token_key_id)
+            INSERT INTO saas_customer_memory_suppressions(tenant_id,contact_id,source_message_id,source_token,external_token,token_key_id)
+              VALUES(item.tenant_id,item.contact_id,item.source_message_id,item.source_token,item.external_token,item.token_key_id)
             ON CONFLICT(tenant_id,contact_id,source_message_id) DO UPDATE SET
               source_token=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.source_token ELSE '' END,
-              token_key_id=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.token_key_id ELSE '' END;
+              external_token=CASE WHEN saas_customer_memory_suppressions.external_token=EXCLUDED.external_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.external_token ELSE '' END,
+              token_key_id=CASE WHEN saas_customer_memory_suppressions.source_token=EXCLUDED.source_token AND saas_customer_memory_suppressions.external_token=EXCLUDED.external_token AND saas_customer_memory_suppressions.token_key_id=EXCLUDED.token_key_id THEN EXCLUDED.token_key_id ELSE '' END;
           EXCEPTION WHEN foreign_key_violation THEN
             -- Concurrent personal-data deletion makes this subject disappear;
             -- no suppression for that deleted subject can or should survive.
@@ -170,13 +229,10 @@ def migrate(cur):
         DELETE FROM saas_customer_memory_source_generations WHERE tenant_id=OLD.tenant_id AND source_message_id=OLD.id;
         RETURN OLD;
       END $$""")
-    cur.execute("""DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='customer_memory_source_deleted'
-        AND tgrelid='saas_crm_messages'::regclass AND NOT tgisinternal) THEN
-        CREATE TRIGGER customer_memory_source_deleted AFTER DELETE ON saas_crm_messages
-          FOR EACH ROW EXECUTE FUNCTION customer_memory_source_deleted();
-      END IF;
-      END $$""")
+    # Older binaries replace the old function but only create this trigger if
+    # absent. Keep the trigger on a versioned function so an old cold start
+    # cannot silently revert its body. Old readers/writers still need fencing.
+    _ensure_versioned_trigger(cur,'source')
 
     # Capture only a non-content revision for new Connect messages. A source
     # inserted before an erasure commit observes the earlier epoch and cannot
@@ -213,7 +269,7 @@ def migrate(cur):
     # Retain only keyed, opaque erasure fences when a CRM contact is deleted.
     # They stop an old source from rehydrating memory under a recreated UUID or
     # a newly linked contact; key rotation remains closed until reconciled.
-    cur.execute("""CREATE OR REPLACE FUNCTION customer_memory_contact_erased() RETURNS trigger
+    cur.execute("""CREATE OR REPLACE FUNCTION customer_memory_contact_erased_v2() RETURNS trigger
       LANGUAGE plpgsql AS $$ DECLARE locked_channel record; BEGIN
         IF NOT EXISTS(SELECT 1 FROM saas_tenants WHERE id=OLD.tenant_id) THEN RETURN OLD; END IF;
         -- Never wait while holding the CRM contact row: a concurrent link
@@ -235,17 +291,28 @@ def migrate(cur):
         INSERT INTO saas_customer_memory_erased_routes(tenant_id,route_token,token_key_id)
           SELECT DISTINCT tenant_id,route_token,subject_key_id FROM saas_customer_memory_links
           WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id ON CONFLICT DO NOTHING;
-        INSERT INTO saas_customer_memory_erased_sources(tenant_id,source_token,token_key_id)
+        -- Keep both channel-bound and tenant-wide provider source identity.
+        -- Missing external identity on legacy rows fails closed for the
+        -- tenant rather than allowing replay on a different channel.
+        INSERT INTO saas_customer_memory_source_erasure_events(tenant_id,source_token,token_key_id)
           SELECT tenant_id,source_token,token_key_id FROM saas_customer_memory_facts
             WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id
-          UNION SELECT tenant_id,source_token,token_key_id FROM saas_customer_memory_suppressions
-            WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id ON CONFLICT DO NOTHING;
+          UNION ALL SELECT tenant_id,external_token,token_key_id FROM saas_customer_memory_facts
+            WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id
+          UNION ALL SELECT tenant_id,external_token,token_key_id FROM saas_customer_memory_suppressions
+            WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id;
+        INSERT INTO saas_customer_memory_erased_sources(tenant_id,source_token,external_token,token_key_id)
+          SELECT tenant_id,source_token,
+            CASE WHEN count(DISTINCT external_token)=1 THEN max(external_token) ELSE '' END,token_key_id
+          FROM (
+            SELECT tenant_id,source_token,external_token,token_key_id FROM saas_customer_memory_facts
+              WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id
+            UNION ALL SELECT tenant_id,source_token,external_token,token_key_id FROM saas_customer_memory_suppressions
+              WHERE tenant_id=OLD.tenant_id AND contact_id=OLD.id
+          ) source_rows GROUP BY tenant_id,source_token,token_key_id
+          ON CONFLICT(tenant_id,source_token,token_key_id) DO UPDATE SET
+            external_token=CASE WHEN saas_customer_memory_erased_sources.external_token=EXCLUDED.external_token
+              THEN EXCLUDED.external_token ELSE '' END;
         RETURN OLD;
       END $$""")
-    cur.execute("""DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='customer_memory_contact_erased'
-        AND tgrelid='saas_crm_native_contacts'::regclass AND NOT tgisinternal) THEN
-        CREATE TRIGGER customer_memory_contact_erased BEFORE DELETE ON saas_crm_native_contacts
-          FOR EACH ROW EXECUTE FUNCTION customer_memory_contact_erased();
-      END IF;
-      END $$""")
+    _ensure_versioned_trigger(cur,'contact')

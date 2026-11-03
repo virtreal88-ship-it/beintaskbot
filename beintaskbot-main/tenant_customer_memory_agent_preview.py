@@ -17,8 +17,8 @@ from tenant_platform import _connect, _ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_operator_case_submission import assignment
 from tenant_customer_memory import (
-    _assert_claim_allowed, _erasure_cutoff, _guard, _link, _lock_contact,
-    _lock_identities, _route, _source, _source_kind_supported, _subject, _text,
+    _assert_claim_allowed, _erasure_cutoff, _erasure_pending, _guard, _link, _lock_contact,
+    _lock_identities, _route, _source, _source_external_token, _source_kind_supported, _source_read_guard, _subject, _text,
     _verify_subject_revision,
 )
 
@@ -76,6 +76,7 @@ def preview(profile, *, tenant_id, subject_id, channel_id, conversation_id,
                   AND id=%s::uuid AND enabled=TRUE AND archived_at IS NULL FOR SHARE''',
                   (tenant,agent_id))
                 if not cur.fetchone():return _result('denied')
+                if _erasure_pending(cur,tenant,subject):return _result('no_memory')
                 cur.execute('''SELECT id FROM saas_customer_memory_links WHERE tenant_id=%s::uuid
                   AND contact_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
                   AND state='confirmed' LIMIT 2''',(tenant,subject,channel_id,conversation_id))
@@ -107,10 +108,15 @@ def preview(profile, *, tenant_id, subject_id, channel_id, conversation_id,
                     try:
                         source,source_version=_source(cur,tenant,link,str(item['source_message_id']))
                         if source_version!=item['source_version']:continue
+                        source_key,source_token=_source_read_guard(cur,tenant,source)
+                        if source_key!=item['token_key_id'] or source_token!=item['source_token']:continue
+                        if _source_external_token(tenant,source)[1]!=item['external_token']:continue
                         if not _source_kind_supported(source,item['source_kind']):continue
                         if cutoff:_assert_claim_allowed(cur,tenant,subject,item['value'],item['token_key_id'],source)
                         value=_text(item['value'])
-                    except TenantLinearError:continue
+                    except TenantLinearError as exc:
+                        if exc.status==503:return _result('temporary_error')
+                        continue
                     candidate={'category':item['category'],'value':value,
                       'source_kind':item['source_kind'],'reliability':item['reliability'],
                       'source_message_id':str(item['source_message_id']),

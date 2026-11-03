@@ -15,6 +15,9 @@ on:
       - 'beintaskbot-main/tests/customer_memory_browser_fixture.py'
       - 'beintaskbot-main/tests/customer_memory_http_browser.cjs'
       - 'beintaskbot-main/tests/customer_memory_erasure_model.py'
+      - 'beintaskbot-main/tests/customer_memory_event_receipts_prototype.py'
+      - 'beintaskbot-main/tests/customer_memory_local_transport_prototype.py'
+      - 'beintaskbot-main/tests/customer_memory_off_migration_check.py'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_crm_identity.py'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
@@ -57,6 +60,8 @@ jobs:
           node-version: '22'
       - name: Install test dependencies
         run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Verify disabled memory cold-start and real session authentication
+        run: python tests/customer_memory_off_migration_check.py
       - name: Exercise memory policy, PostgreSQL and HTTP
         run: python -m unittest discover -s tests -p 'test_customer_memory*.py' -v
       - name: Exercise existing CRM and route regressions
@@ -81,4 +86,8 @@ jobs:
           python -m unittest -v \
             test_customer_memory_postgres.CustomerMemoryPostgresTests.test_inflight_channel_read_allows_eventual_erasure \
             test_customer_memory_postgres.CustomerMemoryPostgresTests.test_contact_erasure_during_other_subject_memory_read \
-            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_opposite_channel_erasure_transactions_both_commit
+            test_customer_memory_postgres.CustomerMemoryPostgresTests.test_opposite_channel_erasure_transactions_both_commit \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_rr_source_quarantine_fences_already_started_other_subject_read \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_deleted_source_without_fact_cannot_reappear_on_replay \
+            test_customer_memory_pending_erasure.PendingErasureTests.test_contact_erasure_fences_inflight_same_source_on_other_channel \
+            test_customer_memory_local_transport_prototype.LocalTransportPrototypeTests.test_received_erasure_request_prevents_not_yet_started_local_post

@@ -384,10 +384,10 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
             with conn.cursor() as cur:
                 cur.execute("SET LOCAL lock_timeout='2s'")
                 cur.execute('SELECT id FROM saas_crm_messages WHERE id=%s FOR UPDATE',(self.message,))
-                thread=Thread(target=editor);thread.start();self.assertTrue(started.wait(2));self.assertFalse(done.wait(.15))
+                thread=Thread(target=editor);thread.start();self.assertTrue(started.wait(2));self.assertTrue(done.wait(2))
                 cur.execute('DELETE FROM saas_crm_messages WHERE id=%s',(self.message,))
             conn.commit()
-        thread.join(3);self.assertTrue(done.is_set());self.assertEqual(out,[404])
+        thread.join(3);self.assertTrue(done.is_set());self.assertEqual(out,[503])
         self.assertEqual(self.memory.read(self.profile,self.contact)['facts'],[])
 
     def test_deleted_message_replay_with_new_row_id_stays_suppressed(self):
@@ -773,7 +773,7 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
             conn.commit()
         thread.join(3);self.assertTrue(done.is_set());self.assertEqual(out,['done'])
 
-    def test_post_erasure_new_evidence_recovers_without_old_or_late_history(self):
+    def test_pending_erasure_hides_new_and_late_evidence_until_resolved(self):
         from tenant_platform import _connect
         from tenant_linear_policy import TenantLinearError
         link=self.link();old=self.fact(link,value='Old synthetic fact')
@@ -786,8 +786,8 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
                     cur.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,body,direction,message_type,happened_at) VALUES(%s,%s,%s,%s,%s,'New synthetic message','incoming','text',"+happened+")",(mid,self.tenant,src['kommo_lead_id'],'connect:'+str(uuid.uuid4()),src['channel']))
             conn.commit()
         with self.assertRaises(TenantLinearError):self.fact(link,source_message_id=late,value='Late historical fact')
-        self.fact(link,source_message_id=fresh,value='New confirmed need')
-        self.assertEqual([x['value'] for x in self.memory.read(self.profile,self.contact)['facts']],['New confirmed need'])
+        with self.assertRaises(TenantLinearError):self.fact(link,source_message_id=fresh,value='New confirmed need')
+        self.assertEqual(self.memory.read(self.profile,self.contact)['facts'],[])
 
     def test_message_inserted_before_erasure_commit_is_not_new_evidence(self):
         from tenant_platform import _connect
