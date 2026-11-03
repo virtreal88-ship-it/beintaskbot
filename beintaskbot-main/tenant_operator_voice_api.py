@@ -5,6 +5,7 @@ from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_voice_context import check
+from tenant_operator_voice_orchestration import open_server_session
 
 
 def handler(member_from_request,origin,logger,resource):
@@ -39,7 +40,9 @@ def handler(member_from_request,origin,logger,resource):
                 if request.method!='GET' or request.headers.get('Origin','').rstrip('/')!=origin.rstrip('/'):
                     raise TenantLinearError('Источник запроса недоступен.',403)
                 _expected(request.query,profile)
-                return web.json_response({'success':False,'error':'Голосовой режим пока недоступен.'},status=503,headers=headers)
+                # The server-owned orchestrator has an immutable cutover gate;
+                # it refuses before any upgrade or provider/network operation.
+                return await open_server_session(request,profile)
             raise TenantLinearError('Метод не поддерживается.',405)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)

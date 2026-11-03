@@ -157,3 +157,28 @@ session readback and one-use dispatch binding are tested only with an injected
 synthetic socket. The real provider factory always rejects. Even a successful
 readback is not proof that a real provider cannot charge before policy attests,
 nor proof of a conservative tariff bound or durable dispatch fencing.
+
+## Server-owned composition candidate
+
+`tenant_operator_voice_orchestration.py` now assembles the existing tenant and
+route authority, scoped Copilot history reader/context preparation, shared
+voice-test grant and the single `tenant_operator_voice_session.py` candidate.
+Database and context preparation run in `asyncio.to_thread`; each operation
+uses a separate connection, and the history row lock is released before any
+potential provider I/O. Scope and executor are server-derived. Reserve/claim
+reauthorize within their transaction and commit before returning; reconciliation
+of an already claimed hold does not require a still-active employee. If an
+awaited DB claim is cancelled, the worker thread may still commit: its hold
+remains charged/reserved, and the mock session cannot dispatch after closure.
+
+The production WS boundary calls this module but returns 503 before upgrade.
+The voice writer has an immutable `require_history_cutover()` refusal because
+old text workers can still overwrite voice turns, and context handoff has an
+independent immutable `require_sealed_source_snapshot()` refusal because exact
+message/knowledge versions and freshness are not yet revalidated. The live
+provider factory independently refuses. These gates have no environment or
+request override. Integration tests exercise actual authority, context and
+ledger components against local PostgreSQL, and explicitly verify refusal;
+they do not bypass the writer gate or establish an active real voice session.
+The older separate prototype test directly inserts a synthetic partial turn to
+exercise the lower-level history helper; it is not the blocked voice writer.

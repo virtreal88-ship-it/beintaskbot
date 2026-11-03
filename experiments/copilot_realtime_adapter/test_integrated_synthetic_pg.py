@@ -6,6 +6,8 @@ inside this test; they are not a production admission or safety guarantee.
 import asyncio
 import base64
 import json
+import threading
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 from test_real_authority_pg import RealVoiceAuthority
@@ -21,6 +23,8 @@ import tenant_ai_agent_run_store as knowledge_store
 import tenant_ai_spend_budget as tenant_spend
 import tenant_operator_copilot_threads as history_candidate
 import tenant_voice_test_grant as grant_candidate
+import tenant_operator_voice_orchestration as production
+from tenant_linear_policy import TenantLinearError
 
 ROOT=Path(__file__).resolve().parents[2]
 class IntegratedSynthetic(RealVoiceAuthority):
@@ -57,6 +61,88 @@ class IntegratedSynthetic(RealVoiceAuthority):
 
     def scoped(self):
         conn=self.connect();conn.execute('SET search_path TO '+self.schema);return conn
+
+    def test_actual_server_composition_fails_closed_and_reconciles_after_revoke(self):
+        profile={'tenant_id':self.tenant,'telegram_id':7};initial=self.admit()
+        self.conn.commit()  # release synthetic membership/route locks before revoke
+        with self.scoped() as conn,conn.cursor() as cur:
+            self.history.append(cur,self.tenant,7,self.channel,self.conversation,0,initial.agent_binding,
+                [{'role':'employee','text':'synthetic text','agent_binding':initial.agent_binding}])
+
+        async def execute():
+            authority=await production.ScopedAuthority.create(profile,self.route)
+            context=production.CopilotContext(authority)
+            # Internal diagnostic only; the public read refuses until source
+            # versions are sealed, so no prompt is delivered to a provider.
+            snapshot=await asyncio.to_thread(context._read)
+            self.assertEqual(snapshot['extra_context']['prior_internal_copilot_turns'][0]['text'],'synthetic text')
+            self.assertNotIn('CONTEXT_ONLY_NO_CREDENTIAL',json.dumps(snapshot))
+            with self.assertRaises(TenantLinearError):await context.read_authorized(authority.session_scope)
+            with self.scoped() as conn:
+                conn.execute("UPDATE saas_crm_messages SET body='synthetic changed' WHERE tenant_id=%s AND external_id='customer-1'",(self.tenant,))
+            # Even when membership/agent/config are unchanged, a changed
+            # source must never reach provider before source sealing exists.
+            await authority.check(authority.session_scope,'response_dispatch')
+            with self.assertRaises(TenantLinearError):await context.read_authorized(authority.session_scope)
+            with self.assertRaises(TenantLinearError):await production.VoiceHistory(authority).append({'text':'synthetic voice'})
+            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None)
+            with self.scoped() as conn:
+                self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
+
+            session_id=str(uuid.uuid4());budget=production.ScopedBudget(authority,session_id)
+            request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
+                     'channel_id':self.channel,'conversation_id':self.conversation,'response_number':1,'executor':'copilot-voice-server'}
+            reserved=await budget.reserve(request);self.assertEqual(reserved['state'],'reserved')
+            claimed=await budget.claim(request);self.assertEqual(claimed['state'],'claimed')
+            # A separate transaction can see the claim before any dispatcher.
+            with self.scoped() as conn:
+                self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold WHERE request_id=%s',(request['request_id'],)).fetchone()['state'],'claimed')
+                conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+            with self.assertRaises(TenantLinearError):await budget.reserve({**request,'request_id':str(uuid.uuid4()),'response_number':2})
+            with self.assertRaises(TenantLinearError):await budget.mark_unknown({**request,'conversation_id':'different'})
+            unknown=await budget.mark_unknown(request);self.assertEqual(unknown['state'],'unknown')
+            actual=await budget.note_actual(request,11);self.assertEqual(actual['state'],'settled')
+            with self.scoped() as conn:
+                hold=conn.execute('SELECT state,reserved_microusd FROM saas_voice_test_hold WHERE request_id=%s',(request['request_id'],)).fetchone()
+                self.assertEqual(hold['state'],'settled');self.assertGreater(hold['reserved_microusd'],0)
+
+        with patch.object(voice,'_connect',self.scoped),patch.object(production,'_connect',self.scoped),patch.object(knowledge_store,'_connect',self.scoped),\
+             patch.object(self.grant,'ENFORCEMENT_VERIFIED',True),patch.object(self.grant,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            asyncio.run(execute())
+
+    def test_cancelled_background_claim_keeps_committed_hold(self):
+        profile={'tenant_id':self.tenant,'telegram_id':7};entered=threading.Event();release=threading.Event();original=self.grant.claim
+        def blocked_claim(cur,item):
+            row=original(cur,item);entered.set()
+            if not release.wait(3):raise RuntimeError('synthetic test timeout')
+            return row
+        async def execute():
+            authority=await production.ScopedAuthority.create(profile,self.route)
+            session_id=str(uuid.uuid4());budget=production.ScopedBudget(authority,session_id)
+            request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
+                     'channel_id':self.channel,'conversation_id':self.conversation,'response_number':1,'executor':'copilot-voice-server'}
+            await budget.reserve(request)
+            pending=asyncio.create_task(budget.claim(request));self.assertTrue(await asyncio.to_thread(entered.wait,1))
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):await pending
+            release.set()
+            state=None
+            for _ in range(100):
+                with self.scoped() as conn:
+                    state=conn.execute('SELECT state FROM saas_voice_test_hold WHERE request_id=%s',(request['request_id'],)).fetchone()['state']
+                if state=='claimed':break
+                await asyncio.sleep(.01)
+            self.assertEqual(state,'claimed')
+            self.assertIsNone(await budget.claim(request))
+            # No provider exists in the production orchestrator path.
+            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None)
+
+        try:
+            with patch.object(voice,'_connect',self.scoped),patch.object(production,'_connect',self.scoped),\
+                 patch.object(self.grant,'claim',blocked_claim),patch.object(self.grant,'ENFORCEMENT_VERIFIED',True),\
+                 patch.object(self.grant,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+                asyncio.run(execute())
+        finally:release.set()
 
     def test_synthetic_text_voice_interruption_text_with_real_admission_budget_and_history(self):
         profile={'tenant_id':self.tenant,'telegram_id':7};scope=self.admit();outer=self

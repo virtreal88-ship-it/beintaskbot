@@ -40,6 +40,9 @@ class Provider:
     mock_only=True
     def __init__(self, ledger): self.events=[];self.config=None;self.closed=False;self.ledger=ledger
     async def open(self, snapshot, **config): self.config=config
+    async def bind_claim(self,scope,receipt):
+        if not isinstance(receipt,dict) or receipt.get('state')!='claimed' or receipt.get('request_id')!=scope['request_id']:
+            raise Refused('claim_invalid')
     async def send(self, event):
         if event['type']=='response.create':
             assert [x[0] for x in self.ledger.events][-2:] == ['reserve','claim']
@@ -103,6 +106,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused): await self.session.receive_client({'type':'response.create'})
         self.assertTrue(self.provider.closed)
         self.assertEqual(self.ledger.events,[])
+
+    async def test_provider_without_claim_binding_is_rejected(self):
+        class NoBinding:mock_only=True
+        with self.assertRaisesRegex(Refused,'provider_claim_binding_required'):
+            Session(('tenant',42,'channel','conversation'),authority=self.auth,ledger=self.ledger,
+                    lease=Lease(),context=self.context,provider=NoBinding(),client=Client())
 
     async def test_unsolicited_provider_response_is_closed(self):
         with self.assertRaises(Refused): await self.session.receive_provider({'type':'response.created'})

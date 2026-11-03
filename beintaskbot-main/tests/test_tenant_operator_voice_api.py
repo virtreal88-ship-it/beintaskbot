@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import tenant_operator_voice_api as api
+import tenant_operator_voice_orchestration as orchestration
 from tenant_linear_policy import TenantLinearError
 
 
@@ -57,8 +58,11 @@ class VoiceHttp(unittest.IsolatedAsyncioTestCase):
             writer.close();await writer.wait_closed()
 
     async def test_websocket_never_upgrades_and_has_no_provider(self):
-        response=await self.client.get('/ws?expected_tenant_id=tenant-synthetic&expected_user_id=7',headers={**self.headers,
-            'Connection':'Upgrade','Upgrade':'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':'dGhlIHNhbXBsZSBub25jZQ=='})
+        with patch.object(api,'open_server_session',wraps=orchestration.open_server_session) as gate,\
+             patch.object(orchestration,'create_production_provider') as provider:
+            response=await self.client.get('/ws?expected_tenant_id=tenant-synthetic&expected_user_id=7',headers={**self.headers,
+                'Connection':'Upgrade','Upgrade':'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':'dGhlIHNhbXBsZSBub25jZQ=='})
+            gate.assert_awaited_once();provider.assert_not_called()
         self.assertEqual(response.status,503);self.assertNotEqual(response.headers.get('Upgrade'),'websocket')
         self.assertEqual((await response.json())['success'],False);self.check.assert_not_called()
 
