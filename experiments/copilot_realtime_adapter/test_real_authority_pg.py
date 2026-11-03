@@ -106,7 +106,8 @@ class RealVoiceAuthority(unittest.TestCase):
     def test_other_tenant_wrong_route_and_role_are_denied(self):
         from tenant_linear_policy import TenantLinearError
         for kwargs in [{'tenant':self.other},{'actor':8},{'actor':404},{'route':{**self.route,'lead_id':42}},
-                       {'route':{**self.route,'channel_id':str(uuid.uuid4())}}]:
+                       {'route':{**self.route,'channel_id':str(uuid.uuid4())}},
+                       {'route':{**self.route,'conversation_id':'different@s.whatsapp.net'}}]:
             with self.subTest(kwargs=kwargs),self.assertRaises(TenantLinearError):self.admit(**kwargs)
 
     def test_revocation_of_membership_role_consent_and_route(self):
@@ -145,6 +146,33 @@ class RealVoiceAuthority(unittest.TestCase):
             self.conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
             self.conn.commit()
             with self.assertRaises(TenantLinearError):voice.check(profile,self.route,expected=fresh)
+
+    def test_http_preflight_uses_real_pg_authority_and_never_upgrades(self):
+        import asyncio
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient,TestServer
+        import tenant_operator_voice_context as voice
+        import tenant_operator_voice_api as api
+        profile={'tenant_id':self.tenant,'telegram_id':7}
+        def scoped_connect():
+            conn=self.connect();conn.execute('SET search_path TO '+self.schema);return conn
+        async def exercise():
+            app=web.Application()
+            # Only the login identity is synthetic; the route check below is
+            # the real voice.check -> access/assert_route/agent path on PG.
+            app.router.add_post('/preflight',api.handler(lambda _:profile,'https://crm.pro.az',None,'preflight'))
+            app.router.add_get('/ws',api.handler(lambda _:profile,'https://crm.pro.az',None,'ws'))
+            client=TestClient(TestServer(app));await client.start_server()
+            try:
+                body={**self.route,'expected_tenant_id':self.tenant,'expected_user_id':'7'}
+                response=await client.post('/preflight',headers={'Origin':'https://crm.pro.az'},json=body)
+                self.assertEqual(response.status,200);self.assertEqual((await response.json())['result'],{'available':False})
+                response=await client.post('/preflight',headers={'Origin':'https://crm.pro.az'},json={**body,'conversation_id':'different@s.whatsapp.net'})
+                self.assertEqual(response.status,404)
+                response=await client.get('/ws',headers={'Origin':'https://crm.pro.az'},params={'expected_tenant_id':self.tenant,'expected_user_id':'7'})
+                self.assertEqual(response.status,503);self.assertNotEqual(response.headers.get('Upgrade'),'websocket')
+            finally:await client.close()
+        with patch.object(voice,'_connect',scoped_connect):asyncio.run(exercise())
 
     def test_real_disabled_company_options_and_ai_access_fail_closed(self):
         from tenant_linear_policy import TenantLinearError
