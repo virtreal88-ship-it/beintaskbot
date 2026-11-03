@@ -13,7 +13,7 @@ const clone=value=>JSON.parse(JSON.stringify(value));
 const settle=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediate(resolve))};
 const until=async predicate=>{for(let i=0;i<140;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert(predicate(),'actual contacts app did not settle')};
 async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));const dom=new JSDOM(html(),{url:'https://fixture.test/app?view='+(config.view||'customers')+'&lang='+(config.language||'en')+(config.query||''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){
- w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installCompanyEmployeesFixture.toString()+')('+JSON.stringify({role:'owner',modules:{customers:true,deals:true},...config})+')');const f=w.companyEmployeesFixture,base=w.fetch;if(config.permissions)f.profile.member.permissions=config.permissions;
+ w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installCompanyEmployeesFixture.toString()+')('+JSON.stringify({role:'owner',modules:{customers:true,deals:true},...config})+')');const f=w.companyEmployeesFixture,base=w.fetch;if(config.permissions)f.profile.member.permissions=config.permissions;if(config.tenantId)f.profile.member.tenant_id=config.tenantId;
  f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions=clone(actions);f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
  f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
  const response=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}),ok=data=>response({success:true,...data}),failure=(status,code)=>response({success:false,error:code,code},status);
@@ -45,4 +45,16 @@ async function search(b,value){type(b,value);await new Promise(resolve=>setTimeo
 async function selectSource(b,value){b.d.getElementById('contactsSource').value=value;b.d.getElementById('contactsSource').dispatchEvent(new b.w.Event('change',{bubbles:true}));await settle()}
 function formInput(b,id,value){const input=b.d.getElementById(id);input.value=value;input.dispatchEvent(new b.w.Event('input',{bubbles:true}));return input}
 async function reauthorize(b,change){change(b.f);await b.w.tenantRequestCoordinator.revalidateProfile();await settle()}
-module.exports={mount,native,external,actions,tenant,contactA,contactB,company,settle,until,directoryReads,writes,type,search,selectSource,formInput,reauthorize};
+/* Controller-only boundary for a malformed legacy permission value. Other app
+   consumers have independently recorded baseline exceptions for that shape;
+   this test neither loads those modules nor waives any errors from this one. */
+async function controllerOnly(profile){
+ const errors=[],calls=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));
+ const dom=new JSDOM(fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8'),{url:'https://fixture.test/app?view=customers',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:vc});
+ const w=dom.window;w.Headers=Headers;w.Response=Response;w.tenantI18n={language:'en'};w.tenantProfileSnapshot=profile;
+ w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-customers'));
+ w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href);calls.push({url:url.pathname+url.search,options});assert.equal(url.pathname,'/api/platform/crm/native/contacts');assert.equal(url.searchParams.get('listing'),'1');assert.equal(url.searchParams.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(url.searchParams.get('expected_user_id'),String(profile.member.telegram_id));return new Response(JSON.stringify({success:true,data:[],total:0,source_total:0,limit:50,offset:0,next_offset:null,source:'native',sources:[{source:'native',allowed:true,available:true,state:'ready'}],state:'empty',actions}),{headers:{'Content-Type':'application/json'}})};
+ w.eval(fs.readFileSync(path.join(docs,'tenant-contacts-directory.js'),'utf8'));await settle();
+ return{w,d:w.document,errors,calls,close:()=>w.close()};
+}
+module.exports={mount,native,external,actions,tenant,contactA,contactB,company,settle,until,directoryReads,writes,type,search,selectSource,formInput,reauthorize,controllerOnly};

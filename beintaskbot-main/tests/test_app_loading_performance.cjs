@@ -111,11 +111,22 @@ async function bootstrapTests(){
   const full={...profile,capabilities:{modules:{dialogs:true,tasks:true,deals:true,customers:true}}};
   requests[1].resolve(response(full));await settle();
   const paths=requests.slice(2).map(request=>request.url);
-  for(const expected of ['/api/platform/crm/tasks?refresh=1','/api/platform/crm/deals','/api/platform/crm/native/deals?options=1','/api/platform/crm/native/companies','/api/platform/crm/native/contacts'])assert.ok(paths.includes(expected),`independent bootstrap started before any CRM response: ${expected}; got ${paths}`);
+  for(const expected of ['/api/platform/crm/tasks?refresh=1','/api/platform/crm/deals','/api/platform/crm/native/deals?options=1','/api/platform/crm/native/companies'])assert.ok(paths.includes(expected),`independent bootstrap started before any CRM response: ${expected}; got ${paths}`);
   const nativeTaskOptions=paths.map(url=>new URL(url,'https://fixture.test')).filter(url=>url.pathname==='/api/platform/crm/native/tasks'&&url.searchParams.get('options')==='1');
   assert.equal(nativeTaskOptions.length,1,'native task options start independently before any CRM response');assert.equal(nativeTaskOptions[0].searchParams.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(nativeTaskOptions[0].searchParams.get('expected_user_id'),String(profile.member.telegram_id));
   assert.equal(paths.filter(url=>url==='/api/platform/crm/native/companies').length,1,'options and list join the same independent company read');
   assert.equal(w.tenantProfileSnapshot.member.tenant_id,profile.member.tenant_id);assert.equal(w.location.pathname,'/app');
+  // Contacts now have a demanded source-specific directory. Load the actual
+  // asset and navigate through the actual router while every other CRM response
+  // is still pending; this must add one independent query, not an eager read.
+  w.eval(read('docs/tenant-contacts-directory.js'));await settle();
+  const contactReads=()=>requests.filter(request=>new URL(request.url,'https://fixture.test').pathname==='/api/platform/crm/native/contacts');
+  assert.equal(contactReads().length,0,'hidden contacts add no list read during task bootstrap');
+  w.tenantAppNavigate('customers',true);await settle();assert.equal(contactReads().length,1,'actual visible contacts start independently of pending task/deal/company reads');
+  const listing=contactReads()[0],params=new URL(listing.url,'https://fixture.test').searchParams;assert.equal(params.get('listing'),'1');assert.equal(params.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(params.get('expected_user_id'),String(profile.member.telegram_id));
+  listing.resolve(response({success:true,data:[],total:0,source_total:0,limit:50,offset:0,next_offset:null,source:'native',sources:[{source:'native',allowed:true,available:true,state:'ready'},{source:'kommo',allowed:true,available:false,state:'unavailable',reason:'integration_not_connected'}],state:'empty',actions:{view:true,create:true,update:true,archive:true}}));await settle();
+  assert.match(w.document.getElementById('customersList').textContent,/No contacts yet/);assert.match(w.document.getElementById('customerCount').textContent,/Found: 0/);
+  w.tenantAppNavigate('profile',true);await settle();w.tenantAppNavigate('customers',true);await settle();assert.equal(contactReads().length,1,'warm same-scope return reuses the directory without a fetch storm');
  }finally{w.close();}
  console.log('PASS bootstrap: superseded startup waits for fresh authorization; independent CRM reads start in parallel');
 }
