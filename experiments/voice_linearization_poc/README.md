@@ -20,6 +20,7 @@ PYTHONPATH=beintaskbot-main:experiments/copilot_realtime_adapter:experiments/voi
   test_linearization.Linearization.test_mutations_invalidate_including_aba_and_roll_back_budget \
   test_linearization.Linearization.test_committed_one_shot_intent_and_budget \
   test_linearization.Linearization.test_competing_duplicate_dispatch_has_one_committed_intent \
+  test_linearization.Linearization.test_wrong_snapshot_scope_refused_before_budget \
   test_linearization.Linearization.test_writer_started_before_L_cannot_commit_until_after_L \
   test_linearization.Linearization.test_legacy_source_then_budget_vs_dispatch_budget_then_epoch_deadlocks \
   test_linearization.Linearization.test_truncate_bypasses_row_triggers \
@@ -30,7 +31,8 @@ PYTHONPATH=beintaskbot-main:experiments/copilot_realtime_adapter:experiments/voi
 
 The test schema installs illustrative row triggers on `TABLES`, using a
 tenant-wide monotonic counter. A snapshot reads authority and a message in one
-repeatable-read transaction. A second, short transaction calls the real voice
+repeatable-read transaction; the synthetic dispatcher requires the same fixed
+tenant, actor, channel and conversation as that fixture. A second, short transaction calls the real voice
 grant's reserve and claim, locks the epoch, checks the snapshot epoch, inserts
 one scoped one-shot intent, and commits. Successful commit is the
 linearization point **L**. On mismatch or failure, intent and both grant and

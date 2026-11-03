@@ -89,6 +89,9 @@ class Linearization(IntegratedSynthetic):
     def dispatch(self, scope, expected, before_commit=None):
         # Uses the real, still-gated grant implementation with gate overrides
         # confined to this test. Budget locks are acquired before epoch.
+        if (scope.get('tenant_id') != self.tenant or scope.get('actor_id') != 7
+            or scope.get('channel_id') != self.channel or scope.get('conversation_id') != self.conversation):
+            raise ValueError('snapshot_scope_mismatch')
         with self.scoped() as conn:
             with conn.cursor() as cur:
                 grant.reserve(cur,scope)
@@ -159,6 +162,16 @@ class Linearization(IntegratedSynthetic):
             with self.scoped() as conn:
                 self.assertEqual(conn.execute('SELECT count(*) AS n FROM experiment_intent WHERE request_id=%s',(scope['request_id'],)).fetchone()['n'],1)
                 self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold WHERE request_id=%s',(scope['request_id'],)).fetchone()['n'],1)
+
+    def test_wrong_snapshot_scope_refused_before_budget(self):
+        with patch.object(grant,'ENFORCEMENT_VERIFIED',True),patch.object(grant,'RECONCILIATION_VERIFIED',True),patch.object(spend,'limit_microusd',return_value=0):
+            original=self.scope();expected=self.snapshot()
+            for wrong in ({'tenant_id':self.other},{'actor_id':8},{'channel_id':str(uuid.uuid4())},{'conversation_id':'other'}):
+                with self.assertRaisesRegex(ValueError,'snapshot_scope_mismatch'):
+                    self.dispatch({**original,**wrong},expected)
+            with self.scoped() as conn:
+                self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
+                self.assertEqual(conn.execute('SELECT count(*) AS n FROM experiment_intent').fetchone()['n'],0)
 
     def test_writer_started_before_L_cannot_commit_until_after_L(self):
         locked=threading.Event();release=threading.Event();writer_started=threading.Event();pids={}
