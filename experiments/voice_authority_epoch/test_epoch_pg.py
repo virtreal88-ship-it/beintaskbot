@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import psycopg
 from test_lease_pg import LeasePostgres
-from epoch_lease import SyntheticEpochLease
+from epoch_lease import SyntheticEpochLease,SyntheticSnapshotContext
 from test_session import Authority, Ledger, Context, Provider, Client
 from tenant_operator_voice_session import Session
 import tenant_operator_voice_lease as base
@@ -62,6 +62,9 @@ class EpochLeasePostgres(LeasePostgres):
     def adapter(self):
         return SyntheticEpochLease(self.profile,self.route,self.expected,str(uuid.uuid4()))
 
+    def context(self,adapter):
+        return SyntheticSnapshotContext(self.profile,self.route,self.expected,adapter)
+
     def revision(self,tenant=None):
         with self.scoped() as conn:
             return conn.execute('SELECT revision FROM experiment_authority_epoch WHERE tenant_id=%s',(tenant or self.tenant,)).fetchone()['revision']
@@ -74,7 +77,8 @@ class EpochLeasePostgres(LeasePostgres):
     def test_actual_member_revoke_regrant_invalidates_epoch_and_fence(self):
         async def run():
             with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
-                adapter=self.adapter();fence=await adapter.claim(self.scope);before=self.revision()
+                adapter=self.adapter();await self.context(adapter).read_authorized(self.scope)
+                fence=await adapter.claim(self.scope);before=self.revision()
                 self.flip_member();self.assertEqual(self.revision(),before+2)
                 with self.assertRaisesRegex(base.LeaseUnavailable,'synthetic_authority_epoch_changed'):
                     await adapter.assert_current(self.scope,fence)
@@ -83,8 +87,115 @@ class EpochLeasePostgres(LeasePostgres):
                 with self.assertRaisesRegex(base.LeaseUnavailable,'session_terminal'):
                     await adapter.assert_current(self.scope,fence)
                 fresh=self.adapter()
+                await self.context(fresh).read_authorized(self.scope)
                 with self.assertRaisesRegex(base.LeaseUnavailable,'already_active_or_unverified'):
                     await fresh.claim(self.scope)
+        asyncio.run(run())
+
+    def test_revoke_regrant_after_snapshot_before_claim_refuses_provider_open(self):
+        async def run():
+            ledger=Ledger();provider=Provider(ledger);client=Client()
+            with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
+                adapter=self.adapter();context=self.context(adapter);original=context.read_authorized
+                async def capture_then_aba(scope):
+                    projection=await original(scope);self.flip_member();return projection
+                context.read_authorized=capture_then_aba
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=context,
+                                provider=provider,client=client,max_seconds=4,idle_seconds=3,poll_seconds=.5)
+                with self.assertRaisesRegex(base.LeaseUnavailable,'synthetic_snapshot_epoch_changed'):
+                    await session.start()
+                self.assertIsNone(provider.config)
+                self.assertNotIn('ready',[event.get('type') for event in client.events])
+                with self.scoped() as conn:
+                    self.assertEqual(conn.execute('SELECT count(*) AS n FROM experiment_voice_session_lease').fetchone()['n'],0)
+        asyncio.run(run())
+
+    def test_revoke_regrant_after_claim_can_reach_mock_open(self):
+        """Expected counterexample in the e585e23 Session start ordering."""
+        async def run():
+            from tenant_operator_voice_orchestration import ScopedAuthority
+            import tenant_operator_voice_context as voice
+            actual=ScopedAuthority(self.profile,self.route,self.expected)
+            class RevokeAfterClaim:
+                async def check(inner,scope,stage):
+                    if stage=='dispatch':self.flip_member()
+                    await actual.check(scope,stage)
+            ledger=Ledger();provider=Provider(ledger);client=Client();seen=[]
+            async def record_open(snapshot,**config):seen.append(snapshot)
+            provider.open=record_open
+            with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped),patch.object(voice,'_connect',self.scoped):
+                adapter=self.adapter()
+                session=Session(self.scope,authority=RevokeAfterClaim(),ledger=ledger,lease=adapter,context=self.context(adapter),
+                                provider=provider,client=client,max_seconds=4,idle_seconds=3,poll_seconds=.5)
+                with self.assertRaisesRegex(base.LeaseUnavailable,'synthetic_authority_epoch_changed'):
+                    await session.start()
+                # Epoch is rechecked after open, so the mock has already seen
+                # the snapshot before this old Session reports the failure.
+                self.assertEqual(len(seen),1)
+                self.assertNotIn('ready',[event.get('type') for event in client.events])
+                self.assertTrue(provider.closed)
+        asyncio.run(run())
+
+    def test_rolled_back_change_does_not_invalidate_captured_epoch(self):
+        async def run():
+            with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
+                adapter=self.adapter();await self.context(adapter).read_authorized(self.scope);before=self.revision()
+                with self.scoped() as conn:
+                    conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                    conn.rollback()
+                self.assertEqual(self.revision(),before)
+                fence=await adapter.claim(self.scope);self.assertIsNotNone(fence)
+        asyncio.run(run())
+
+    def test_unknown_committed_change_still_invalidates_captured_epoch(self):
+        async def run():
+            with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
+                adapter=self.adapter();await self.context(adapter).read_authorized(self.scope)
+                conn=self.scoped()
+                try:
+                    try:
+                        conn.execute('UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                        conn.commit()
+                        raise OSError('synthetic_unknown_commit_after_real_commit')
+                    except OSError:pass
+                finally:conn.close()
+                with self.scoped() as conn:
+                    conn.execute('UPDATE saas_tenant_members SET active=true WHERE tenant_id=%s AND telegram_id=7',(self.tenant,))
+                with self.assertRaisesRegex(base.LeaseUnavailable,'synthetic_snapshot_epoch_changed'):
+                    await adapter.claim(self.scope)
+                with self.scoped() as conn:
+                    self.assertEqual(conn.execute('SELECT count(*) AS n FROM experiment_voice_session_lease').fetchone()['n'],0)
+        asyncio.run(run())
+
+    def test_split_connections_can_bind_old_content_to_new_epoch(self):
+        """Expected counterexample: separately collected epoch is unsafe."""
+        with self.scoped() as conn:
+            conn.execute('INSERT INTO saas_crm_messages VALUES(%s,%s,%s::jsonb)',(self.tenant,'synthetic','{"text":"before"}'))
+        class SplitContext(Context):
+            async def read_authorized(inner,scope):
+                with self.scoped() as conn:
+                    raw=conn.execute("SELECT raw FROM saas_crm_messages WHERE tenant_id=%s AND channel='synthetic'",(self.tenant,)).fetchone()['raw']
+                with self.scoped() as conn:
+                    conn.execute("UPDATE saas_crm_messages SET raw='{\"text\":\"after\"}' WHERE tenant_id=%s AND channel='synthetic'",(self.tenant,))
+                # Unsafe: the epoch is now newer than the already-read content.
+                adapter.bind_snapshot(scope,self.revision())
+                return {'existing_copilot_instructions':'synthetic','synthetic_rows':[raw]}
+        async def run():
+            ledger=Ledger();provider=Provider(ledger);seen=[]
+            async def record_open(snapshot,**config):seen.append(snapshot)
+            provider.open=record_open
+            with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
+                nonlocal adapter
+                adapter=self.adapter()
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=SplitContext(),
+                                provider=provider,client=Client(),max_seconds=4,idle_seconds=3,poll_seconds=.5)
+                await session.start()
+                try:
+                    self.assertEqual(seen[0]['synthetic_rows'][0]['text'],'before')
+                    with self.scoped() as conn:
+                        self.assertEqual(conn.execute("SELECT raw FROM saas_crm_messages WHERE tenant_id=%s AND channel='synthetic'",(self.tenant,)).fetchone()['raw']['text'],'after')
+                finally:await session.end('test')
+        adapter=None
         asyncio.run(run())
 
     def test_fixture_workflow_and_identity_changes_increment_same_tenant_epoch(self):
@@ -101,11 +212,26 @@ class EpochLeasePostgres(LeasePostgres):
         self.assertEqual(self.revision(),before+len(operations))
         self.assertEqual(self.revision(self.other),other_before)
 
+    def test_uninstrumented_group_coordination_writes_do_not_advance_epoch(self):
+        """Missing writer is real; this reduced table is a synthetic model."""
+        with self.scoped() as conn:
+            conn.execute('''CREATE TABLE saas_ai_group_coordination
+              (tenant_id uuid,group_jid text,revision bigint)''')
+        try:
+            before=self.revision()
+            with self.scoped() as conn:
+                conn.execute('INSERT INTO saas_ai_group_coordination VALUES(%s,%s,1)',(self.tenant,'12345@g.us'))
+                conn.execute('UPDATE saas_ai_group_coordination SET revision=revision+1 WHERE tenant_id=%s',(self.tenant,))
+            self.assertEqual(self.revision(),before)
+        finally:
+            with self.scoped() as conn:conn.execute('DROP TABLE saas_ai_group_coordination')
+
     def test_session_blocks_new_audio_after_participating_revoke_regrant(self):
         async def run():
             ledger=Ledger();provider=Provider(ledger);client=Client()
             with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
-                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=self.adapter(),context=Context(),
+                adapter=self.adapter()
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=self.context(adapter),
                                 provider=provider,client=client,max_seconds=4,idle_seconds=3,poll_seconds=.5)
                 await session.start();self.flip_member()
                 with self.assertRaisesRegex(base.LeaseUnavailable,'synthetic_authority_epoch_changed'):
@@ -126,7 +252,7 @@ class EpochLeasePostgres(LeasePostgres):
             provider.send=blocked
             with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
                 adapter=self.adapter()
-                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=Context(),
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=self.context(adapter),
                                 provider=provider,client=client,max_seconds=4,idle_seconds=3,poll_seconds=.5)
                 session.shutdown_timeout=.05
                 await session.start()
@@ -155,7 +281,8 @@ class EpochLeasePostgres(LeasePostgres):
                 entered.set();await proceed.wait()
             provider.open=blocked_open
             with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
-                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=self.adapter(),context=Context(),
+                adapter=self.adapter()
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=self.context(adapter),
                                 provider=provider,client=client,max_seconds=4,idle_seconds=3,poll_seconds=.5)
                 startup=asyncio.create_task(session.start())
                 try:
@@ -184,7 +311,7 @@ class EpochLeasePostgres(LeasePostgres):
             provider.send=suppress_cancellation
             with patch.object(base,'LEASE_ENFORCEMENT_VERIFIED',True),patch.object(base,'_connect',self.scoped):
                 adapter=self.adapter()
-                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=Context(),
+                session=Session(self.scope,authority=Authority(),ledger=ledger,lease=adapter,context=self.context(adapter),
                                 provider=provider,client=Client(),max_seconds=4,idle_seconds=3,poll_seconds=.5)
                 session.shutdown_timeout=.05;await session.start()
                 sending=asyncio.create_task(session.receive_client({'type':'audio','pcm':bytes(100)}))

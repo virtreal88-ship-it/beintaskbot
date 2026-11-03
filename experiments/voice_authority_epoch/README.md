@@ -11,9 +11,14 @@ hard-off. No audio, contact or external provider call is used. Any reference to
 
 The fixture adds a tenant-wide revision row and synthetic row triggers to the
 14 direct-dialog fixture tables named in `AUTH_FIXTURE_TABLES`. The experimental
-`SyntheticEpochLease` takes the revision row lock, runs real
-`tenant_operator_voice_context.authorize` and records the revision with the
-lease in the same local claim transaction. During heartbeat it locks the same
+`SyntheticSnapshotContext` reads a small synthetic projection, the revision and
+real `tenant_operator_voice_context.authorize` in one repeatable read PostgreSQL
+snapshot. It binds that revision to the server-side lease before claim.
+`SyntheticEpochLease` then locks the revision row, requires a match, rechecks
+real authority and records the revision with the lease in one local transaction.
+This is not the real prompt and does not bind exact provider bytes. The fixture
+projection queries a synthetic channel, not a real dialog/lead-scoped source;
+it is not evidence of source isolation. During heartbeat the lease locks the same
 revision and lease row, checks the stored revision, then rechecks real authority.
 If a participating mutation committed between the two boundaries, including an
 edit and revert, the heartbeat commits quarantine and refuses; a cancelled or
@@ -27,6 +32,17 @@ pipeline, stage, workflow, conflict and agent writes increment the fixture
 revision, without changing another tenant's revision. This is a **conditional
 ABA proof for participating fixture writers**, not a claim of complete coverage
 or a safe migration.
+
+The first version (`1d4439a`) sampled the epoch only at claim and could accept
+an ABA that happened after context capture. Independent review reproduced this
+with real `ScopedAuthority` and the old synthetic Session. The current fixture
+refuses a participating ABA between its single-transaction snapshot and claim;
+a rolled-back change does not invalidate, while a committed change with a
+deliberately unknown client outcome does. A separate **counterexample** reads
+old content on one connection, then reads a newer revision on another; the
+stale projection can still reach the mock provider. The real Copilot prompt and
+knowledge builders use multiple connections, so the synthetic fix does not
+establish their atomicity, source isolation or safety.
 
 Two counterexamples delimit the result. A mock audio send already in progress
 can complete after the revoke commits; quarantine and failed release remain in
@@ -42,6 +58,13 @@ the epoch-first reader waits for the member writer while its row trigger waits
 for the epoch. One transaction is aborted. This is a counterexample against
 installing these triggers on the shared database, not evidence of a live
 production deadlock.
+
+An additional counterexample uses real `ScopedAuthority.check`: the e585e23
+`Session.start` checks the lease after mock `provider.open`, so a committed
+revoke/regrant after claim can pass the current-value authority check and expose
+the old mock context before the later epoch check rejects it. A newer transport
+may add a pre-open lease check; that narrows this window without making a DB
+check atomic with external I/O. No live upload is permitted on this evidence.
 
 A further mock suppresses task cancellation and completes its already started
 send; `Session.end` times out, retaining the quarantined lease and refusing
@@ -60,6 +83,8 @@ Neither table nor those writers is in this fixture's trigger set. Thus the
 fixture cannot prove monotonic revision across **all** actual voice-authority
 paths. This is a concrete missing writer path, not an assertion that a live
 production incident occurred. Group-specific behavior must stay gated.
+A test writes a reduced synthetic table with that name and confirms its epoch
+does not change; that test does not exercise the real group implementation.
 
 The direct identity path also calls `tenant_connect_owner_identity.active_link`,
 which reads `saas_connect_owner_identity_assertions`; its real `merge` path
@@ -98,15 +123,9 @@ other targets and creates/drops one random schema. With project dependencies:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 \
 PYTHONPATH=beintaskbot-main:experiments/copilot_realtime_adapter:experiments/voice_session_lease:experiments/voice_authority_epoch \
-python -m unittest -v \
- test_epoch_pg.EpochLeasePostgres.test_actual_member_revoke_regrant_invalidates_epoch_and_fence \
- test_epoch_pg.EpochLeasePostgres.test_fixture_workflow_and_identity_changes_increment_same_tenant_epoch \
- test_epoch_pg.EpochLeasePostgres.test_session_blocks_new_audio_after_participating_revoke_regrant \
- test_epoch_pg.EpochLeasePostgres.test_started_mock_send_can_finish_after_revoke_and_remains_unconfirmed \
- test_epoch_pg.EpochLeasePostgres.test_started_mock_context_upload_cannot_be_retracted_by_revoke \
- test_epoch_pg.EpochLeasePostgres.test_cancel_suppressed_mock_send_remains_inflight_and_lease_held \
- test_epoch_pg.EpochLeasePostgres.test_epoch_before_real_authorize_can_deadlock_with_member_writer
+python -m unittest -v test_epoch_pg.EpochLeasePostgres
 ```
 
+This class includes the inherited lease and authorization regressions.
 Some tests intentionally **reproduce failures**. A green result is evidence the
 counterexample occurred, not evidence of safe external delivery or rollout.

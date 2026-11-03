@@ -4,10 +4,25 @@ Only caller-created fixtures install the epoch and triggers. Lock ordering and
 writer coverage are incomplete. No recovery or external provider call exists.
 """
 import hashlib
+import asyncio
 import tenant_operator_voice_lease as base
 
 
 class SyntheticEpochLease(base.ServerLease):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self._snapshot_revision=None
+
+    def bind_snapshot(self,scope,revision):
+        """Trusted synthetic capture only; not an externally supplied claim."""
+        self._ensure_live()
+        if scope!=base._scope_tuple(self._expected) or type(revision) is not int or revision<1:
+            raise base.LeaseUnavailable('synthetic_snapshot_invalid')
+        with self._state_lock:
+            if self._snapshot_revision is not None:
+                raise base.LeaseUnavailable('synthetic_snapshot_already_bound')
+            self._snapshot_revision=revision
+
     def _run(self,operation,*args):
         base._ready()
         if operation not in (base._claim,base._heartbeat):
@@ -22,6 +37,8 @@ class SyntheticEpochLease(base.ServerLease):
                 if not row:raise base.LeaseUnavailable('synthetic_epoch_missing')
                 revision=row['revision']
                 if operation is base._claim:
+                    if self._snapshot_revision is None or self._snapshot_revision!=revision:
+                        raise base.LeaseUnavailable('synthetic_snapshot_epoch_changed')
                     value=operation(cur,self._profile,self._route,self._expected,*args,self._owner)
                     scope=args[0]
                     cur.execute('''UPDATE experiment_voice_session_lease SET authority_epoch=%s
@@ -52,3 +69,36 @@ class SyntheticEpochLease(base.ServerLease):
         if operation is base._heartbeat and value:
             raise base.LeaseUnavailable(value)
         return value
+
+
+class SyntheticSnapshotContext:
+    """Read a tiny synthetic projection and its epoch in one PG snapshot.
+
+    This is not the real Copilot prompt or knowledge reader. No raw audio is
+    read or stored, and the production context path is deliberately unchanged.
+    """
+    def __init__(self,profile,route,expected,adapter):
+        self.profile=profile;self.route=route;self.expected=expected;self.adapter=adapter
+
+    def _capture(self,scope):
+        if scope!=base._scope_tuple(self.expected):raise base.LeaseUnavailable('synthetic_snapshot_scope')
+        with base._connect() as conn:
+            conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+            with conn.cursor() as cur:
+                cur.execute('SELECT revision FROM experiment_authority_epoch WHERE tenant_id=%s::uuid',(self.expected.tenant,))
+                row=cur.fetchone()
+                if not row:raise base.LeaseUnavailable('synthetic_epoch_missing')
+                base._verify_scope(cur,self.profile,self.route,self.expected,scope)
+                cur.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s ORDER BY raw::text',
+                            (self.expected.tenant,'synthetic'))
+                projection={'existing_copilot_instructions':'synthetic','synthetic_rows':[item['raw'] for item in cur.fetchall()]}
+        return projection,row['revision']
+
+    async def read_authorized(self,scope):
+        projection,revision=await asyncio.to_thread(self._capture,scope)
+        self.adapter.bind_snapshot(scope,revision)
+        return projection
+
+    async def revalidate(self,scope):
+        if scope!=base._scope_tuple(self.expected):raise base.LeaseUnavailable('synthetic_snapshot_scope')
+        return True  # claim/heartbeat compare the bound revision, not this stub
