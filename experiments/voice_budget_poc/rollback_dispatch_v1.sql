@@ -15,6 +15,10 @@ DECLARE
  new_def CONSTANT TEXT := $$CHECK ((state = ANY (ARRAY['reserved'::text, 'claimed'::text, 'dispatching'::text, 'unknown'::text, 'settled'::text, 'released'::text, 'quarantined'::text])))$$;
  body CONSTANT TEXT := $body$
 BEGIN
+  IF to_regclass('saas_voice_session_budget') IS NOT NULL OR to_regclass('saas_voice_session_response') IS NOT NULL OR
+     to_regclass('saas_voice_session_audio') IS NOT NULL THEN
+    RAISE EXCEPTION 'voice_session_remove_requires_explicit_review' USING ERRCODE='23514';
+  END IF;
   IF TG_OP='DELETE' THEN
     RAISE EXCEPTION 'voice_activation_requires_review' USING ERRCODE='23514';
   ELSIF TG_OP='INSERT' THEN
