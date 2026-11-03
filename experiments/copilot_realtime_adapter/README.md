@@ -183,6 +183,96 @@ they do not bypass the writer gate or establish an active real voice session.
 The older separate prototype test directly inserts a synthetic partial turn to
 exercise the lower-level history helper; it is not the blocked voice writer.
 
+## aiohttp transport candidate
+
+The wire protocol now has a bounded aiohttp WebSocket JSON adapter and a
+server-only OpenAI connection implementation behind an unconditional admission
+refusal. The production factory is separately unconditionally disabled and
+`Session` rejects non-mock providers. No environment variable, browser input,
+or feature flag opens either gate. Local loopback tests exercise real aiohttp
+frames with a fake peer, safe session readback, one-use mock response claims,
+interruption/truncation and cleanup; this is not an OpenAI compatibility test.
+
+The GA protocol shape was checked against the official [WebSocket guide](https://developers.openai.com/api/docs/guides/voice-websockets),
+[Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations),
+and [model documentation](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+The model and quote in this candidate are provisional; real effective session
+readback, immutable model pricing, all billable paths, provider cancellation,
+redirect/connection timeout semantics, and shared dispatch enforcement remain
+unverified. The no-tools/no-transcription/no-automatic-response settings are
+requested and checked against the peer readback before audio is accepted, but
+mock readback cannot prove actual provider behavior or cost prevention.
+`ScopedDispatchGuard` now reauthorizes and commits the ledger CAS from
+`claimed` to `dispatching` before the mock socket send, comparing the returned
+scope, fingerprint, quote and tenant hold. Local PostgreSQL tests cover this
+ordering, replay, revocation, cancellation and uncertain send; global admission,
+old-schema migration and actual upstream cost bounds remain unproven. Unknown
+outcomes retain their hold and cannot be retried blindly.
+The provider receives the initial context and input audio before a response
+dispatch claim. Their billing behavior has not been bounded by the existing
+per-response CAS. A separate session-level reservation and a proven upper bound
+covering every billable phase are required before asserting the shared $5 cap.
+
+Input ASR remains disabled because no separately metered ASR admission exists.
+Output transcripts are not stored or presented as heard. Incomplete/interrupted
+audio is conservatively truncated to zero; no aligned text is invented. The
+voice history writer still refuses until every legacy text writer has cut over.
+Consequently this candidate does not yet provide a working live conversation,
+text-to-voice-to-text continuity, or verified Russian/Azerbaijani behavior.
+`OpenAIRealtimeProvider` composes the wire, trusted credential loader and owned
+aiohttp socket behind separate immutable connector, factory and Session gates.
+The production route now has a real server WebSocket gateway and provider event
+pump, but its distributed lease factory deliberately refuses until the separate
+lease implementation is reviewed and integrated. A local synthetic PG/HTTP
+test overrides gates only inside the test and exercises the actual composition,
+with fake provider/socket/context/lease and committed durable dispatch guard.
+It does not prove real provider, source or billing behavior. Cleanup now uses a
+shared shielded task and the Session drains the provider receive lock before
+lease release; startup/remote close and cancellation still need review.
+The mock UI now reports an unconfirmed end separately if socket closure,
+draining or server lease release cannot be verified; it keeps text available
+and disables another voice start in that view. An ordinary ended event is sent
+only after release succeeds. Recovery/reconciliation is not implemented.
+
+`transcript_draft.py` is an isolated mock of ordered item registration and
+later input-transcription completion/failure; it only generates candidate
+entries accepted by the existing thread validator and stores no audio. Empty,
+missing or failed input is unavailable and automatic ASR is unverified. The
+mock can retain complete generated text only after a full app-level playback
+signal; it separately marks `device_playback_complete`. A client can forge that
+signal and it does not prove human hearing. The marker is mock-only, not stored
+by the current DB schema; the real Session still truncates to zero. Interruptions
+and unknown playback omit generated text without inventing an aligned prefix.
+Item ordering in a real
+provider stream must additionally be checked against linked previous-item IDs;
+the mock's order assumption is not an upstream guarantee. A future writer must
+accept server-derived scope, session/item idempotency keys, ordered entries,
+agent binding and clear revision, reauthorize transactionally and use the
+existing thread adapter after old-writer cutover. ASR also needs a separate,
+durable upper-bounded reservation and usage reconciliation before it is enabled.
+The mock is not connected to sessions or any database writer.
+
+`VoiceHistory.append` has a separately gated server-only candidate path using
+the existing thread writer, transactional authorization, session binding,
+clear revision, contiguous order and digest-based idempotency. The matching
+`voice_history_candidate.sql` is synthetic test schema, not a migration. No
+call can write while the immutable history gate is present. This candidate is
+not ready to release: legacy writers can overwrite or delete thread rows,
+clear on an absent row may not advance a durable epoch, and migration, mixed
+workers, role privileges, retention and idempotency across rollback remain to
+be designed and independently reviewed. It is not yet fed by transcript events.
+An independent immutable provenance gate additionally rejects all writes
+until server-owned session/lease/event origins are bound and verified. Even in
+isolated tests which override both gates, `complete` and `human_verified` turns
+are rejected until their stronger evidence policy is implemented.
+
+The live connector remains unusable. The candidate now owns a ClientSession
+with `trust_env=False`, an aiohttp pre-redirect trace refusal and connection and
+close deadlines; localhost tests verify that a redirect target is never called
+and a stalled handshake times out. These tests do not prove all redirect,
+DNS/TLS/proxy, cancellation-suppression or cleanup paths, nor establish a remote
+billing-stop guarantee. Local `ws.closed` does not establish that guarantee.
+
 ## Source fingerprints and remaining fence
 
 The candidate captures server-derived scope, the allowlisted context and

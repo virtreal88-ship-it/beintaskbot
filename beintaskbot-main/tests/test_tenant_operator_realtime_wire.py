@@ -11,10 +11,10 @@ class Socket:
     def __init__(self,mutate=None):self.sent=[];self.mutate=mutate;self.closed=False
     async def send_json(self,event):self.sent.append(copy.deepcopy(event))
     async def receive_json(self):
-        if not self.sent:return {'type':'session.created'}
+        if not self.sent:return {'type':'session.created','session':{'id':'synthetic-session'}}
         config=copy.deepcopy(self.sent[-1]['session'])
         if self.mutate:self.mutate(config)
-        return {'type':'session.updated','session':config}
+        return {'type':'session.updated','session':{**config,'id':'synthetic-session'}}
     async def close(self):self.closed=True
 
 
@@ -30,7 +30,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.socket=Socket();self.guard=Guard();self.wire=SyntheticRealtimeWire(self.socket,self.guard)
         self.snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.',
                        'lines':[],'extra_context':{}}
-        self.options={'tools':[],'create_response':False,'interrupt_response':True,'transcription':False,'reconnect':False}
+        self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':False,'reconnect':False}
 
     async def open(self):await self.wire.open(self.snapshot,**self.options)
 
@@ -48,8 +48,12 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_mismatched_policy_closes_admission(self):
         changes=[lambda s:s['audio']['input']['turn_detection'].__setitem__('create_response',True),
+                 lambda s:s['audio']['input']['turn_detection'].__setitem__('interrupt_response',True),
+                 lambda s:s['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',1000),
+                 lambda s:s['audio']['input']['turn_detection'].__setitem__('future_trigger',True),
                  lambda s:s['audio']['input'].__setitem__('transcription',{'model':'unapproved'}),
                  lambda s:s.__setitem__('tools',[{'name':'send'}]),lambda s:s.__setitem__('max_output_tokens',999999),
+                 lambda s:s.__setitem__('max_output_tokens',32000),
                  lambda s:s.__setitem__('model','other')]
         for change in changes:
             wire=SyntheticRealtimeWire(Socket(change),Guard())
@@ -89,6 +93,41 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
     async def test_live_factory_cannot_be_enabled(self):
         with self.assertRaises(TenantLinearError):create_production_provider()
         with self.assertRaises(ValueError):SyntheticRealtimeWire(object(),Guard())
+
+    async def test_session_identity_mismatch_refused(self):
+        class WrongSession(Socket):
+            async def receive_json(self):
+                event=await super().receive_json()
+                if event['type']=='session.updated':event['session']['id']='different-session'
+                return event
+        wire=SyntheticRealtimeWire(WrongSession(),Guard())
+        with self.assertRaisesRegex(ValueError,'unsafe_session_readback'):await wire.open(self.snapshot,**self.options)
+        self.assertEqual([event['type'] for event in wire.socket.sent],['session.update'])
+
+    async def test_missing_created_id_and_later_foreign_session_refused(self):
+        class MissingId(Socket):
+            async def receive_json(self):return {'type':'session.created','session':{}}
+        wire=SyntheticRealtimeWire(MissingId(),Guard())
+        with self.assertRaisesRegex(ValueError,'session_id_missing'):await wire.open(self.snapshot,**self.options)
+        self.assertEqual(wire.socket.sent,[])
+        await self.open()
+        async def foreign():return {'type':'response.created','session_id':'other','response':{'id':'synthetic'}}
+        self.socket.receive_json=foreign
+        with self.assertRaisesRegex(ValueError,'provider_session_changed'):await self.wire.receive()
+        with self.assertRaisesRegex(ValueError,'session_not_ready'):await self.wire.send({'type':'input_audio_buffer.clear'})
+
+    async def test_conversation_announcement_before_readback(self):
+        class Interleaved(Socket):
+            def __init__(self):super().__init__();self.announced=False
+            async def receive_json(self):
+                if self.sent and not self.announced:
+                    self.announced=True
+                    return {'type':'conversation.created','conversation':{'id':'synthetic-conversation'}}
+                return await super().receive_json()
+        wire=SyntheticRealtimeWire(Interleaved(),Guard())
+        await wire.open(self.snapshot,**self.options)
+        self.assertEqual(wire.conversation_id,'synthetic-conversation')
+        self.assertEqual([e['type'] for e in wire.socket.sent],['session.update','conversation.item.create'])
 
 
 if __name__=='__main__':unittest.main()

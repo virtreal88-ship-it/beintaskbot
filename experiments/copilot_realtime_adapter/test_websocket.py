@@ -63,6 +63,26 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.events,[])
         await ws.close()
 
+    async def test_provider_receive_pump_forwards_audio_and_closes(self):
+        class QueueProvider(Provider):
+            def __init__(self,ledger):super().__init__(ledger);self.queue=asyncio.Queue()
+            async def receive(self):return await self.queue.get()
+            async def close(self):self.closed=True;self.queue.put_nowait(None)
+        self.provider=QueueProvider(self.ledger)
+        ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
+        self.assertEqual((await ws.receive_json())['type'],'ready')
+        await self.provider.queue.put({'type':'input_audio_buffer.speech_stopped'})
+        for _ in range(100):
+            if self.ledger.events:break
+            await asyncio.sleep(.005)
+        self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim'])
+        await self.provider.queue.put({'type':'response.created','response':{'id':'synthetic-pump'}})
+        await self.provider.queue.put({'type':'response.output_audio.delta','response_id':'synthetic-pump','item_id':'audio',
+                                       'content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+        self.assertEqual((await asyncio.wait_for(ws.receive_json(),1))['type'],'audio')
+        await ws.close();await asyncio.sleep(.03)
+        self.assertTrue(self.provider.closed);self.assertFalse(self.lease.held)
+
     def test_missing_security_dependencies_rejected(self):
         with self.assertRaises(ValueError): make_handler(allowed_origins={'*'},authenticate=None,build_session=None)
 

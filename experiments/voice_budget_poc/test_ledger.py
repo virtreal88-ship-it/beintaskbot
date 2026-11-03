@@ -469,5 +469,82 @@ class LedgerPostgresTests(unittest.TestCase):
             row=conn.execute('SELECT h.state,h.actual_microusd,g.frozen FROM saas_voice_test_hold h CROSS JOIN saas_voice_test_grant g').fetchone()
         self.assertEqual(row,{'state':'settled','actual_microusd':RESERVE_MICROUSD+1,'frozen':True})
 
+    def test_dispatch_capability_is_single_use_across_concurrent_connections(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            def issue(_):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:return candidate.issue_dispatch(cur,a)
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                issued=list(pool.map(issue,range(40)))
+            self.assertEqual(sum(x is not None for x in issued),1)
+            self.assertEqual(next(x['state'] for x in issued if x),'dispatching')
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.issue_dispatch(cur,a))
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.mark_unknown(cur,a)['state'],'unknown')
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.issue_dispatch(cur,a))
+
+    def test_dispatch_committed_before_crash_is_never_reissued_after_restart(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            module_path=Path(__file__).resolve().parents[2]/'beintaskbot-main'
+            exp_path=Path(__file__).resolve().parent
+            env={'PATH':os.environ['PATH'],'PYTHONPATH':str(module_path)+':'+str(exp_path),'POC_DSN':self.dsn,'POC_SCOPE':json.dumps(a)}
+            script='''import json,os
+from unittest.mock import patch
+from ledger import local_connect
+import tenant_voice_test_grant as candidate
+import tenant_ai_spend_budget as spending
+s=json.loads(os.environ['POC_SCOPE'])
+with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(spending,'limit_microusd',return_value=0):
+    with local_connect(os.environ['POC_DSN']) as conn,conn.cursor() as cur:
+        assert candidate.issue_dispatch(cur,s)['state']=='dispatching'
+    os._exit(71)
+'''
+            child=subprocess.run([sys.executable,'-c',script],env=env,capture_output=True,text=True)
+            self.assertEqual(child.returncode,71,child.stderr)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.issue_dispatch(cur,a))
+            with local_connect(self.dsn) as conn:
+                row=conn.execute('SELECT state,reserved_microusd FROM saas_voice_test_hold WHERE request_id=%s',(a['request_id'],)).fetchone()
+            self.assertEqual(row,{'state':'dispatching','reserved_microusd':RESERVE_MICROUSD})
+
+    def test_dispatch_rechecks_grant_tenant_scope_quote_and_expiry(self):
+        a,b=server_scope(),server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            for s in (a,b):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,s)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.issue_dispatch(cur,{**a,'executor':'wrong'}))
+            with patch('tenant_voice_test_grant.datetime') as clock:
+                clock.now.return_value=datetime(2026,11,4,tzinfo=timezone.utc)
+                with self.assertRaises(TenantLinearError):
+                    with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.issue_dispatch(cur,a)
+            with local_connect(self.dsn) as conn:conn.execute("UPDATE saas_ai_spend_reservations SET state='released' WHERE tenant_id=%s",(a['tenant_id'],))
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.issue_dispatch(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,b,RESERVE_MICROUSD+1)
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.issue_dispatch(cur,a)
+
+    def test_dispatch_and_mark_unknown_race_never_permits_two_dispatches(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            def run(method):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:return method(cur,a)
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                dispatch=workers.submit(run,candidate.issue_dispatch);unknown=workers.submit(run,candidate.mark_unknown)
+                dispatched,marked=dispatch.result(),unknown.result()
+            self.assertIsNotNone(marked)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertIsNone(candidate.issue_dispatch(cur,a))
+            self.assertTrue(dispatched is None or dispatched['state']=='dispatching')
+
 
 if __name__=='__main__': unittest.main()

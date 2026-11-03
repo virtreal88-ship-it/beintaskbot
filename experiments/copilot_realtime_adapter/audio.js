@@ -7,6 +7,17 @@
   const Ctx=deps.AudioContext||deps.webkitAudioContext;
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
   let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,segments=[],waiters=[];
+  const stoppedTracks=new Set();
+  const stopTracks=()=>{
+    let unconfirmed=false;
+    let tracks=[];
+    try{tracks=stream?.getTracks()||[];}catch(_){unconfirmed=true;}
+    for(const track of tracks){
+      if(stoppedTracks.has(track))continue;
+      try{track.stop();stoppedTracks.add(track);}catch(_){unconfirmed=true;}
+    }
+    if(unconfirmed)throw new Error('microphone_stop_unconfirmed');
+  };
   try {
     stream=await media.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});
     ctx=new Ctx({sampleRate:24000});
@@ -23,16 +34,27 @@
     };
     source.connect(processor);processor.connect(silence);silence.connect(ctx.destination);
   } catch(error) {
-    if(stream)stream.getTracks().forEach(track=>track.stop());
+    try{stopTracks();}catch(_){
+      // The caller must retain the microphone lease when cleanup is unknown.
+      const failure=new Error('microphone_stop_unconfirmed');
+      if(ctx)await ctx.close().catch(()=>{});
+      throw failure;
+    }
     if(ctx)await ctx.close().catch(()=>{});
     throw error;
   }
   const finishWaiters=value=>{for(const done of waiters)done(value);waiters=[];};
   const stopNow=()=>{
-    if(closed)return;closed=true;finishWaiters(false);
-    for(const node of segments){try{node.stop();}catch(_){}}
-    segments=[];processor.onaudioprocess=null;source.disconnect();processor.disconnect();silence.disconnect();
-    stream.getTracks().forEach(track=>track.stop());
+    if(!closed){
+      closed=true;finishWaiters(false);
+      for(const node of segments){try{node.stop();}catch(_){}}
+      segments=[];
+      try{processor.onaudioprocess=null;}catch(_){}
+      for(const node of [source,processor,silence]){try{node.disconnect();}catch(_){}}
+    }
+    // Retry tracks whose stop threw on a previous call, while still attempting
+    // all other tracks. Never signal successful cleanup if any is unconfirmed.
+    stopTracks();
   };
   return {
     mute(value){for(const track of stream.getAudioTracks())track.enabled=!value;},
@@ -64,6 +86,11 @@
       return 0;
     },
     stopNow,
-    async close(){stopNow();if(ctx.state!=='closed')await ctx.close();},
+    async close(){
+      let failure=null;
+      try{stopNow();}catch(error){failure=error;}
+      try{if(ctx.state!=='closed')await ctx.close();}catch(error){if(!failure)failure=error;}
+      if(failure)throw failure;
+    },
   };
 });

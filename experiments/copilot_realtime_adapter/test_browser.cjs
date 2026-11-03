@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const mount=require('./browser.js');
 
-function setup({open}={}){
+function setup({open,connectOverride}={}){
   const lifecycle={visibilityState:'visible',listeners:{},addEventListener(k,v){this.listeners[k]=v;},removeEventListener(k){delete this.listeners[k];}};
   const document={createElement(){return {hidden:false,textContent:'',disabled:false,handlers:{},setAttribute(){},addEventListener(k,f){this.handlers[k]=f;}};}};
   const root={ownerDocument:document,children:[],append(...xs){this.children.push(...xs);},replaceChildren(){this.children=[];}};
@@ -10,7 +10,7 @@ function setup({open}={}){
   const sent=[],heard=[];
   const audio={play:(id,data)=>heard.push([id,data]),interrupt:()=>0,mute:()=>{},close:async()=>{closed++;}};
   const view=mount(root,{lifecycle,acquireMicrophone:async()=>()=>{released++;},openAudio:open|| (async()=>audio),
-    connect:async onEvent=>{cb=onEvent;return {send:e=>sent.push(e),close:async()=>{channelClosed++;}};}});
+    connect:connectOverride|| (async onEvent=>{cb=onEvent;return {send:e=>sent.push(e),close:async()=>{channelClosed++;}};})});
   return {view,root,lifecycle,sent,heard,audio,emit:e=>cb(e),released:()=>released,closed:()=>closed,channelClosed:()=>channelClosed};
 }
 
@@ -50,4 +50,133 @@ test('server closes promptly even if audio shutdown is stuck; lease stays held',
   await x.view.start();await x.view.stop();
   assert.equal(stopped,1);assert.equal(x.channelClosed(),1);assert.equal(x.released(),0);
   finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(x.released(),1);
+});
+
+test('unconfirmed shutdown is not shown as a normal end',async()=>{
+  const x=setup();await x.view.start();x.root.children[3].handlers.click();
+  assert.deepEqual(x.sent.at(-1),{type:'end'});
+  assert.match(x.root.children[0].textContent,/Завершение/);
+  await x.emit({type:'end_unconfirmed'});
+  assert.match(x.root.children[0].textContent,/не подтверждено; текстовый чат доступен/);
+  assert.equal(x.root.children[1].disabled,true);
+  assert.equal(x.released(),1);
+});
+
+test('playback failure cannot silently re-enable voice before server stop',async()=>{
+  const x=setup();await x.view.start();
+  x.audio.play=()=>{throw new Error('synthetic playback failure');};
+  await x.emit({type:'audio',item_id:'a',pcm:new Uint8Array(2)});
+  assert.match(x.root.children[0].textContent,/Ошибка воспроизведения.*не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+  assert.equal(x.channelClosed(),1);
+});
+
+test('playback completion failure also keeps voice disabled',async()=>{
+  const x=setup();await x.view.start();
+  x.audio.finished=()=>Promise.reject(new Error('synthetic failure'));
+  await x.emit({type:'audio_done',item_id:'a'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(x.root.children[0].textContent,/Ошибка воспроизведения.*не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+});
+
+test('late output while ending cannot restart playback or change status',async()=>{
+  const x=setup();await x.view.start();x.root.children[3].handlers.click();
+  x.audio.play=()=>{throw new Error('audio engine is stopped');};
+  await x.emit({type:'audio',item_id:'a',pcm:new Uint8Array(2)});
+  assert.match(x.root.children[0].textContent,/Завершение разговора…/);
+  assert.equal(x.root.children[1].disabled,true);
+  await x.emit({type:'end_unconfirmed'});
+  assert.equal(x.root.children[1].disabled,true);
+});
+
+test('local stop after server start requires confirmation before restart',async()=>{
+  const x=setup();await x.view.start();await x.view.stop();
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.released(),1);
+});
+
+test('unknown connect failure keeps voice blocked and releases microphone',async()=>{
+  const x=setup({connectOverride:async()=>{throw new Error('synthetic unknown connect');}});
+  await x.view.start();
+  assert.match(x.root.children[0].textContent,/не подтверждено/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),1);
+});
+
+test('unconfirmed startup track cleanup keeps shared microphone lease',async()=>{
+  const x=setup({open:async()=>{throw new Error('microphone_stop_unconfirmed');}});
+  await x.view.start();
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),0);
+});
+
+test('late unconfirmed capture cleanup never releases shared lease',async()=>{
+  let fail;const pending=new Promise((_resolve,reject)=>{fail=reject;});
+  const x=setup({open:()=>pending});const starting=x.view.start();
+  await new Promise(resolve=>setImmediate(resolve));
+  const stopping=x.view.stop();fail(new Error('microphone_stop_unconfirmed'));
+  await Promise.all([starting,stopping]);
+  assert.equal(x.released(),0);assert.equal(x.root.children[1].disabled,true);
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+});
+
+test('confirmed server end cannot hide a failed microphone shutdown',async()=>{
+  const x=setup({open:async()=>({stopNow(){throw new Error('synthetic stop failure');},
+                               close:async()=>{throw new Error('microphone_stop_unconfirmed');},mute(){}})});
+  await x.view.start();await x.emit({type:'ended'});
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),0);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+});
+
+test('confirmed server end waits for microphone cleanup before enabling start',async()=>{
+  let finish;const pending=new Promise(resolve=>{finish=resolve;});
+  const x=setup({open:async()=>({stopNow(){},close:()=>pending,mute(){}})});
+  await x.view.start();await x.emit({type:'ended'});
+  assert.equal(x.root.children[1].disabled,true);
+  assert.match(x.root.children[0].textContent,/Отключаем микрофон/);
+  await x.view.start();assert.equal(x.channelClosed(),1);
+  finish();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(x.root.children[1].disabled,false);assert.equal(x.released(),1);
+  assert.match(x.root.children[0].textContent,/Соединение завершено/);
+});
+
+test('late playback failure from previous session cannot stop a new one',async()=>{
+  let rejectOld;const oldFinished=new Promise((_resolve,reject)=>{rejectOld=reject;});
+  const x=setup();await x.view.start();x.audio.finished=()=>oldFinished;
+  await x.emit({type:'audio_done',item_id:'old'});
+  await x.emit({type:'ended'});await x.view.start();
+  assert.match(x.root.children[0].textContent,/Слушаю/);
+  rejectOld(new Error('synthetic late rejection'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(x.root.children[0].textContent,/Слушаю/);
+  assert.equal(x.channelClosed(),1);
+  await x.view.stop();
+});
+
+test('late send failure from previous session cannot stop a new one',async()=>{
+  let rejectOld,callback;const oldSend=new Promise((_resolve,reject)=>{rejectOld=reject;});let opens=0;
+  const x=setup({connectOverride:async onEvent=>{
+    callback=onEvent;opens++;
+    return {send:()=>oldSend,close:async()=>{}};
+  }});
+  await x.view.start();x.root.children[2].handlers.click();
+  await callback({type:'ended'});await x.view.start();
+  rejectOld(new Error('synthetic late send failure'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(opens,2);assert.match(x.root.children[0].textContent,/Слушаю/);
+  await x.view.stop();
+});
+
+test('playback completion after End does not send a late acknowledgement',async()=>{
+  let finish;const pending=new Promise(resolve=>{finish=resolve;});
+  const x=setup();await x.view.start();x.audio.finished=()=>pending;
+  await x.emit({type:'audio_done',item_id:'a'});
+  x.root.children[3].handlers.click();finish(true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(x.sent,[{type:'end'}]);
+  await x.emit({type:'end_unconfirmed'});
 });

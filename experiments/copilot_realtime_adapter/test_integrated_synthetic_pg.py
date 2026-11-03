@@ -189,12 +189,14 @@ class IntegratedSynthetic(RealVoiceAuthority):
 
         class Socket:
             synthetic_only=True
-            def __init__(self):self.sent=[];self.closed=False
+            def __init__(self):self.sent=[];self.closed=False;self.reads=0;self.queue=asyncio.Queue()
             async def send_json(self,event):self.sent.append(event)
             async def receive_json(self):
-                if not self.sent:return {'type':'session.created'}
-                return {'type':'session.updated','session':self.sent[-1]['session']}
-            async def close(self):self.closed=True
+                self.reads+=1
+                if self.reads==1:return {'type':'session.created','session':{'id':'synthetic-session'}}
+                if self.reads==2:return {'type':'session.updated','session':{**self.sent[-1]['session'],'id':'synthetic-session'}}
+                return await self.queue.get()
+            async def close(self):self.closed=True;await self.queue.put(None)
 
         class DispatchGuard:
             def __init__(self):self.seen=set()

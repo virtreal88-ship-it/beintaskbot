@@ -1,36 +1,150 @@
-"""Review candidate for a server-owned Realtime wire. Live creation is blocked.
+"""Server-owned Realtime protocol candidate. Live creation is hard disabled.
 
-Only injected synthetic sockets are accepted. This module does not read keys,
-open sockets, issue tokens, or register routes. A production factory requires
-independent budget, context, auth and lifecycle enforcement before admission.
+Only injected sockets reach the wire today. The aiohttp transport is usable in
+isolated tests, but live connection requires a reviewed, immutable admission
+change and proof of the budget, source and history fences.
 """
+import asyncio
 import base64
 import binascii
 import json
 import uuid
+import aiohttp
 from tenant_linear_policy import TenantLinearError
 
 MODEL='gpt-realtime-2.1-mini'
-OUTPUT_LIMIT=32000
+# The session API accepts 1..4096 or "inf", regardless of the larger model
+# maximum. Keep the larger existing hold until a full billing bound is proven.
+OUTPUT_LIMIT=4096
 QUOTE='mini-2026-11-03-1resp-v1'
 MINIMUM_HOLD=2_112_000
+OPENAI_URL='wss://api.openai.com/v1/realtime'
+MAX_WIRE_MESSAGE=262144
+CONNECT_DEADLINE=4
+CLOSE_DEADLINE=3
 
 
-def create_production_provider(*_args,**_kwargs):
-    # No environment/config override: wiring has not been independently proven.
+class RedirectRefused(ValueError):
+    pass
+
+
+async def _deny_redirect(_session,_trace_context,_params):
+    # aiohttp emits this before making the redirected request.
+    raise RedirectRefused('realtime_redirect_forbidden')
+
+
+def _new_owned_session():
+    trace=aiohttp.TraceConfig()
+    trace.on_request_redirect.append(_deny_redirect)
+    return aiohttp.ClientSession(trust_env=False,trace_configs=[trace],
+        timeout=aiohttp.ClientTimeout(total=CONNECT_DEADLINE,connect=3,sock_connect=3))
+
+
+async def _connect_websocket(session,url,headers):
+    # Outer deadline includes the complete HTTP upgrade, not only TCP setup.
+    return await asyncio.wait_for(session.ws_connect(url,headers=headers,timeout=CLOSE_DEADLINE,
+                                  heartbeat=20,max_msg_size=MAX_WIRE_MESSAGE),CONNECT_DEADLINE)
+
+
+def _unique_object(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result:raise ValueError('duplicate_json_key')
+        result[key]=value
+    return result
+
+
+def _require_live_admission():
+    # Never toggle through request arguments, deployment config or env vars.
+    # Claims, pre-open context linearization, writer cutover and billing are
+    # not yet proven with the actual upstream API.
     raise TenantLinearError('Голосовой режим пока недоступен.',503)
 
 
-class SyntheticRealtimeWire:
-    mock_only=True
+class AiohttpRealtimeSocket:
+    """Bounded JSON adapter around an already-open aiohttp WebSocket.
 
+    This wrapper owns no key. Its caller owns the session. Production cannot
+    obtain a socket through this module while admission is disabled.
+    """
+    def __init__(self,ws,owned_session=None):
+        self.ws=ws;self.owned_session=owned_session;self._close_task=None
+
+    async def send_json(self,event):
+        if not isinstance(event,dict):raise ValueError('wire_event_invalid')
+        raw=json.dumps(event,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+        if len(raw.encode('utf-8'))>MAX_WIRE_MESSAGE:raise ValueError('wire_message_too_large')
+        await self.ws.send_str(raw)
+
+    async def receive_json(self):
+        message=await self.ws.receive()
+        if message.type!=aiohttp.WSMsgType.TEXT:raise ValueError('wire_socket_closed_or_nontext')
+        if len(message.data.encode('utf-8'))>MAX_WIRE_MESSAGE:raise ValueError('wire_message_too_large')
+        try:
+            data=json.loads(message.data,object_pairs_hook=_unique_object,
+                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        except (ValueError,TypeError,RecursionError):raise ValueError('wire_json_invalid') from None
+        if not isinstance(data,dict):raise ValueError('wire_event_invalid')
+        return data
+
+    async def close(self):
+        # Multiple callers/cancellations share one cleanup. A caller timing
+        # out must not cancel cleanup or claim that the lease is releasable.
+        if self._close_task is None:self._close_task=asyncio.create_task(self._close_owned())
+        return await asyncio.shield(self._close_task)
+
+    async def _close_owned(self):
+        try:
+            await asyncio.wait_for(self.ws.close(),CLOSE_DEADLINE)
+        finally:
+            if self.owned_session is not None:
+                await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
+        if not self.ws.closed:raise ValueError('wire_close_unconfirmed')
+        if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
+
+
+async def _open_openai_socket(api_key,owner):
+    """Future server-only connector. Gate fires before key use or any I/O."""
+    _require_live_admission()
+    # No caller-supplied session, proxy, endpoint, or trace hooks. This path
+    # remains blocked until key source, cancellation and remote billing proof.
+    session=_new_owned_session()
+    owner._opening_session=session
+    try:
+        ws=await _connect_websocket(session,OPENAI_URL+'?model='+MODEL,{'Authorization':'Bearer '+api_key})
+    except BaseException:
+        await owner._close_opening_session()
+        raise
+    socket=AiohttpRealtimeSocket(ws,owned_session=session)
+    owner.socket=socket
+    return socket
+
+
+def create_production_provider(*args,**kwargs):
+    # Never accept loader, guard or endpoint from an HTTP request. Imported
+    # lazily to avoid a dependency cycle; types are server-owned implementations.
+    _require_live_admission()
+    from tenant_operator_voice_orchestration import ScopedDispatchGuard, ServerCredentialLoader
+    if kwargs or len(args)!=2 or type(args[0]) is not ScopedDispatchGuard or type(args[1]) is not ServerCredentialLoader:
+        raise ValueError('trusted_provider_dependencies_required')
+    return OpenAIRealtimeProvider(args[1].load,args[0])
+
+
+class _RealtimeWire:
     def __init__(self,socket,claim_guard):
-        if getattr(socket,'synthetic_only',None) is not True or not callable(getattr(claim_guard,'consume',None)):
-            raise ValueError('synthetic_socket_and_guard_required')
-        self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None
+        if not callable(getattr(claim_guard,'consume',None)):
+            raise ValueError('claim_guard_required')
+        self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
+
+    def _note_conversation(self,event):
+        conversation=event.get('conversation')
+        value=conversation.get('id') if isinstance(conversation,dict) else None
+        if self.conversation_id is not None or not isinstance(value,str) or not value or len(value)>128:
+            raise ValueError('provider_conversation_invalid')
+        self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not True or transcription is not False
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not False
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -42,29 +156,39 @@ class SyntheticRealtimeWire:
             raise ValueError('context_too_large')
         created=await self.socket.receive_json()
         if not isinstance(created,dict) or created.get('type')!='session.created':raise ValueError('session_created_missing')
+        session=created.get('session')
+        session_id=session.get('id') if isinstance(session,dict) else None
+        if not isinstance(session_id,str) or not session_id or len(session_id)>128:raise ValueError('session_id_missing')
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},'transcription':None,
-                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True}},
+                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
+        # GA may announce the conversation between session.created and
+        # session.updated. Reject all other interleavings; caller bounds open.
         updated=await self.socket.receive_json()
-        self._verify(updated,config)
+        if isinstance(updated,dict) and updated.get('type')=='conversation.created':
+            self._note_conversation(updated)
+            updated=await self.socket.receive_json()
+        self._verify(updated,config,session_id)
         # Existing dialog/customer material stays user-level untrusted input;
         # it must never be appended to the privileged system instructions.
         await self.socket.send_json({'type':'conversation.item.create','item':{'type':'message','role':'user',
                                     'content':[{'type':'input_text','text':'Untrusted dialog context: '+data}]}})
-        self.config=config;self.ready=True
+        self.config=config;self.session_id=session_id;self.ready=True
 
     @staticmethod
-    def _verify(event,expected):
+    def _verify(event,expected,session_id):
         try:
             if event['type']!='session.updated':raise ValueError()
             s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
-            good=(s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
+            good=(s['id']==session_id and s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
               and s['tool_choice']=='none' and s['max_output_tokens']==OUTPUT_LIMIT and s['instructions']==expected['instructions']
               and incoming['format']=={'type':'audio/pcm','rate':24000} and incoming['transcription'] is None
-              and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is True
+              and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is False
+              and vad['idle_timeout_ms'] is None
+              and set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'}
               and audio['output']['format']=={'type':'audio/pcm','rate':24000})
             if not good:raise ValueError()
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
@@ -98,6 +222,9 @@ class SyntheticRealtimeWire:
             except (ValueError,TypeError,binascii.Error):raise ValueError('audio_invalid') from None
             if not audio or len(audio)>9600 or len(audio)%2:raise ValueError('audio_invalid')
         elif kind=='input_audio_buffer.clear' and set(event)=={'type'}:pass
+        elif kind=='response.cancel' and set(event) in ({'type'},{'type','response_id'}):
+            if 'response_id' in event and (not isinstance(event['response_id'],str) or not event['response_id'] or len(event['response_id'])>128):
+                raise ValueError('response_id_invalid')
         elif kind=='conversation.item.truncate' and set(event)=={'type','item_id','content_index','audio_end_ms'}:
             if not isinstance(event['item_id'],str) or event['content_index']!=0 or event['audio_end_ms']!=0:
                 raise ValueError('truncate_invalid')
@@ -108,12 +235,81 @@ class SyntheticRealtimeWire:
         if not self.ready:raise ValueError('session_not_ready')
         event=await self.socket.receive_json()
         if not isinstance(event,dict):raise ValueError('provider_event_invalid')
+        if 'session_id' in event and event['session_id']!=self.session_id:
+            self.ready=False;raise ValueError('provider_session_changed')
         if event.get('type') in {'session.created','session.updated'}:
             # No settings changes after the attested startup are permitted.
             self.ready=False
             raise ValueError('provider_configuration_changed')
+        if event.get('type')=='conversation.created':
+            try:self._note_conversation(event)
+            except ValueError:self.ready=False;raise
         return event
 
     async def close(self):
         self.ready=False;self.bound=None
         await self.socket.close()
+
+
+class SyntheticRealtimeWire(_RealtimeWire):
+    mock_only=True
+
+    def __init__(self,socket,claim_guard):
+        if getattr(socket,'synthetic_only',None) is not True:
+            raise ValueError('synthetic_socket_and_guard_required')
+        super().__init__(socket,claim_guard)
+
+
+class OpenAIRealtimeProvider(_RealtimeWire):
+    """Server-only provider composition. Not admitted by production Session.
+
+    The credential loader must eventually be supplied by the reviewed server
+    factory, never by a request. Both this class and its connector reject
+    before loading credentials while the immutable admission gate is closed.
+    """
+    mock_only=False
+
+    def __init__(self,credential_loader,claim_guard):
+        if not callable(credential_loader):raise ValueError('credential_loader_required')
+        super().__init__(None,claim_guard)
+        self._credential_loader=credential_loader;self._closing=False
+        self._opening_session=None;self._opening_close_task=None
+
+    async def _close_opening_session(self):
+        if self._opening_session is None:return
+        if self._opening_close_task is None:
+            self._opening_close_task=asyncio.create_task(self._opening_session.close())
+        await asyncio.shield(self._opening_close_task)
+        if not self._opening_session.closed:raise ValueError('provider_cleanup_unconfirmed')
+
+    async def open(self,snapshot,**options):
+        _require_live_admission()
+        if self._closing:raise ValueError('provider_closed')
+        try:
+            credential=await asyncio.wait_for(self._credential_loader(),CONNECT_DEADLINE)
+        except Exception:
+            raise ValueError('provider_credential_unavailable') from None
+        try:
+            if not isinstance(credential,str) or not credential:raise ValueError('credential_unavailable')
+            if self._closing:raise ValueError('provider_closed')
+            self.socket=await _open_openai_socket(credential,self)
+        except Exception:
+            raise ValueError('provider_connect_unavailable') from None
+        finally:
+            credential=None
+        try:
+            if self._closing:raise ValueError('provider_closed')
+            await super().open(snapshot,**options)
+        except asyncio.CancelledError:
+            # Session cleanup must still retain its lease if close is unknown.
+            await self.socket.close()
+            raise
+        except Exception:
+            try:await self.socket.close()
+            except Exception:raise ValueError('provider_cleanup_unconfirmed') from None
+            raise ValueError('provider_open_unavailable') from None
+
+    async def close(self):
+        self._closing=True;self.ready=False;self.bound=None
+        if self.socket is not None:await self.socket.close()
+        elif self._opening_session is not None:await self._close_opening_session()
