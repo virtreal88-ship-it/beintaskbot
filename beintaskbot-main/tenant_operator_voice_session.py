@@ -60,6 +60,7 @@ class Session:
         self.speech_epoch = 0
         self.unprocessed_speech = 0
         self.dispatch_sending = False
+        self.client_audio_sending = False
         # Without an audio-to-VAD watermark even silence sent before mute can
         # become a late speech event. Keep this sticky for the whole session.
         self.audio_may_be_pending = False
@@ -109,7 +110,7 @@ class Session:
         if isinstance(event,dict) and event.get('type')=='input_audio_buffer.speech_started':
             self.speech_epoch += 1
             self.unprocessed_speech += 1
-            if self.dispatch_sending and not self.closed:
+            if (self.dispatch_sending or self.client_audio_sending) and not self.closed:
                 # A write already in progress cannot be recalled. Begin close
                 # immediately; the I/O drain retains the lease if it stalls.
                 self._stop_requested=True
@@ -120,7 +121,18 @@ class Session:
         async with self.client_lock:
             if self.closed:
                 raise Refused('session_closed')
-            await self.client.send(event)
+            if event.get('type')=='audio':
+                # Recheck after acquiring the socket lock: a later VAD event
+                # may have been observed while this output waited for it.
+                if self.unprocessed_speech:
+                    return
+                self.client_audio_sending=True
+                try:
+                    await self.client.send(event)
+                finally:
+                    self.client_audio_sending=False
+            else:
+                await self.client.send(event)
 
     async def next_provider_event(self):
         async with self.receive_lock:
@@ -420,7 +432,7 @@ class Session:
             if not isinstance(item, str) or not item or len(item) > 128 or event.get('content_index') != 0 or not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_provider_audio')
             async with self.lock:
-                if self.interrupt_pending:
+                if self.interrupt_pending or self.unprocessed_speech:
                     return  # queued unplayed audio must not reach playback
                 if self.output_finished:
                     raise Refused('audio_after_completion')

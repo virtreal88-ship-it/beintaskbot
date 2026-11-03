@@ -300,6 +300,10 @@ pending observed event or changed generation prevents a new response dispatch.
 A change after a reservation is conservatively retained; a change after claim
 is marked unknown. If speech is observed while a provider send is already in
 flight, shutdown begins and a failed or undrained close retains the lease.
+Observed but unprocessed speech also drops queued assistant audio and is
+checked again under the client socket lock. If a socket write is already in
+flight, the session closes; those bytes cannot be recalled, and an undrained
+socket retains the lease.
 
 This is not a remote silence, billing, cancellation, or network-delivery fence:
 events not yet received cannot be observed, an already-started provider write
