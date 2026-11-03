@@ -54,6 +54,7 @@ class Session:
             raise Refused('invalid_session_id') from None
         self.executor = executor
         self.response_number = 0
+        self.input_turns = {}
         self.response_inflight = False
         self.cancel_requested = False
         self.response_pending = False
@@ -213,6 +214,23 @@ class Session:
                 self.current_reservation=None
             raise
 
+    async def _note_input_item(self, item_id, marker):
+        """Called under self.lock for server-owned VAD/item events."""
+        if not isinstance(item_id,str) or not item_id or len(item_id)>128:
+            raise Refused('input_item_invalid')
+        turn=self.input_turns.get(item_id)
+        if marker=='started':
+            if turn is not None or len(self.input_turns)>=20:raise Refused('input_item_replayed')
+            self.input_turns[item_id]={'started':True,'stopped':False,'committed':False,'added':False,'scheduled':False}
+            return
+        if turn is None or marker not in ('stopped','committed','added') or turn[marker]:
+            raise Refused('input_item_unmatched')
+        turn[marker]=True
+        if turn['stopped'] and turn['committed'] and turn['added'] and not turn['scheduled']:
+            turn['scheduled']=True
+            self.response_pending=True
+            await self._dispatch_pending()
+
     async def _watch(self):
         try:
             while not self.closed:
@@ -301,8 +319,10 @@ class Session:
         await self.lease.assert_current(self.scope, self.fence)
         kind = event.get('type')
         if kind == 'input_audio_buffer.speech_started':
+            if self.muted:return
             self.activity = time.monotonic()
             async with self.lock:
+                await self._note_input_item(event.get('item_id'),'started')
                 if self.response_inflight and not self.cancel_requested:
                     event={'type':'response.cancel'}
                     if self.provider_response_id:event['response_id']=self.provider_response_id
@@ -322,8 +342,7 @@ class Session:
                 return
             self.activity = time.monotonic()
             async with self.lock:
-                self.response_pending = True
-                await self._dispatch_pending()
+                await self._note_input_item(event.get('item_id'),'stopped')
             return
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
@@ -394,11 +413,22 @@ class Session:
                     self.output_finished=True
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
-        if kind in ('input_audio_buffer.committed','input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
+        if kind=='input_audio_buffer.committed':
+            async with self.lock:
+                await self._note_input_item(event.get('item_id'),'committed')
+            return
+        if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
             return
         if kind in ('conversation.item.added','conversation.item.done'):
             item=event.get('item')
             if isinstance(item,dict) and item.get('type')=='message' and item.get('role') in ('user','assistant'):
+                if kind=='conversation.item.added' and item.get('role')=='user':
+                    content=item.get('content')
+                    if (not isinstance(content,list) or len(content)!=1 or not isinstance(content[0],dict)
+                        or content[0].get('type')!='input_audio'):
+                        raise Refused('input_item_content_invalid')
+                    async with self.lock:
+                        await self._note_input_item(item.get('id'),'added')
                 return
             raise Refused('provider_item_forbidden')
         if kind in ('response.output_item.added','response.output_item.done'):

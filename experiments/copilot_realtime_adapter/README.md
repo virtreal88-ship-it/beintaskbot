@@ -278,9 +278,12 @@ item ID and waits for an exact matching `conversation.item.added` acknowledgemen
 before declaring the provider ready. A mismatch or missing acknowledgement
 fails closed; loopback tests do not prove a live provider's timing or shape.
 This does not fence later changes to the source data, authorize a real call,
-or replace the separate source, history, lease and budget gates. The existing
-session also reacts to `speech_stopped` before observing the matching committed
-input item; ordering and transcript linkage still require implementation.
+or replace the separate source, history, lease and budget gates. The session
+now waits for matching `speech_stopped`, `input_audio_buffer.committed` and
+audio `conversation.item.added` before requesting a response; duplicate, wrong
+or missing item IDs fail closed. This ordering has only been tested with mock
+events, not a live provider, and does not implement transcript persistence or
+prove that the provider used the intended audio.
 
 ## Source fingerprints and remaining fence
 

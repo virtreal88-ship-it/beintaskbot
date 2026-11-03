@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from test_real_authority_pg import RealVoiceAuthority
 from session import Session
-from test_session import Lease
+from test_session import Lease, begin_input, finish_input
 from tenant_operator_realtime_wire import SyntheticRealtimeWire
 from websocket import make_handler
 from aiohttp import web
@@ -245,18 +245,18 @@ class IntegratedSynthetic(RealVoiceAuthority):
                 self.history.append(cur,self.tenant,7,self.channel,self.conversation,0,scope.agent_binding,[{
                   'role':'employee','text':'synthetic non-exact voice transcript','agent_binding':scope.agent_binding,
                   'voice_session_id':session.session_id,'turn_sequence':0,'transcript_status':'partial','transcript_quality':'automatic_unverified'}])
-            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+            await begin_input(session)
             await ws.send_bytes(bytes(480))
             for _ in range(50):
                 if any(e.get('type')=='input_audio_buffer.append' for e in socket.sent):break
                 await asyncio.sleep(.01)
             self.assertTrue(any(e.get('type')=='input_audio_buffer.append' for e in socket.sent))
-            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await finish_input(session)
             await session.receive_provider({'type':'response.created','response':{'id':'synthetic-response'}})
             await session.receive_provider({'type':'response.output_audio.delta','response_id':'synthetic-response','item_id':'synthetic-item',
                                             'content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
             self.assertEqual((await ws.receive_json())['type'],'audio')
-            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+            await begin_input(session)
             self.assertEqual((await ws.receive_json())['type'],'interrupt')
             await ws.send_json({'type':'played','item_id':'synthetic-item','played_ms':0})
             for _ in range(50):

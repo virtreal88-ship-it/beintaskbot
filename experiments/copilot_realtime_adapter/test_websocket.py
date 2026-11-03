@@ -6,7 +6,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from session import Session
 from websocket import make_handler, SocketClient
 from unittest.mock import patch
-from test_session import Authority, Ledger, Lease, Context, Provider
+from test_session import Authority, Ledger, Lease, Context, Provider, begin_input, finish_input
 
 
 class GatewayTest(unittest.IsolatedAsyncioTestCase):
@@ -39,13 +39,13 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
             if self.provider.events: break
             await asyncio.sleep(.01)
         self.assertEqual(self.provider.events[0]['type'],'input_audio_buffer.append')
-        await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        await finish_input(session)
         self.assertEqual([e[0] for e in self.ledger.events],['reserve','claim'])
         await session.receive_provider({'type':'response.created','response':{'id':'response-1'}})
         await session.receive_provider({'type':'response.output_audio.delta','response_id':'response-1','item_id':'synthetic','content_index':0,
                                         'delta':base64.b64encode(bytes(4800)).decode()})
         audio=await ws.receive_json();self.assertEqual(audio['item_id'],'synthetic');self.assertEqual(len(base64.b64decode(audio['pcm_base64'])),4800)
-        await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+        await begin_input(session)
         self.assertEqual((await ws.receive_json())['type'],'interrupt')
         await ws.send_json({'type':'played','item_id':'synthetic','played_ms':0})
         for _ in range(50):
@@ -71,7 +71,11 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.provider=QueueProvider(self.ledger)
         ws=await self.client.ws_connect('/local-voice',headers={'Origin':'https://crm.pro.az','X-Synthetic-Auth':'yes'})
         self.assertEqual((await ws.receive_json())['type'],'ready')
-        await self.provider.queue.put({'type':'input_audio_buffer.speech_stopped'})
+        await self.provider.queue.put({'type':'input_audio_buffer.speech_started','item_id':'synthetic-input'})
+        await self.provider.queue.put({'type':'input_audio_buffer.speech_stopped','item_id':'synthetic-input'})
+        await self.provider.queue.put({'type':'input_audio_buffer.committed','item_id':'synthetic-input'})
+        await self.provider.queue.put({'type':'conversation.item.added','item':{'id':'synthetic-input',
+                                      'type':'message','role':'user','content':[{'type':'input_audio'}]}})
         for _ in range(100):
             if self.ledger.events:break
             await asyncio.sleep(.005)

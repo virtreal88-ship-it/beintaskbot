@@ -26,6 +26,17 @@ class OneUseGuard:
         self.used.add(scope['request_id']);return True
 
 
+async def start_input(session,item):
+    await session.receive_provider({'type':'input_audio_buffer.speech_started','item_id':item})
+
+
+async def finish_input(session,item):
+    await session.receive_provider({'type':'input_audio_buffer.speech_stopped','item_id':item})
+    await session.receive_provider({'type':'input_audio_buffer.committed','item_id':item})
+    await session.receive_provider({'type':'conversation.item.added','item':{
+        'id':item,'type':'message','role':'user','content':[{'type':'input_audio'}]}})
+
+
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.received=[]
@@ -175,7 +186,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             session=Session(scope,**deps)
             try:
                 await session.start()
-                await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                await start_input(session,'synthetic-input-1')
+                await finish_input(session,'synthetic-input-1')
                 await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
                 self.assertTrue(session.response_inflight)
                 self.assertTrue(await session.end('test'));self.assertFalse(lease.held)
@@ -310,7 +322,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         try:
             await session.start()
             await session.receive_client({'type':'audio','pcm':bytes(480)})
-            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await start_input(session,'synthetic-input-1')
+            await finish_input(session,'synthetic-input-1')
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
             prior=list(client.events)
             # Generated transcripts are not proven heard and are neither
@@ -321,9 +334,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             await self.server_socket.send_json({'type':'response.output_audio.delta','response_id':'synthetic-response',
                                                'item_id':'audio-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
-            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+            await start_input(session,'synthetic-input-2')
             self.assertEqual(client.events[-1],{'type':'interrupt','item_id':'audio-1'})
-            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await finish_input(session,'synthetic-input-2')
             await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response'}})
             await session.receive_client({'type':'played','item_id':'audio-1','played_ms':0})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))

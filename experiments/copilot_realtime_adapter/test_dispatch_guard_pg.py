@@ -17,7 +17,7 @@ from tenant_operator_realtime_wire import SyntheticRealtimeWire
 from tenant_operator_voice_session import Session
 from tenant_linear_policy import TenantLinearError
 from test_integrated_synthetic_pg import IntegratedSynthetic
-from test_session import Lease,Client
+from test_session import Lease,Client,finish_input
 
 
 class GuardPG(IntegratedSynthetic):
@@ -77,7 +77,12 @@ class GuardPG(IntegratedSynthetic):
                 if event['type']=='conversation.item.create':
                     await self.queue.put({'type':'conversation.item.added','item':event['item']})
                 if event['type']=='input_audio_buffer.append':
-                    await self.queue.put({'type':'input_audio_buffer.speech_stopped'})
+                    item='synthetic-input'
+                    await self.queue.put({'type':'input_audio_buffer.speech_started','item_id':item})
+                    await self.queue.put({'type':'input_audio_buffer.speech_stopped','item_id':item})
+                    await self.queue.put({'type':'input_audio_buffer.committed','item_id':item})
+                    await self.queue.put({'type':'conversation.item.added','item':{'id':item,
+                                          'type':'message','role':'user','content':[{'type':'input_audio'}]}})
                 if event['type']=='response.create':
                     with outer.scoped() as conn:
                         state=conn.execute('SELECT state FROM saas_voice_test_hold WHERE tenant_id=%s',(outer.tenant,)).fetchone()['state']
@@ -256,9 +261,9 @@ class GuardPG(IntegratedSynthetic):
                             executor='copilot-voice-server')
             await session.start()
             if fail_send or fail_issue:
-                with self.assertRaises(OSError):await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                with self.assertRaises(OSError):await finish_input(session)
             else:
-                await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                await finish_input(session)
             self.assertEqual(socket.committed,[] if fail_issue else ['dispatching'])
             with self.scoped() as conn:
                 row=conn.execute('SELECT * FROM saas_voice_test_hold WHERE tenant_id=%s',(self.tenant,)).fetchone()
