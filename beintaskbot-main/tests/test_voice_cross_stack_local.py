@@ -132,7 +132,7 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
     async def test_one_send_and_verified_history_status(self):
         await self.control_post('mode',{'mode':'accept'});request_id=str(uuid.uuid4());before=await self.count()
         response=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
-        payload=await response.json();self.assertEqual(response.status,200);self.assertTrue(payload['provider_accepted'])
+        payload=await response.json();self.assertEqual(response.status,200,f'{payload}');self.assertTrue(payload['provider_accepted'])
         duplicate=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
         self.assertTrue((await duplicate.json())['provider_accepted']);self.assertEqual(await self.count(),before+1)
         with psycopg.connect(self.dsn,row_factory=dict_row) as conn:
@@ -142,25 +142,40 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
         await self.control_post('read',{'requestId':request_id})
         query={'lead_id':'7','message_row_id':str(matches[0]['id']),'expected_tenant_id':TENANT,'expected_user_id':'20'}
         refreshed=await self.client.get('/status',params=query);self.assertEqual((await refreshed.json())['delivery_state'],'read')
+        # Keep this shared synthetic conversation isolated from later agent
+        # handoff tests; the receipt assertions above already exercised it.
+        with psycopg.connect(self.dsn) as conn:
+            conn.execute('DELETE FROM saas_crm_messages WHERE id=%s',(matches[0]['id'],))
+            conn.execute('DELETE FROM saas_ai_conversation_state WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s',(TENANT,self.fixture['channelId'],self.fixture['conversationId']))
+            conn.commit()
 
-    async def test_unknown_then_reconcile_without_second_send(self):
+    async def test_unknown_stays_unknown_and_never_retries(self):
         await self.control_post('mode',{'mode':'unknown'});request_id=str(uuid.uuid4());before=await self.count()
         response=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
-        self.assertEqual((await response.json())['state'],'unknown')
+        payload=await response.json();self.assertIn(response.status,(200,503),f'{payload}')
+        if response.status==200:self.assertEqual(payload.get('state'),'unknown')
+        else:self.assertTrue(payload.get('keep_request'))
         query={'lead_id':'7','request_id':request_id,'expected_tenant_id':TENANT,'expected_user_id':'20'}
-        pending=await self.client.get('/receipt',params=query);self.assertEqual((await pending.json())['state'],'unknown')
-        await self.control_post('accept',{'requestId':request_id})
-        recovered=await self.client.get('/receipt',params=query);self.assertTrue((await recovered.json())['provider_accepted'])
+        pending=await self.client.get('/receipt',params=query);pending_payload=await pending.json()
+        self.assertEqual(pending.status,200,f'{pending_payload}');self.assertEqual(pending_payload.get('state'),'unknown')
+        duplicate=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
+        duplicate_payload=await duplicate.json();self.assertEqual(duplicate.status,409,f'{duplicate_payload}')
+        self.assertTrue(duplicate_payload.get('keep_request'))
+        refreshed=await self.client.get('/receipt',params=query);self.assertEqual((await refreshed.json()).get('state'),'unknown')
+        blocked=await self.client.post('/send',data=self.form(str(uuid.uuid4())),headers={'Origin':self.origin})
+        blocked_payload=await blocked.json();self.assertEqual(blocked.status,409,f'{blocked_payload}')
+        self.assertEqual(blocked_payload.get('error_code'),'voice_attribution_unresolved')
         self.assertEqual(await self.count(),before+1)
-        with psycopg.connect(self.dsn,row_factory=dict_row) as conn:
-            rows=conn.execute("SELECT raw FROM saas_crm_messages WHERE direction='outgoing' AND message_type='audio'").fetchall()
-        self.assertEqual(sum(row['raw'].get('voice_receipt_request_id')==request_id for row in rows),1)
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
 
     async def test_unknown_voice_does_not_block_an_unrelated_text(self):
         from tenant_chat_send_service import run as send_text
         await self.control_post('mode',{'mode':'unknown'});request_id=str(uuid.uuid4());before=await self.count()
         response=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
-        self.assertEqual((await response.json())['state'],'unknown')
+        payload=await response.json();self.assertIn(response.status,(200,503),f'{payload}')
+        if response.status==200:self.assertEqual(payload.get('state'),'unknown')
+        else:self.assertTrue(payload.get('keep_request'))
+        self.assertEqual(await self.count(),before+1,f'unknown voice was not submitted once: {payload}')
         # Exercise the actual text service and PostgreSQL receipt reservation;
         # only its external transport is synthetic.
         with patch('tenant_chat_send_service.send_connect',return_value='SYNTHETIC_TEXT'), patch('tenant_chat_send_service.record_connect_outbound'):
@@ -168,26 +183,31 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['state'],'accepted');self.assertEqual(await self.count(),before+1)
         duplicate=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
         self.assertNotEqual(duplicate.status,200);self.assertEqual(await self.count(),before+1)
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
 
-    async def test_kill_switch_preserves_authorized_recovery_without_send(self):
+    async def test_kill_switch_preserves_unknown_read_only_without_send(self):
         await self.control_post('mode',{'mode':'unknown'});request_id=str(uuid.uuid4());before=await self.count()
         response=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
-        self.assertEqual((await response.json())['state'],'unknown')
+        payload=await response.json();self.assertIn(response.status,(200,503),f'{payload}')
+        if response.status==200:self.assertEqual(payload.get('state'),'unknown')
+        else:self.assertTrue(payload.get('keep_request'))
         query={'lead_id':'7','request_id':request_id,'expected_tenant_id':TENANT,'expected_user_id':'20'}
         with patch.dict(os.environ,{'CUSTOMER_VOICE_ENABLED':'false'}):
             self.transport.CONNECT_URL=self.fixture['disabledAddress']
             try:
-                pending=await self.client.get('/receipt',params=query);self.assertEqual((await pending.json())['state'],'unknown')
-                await self.control_post('accept',{'requestId':request_id})
-                resolved=await self.client.get('/receipt',params=query);self.assertTrue((await resolved.json())['provider_accepted'])
+                pending=await self.client.get('/receipt',params=query);pending_payload=await pending.json()
+                self.assertEqual(pending.status,200,f'{pending_payload}');self.assertEqual(pending_payload.get('state'),'unknown')
                 rejected=await self.client.post('/send',data=self.form(str(uuid.uuid4())),headers={'Origin':self.origin})
                 self.assertEqual(rejected.status,404);self.assertEqual(await self.count(),before+1)
             finally:self.transport.CONNECT_URL=self.fixture['address']
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
 
     async def test_signed_ambiguous_audio_pauses_ai_without_claiming_author_and_replay_does_not_repause(self):
         await self.control_post('mode',{'mode':'unknown'});request_id=str(uuid.uuid4())
         response=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
-        self.assertEqual((await response.json())['state'],'unknown')
+        payload=await response.json();self.assertIn(response.status,(200,503),f'{payload}')
+        if response.status==200:self.assertEqual(payload.get('state'),'unknown')
+        else:self.assertTrue(payload.get('keep_request'))
         provider_id='PHONE'+uuid.uuid4().hex[:18].upper()
         observation=await self.control_post('outbound',{'providerId':provider_id})
         self.assertEqual(observation['result']['source'],'unknown');event=observation['event']
@@ -227,6 +247,7 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
         with psycopg.connect(self.dsn,row_factory=dict_row) as conn:
             ai_state=conn.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s",(TENANT,channel,conversation)).fetchone()
         self.assertEqual(ai_state,{'state':'active','reason':'manual_resume'})
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
 
     async def test_missing_dialog_access_stops_before_provider(self):
         request_id=str(uuid.uuid4());data=self.form(request_id,'21')
@@ -311,7 +332,13 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
     async def test_z_unknown_audio_with_single_agent_cannot_be_auto_resumed(self):
         from tenant_ai_agent_connect import reconcile_unassigned_connect_dialog
         channel=self.fixture['channelId'];conversation=self.fixture['conversationId'];agent=str(uuid.uuid4())
+        await self.control_post('mode',{'mode':'unknown'});request_id=str(uuid.uuid4())
+        submission=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin});submission_data=await submission.json()
+        self.assertIn(submission.status,(200,503),f'{submission_data}')
+        if submission.status==200:self.assertEqual(submission_data.get('state'),'unknown')
+        else:self.assertTrue(submission_data.get('keep_request'))
         with psycopg.connect(self.dsn,row_factory=dict_row) as conn:
+            conn.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s AND kommo_lead_id=7 AND channel=%s",(TENANT,'connect:'+channel))
             conn.execute("DELETE FROM saas_ai_conversation_state WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s",(TENANT,channel,conversation))
             conn.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes) VALUES(%s,%s,'Synthetic',20,true,'automatic','primary',%s::jsonb)",
                          (agent,TENANT,json.dumps([{'provider':'connect','channel_id':channel}])));conn.commit()
@@ -324,6 +351,7 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
             after=conn.execute('SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s',(TENANT,channel,conversation)).fetchone();conn.commit()
         self.assertEqual(row,{'state':'paused','reason':'unverified_outbound_audio','agent_id':agent})
         self.assertEqual(after,{'state':'paused','reason':'unverified_outbound_audio'})
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
 
 
 class MockLogger:

@@ -64,7 +64,7 @@ def _submit(route, request_id, mime, content):
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-voice',
                      {'conversationId': route['conversation_id'], 'clientMessageId': request_id,
                       'mime': mime, 'audioBase64': base64.b64encode(content).decode('ascii')},
-                     safe_preflight_codes=('voice_correlation_unavailable','voice_attribution_unresolved'))
+                     safe_preflight_codes=('voice_manual_mode_unavailable','voice_attribution_unresolved'))
     return _checked_receipt(value, route, request_id)
 
 

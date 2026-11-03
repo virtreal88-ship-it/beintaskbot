@@ -1,96 +1,53 @@
-/* Task creation for the tenant cabinet, independent of legacy /webapp. */
+/* Existing external creation routes; the production entry is the task source picker. */
 (() => {
-  const $ = id => document.getElementById(id);
-  let profile, options, pending, busy = false;
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const storageKey = () => `crm-task:${profile.tenant_id}:${profile.telegram_id}`;
-  async function api(url, data) {
-    const response = await fetch(url, {credentials:'same-origin', method:data ? 'POST' : 'GET',
-      headers:{'Content-Type':'application/json'}, ...(data ? {body:JSON.stringify(data)} : {})});
-    const body = await response.json();
-    if (!response.ok || !body.success) {
-      const error = new Error(body.error || 'Sorğu alınmadı.');
-      error.pending = !!body.retry_same_request || response.status >= 500;
-      throw error;
-    }
-    return body;
-  }
-  const button = document.createElement('button');
-  button.className = 'primary'; button.textContent = '+ Tapşırıq'; button.hidden = true;
-  $('tasksRefresh').before(button);
-  const style = document.createElement('style');
-  style.textContent = '#tenantTaskModal .modal-card{max-height:calc(100dvh - 32px);overflow:auto;padding-bottom:max(22px,env(safe-area-inset-bottom))}#tenantTaskModal label{display:grid;gap:6px;margin:12px 0}#tenantTaskModal input,#tenantTaskModal select,#tenantTaskModal textarea{width:100%;font:inherit;border:1px solid var(--line);border-radius:9px;padding:10px}#tenantTaskModal textarea{resize:none;min-height:100px}#tenantTaskModal .task-actions{display:flex;gap:10px;position:sticky;bottom:-22px;background:#fff;padding:14px 0}#tenantTaskModal .spinner{display:inline-block}#view-tasks .top{flex-wrap:wrap}';
-  document.head.append(style);
-  const modal = document.createElement('div'); modal.id = 'tenantTaskModal'; modal.className = 'modal';
-  modal.innerHTML = `<form class="modal-card" id="tenantTaskForm"><div class="modal-head"><h2>Yeni tapşırıq</h2><button type="button" class="close" id="taskClose" aria-label="Bağla">×</button></div>
-    <label>İcraçı<select id="taskExecutor" required></select></label>
-    <label>Vərəq<select id="taskPipeline"></select></label>
-    <label>Sövdələşmə<select id="taskLead"><option value="">Sövdələşməsiz</option></select></label>
-    <p class="sub" id="taskRouteHint" style="white-space:normal"></p>
-    <label>Tapşırıq<textarea id="taskBody" required maxlength="3500" placeholder="Nə etmək lazımdır?"></textarea></label>
-    <label>Son tarix və saat<input id="taskDue" type="datetime-local" required></label>
-    <div id="taskCreateNotice" class="notice"></div><div class="task-actions"><button class="primary" type="submit" id="taskSubmit">Yarat</button><button class="outline" type="button" id="taskCancel">Bağla</button></div></form>`;
-  document.body.append(modal);
-  function resize() { const t = $('taskBody'); t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px`; }
-  function configure() {
-    const executor = options.executors.find(e => String(e.id) === $('taskExecutor').value);
-    const pipes = executor?.pipelines || [];
-    const selected = $('taskPipeline').value;
-    $('taskPipeline').innerHTML = pipes.map(p => `<option value="${p.pipeline_id}">${esc(p.name || 'Vərəq #'+p.pipeline_id)}</option>`).join('');
-    if (pipes.some(p => String(p.pipeline_id) === selected)) $('taskPipeline').value = selected;
-    $('taskPipeline').closest('label').hidden = pipes.length === 0;
-    $('taskRouteHint').textContent = pipes.length ? 'Sövdələşmə seçilməsə, əvvəl icraçının vərəqində yeni sövdələşmə yaradılacaq. Administrator təyin edərkən seçilmiş sövdələşmə icraçının ilk mərhələsinə köçürüləcək.' : 'Tapşırıq icraçının daxili nişanı ilə saxlanacaq; sövdələşmə köçürülməyəcək.';
-  }
-  function lock(on) {
-    ['taskExecutor','taskPipeline','taskLead','taskBody','taskDue'].forEach(id => $(id).disabled = on);
-    $('taskSubmit').disabled = busy;
-  }
-  async function open() {
-    button.disabled = true;
-    try {
-      options = await api('/api/platform/crm/tasks/options');
-      try { pending = JSON.parse(sessionStorage.getItem(storageKey()) || 'null'); } catch { pending = null; }
-      $('tenantTaskForm').reset();
-      $('taskExecutor').innerHTML = options.executors.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
-      $('taskExecutor').value = String(pending?.executor_id || profile.telegram_id);
-      if (!$('taskExecutor').value && options.executors[0]) $('taskExecutor').value = String(options.executors[0].id);
-      $('taskLead').innerHTML = '<option value="">Sövdələşməsiz</option>' + options.deals.map(d => `<option value="${d.id}">${esc(d.name)} · #${d.id}</option>`).join('');
-      configure();
-      if (pending) {
-        $('taskPipeline').value = String(pending.pipeline_id || ''); $('taskLead').value = String(pending.lead_id || '');
-        $('taskBody').value = pending.text;
-        const due = new Date(pending.due_at); $('taskDue').value = new Date(due.getTime() - due.getTimezoneOffset()*60000).toISOString().slice(0,16);
-      }
-      lock(!!pending); $('taskSubmit').textContent = pending ? 'Eyni sorğunu yoxla' : 'Yarat';
-      $('taskCreateNotice').classList.remove('show'); modal.classList.add('show'); resize();
-    } catch (error) { alert(error.message); } finally { button.disabled = false; }
-  }
-  function close() { if (!busy) modal.classList.remove('show'); }
-  button.onclick = open; $('taskClose').onclick = close; $('taskCancel').onclick = close;
-  modal.onclick = event => { if (event.target === modal) close(); };
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
-  $('taskBody').oninput = resize; $('taskExecutor').onchange = configure;
-  $('tenantTaskForm').onsubmit = async event => {
-    event.preventDefault(); if (busy) return;
-    if (!pending) {
-      pending = {request_id:crypto.randomUUID(), executor_id:Number($('taskExecutor').value),
-        pipeline_id:Number($('taskPipeline').value), lead_id:Number($('taskLead').value),
-        text:$('taskBody').value.trim(), due_at:new Date($('taskDue').value).toISOString()};
-    }
-    // Keep the exact request on network loss or browser reload.
-    sessionStorage.setItem(storageKey(), JSON.stringify(pending));
-    busy = true; lock(true); $('taskSubmit').innerHTML = '<i class="spinner"></i>Yaradılır…';
-    try {
-      const result = await api('/api/platform/crm/tasks', pending);
-      sessionStorage.removeItem(storageKey()); pending = null; busy = false; close();
-      $('tasksRefresh').click(); if (result.warning) alert(result.warning);
-    } catch (error) {
-      $('taskCreateNotice').textContent = error.message; $('taskCreateNotice').classList.add('show');
-      if (error.pending !== false) lock(true);
-      else { pending = null; sessionStorage.removeItem(storageKey()); lock(false); }
-    } finally { busy = false; $('taskSubmit').disabled = false; $('taskSubmit').textContent = pending ? 'Eyni sorğunu yoxla' : 'Yarat'; }
+  'use strict';
+  const $=id=>document.getElementById(id),flow=()=>window.tenantTaskFlow;
+  if(!$('tasksRefresh'))return;
+  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let profile=null,options=null,pending=null,busy=false,generation=0,paused=true,returnFocus=null,dirty=false,profileKey='',retained=null,replayAllowed=false;
+  const keyFor=member=>`crm-task:${member.tenant_id}:${member.telegram_id}`;
+  const dictionary={
+    ru:{title:'Новая задача Kommo',executor:'Исполнитель',pipeline:'Воронка исполнителя',lead:'Сделка',noLead:'Без сделки',body:'Задача',due:'Срок',create:'Создать',check:'Проверить прежний запрос',replay:'Повторить исходный запрос',close:'Закрыть',loading:'Загружаем доступные варианты…',saving:'Сохраняем…',keep:'Задача будет связана с выбранной сделкой. Воронка и этап сделки сохранятся.',newDeal:'Без выбранной сделки сначала будет создана новая сделка в личной воронке исполнителя, затем задача.',standalone:'Без выбранной сделки будет создана отдельная задача с внутренней меткой исполнителя. Существующие сделки не перемещаются.',error:'Не удалось сохранить задачу. Введённые данные сохранены.',unknown:'Результат не подтверждён. Прежний запрос сохранён; проверьте его без повторного создания.',storage:'Не удалось сохранить запрос в этом браузере. Задача не отправлена.',discard:'Есть несохранённые изменения. Закрыть форму?',unavailable:'Сейчас нельзя создать внешнюю задачу. Проверьте текущий доступ.'},
+    az:{title:'Yeni Kommo tapşırığı',executor:'İcraçı',pipeline:'İcraçının hunisi',lead:'Sövdələşmə',noLead:'Sövdələşməsiz',body:'Tapşırıq',due:'Son tarix və saat',create:'Yarat',check:'Əvvəlki sorğunu yoxla',replay:'İlkin sorğunu təkrar göndər',close:'Bağla',loading:'Əlçatan seçimlər yüklənir…',saving:'Saxlanılır…',keep:'Tapşırıq seçilmiş sövdələşməyə bağlanacaq. Sövdələşmənin hunisi və mərhələsi saxlanılacaq.',newDeal:'Sövdələşmə seçilməsə, əvvəl icraçının şəxsi hunisində yeni sövdələşmə, sonra tapşırıq yaradılacaq.',standalone:'Sövdələşmə seçilməsə, icraçının daxili nişanı ilə ayrıca tapşırıq yaradılacaq. Mövcud sövdələşmələr köçürülmür.',error:'Tapşırığı saxlamaq mümkün olmadı. Daxil etdiyiniz məlumatlar saxlanılıb.',unknown:'Nəticə təsdiqlənməyib. Əvvəlki sorğu saxlanılıb; yenidən yaratmadan yoxlayın.',storage:'Sorğunu bu brauzerdə saxlamaq mümkün olmadı. Tapşırıq göndərilmədi.',discard:'Saxlanılmamış dəyişikliklər var. Forma bağlansın?',unavailable:'Hazırda xarici tapşırıq yaratmaq mümkün deyil. Cari girişi yoxlayın.'},
+    en:{title:'New Kommo task',executor:'Assignee',pipeline:'Assignee pipeline',lead:'Deal',noLead:'No deal',body:'Task',due:'Due date and time',create:'Create',check:'Check original request',replay:'Send original request again',close:'Close',loading:'Loading available choices…',saving:'Saving…',keep:'The task will be linked to the selected deal. Its pipeline and stage will stay unchanged.',newDeal:'Without a selected deal, a new deal in the assignee’s personal pipeline will be created first, followed by the task.',standalone:'Without a selected deal, a standalone task with the assignee’s internal marker will be created. Existing deals are not moved.',error:'Could not save the task. Your input is preserved.',unknown:'The result is unconfirmed. The original request is retained; check it without creating again.',storage:'Could not preserve the request in this browser. The task was not sent.',discard:'You have unsaved changes. Close the form?',unavailable:'An external task cannot be created now. Check current access.'}
   };
-  function apply(data) { profile = data.member; button.hidden = !data.capabilities?.modules?.tasks; }
-  document.addEventListener('tenant-profile', event => apply(event.detail));
-  api('/api/platform/me').then(apply).catch(() => {});
+  const copy=()=>dictionary[window.tenantI18n?.language]||dictionary.az;
+  const stored=()=>{try{return !!profile&&!!sessionStorage.getItem(keyFor(profile));}catch{return false;}};
+  const allowed=()=>!paused&&profile?.active!==false&&!!profile?.tenant_id&&(flow()?flow().sourceActions('kommo').view===true&&(flow().sourceActions('kommo').create===true||stored()):true);
+  const stamp=()=>({generation,tenant:profile?.tenant_id,actor:String(profile?.telegram_id),scope:flow()?.capture()});
+  const current=value=>value.generation===generation&&value.tenant===profile?.tenant_id&&value.actor===String(profile?.telegram_id)&&!paused&&(!flow()||flow().current(value.scope));
+  async function api(url,data,own){
+    if(flow())return flow().api(url,{method:data?'POST':'GET',body:data,scope:own.scope,flow:true});
+    const response=await fetch(url,{credentials:'same-origin',method:data?'POST':'GET',headers:{'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})});let body;try{body=await response.json();}catch{body=null;}
+    if(!response.ok||!body||body.success!==true)throw Object.assign(new Error(body?.error||copy().error),{unknown:!!data&&(response.ok||response.status>=500||body?.retry_same_request===true)});return body;
+  }
+  const button=document.createElement('button');button.className='primary';button.textContent='+ Tapşırıq';button.hidden=true;if(!flow())$('tasksRefresh').before(button);
+  const style=document.createElement('style');style.textContent='#tenantTaskModal [hidden]{display:none!important}#tenantTaskModal .modal-card{max-width:680px;width:calc(100% - 24px);box-sizing:border-box;max-height:calc(100dvh - 24px);overflow:auto;padding-bottom:max(22px,env(safe-area-inset-bottom))}#tenantTaskModal label{display:grid;gap:6px;margin:12px 0;min-width:0}#tenantTaskModal input,#tenantTaskModal select,#tenantTaskModal textarea{min-width:0;max-width:100%;width:100%;box-sizing:border-box;font:inherit;border:1px solid var(--line);border-radius:9px;padding:10px;min-height:44px}#tenantTaskModal textarea{resize:vertical;min-height:100px}#tenantTaskModal button{min-height:44px}#tenantTaskModal .task-actions{display:flex;flex-wrap:wrap;gap:10px;background:var(--paper,#fff);padding:14px 0}#tenantTaskModal p{white-space:normal;overflow-wrap:anywhere}#tenantTaskModal .spinner{display:inline-block}#tenantTaskModal :focus-visible{outline:3px solid #087c5c;outline-offset:3px}';document.head.append(style);
+  const modal=document.createElement('div');modal.id='tenantTaskModal';modal.className='modal';modal.innerHTML='<form class="modal-card" id="tenantTaskForm" role="dialog" aria-modal="true" aria-labelledby="tenantTaskTitle"><div class="modal-head"><h2 id="tenantTaskTitle"></h2><button type="button" class="close" id="taskClose">×</button></div><label><span data-task-external-label="executor"></span><select id="taskExecutor" required></select></label><label><span data-task-external-label="pipeline"></span><select id="taskPipeline"></select></label><label><span data-task-external-label="lead"></span><select id="taskLead"></select></label><p class="sub" id="taskRouteHint"></p><label><span data-task-external-label="body"></span><textarea id="taskBody" required maxlength="3500"></textarea></label><label><span data-task-external-label="due"></span><input id="taskDue" type="datetime-local" required></label><div id="taskCreateNotice" class="notice" role="status"></div><div class="task-actions"><button class="primary" type="submit" id="taskSubmit"></button><button class="outline" type="button" id="taskReplayOriginal" hidden></button><button class="outline" type="button" id="taskCancel"></button></div></form>';document.body.append(modal);
+  function notice(message){$('taskCreateNotice').textContent=message;$('taskCreateNotice').classList.toggle('show',!!message);}
+  function hint(){const executor=options?.executors?.find(value=>String(value.id)===$('taskExecutor').value);$('taskRouteHint').textContent=$('taskLead').value?copy().keep:executor?.pipelines?.length?copy().newDeal:copy().standalone;}
+  function translate(){const c=copy();$('tenantTaskTitle').textContent=c.title;modal.querySelectorAll('[data-task-external-label]').forEach(node=>node.textContent=c[node.dataset.taskExternalLabel]);$('taskClose').setAttribute('aria-label',c.close);$('taskCancel').textContent=c.close;$('taskReplayOriginal').textContent=c.replay;$('taskReplayOriginal').hidden=!replayAllowed||!pending;$('taskReplayOriginal').disabled=busy||!allowed();$('taskSubmit').textContent=busy?c.saving:pending?c.check:c.create;const empty=$('taskLead').querySelector('option[value=""]');if(empty)empty.textContent=c.noLead;hint();}
+  function configure(){const executor=options?.executors?.find(value=>String(value.id)===$('taskExecutor').value),pipes=executor?.pipelines||[],selected=$('taskPipeline').value;$('taskPipeline').innerHTML=pipes.map(value=>`<option value="${esc(value.pipeline_id)}">${esc(value.name||copy().pipeline)}</option>`).join('');if(pipes.some(value=>String(value.pipeline_id)===selected))$('taskPipeline').value=selected;$('taskPipeline').closest('label').hidden=pipes.length===0;hint();}
+  function lock(on){for(const id of ['taskExecutor','taskPipeline','taskLead','taskBody','taskDue'])$(id).disabled=on;$('taskSubmit').disabled=busy||!options||!allowed();}
+  const draft=()=>({executor:$('taskExecutor').value,pipeline:$('taskPipeline').value,lead:$('taskLead').value,text:$('taskBody').value,due:$('taskDue').value,dirty});
+  async function open({preserve=false}={}){if(!allowed())return;const previous=preserve?(retained||draft()):null;retained=null;replayAllowed=false;generation++;const own=stamp();returnFocus=document.activeElement;busy=true;options=null;modal.classList.add('show');notice(copy().loading);lock(true);translate();
+    try{const result=await api('/api/platform/crm/tasks/options?'+(flow()?'source=kommo':''),null,own);if(!current(own))return;if(!Array.isArray(result.executors)||!Array.isArray(result.deals))throw new Error('invalid_options');options=result;try{const saved=JSON.parse(sessionStorage.getItem(keyFor(profile))||'null');pending=saved&&/^[a-f\d-]{36}$/i.test(String(saved.request_id))&&typeof saved.text==='string'?saved:null;}catch{pending=null;}
+      $('tenantTaskForm').reset();$('taskExecutor').innerHTML=options.executors.map(value=>`<option value="${esc(value.id)}">${esc(value.name)}</option>`).join('');$('taskExecutor').value=String(pending?.executor_id||profile.telegram_id);if(!$('taskExecutor').value&&options.executors[0])$('taskExecutor').value=String(options.executors[0].id);$('taskLead').innerHTML=`<option value="">${esc(copy().noLead)}</option>`+options.deals.map(value=>`<option value="${esc(value.id)}">${esc(value.name)}</option>`).join('');configure();if(previous&&!pending){$('taskExecutor').value=previous.executor;configure();$('taskPipeline').value=previous.pipeline;$('taskLead').value=previous.lead;$('taskBody').value=previous.text;$('taskDue').value=previous.due;}if(pending){$('taskPipeline').value=String(pending.pipeline_id||'');$('taskLead').value=String(pending.lead_id||'');$('taskBody').value=pending.text;const due=new Date(pending.due_at);$('taskDue').value=Number.isNaN(due.getTime())?'':new Date(due.getTime()-due.getTimezoneOffset()*60000).toISOString().slice(0,16);}dirty=previous?.dirty||false;notice(pending?copy().unknown:'');busy=false;lock(!!pending);translate();(pending?$('taskSubmit'):$('taskBody')).focus();}
+    catch(error){if(!current(own))return;busy=false;notice(copy().unavailable);lock(true);if(error.status===403||error.status===409)void flow()?.proveAccess();}
+  }
+  function close(){if(busy)return false;if(dirty&&!pending&&!confirm(copy().discard))return false;generation++;modal.classList.remove('show');if(!pending)$('tenantTaskForm').reset();dirty=false;(returnFocus?.isConnected?returnFocus:$('nativeTaskCreate'))?.focus();return true;}
+  button.onclick=open;$('taskClose').onclick=close;$('taskCancel').onclick=close;modal.onclick=event=>{if(event.target===modal)close();};
+  document.addEventListener('keydown',event=>{if(!modal.classList.contains('show'))return;if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}else if(event.key==='Tab'){const controls=[...modal.querySelectorAll('button,input,select,textarea')].filter(node=>!node.disabled&&!node.closest('[hidden]')),first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}},true);
+  $('taskExecutor').onchange=configure;$('taskLead').onchange=hint;modal.addEventListener('input',()=>dirty=true);modal.addEventListener('change',()=>dirty=true);
+  $('tenantTaskForm').onsubmit=async event=>{event.preventDefault();if(busy||!allowed()||!options)return;const replay=event.replay===true;if(replay&&!replayAllowed)return;const own=stamp(),originalKey=keyFor(profile),wasPending=!!pending;replayAllowed=false;let command=pending;
+    if(!command){try{command={request_id:crypto.randomUUID(),executor_id:$('taskExecutor').value,pipeline_id:$('taskPipeline').value||0,lead_id:$('taskLead').value||0,text:$('taskBody').value.trim(),due_at:new Date($('taskDue').value).toISOString()};sessionStorage.setItem(originalKey,JSON.stringify(command));pending=command;}catch{notice(copy().storage);return;}}
+    busy=true;lock(true);translate();
+    try{let outcome;if(wasPending&&flow()&&!replay)outcome=await flow().checkRequest('kommo',command.request_id);else{const result=await api('/api/platform/crm/tasks'+(flow()?'?source=kommo':''),command,own);if(flow()){if(!flow().validCommand('kommo',result.command,command.request_id))throw Object.assign(new Error('invalid_receipt'),{unknown:true});outcome=result.command;}else outcome=result.approval_pending?{state:'approval_pending'}:result.task_id?{state:'created'}:null;}if(!current(own))return;if(!outcome)throw Object.assign(new Error('invalid_receipt'),{unknown:true});if(['created','approval_pending','rejected'].includes(outcome.state)){sessionStorage.removeItem(originalKey);pending=null;busy=false;dirty=false;close();if(flow())flow().commandNotice(outcome);else $('tasksRefresh').click();}else{replayAllowed=outcome.state==='not_confirmed';notice(flow()?.labels()[outcome.state==='unknown'?'unknown':'notConfirmed']||copy().unknown);}}
+    catch(error){if(!current(own)||error.stale)return;notice(error.unknown||wasPending?copy().unknown:copy().error);if(!wasPending&&!error.unknown){sessionStorage.removeItem(originalKey);pending=null;}if(error.status===403||error.status===409&&error.code==='task_context_changed')void flow()?.proveAccess();}
+    finally{if(current(own)){busy=false;lock(!!pending);translate();}}
+  };
+  $('taskReplayOriginal').onclick=()=>{if(replayAllowed)$('tenantTaskForm').onsubmit({preventDefault(){},replay:true});};
+  function apply(data){const nextKey=JSON.stringify([data?.member,data?.capabilities]),changed=nextKey!==profileKey;profileKey=nextKey;const member=data?.member,same=profile?.tenant_id===member?.tenant_id&&String(profile?.telegram_id)===String(member?.telegram_id);if(same&&changed&&modal.classList.contains('show')){retained=draft();generation++;busy=false;options=null;$('taskLead').replaceChildren();$('taskExecutor').replaceChildren();$('taskPipeline').replaceChildren();}profile=member;paused=data?.member?.active===false||(flow()?false:data?.capabilities?.modules?.tasks!==true);if(!same||paused){generation++;busy=false;pending=null;options=null;modal.classList.remove('show');$('tenantTaskForm').reset();dirty=false;retained=null;replayAllowed=false;}button.hidden=!!flow()||paused;modal.style.visibility='';translate();lock(!!pending||busy);}
+  document.addEventListener('tenant-profile',event=>apply(event.detail));document.addEventListener('tenant-language',translate);document.addEventListener('tenant-auth-pending',()=>{paused=true;generation++;modal.style.visibility='hidden';});document.addEventListener('tenant-auth-invalid',()=>{paused=true;generation++;modal.classList.remove('show');$('tenantTaskForm').reset();options=null;pending=null;});
+  window.tenantExternalTasks={open,render:()=>{lock(!!pending||busy);if(!options&&!busy&&modal.classList.contains('show')&&allowed())void open({preserve:true});},hasPending:stored,leave:()=>{generation++;busy=false;modal.classList.remove('show');},clear:()=>{generation++;busy=false;pending=null;options=null;retained=null;dirty=false;replayAllowed=false;modal.classList.remove('show');$('tenantTaskForm').reset();$('taskLead').replaceChildren();$('taskExecutor').replaceChildren();$('taskPipeline').replaceChildren();}};if(window.tenantProfileSnapshot)apply(window.tenantProfileSnapshot);else if(!flow())api('/api/platform/me').then(apply).catch(()=>{});translate();
 })();

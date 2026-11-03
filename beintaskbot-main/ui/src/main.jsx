@@ -425,72 +425,31 @@ function IntegrationLogo({ provider, size = "md" }) {
     </Flex>
   );
 }
-function TasksTable({ rows = [] }) {
-  if (!rows.length) return <Empty>Açıq tapşırıq yoxdur.</Empty>;
-  return (
-    <Card.Root
-      borderColor="app.line"
-      borderRadius="xl"
-      overflow="hidden"
-      shadow="xs"
-    >
-      <Table.ScrollArea>
-        <Table.Root size="sm" variant="line" minW="720px">
-          <Table.Header bg="app.raised">
-            <Table.Row>
-              <Table.ColumnHeader>Tapşırıq</Table.ColumnHeader>
-              <Table.ColumnHeader>Sövdələşmə</Table.ColumnHeader>
-              <Table.ColumnHeader>Vəziyyət</Table.ColumnHeader>
-              <Table.ColumnHeader>Son tarix</Table.ColumnHeader>
-              <Table.ColumnHeader textAlign="end">Əməliyyat</Table.ColumnHeader>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {rows.map((task) => (
-              <Table.Row key={task.kommo_task_id} _hover={{ bg: "app.raised" }}>
-                <Table.Cell maxW="440px">
-                  <Text fontWeight="700" color="app.ink" lineClamp="2">
-                    {String(task.text || "Tapşırıq").replace(
-                      /\n?\[CRM:[a-f0-9]{32}\]/g,
-                      "",
-                    )}
-                  </Text>
-                  <Text fontSize="xs" color="app.muted">
-                    #{task.kommo_task_id}
-                  </Text>
-                </Table.Cell>
-                <Table.Cell>
-                  {task.kommo_lead_id
-                    ? `#${task.kommo_lead_id}`
-                    : "Sövdələşməsiz"}
-                </Table.Cell>
-                <Table.Cell>
-                  <StatusBadge tone={task.completed ? "gray" : "green"}>
-                    {task.completed ? "Tamamlandı" : "Açıq"}
-                  </StatusBadge>
-                </Table.Cell>
-                <Table.Cell whiteSpace="nowrap">
-                  {formatDate(task.due_at)}
-                </Table.Cell>
-                <Table.Cell textAlign="end">
-                  {!task.completed && (
-                    <Button
-                      size="xs"
-                      colorPalette="brand"
-                      variant="outline"
-                      data-task-complete={task.kommo_task_id}
-                    >
-                      Tamamla
-                    </Button>
-                  )}
-                </Table.Cell>
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-      </Table.ScrollArea>
-    </Card.Root>
-  );
+function TasksTable({ rows = [], settings = {} }) {
+  const labels = settings.labels || {open:'Açıq',completed:'Tamamlandı',view:'Aç',complete:'Tamamla',deal:'Sövdələşmə',status:'Vəziyyət',due:'Son tarix',text:'Tapşırıq',none:'Göstərilməyib'};
+  if (!rows.length) return <Empty>{settings.empty || 'Açıq tapşırıq yoxdur.'}</Empty>;
+  return <Card.Root borderColor="app.line" borderRadius="xl" overflow="hidden" shadow="xs">
+    <Flex direction="column" divideY="1px" borderColor="app.line">
+      {rows.map(task => {
+        const id = String(task.id || task.kommo_task_id), status = task.status || (task.completed ? 'completed' : 'open');
+        const native = settings.source === 'native';
+        return <Flex key={id} p="4" gap="3" justify="space-between" wrap="wrap" align="start">
+          <Box flex="1" minW="180px">
+            {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
+              <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
+            </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
+            <Text fontSize="sm" color="app.muted">{task.deal_title || ''}{task.responsible_name ? ' · ' + task.responsible_name : ''}</Text>
+            <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
+          </Box>
+          <Flex gap="2" wrap="wrap" align="center">
+            <StatusBadge tone={status === 'completed' ? 'gray' : 'green'}>{labels[status]}</StatusBadge>
+            {!native && status === 'open' && settings.complete !== false && Number.isSafeInteger(Number(id)) && <Button minH="44px" colorPalette="brand" variant="outline" data-task-complete={id}>{labels.complete}</Button>}
+            {!native && status === 'open' && !Number.isSafeInteger(Number(id)) && <Text fontSize="sm">{labels.unsafeComplete}</Text>}
+          </Flex>
+        </Flex>;
+      })}
+    </Flex>
+  </Card.Root>;
 }
 
 function DealTable({ rows = [], customer = false, onOpen }) {
@@ -2483,7 +2442,7 @@ function SettingsHub() {
 }
 
 window.tenantChakraCRM = {
-  renderTasks: (rows) => mount("tasksList", <TasksTable rows={rows} />),
+  renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksTable rows={rows} settings={settings} />),
   renderDeals: (target, rows, customer, onOpen) =>
     mount(
       target,

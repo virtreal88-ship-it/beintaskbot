@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const app = fs.readFileSync(`${__dirname}/../docs/tenant-app.html`, 'utf8');
 const sync = fs.readFileSync(`${__dirname}/../docs/tenant-crm-sync.js`, 'utf8');
+const contacts = fs.readFileSync(`${__dirname}/../docs/tenant-contacts-directory.js`, 'utf8');
 function view(id) {
   const start = app.indexOf(`id="view-${id}"`);
   assert(start >= 0, `missing ${id} view`);
@@ -27,22 +28,25 @@ for (const [viewId, createId, formId, modalId] of [
 }
 assert(app.includes('data-view="companies"') && app.includes('data-crm-nav-label="companies"'), 'companies live inside the CRM navigation group');
 assert(app.includes("ru:{group:'CRM'") && app.includes("en:{group:'CRM'") && app.includes('tenant-language'), 'CRM navigation supports RU/AZ/EN');
-assert(app.includes("nativeContactCreate').onclick=async") && app.includes("nativeDealCreate').onclick=async") && app.includes("nativeTaskCreate').onclick=async") && app.includes("nativeCompanyCreate').onclick=async"), 'all four create buttons open working forms');
-assert(app.includes("nativeContactForm').onsubmit=async") && app.includes("nativeDealForm').onsubmit=async") && app.includes("nativeTaskForm').onsubmit=async") && app.includes("nativeCompanyForm').onsubmit=async"), 'all entity forms persist through existing APIs');
+// Contact handlers moved into the real directory asset; the contact/deal/task
+// workflow suite exercises the actual buttons rather than opening fake modals.
+assert(app.includes('/assets/tenant-contacts-directory.js') && contacts.includes("nativeContactCreate').onclick=()=>void openForm('create')") && app.includes("nativeDealCreate').onclick=async") && app.includes("nativeTaskCreate').onclick=async") && app.includes("nativeCompanyCreate').onclick=async"), 'all four create buttons bind their working forms in the current modules');
+assert(contacts.includes("nativeContactForm').onsubmit=saveForm") && contacts.includes('async function saveForm(event)') && app.includes("nativeDealForm').onsubmit=async") && app.includes("nativeTaskForm').onsubmit=async") && app.includes("nativeCompanyForm').onsubmit=async"), 'all entity forms persist through their current API controllers');
 assert(!app.includes('id="nativeTaskReset"'), 'task modal has only one save/create action');
 assert(!app.includes('id="nativeDealReset"')&&!app.includes('id="nativeCompanyReset"'),'deal/company cards have no duplicate create/reset action');
 assert(!app.includes('instruction-library-nav')&&!app.includes('data-instruction-label'),'Instructions are no longer a sidebar item');
 assert(app.includes("Saxlanılmamış dəyişikliklər var"), 'closing an edited form asks before discarding changes');
-assert(view('customers').includes('nativeContactsList'), 'Kommo client list and native contacts must coexist');
+for (const id of ['customerSearch','customerCount','customersList','contactsSource']) assert.equal((view('customers').match(new RegExp(`id="${id}"`,'g'))||[]).length,1,`one contact directory ${id}`);
+assert(!view('customers').includes('nativeContactsList')&&!view('customers').includes('nativeContactSearch'),'the selected source uses one visible contact list and query');
 assert(view('companies').includes('companySearch') && view('companies').includes('nativeCompaniesList'));
 assert(!view('companies').includes('nativeCompanyLinkContact') && !view('companies').includes('nativeCompanyLinkDeal'), 'company associations belong inside the company card');
 assert(app.includes('nativeEntityCard') && app.includes('data-company-tab=\"contacts\"') && app.includes('data-company-tab=\"deals\"'), 'company card exposes relationship tabs');
-assert(app.includes('data-contact-tab=\"companies\"') && app.includes('data-contact-tab=\"deals\"') && app.includes('data-contact-tab=\"dialogs\"'), 'contact card shows supported company/deal relations and explains dialog limitation');
+assert(contacts.includes("['general','companies','deals','dialogs']") && contacts.includes('data-contact-panel="companies"') && contacts.includes('data-contact-panel="deals"') && contacts.includes('data-contact-panel="dialogs"') && contacts.includes("t('dialogsHelp')"), 'the current contact card retains company/deal relations and explains its dialog limitation');
 assert(app.includes('data-deal-tab=\"contacts\"') && app.includes('data-deal-tab=\"company\"') && app.includes('data-deal-tab=\"tasks\"'), 'deal card exposes contact/company/task relations');
 assert(app.includes('data-task-tab=\"related\"') && app.includes('başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil'), 'task card shows its real links and reports that reassignment is unsupported');
 assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}'), 'CRM action rows wrap at mobile widths without horizontal overflow');
 assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');
-assert(app.includes("action:'link_contact'") && app.includes("action:'unlink_contact'") && app.includes("action:'link_deal'") && app.includes("action:'unlink_deal'"), 'relations use existing tenant-scoped company APIs');
+assert(contacts.includes("action:'link_contact'") && contacts.includes("action:'unlink_contact'") && app.includes("action:'link_deal'") && app.includes("action:'unlink_deal'"), 'contact and deal relations retain their existing tenant-scoped company APIs in the current controllers');
 for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
 assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
 assert(!view('deals').includes('externalCrmSyncPanel'));

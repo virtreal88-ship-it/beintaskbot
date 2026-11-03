@@ -3,7 +3,7 @@
   let profile, timer, generation = 0, watching = false;
   const boxes = {};
   const fullButtons = [];
-  for (const [id, resource] of [['tasksRefresh','tasks'],['dealsRefresh','deals'],['customersRefresh','deals']]) {
+  for (const [id, resource] of [['tasksRefresh','tasks'],['dealsRefresh','deals']]) {
     const anchor = document.getElementById(id);
     if (!anchor) continue;
     const button = document.createElement('button');
@@ -23,7 +23,7 @@
       } finally { button.disabled = false; }
     };
   }
-  for (const [resource, ids] of Object.entries({leads:['dealsNotice','customersNotice'], tasks:['tasksNotice']})) {
+  for (const [resource, ids] of Object.entries({leads:['dealsNotice'], tasks:['tasksNotice']})) {
     boxes[resource] = ids.map(id => {
       const anchor = document.getElementById(id);
       if (!anchor) return null;

@@ -82,12 +82,14 @@ ASSETS = (
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
+    ('/assets/tenant-contacts-directory.js', 'tenant-contacts-directory.js', 'no-store'),
     ('/assets/tenant-members-ui.js', 'tenant-members-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-members-ui.css', 'tenant-members-ui.css', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-hot-order-settings.js', 'tenant-hot-order-settings.js', 'no-store'),
     ('/assets/tenant-hot-orders.js', 'tenant-hot-orders.js', 'no-store'),
     ('/assets/tenant-hot-order-completion.js', 'tenant-hot-order-completion.js', 'no-cache'),
     ('/assets/tenant-crm-sync.js', 'tenant-crm-sync.js', 'no-store'),
+    ('/assets/tenant-task-flow.js', 'tenant-task-flow.js', 'no-store'),
     ('/assets/tenant-tasks.js', 'tenant-tasks.js', 'no-cache, max-age=0, must-revalidate'),
 )
 

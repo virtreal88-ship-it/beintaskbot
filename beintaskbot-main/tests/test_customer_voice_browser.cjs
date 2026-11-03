@@ -77,6 +77,7 @@ async function main(){
 
     await page.evaluate(()=>{const button=[...document.querySelectorAll('.operator-customer-voice button')].find(n=>n.textContent==='Отправить голосовое');button.click();button.click();});
     await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
+    await page.getByText('Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.').waitFor({state:'visible'});
     assert.equal(posts,1,'one explicit send');
     await page.reload();await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
     await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);

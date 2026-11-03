@@ -53,6 +53,7 @@ def _profiles(cur,tenant_id,company,ids=None,*,lock=False):
     # membership/policy writer has committed. No stage locks invert FK checks.
     workflow=_read_tenant_workflow(cur,tenant_id)
     return {int(row['telegram_id']):{**dict(row),'tenant_id':str(tenant_id),
+        'permissions':row['permissions'] if isinstance(row['permissions'],list) else [],
         'modules':company.get('modules') or {},'workflow':workflow} for row in rows}
 
 
@@ -212,6 +213,7 @@ def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None
     """The legacy privilege argument is not authority; resolve current rows."""
     actor_id=int(actor_id)
     with _connect() as conn:
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
         _require_schema(conn)
         with conn.cursor() as cur:
             company=_tenant(cur,tenant_id)
@@ -268,9 +270,18 @@ def get_task(tenant_id,task_id):
         with conn.cursor() as cur:return _row(cur,tenant_id,task_id)
 
 def _locked_task(cur,tenant_id,task_id):
-    cur.execute('''SELECT id,deal_id,responsible_id,created_by FROM saas_crm_native_tasks
+    cur.execute('''SELECT id,deal_id,responsible_id,created_by,updated_at FROM saas_crm_native_tasks
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE''',(tenant_id,task_id))
     return cur.fetchone()
+
+
+def _check_version(task,expected_updated_at):
+    if expected_updated_at is None:return
+    if not isinstance(expected_updated_at,str) or not expected_updated_at:
+        raise ValueError('invalid task version')
+    current=task.get('updated_at')
+    if not current or current.isoformat()!=expected_updated_at:
+        raise NativeTaskAccessError('task_conflict',409)
 
 
 def _task_actor(cur,tenant_id,company,task,deal,actor_id,action,*,completion=False,archive=False):
@@ -285,7 +296,7 @@ def _task_actor(cur,tenant_id,company,task,deal,actor_id,action,*,completion=Fal
         raise NativeTaskAccessError('approval_required')
 
 
-def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None,actor_id=None):
+def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None,actor_id=None,expected_updated_at=None):
     task_id=_id(task_id,'task id'); text=_text(text)
     if not text:raise ValueError('invalid task text')
     due=_due(due_at)
@@ -297,12 +308,13 @@ def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None,actor_id=Non
             if not task: return None
             deal=_deal(cur,tenant_id,str(task['deal_id']))
             assignee=_admit(cur,tenant_id,company,deal,responsible_id,actor_id,task=task,action='update')
-            cur.execute("UPDATE saas_crm_native_tasks SET text=%s,responsible_id=%s,due_at=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL",(text,assignee,due,tenant_id,task_id))
+            _check_version(task,expected_updated_at)
+            cur.execute("UPDATE saas_crm_native_tasks SET text=%s,responsible_id=%s,due_at=%s,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL",(text,assignee,due,tenant_id,task_id))
             row=_row(cur,tenant_id,task_id)
         conn.commit()
     return row
 
-def set_task_state(tenant_id,task_id,status,*,actor_id=None):
+def set_task_state(tenant_id,task_id,status,*,actor_id=None,expected_updated_at=None):
     if status not in {'open','completed'}:raise ValueError('invalid task status')
     with _connect() as conn:
         _require_schema(conn)
@@ -312,13 +324,14 @@ def set_task_state(tenant_id,task_id,status,*,actor_id=None):
             if not task:return None
             deal=_deal(cur,tenant_id,str(task['deal_id']))
             _task_actor(cur,tenant_id,company,task,deal,actor_id,'update',completion=status=='completed')
-            cur.execute("UPDATE saas_crm_native_tasks SET status=%s,completed_at=CASE WHEN %s='completed' THEN COALESCE(completed_at,now()) ELSE NULL END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(status,status,tenant_id,_id(task_id,'task id')))
+            _check_version(task,expected_updated_at)
+            cur.execute("UPDATE saas_crm_native_tasks SET status=%s,completed_at=CASE WHEN %s='completed' THEN COALESCE(completed_at,now()) ELSE NULL END,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(status,status,tenant_id,_id(task_id,'task id')))
             row=cur.fetchone()
             result=_row(cur,tenant_id,task_id) if row else None
         conn.commit()
     return result
 
-def archive_task(tenant_id,task_id,*,actor_id=None):
+def archive_task(tenant_id,task_id,*,actor_id=None,expected_updated_at=None):
     with _connect() as conn:
         _require_schema(conn)
         with conn.cursor() as cur:
@@ -327,7 +340,8 @@ def archive_task(tenant_id,task_id,*,actor_id=None):
             if not task:return False
             deal=_deal(cur,tenant_id,str(task['deal_id']))
             _task_actor(cur,tenant_id,company,task,deal,actor_id,'delete',archive=True)
-            cur.execute("UPDATE saas_crm_native_tasks SET archived_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(tenant_id,_id(task_id,'task id')))
+            _check_version(task,expected_updated_at)
+            cur.execute("UPDATE saas_crm_native_tasks SET archived_at=now(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(tenant_id,_id(task_id,'task id')))
             result=cur.fetchone() is not None
         conn.commit()
     return result
