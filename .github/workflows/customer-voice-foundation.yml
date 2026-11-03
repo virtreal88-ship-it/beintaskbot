@@ -1,0 +1,66 @@
+name: Customer voice recording foundation
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/customer-voice-foundation.yml'
+      - 'beintaskbot-main/docs/tenant-voice-recorder.js'
+      - 'beintaskbot-main/docs/tenant-microphone-lease.js'
+      - 'beintaskbot-main/docs/tenant-customer-voice-store.js'
+      - 'beintaskbot-main/docs/tenant-customer-voice-ui.js'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/tenant_customer_voice.py'
+      - 'beintaskbot-main/tenant_customer_voice_api.py'
+      - 'beintaskbot-main/tenant_customer_voice_service.py'
+      - 'beintaskbot-main/tenant_chat_send_store.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/tenant_operator_dialogs.py'
+      - 'beintaskbot-main/tenant_connect_voice.py'
+      - 'beintaskbot-main/tests/test_tenant_voice_recorder.cjs'
+      - 'beintaskbot-main/tests/test_tenant_customer_voice*.py'
+      - 'beintaskbot-main/tests/test_customer_voice_browser.cjs'
+      - 'beintaskbot-main/tests/test_tenant_chat_send_store.py'
+      - 'beintaskbot-main/tests/test_tenant_web_routes.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recording:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: synthetic-test-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      VOICE_TEST_POSTGRES_URL: postgresql://postgres:synthetic-test-password@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - run: command -v ffmpeg && command -v ffprobe
+      - run: node --test tests/test_tenant_voice_recorder.cjs
+      - run: python -m unittest discover -s tests -p 'test_tenant_customer_voice*.py' -v
+      - run: python -m unittest discover -s tests -p test_tenant_chat_send_store.py -v
+      - run: python -m unittest discover -s tests -p test_tenant_web_routes.py -v
+      - run: npm install --prefix .voice-test-deps --no-save playwright@1.62.1
+      - run: node .voice-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: node -e "require('fs').appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.voice-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - run: NODE_PATH=.voice-test-deps/node_modules node tests/test_customer_voice_browser.cjs

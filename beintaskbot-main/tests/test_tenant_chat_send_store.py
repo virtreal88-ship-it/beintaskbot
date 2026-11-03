@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 import test_tenant_hot_orders as loaders
 from test_tenant_chat_send import TENANT, SESSION, INPUT
 from tenant_chat_send_policy import fingerprint
@@ -77,6 +77,16 @@ class Store(unittest.TestCase):
         self.assertEqual(credentials['access_token'], 'tenant-key')
         self.assertIn("state='preparing'", self.cur.execute.call_args.args[0])
         self.conn.commit.assert_called_once()
+
+    def test_existing_group_send_retains_early_ai_handoff(self):
+        item={'key':(TENANT,20,INPUT['request_id']),'command':INPUT,'connection':['connect','channel','123456789012345@g.us'],'quote':None}
+        route={'conversation_id':'123456789012345@g.us'}
+        self.cur.fetchone.return_value={'request_id':INPUT['request_id']}
+        with patch.dict(self.module.mark_sending.__globals__,{'authority':Mock(return_value=(self.person,item['connection'],{'provider':'connect','route':route})),
+                                                           'quote_target':Mock(return_value=None)}), \
+             patch('tenant_ai_agents_schema.ensure_schema'), patch('tenant_ai_group_coordination.stop') as stop:
+            self.module.mark_sending(item,{'origin':'connect'})
+            stop.assert_called_once()
 
     def test_acceptance_and_audit_share_transaction(self):
         self.cur.fetchone.return_value = {'lead_id': 7}
