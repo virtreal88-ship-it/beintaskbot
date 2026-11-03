@@ -19,7 +19,9 @@ class Ledger:
     async def claim(self, scope):
         self.events.append(('claim', scope.copy()))
         return {**scope,'state':'claimed','reserved_microusd':1}
-    async def mark_unknown(self, scope): self.events.append(('unknown', scope.copy()))
+    async def mark_unknown(self, scope):
+        self.events.append(('unknown', scope.copy()))
+        return {**scope,'state':'unknown','reserved_microusd':1}
 
 
 class Lease:
@@ -33,7 +35,12 @@ class Lease:
 
 
 class Context:
+    def __init__(self):self.checks=0;self.fail_at=None
     async def read_authorized(self, scope): return {'existing_copilot_instructions':'synthetic'}
+    async def revalidate(self, scope):
+        self.checks+=1
+        if self.fail_at==self.checks:raise Refused('stale_context')
+        return True
 
 
 class Provider:
@@ -133,6 +140,22 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused): await self.turn()
         self.assertNotIn({'type':'response.create'},self.provider.events)
         self.assertTrue(self.provider.closed)
+
+    async def test_revalidates_before_reserve_and_after_committed_claim(self):
+        await self.turn();self.assertEqual(self.context.checks,3)
+
+    async def test_stale_context_never_reaches_provider_open(self):
+        context=Context();context.fail_at=1;ledger=Ledger();provider=Provider(ledger);lease=Lease()
+        session=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=ledger,lease=lease,
+                        context=context,provider=provider,client=Client())
+        with self.assertRaisesRegex(Refused,'stale_context'):await session.start()
+        self.assertIsNone(provider.config);self.assertFalse(lease.held);self.assertEqual(ledger.events,[])
+
+    async def test_changed_context_after_claim_never_dispatches_and_keeps_hold(self):
+        self.context.fail_at=3
+        with self.assertRaisesRegex(Refused,'stale_context'):await self.turn()
+        self.assertEqual([x[0] for x in self.ledger.events],['reserve','claim','unknown'])
+        self.assertNotIn({'type':'response.create'},self.provider.events)
 
     async def test_idle_closes_without_input(self):
         self.session.idle_seconds=.05

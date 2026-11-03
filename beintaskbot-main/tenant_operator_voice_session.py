@@ -91,6 +91,11 @@ class Session:
             if self._stop_requested: raise Refused('session_stopped_during_start')
             if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
                 raise Refused('existing_copilot_context_unavailable')
+            # Initial provider.open sends the context, so validate before open
+            # as well as before each response. This remains non-atomic with
+            # network I/O; immutable production gate remains closed.
+            await self.context.revalidate(self.scope)
+            if self._stop_requested: raise Refused('session_stopped_during_start')
             self.fence = await self.lease.claim(self.scope)
             if not self.fence:
                 raise Refused('session_already_active')
@@ -157,6 +162,10 @@ class Session:
         self.response_number += 1
         if self.response_number > 2:
             raise Refused('session_response_limit')
+        # Validate a server-owned context before reserving and again as close
+        # as possible to dispatch. This does not prove an atomic DB→network
+        # fence; production admission remains hard-disabled.
+        await self.context.revalidate(self.scope)
         tenant, actor, channel, conversation = self.scope
         reservation = {'request_id': str(uuid.uuid4()), 'tenant_id': str(tenant), 'session_id': self.session_id,
                        'actor_id': actor, 'channel_id':str(channel), 'conversation_id':str(conversation),
@@ -171,6 +180,7 @@ class Session:
         try:
             await self.authority.check(self.scope, 'response_dispatch')
             await self.lease.assert_current(self.scope, self.fence)
+            await self.context.revalidate(self.scope)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
             # A production transport must independently consume a committed
@@ -181,7 +191,9 @@ class Session:
                 raise Refused('session_closed_before_dispatch')
             await self._send_provider({'type': 'response.create'})
         except BaseException:
-            await self.ledger.mark_unknown(reservation)
+            marked=await self.ledger.mark_unknown(reservation)
+            if isinstance(marked,dict) and marked.get('state')=='unknown':
+                self.current_reservation=None
             raise
 
     async def _watch(self):

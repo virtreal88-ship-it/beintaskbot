@@ -12,6 +12,7 @@ from tenant_platform import _connect
 import tenant_operator_voice_context as voice
 import tenant_operator_copilot as copilot
 import tenant_voice_test_grant as grant
+import tenant_operator_voice_source_snapshot as source_snapshot
 from tenant_operator_voice_session import Session
 from tenant_operator_realtime_wire import create_production_provider
 
@@ -58,15 +59,42 @@ class ScopedAuthority:
 
 
 class CopilotContext:
-    def __init__(self,authority):self.authority=authority
+    def __init__(self,authority):self.authority=authority;self._sealed=None
 
     async def read_authorized(self,session_scope):
         if session_scope!=self.authority.session_scope:raise TenantLinearError('Диалог недоступен.',403)
-        snapshot=await asyncio.to_thread(self._read)
+        snapshot=await asyncio.to_thread(self._seal)
         require_sealed_source_snapshot()
-        return snapshot
+        return snapshot[0]
+
+    async def revalidate(self,session_scope):
+        if session_scope!=self.authority.session_scope or self._sealed is None:
+            raise TenantLinearError('Версия контекста недоступна.',409)
+        expected=self._sealed
+        _,current=await asyncio.to_thread(self._capture_stable)
+        if self._sealed is not expected or not expected.matches(current):
+            raise TenantLinearError('Контекст изменился. Начните разговор заново.',409)
+        # This comparison alone cannot fence changes after returning; the live
+        # gate is deliberately independent and remains closed.
+        return True
+
+    def _seal(self):
+        snapshot,sealed=self._capture_stable()
+        self._sealed=sealed
+        return snapshot,sealed
+
+    def _capture_stable(self):
+        first=self._capture_once()
+        second=self._capture_once()
+        if not first[1].matches(second[1]):
+            raise TenantLinearError('Контекст изменился. Начните разговор заново.',409)
+        return second
 
     def _read(self):
+        # Compatibility for local, internal diagnostic tests only.
+        return self._capture_once()[0]
+
+    def _capture_once(self):
         a=self.authority;s=a.scope
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -84,11 +112,73 @@ class CopilotContext:
         # building context. A real dispatch must recheck authority and source.
         prepared=copilot._draft_context(s.tenant,s.actor,command,config,connection,
             {'api_key':'CONTEXT_ONLY_NO_CREDENTIAL'},str(agent['model']),agent,rows,turns,context_only=True)
-        voice.check(a.profile,a.route,expected=s)
         if set(prepared)!={'instructions','lines','extra_context'}:
             raise TenantLinearError('Контекст голосового режима недоступен.',503)
-        return {'existing_copilot_instructions':prepared['instructions'],'lines':prepared['lines'],
-                'extra_context':prepared['extra_context']}
+        projection={'existing_copilot_instructions':prepared['instructions'],'lines':prepared['lines'],
+                    'extra_context':prepared['extra_context']}
+        knowledge=prepared['extra_context'].get('verified_knowledge') or []
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                a.recheck(cur)
+                cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                  AND kommo_lead_id=%s AND channel=%s ORDER BY external_id LIMIT %s''',
+                  (s.tenant,s.lead_id,'connect:'+s.channel_id,source_snapshot.MAX_HISTORY_IDS+1))
+                all_ids=[row['external_id'] for row in cur.fetchall()]
+                selected_ids=[str(row.get('external_id') or '') for row in rows]
+                cur.execute('''SELECT id::text AS row_id,external_id,to_jsonb(m) AS record FROM saas_crm_messages m
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=ANY(%s::text[])
+                  ORDER BY external_id''',(s.tenant,s.lead_id,'connect:'+s.channel_id,selected_ids))
+                message_records=[dict(row) for row in cur.fetchall()]
+                knowledge_state=_knowledge_state(cur,s.tenant,str(agent['agent_id']),knowledge)
+        voice.check(a.profile,a.route,expected=s)
+        identity={'tenant':s.tenant,'actor':s.actor,'channel_id':s.channel_id,'conversation_id':s.conversation_id,
+                  'lead_id':s.lead_id,'agent_binding':s.agent_binding,'config_version':s.config_version}
+        sealed=source_snapshot.seal(identity,projection,rows,turns,all_ids,knowledge_state,message_records)
+        return projection,sealed
+
+
+def _knowledge_state(cur,tenant,agent_id,knowledge):
+    if not isinstance(knowledge,list) or len(knowledge)>4:
+        raise TenantLinearError('Источники знаний недоступны.',409)
+    try:
+        ids=sorted({str(uuid.UUID(str(item['source_id']))) for item in knowledge})
+    except (ValueError,TypeError,KeyError,AttributeError):
+        raise TenantLinearError('Источники знаний недоступны.',409) from None
+    if not ids:return {'sources':[],'chunks':[],'candidates':[],'instructions':[]}
+    cur.execute('''SELECT id::text AS source_id,active,agent_id::text AS agent_id,provenance,updated_at,title,content_hash
+      FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) ORDER BY id''',(tenant,ids))
+    sources=[dict(row) for row in cur.fetchall()]
+    by_id={row['source_id']:row for row in sources}
+    if set(by_id)!=set(ids) or any(row.get('active') is not True or row.get('agent_id') not in (None,agent_id) for row in sources):
+        raise TenantLinearError('Источники знаний изменились.',409)
+    cur.execute('''SELECT source_id::text AS source_id,chunk_no,content FROM saas_ai_knowledge_chunks
+      WHERE tenant_id=%s::uuid AND source_id=ANY(%s::uuid[]) ORDER BY source_id,chunk_no LIMIT 1001''',(tenant,ids))
+    chunks=[dict(row) for row in cur.fetchall()]
+    if len(chunks)>1000:raise TenantLinearError('Слишком большая база знаний для проверки.',409)
+    for item in knowledge:
+        if (by_id[str(item['source_id'])]['title']!=item['title'] or not any(
+            row['source_id']==str(item['source_id']) and str(row['content'])[:1200]==item['content'] for row in chunks)):
+            raise TenantLinearError('Источники знаний изменились.',409)
+    cur.execute('''SELECT to_jsonb(k) AS candidate,to_jsonb(ks) AS link FROM saas_knowledge_candidates k
+      JOIN saas_knowledge_candidate_sources ks ON ks.tenant_id=k.tenant_id AND ks.candidate_id=k.id
+      WHERE k.tenant_id=%s::uuid AND ks.source_id=ANY(%s::uuid[]) ORDER BY ks.source_id,k.id,ks.agent_id LIMIT 1001''',(tenant,ids))
+    candidates=[dict(row) for row in cur.fetchall()]
+    if len(candidates)>1000:raise TenantLinearError('Источники знаний недоступны.',409)
+    instruction_ids=[]
+    for row in sources:
+        value=(row.get('provenance') or {}).get('instruction_id')
+        if value:
+            try:instruction_ids.append(str(uuid.UUID(str(value))))
+            except (ValueError,TypeError,AttributeError):raise TenantLinearError('Источники знаний недоступны.',409) from None
+    instructions=[]
+    if instruction_ids:
+        cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
+        if not (cur.fetchone() or {}).get('available'):raise TenantLinearError('Источники знаний недоступны.',409)
+        cur.execute('''SELECT to_jsonb(l) AS lesson FROM saas_instruction_lessons l
+          WHERE l.tenant_id=%s::uuid AND l.id=ANY(%s::uuid[]) ORDER BY l.id''',(tenant,instruction_ids))
+        instructions=[dict(row) for row in cur.fetchall()]
+        if len(instructions)!=len(set(instruction_ids)):raise TenantLinearError('Источники знаний недоступны.',409)
+    return {'sources':sources,'chunks':chunks,'candidates':candidates,'instructions':instructions}
 
 
 class ScopedBudget:

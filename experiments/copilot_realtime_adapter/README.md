@@ -174,11 +174,33 @@ remains charged/reserved, and the mock session cannot dispatch after closure.
 The production WS boundary calls this module but returns 503 before upgrade.
 The voice writer has an immutable `require_history_cutover()` refusal because
 old text workers can still overwrite voice turns, and context handoff has an
-independent immutable `require_sealed_source_snapshot()` refusal because exact
-message/knowledge versions and freshness are not yet revalidated. The live
+independent immutable `require_sealed_source_snapshot()` refusal because
+freshness cannot yet be fenced atomically with provider I/O. The live
 provider factory independently refuses. These gates have no environment or
 request override. Integration tests exercise actual authority, context and
 ledger components against local PostgreSQL, and explicitly verify refusal;
 they do not bypass the writer gate or establish an active real voice session.
 The older separate prototype test directly inserts a synthetic partial turn to
 exercise the lower-level history helper; it is not the blocked voice writer.
+
+## Source fingerprints and remaining fence
+
+The candidate captures server-derived scope, the allowlisted context and
+history, full selected message rows with their database IDs, all scoped message
+external IDs, and selected knowledge, chunks and available approval/provenance
+records. It compares two captures and checks again before provider open and
+before and after a response claim. Synthetic PostgreSQL tests cover edits,
+deletes, recreation with the same external ID, new/backfilled messages, raw
+JSON and bytea edits, knowledge changes and access revocation. No raw audio is
+persisted. These are observed-change checks, not an atomic fence: an ABA edit
+between reads and changes after the final check can escape detection, including
+before initial context transmission. A synthetic ABA test demonstrates this.
+The immutable gate therefore remains closed even when revalidation succeeds.
+
+The candidate fails closed above 5,000 scoped message IDs, 1,000 knowledge
+records/chunks, or 2 MB per canonical serialized component; larger dialogs or
+knowledge sources may be unavailable and repeated scans add database load.
+These limits and the source/version protocol require production design and
+performance review. The current route checks inherit existing access policy;
+they do not establish stronger per-deal authorization. No test proves live
+provider billing, real-time operation, or safety across legacy history writers.
