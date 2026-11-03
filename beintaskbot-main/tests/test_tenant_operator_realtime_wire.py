@@ -125,6 +125,21 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             await wire.send({'type':'input_audio_buffer.clear'})
         socket.wait.set();await task;self.assertTrue(wire.ready)
 
+    async def test_context_ack_rejects_foreign_session_incomplete_and_nonroot(self):
+        def wrong_session(event):event['session_id']='wrong-session'
+        def incomplete(event):event['item']['status']='incomplete'
+        def nonroot(event):event['previous_item_id']='foreign-item'
+        for change in (wrong_session,incomplete,nonroot):
+            class BadAck(Socket):
+                async def receive_json(self):
+                    event=await super().receive_json()
+                    if event['type']=='conversation.item.added':change(event)
+                    return event
+            wire=SyntheticRealtimeWire(BadAck(),Guard())
+            with self.assertRaisesRegex(ValueError,'provider_context_unconfirmed'):
+                await wire.open(self.snapshot,**self.options)
+            self.assertFalse(wire.ready)
+
     async def test_context_ack_can_follow_conversation_announcement(self):
         class AnnounceBeforeAck(Socket):
             def __init__(self):super().__init__();self.announced=False
