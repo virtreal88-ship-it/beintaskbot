@@ -72,6 +72,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
 
     async def tasks(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return flow_error(TaskFlowError('task_forbidden', 403))
         try:
             params = intent(request, profile)
             if params.get('flow') == '1':
@@ -112,6 +114,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
 
     async def options(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return flow_error(TaskFlowError('task_forbidden', 403))
         try:
             profile, params = await fresh_external(request, profile)
             if params.get('flow') == '1':
@@ -154,6 +158,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
 
     async def create(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return flow_error(TaskFlowError('task_forbidden', 403))
         try:
             profile, params = await fresh_external(request, profile)
         except TaskFlowError as exc:
@@ -203,6 +209,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
 
     async def complete(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return flow_error(TaskFlowError('task_forbidden', 403))
         try:
             profile, params = await fresh_external(request, profile)
         except TaskFlowError as exc:
