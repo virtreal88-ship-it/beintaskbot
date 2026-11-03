@@ -15,11 +15,11 @@ def handler(member, origin, logger):
         if not profile:
             return web.json_response({'success':False,'error':'unavailable'},status=403,headers=headers)
         try:
+            if set(request.query)!={'expected_tenant_id','expected_user_id'}:
+                raise TenantLinearError('Expected tenant and user required.',400)
             require_expected_context(request,profile)
             contact=request.match_info['contact_id']
             if request.method=='GET':
-                if set(request.query)-{'expected_tenant_id','expected_user_id'}:
-                    raise TenantLinearError('Invalid query.',400)
                 result=await asyncio.to_thread(memory.read,profile,contact)
             else:
                 require_json_post(request,origin)

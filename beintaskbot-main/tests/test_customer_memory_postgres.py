@@ -136,7 +136,9 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
             app.router.add_route('*','/memory/{contact_id}',handler(lambda _:self.profile,'https://example.test',logging.getLogger('fixture')))
             client=TestClient(TestServer(app));await client.start_server()
             try:
-                path='/memory/'+self.contact
+                path='/memory/'+self.contact+'?expected_tenant_id='+self.tenant+'&expected_user_id=71'
+                response=await client.get('/memory/'+self.contact)
+                self.assertEqual(response.status,400)
                 response=await client.get(path)
                 self.assertEqual(response.status,200)
                 self.assertEqual(response.headers.get('Cache-Control'),'no-store')
