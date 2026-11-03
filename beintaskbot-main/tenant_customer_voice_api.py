@@ -4,7 +4,7 @@ import json
 import os
 from aiohttp import web
 from tenant_customer_voice import MAX_RECORDING_BYTES
-from tenant_customer_voice_service import can_send, check, check_visible, prepare, run
+from tenant_customer_voice_service import can_send, check, check_visible, prepare, record_manual_confirmation, run
 from tenant_linear_policy import TenantLinearError
 from tenant_read_session import require_read_session
 
@@ -100,6 +100,32 @@ def receipt_handler(member_from_request, logger):
         except Exception:
             logger.warning('Customer voice receipt read unavailable; no dispatch')
             return web.json_response({'success': False, 'error': 'Səsin vəziyyəti yoxlanmadı. Təkrar göndərməyin.', 'keep_request': True}, status=503, headers=headers)
+    return handle
+
+
+def manual_confirmation_handler(member_from_request, origin, logger):
+    async def handle(request):
+        headers={'Cache-Control':'no-store'}
+        try:
+            session=member_from_request(request)
+            if not session:
+                raise TenantLinearError('İcazə yoxdur.',401)
+            if (request.method!='POST' or request.content_type!='application/json'
+                    or request.headers.get('Origin','').rstrip('/')!=origin.rstrip('/')):
+                raise TenantLinearError('İcazə yoxdur.',403)
+            data=await request.json()
+            required={'lead_id','request_id','expected_tenant_id','expected_user_id','outcome'}
+            if not isinstance(data,dict) or set(data)!=required:
+                raise TenantLinearError('Sorğu düzgün deyil.',400)
+            if (str(data['expected_tenant_id']),str(data['expected_user_id']))!=(str(session['tenant_id']),str(session['telegram_id'])):
+                error=TenantLinearError('Kabinet dəyişib.',409);error.error_code='voice_identity_changed';raise error
+            result=await asyncio.to_thread(record_manual_confirmation,session,data['lead_id'],data['request_id'],data['outcome'])
+            return web.json_response({'success':True,**result},headers=headers)
+        except TenantLinearError as error:
+            return web.json_response(error_data(error,True),status=error.status,headers=headers)
+        except Exception:
+            logger.warning('Customer voice manual confirmation unavailable')
+            return web.json_response({'success':False,'error':'Əl ilə yoxlama saxlanmadı.','keep_request':True},status=503,headers=headers)
     return handle
 
 

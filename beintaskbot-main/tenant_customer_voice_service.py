@@ -32,11 +32,14 @@ def prepare(data, mime, content):
 def _checked_receipt(value, route, request_id):
     try:
         message_id = str(uuid.UUID(str(value['id'])))
+        operation_id = str(uuid.UUID(str(value.get('operationId', value['id']))))
         request_id = str(uuid.UUID(str(request_id)))
     except (KeyError, TypeError, ValueError):
         raise ValueError('invalid receipt') from None
     if (value.get('channelId') != route['channel_id'] or value.get('conversationId') != route['conversation_id']
             or value.get('clientMessageId') != request_id or value.get('retrySafe') is not False
+            or str(value.get('authorId')) != str(route.get('author_id'))
+            or str(value.get('crmConversationId')) != str(route.get('crm_conversation_id'))
             or value.get('status') not in {'unknown', 'sent', 'delivered', 'read', 'failed'}):
         raise ValueError('receipt scope mismatch')
     status = value['status']
@@ -44,14 +47,14 @@ def _checked_receipt(value, route, request_id):
     accepted = value.get('providerAccepted') is True and isinstance(provider_id, str) and bool(re.fullmatch(r'[A-Za-z0-9_-]{5,200}', provider_id))
     if not accepted:
         return {'state': 'unknown', 'delivery_state': 'unknown', 'provider_accepted': False,
-                'delivered': False, 'retry_safe': False, 'message_id': message_id}
+                'delivered': False, 'retry_safe': False, 'message_id': message_id,'operation_id':operation_id}
     if status in {'delivered', 'read'} and value.get('delivered') is not True:
         status = 'sent'
     if status not in {'sent', 'delivered', 'read', 'failed'}:
         raise ValueError('invalid accepted receipt')
     return {'state': 'accepted', 'delivery_state': status, 'provider_accepted': True,
             'delivered': status in {'delivered', 'read'}, 'retry_safe': False,
-            'message_id': message_id, 'provider_message_id': provider_id}
+            'message_id': message_id, 'operation_id':operation_id,'provider_message_id': provider_id}
 
 
 def _connect_receipt(route, request_id):
@@ -63,8 +66,9 @@ def _connect_receipt(route, request_id):
 def _submit(route, request_id, mime, content):
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-voice',
                      {'conversationId': route['conversation_id'], 'clientMessageId': request_id,
+                      'authorId': str(route['author_id']), 'crmConversationId': str(route['crm_conversation_id']),
                       'mime': mime, 'audioBase64': base64.b64encode(content).decode('ascii')},
-                     safe_preflight_codes=('voice_manual_mode_unavailable','voice_attribution_unresolved'))
+                     safe_preflight_codes=('voice_manual_mode_unavailable',))
     return _checked_receipt(value, route, request_id)
 
 
@@ -77,6 +81,8 @@ def own_receipt(session, lead_id, request_id):
     except (ValueError, TypeError):
         raise TenantLinearError('Sorğu düzgün deyil.', 400) from None
     with _connect() as conn:
+        from tenant_customer_voice_manual_schema import ensure_schema as ensure_manual_schema
+        ensure_manual_schema(conn)
         with conn.cursor() as cur:
             profile, connection, integration = authority(cur, session, lead_id)
             cur.execute('''SELECT state,message_id,route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
@@ -89,8 +95,15 @@ def own_receipt(session, lead_id, request_id):
             if (connection[0] != 'connect' or route.get('voice_protocol') is not True
                     or [route.get('channel_id'), route.get('conversation_id')] != connection[1:]):
                 raise TenantLinearError('Səs sorğusunun dialoqu dəyişib.', 409)
+            cur.execute('''SELECT outcome,recorded_at FROM saas_customer_voice_manual_checks WHERE tenant_id=%s::uuid
+              AND actor_id=%s AND request_id=%s::uuid AND lead_id=%s''',
+                        (profile['tenant_id'],profile['telegram_id'],request_id,lead_id))
+            manual=cur.fetchone()
             return {'key': (profile['tenant_id'], int(profile['telegram_id']), request_id), 'lead_id': lead_id,
-                    'connection': connection, 'credentials': integration['route'], 'receipt_state': row['state']}
+                    'connection': connection,
+                    'credentials': {**integration['route'],'author_id':int(profile['telegram_id']),'crm_conversation_id':lead_id},
+                    'receipt_state': row['state'],
+                    'manual_confirmation': ({'outcome':manual['outcome'],'recorded_at':manual['recorded_at'].isoformat()} if manual else None)}
 
 
 def can_send(session, lead_id):
@@ -149,7 +162,8 @@ def record_acceptance(session, item, receipt):
             status = receipt['delivery_state']
             if ranks.get(previous, 0) > ranks.get(status, 0):
                 status = previous
-            facts = {'source': 'connect', 'id': receipt['message_id'], 'externalMessageId': receipt['provider_message_id'],
+            facts = {'source': 'connect', 'id': receipt['message_id'], 'connect_operation_id':receipt['operation_id'],
+                     'externalMessageId': receipt['provider_message_id'],
                      'originClientMessageId': request_id, 'verified_employee_id': actor,
                      'voice_receipt_request_id': request_id, 'fromMe': True, 'status': status}
             author = str(profile.get('display_name') or 'Operator')[:120]
@@ -186,6 +200,7 @@ async def run(session, command, content, logger):
         channel, conversation = item['connection'][1:]
         profile, route = await asyncio.to_thread(mark_sending, item, {'origin':'connect','voice_protocol':True,
                                                                       'channel_id':channel,'conversation_id':conversation})
+        route = {**route,'author_id':item['key'][1],'crm_conversation_id':command['lead_id']}
         started = True
         receipt = await asyncio.to_thread(_submit, route, command['request_id'], command['file']['mime'], content)
         if receipt['provider_accepted']:
@@ -224,7 +239,38 @@ async def check(session, lead_id, request_id):
         fresh = await asyncio.to_thread(own_receipt, session, lead_id, request_id)
         if fresh['connection'] != item['connection']:
             raise TenantLinearError('Dialoqa giriş dəyişib.', 409)
-    return receipt
+    return {**receipt,'manual_confirmation':item['manual_confirmation']}
+
+
+def record_manual_confirmation(session, lead_id, request_id, outcome):
+    """Store the employee's observation separately; never rewrite provider status."""
+    if not isinstance(outcome,str) or outcome not in {'seen','not_seen','unsure'}:
+        raise TenantLinearError('Yoxlama nəticəsi düzgün deyil.',400)
+    item=own_receipt(session,lead_id,request_id)
+    if item['receipt_state']!='unknown':
+        raise TenantLinearError('Yalnız nəticəsi qeyri-müəyyən göndəriş yoxlanıla bilər.',409)
+    tenant,actor,request=item['key']
+    with _connect() as conn:
+        from tenant_customer_voice_manual_schema import ensure_schema as ensure_manual_schema
+        ensure_manual_schema(conn)
+        with conn.cursor() as cur:
+            profile,connection,_=authority(cur,session,item['lead_id'])
+            if profile['tenant_id']!=tenant or int(profile['telegram_id'])!=actor or connection!=item['connection']:
+                raise TenantLinearError('Dialoqa giriş dəyişib.',409)
+            cur.execute('''SELECT state,route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s
+              AND lead_id=%s AND request_id=%s::uuid FOR UPDATE''',(tenant,actor,item['lead_id'],request))
+            saved=cur.fetchone();route=(saved or {}).get('route') or {}
+            if (not saved or saved['state']!='unknown' or route.get('voice_protocol') is not True
+                    or [route.get('channel_id'),route.get('conversation_id')]!=connection[1:]):
+                raise TenantLinearError('Göndərişin vəziyyəti dəyişib.',409)
+            cur.execute('''INSERT INTO saas_customer_voice_manual_checks(tenant_id,actor_id,request_id,lead_id,outcome)
+              VALUES(%s::uuid,%s,%s::uuid,%s,%s) ON CONFLICT(tenant_id,actor_id,request_id)
+              DO UPDATE SET lead_id=EXCLUDED.lead_id,outcome=EXCLUDED.outcome,recorded_at=now()
+              RETURNING outcome,recorded_at''',(tenant,actor,request,item['lead_id'],outcome))
+            row=cur.fetchone()
+        conn.commit()
+    return {'manual_confirmation':{'outcome':row['outcome'],'recorded_at':row['recorded_at'].isoformat()},
+            'provider_state':'unknown'}
 
 
 def visible_receipt(session, lead_id, row_id):
@@ -258,7 +304,8 @@ def visible_receipt(session, lead_id, row_id):
                     [route.get('channel_id'),route.get('conversation_id')]!=connection[1:]):
                 raise TenantLinearError('Səs vəziyyəti əlçatan deyil.', 404)
             return {'tenant':profile['tenant_id'],'lead_id':lead_id,'row_id':row_id,'request_id':request_id,
-                    'message_id':message_id,'provider_id':provider_id,'connection':connection,'credentials':integration['route']}
+                    'message_id':message_id,'provider_id':provider_id,'connection':connection,
+                    'credentials':{**integration['route'],'author_id':sender,'crm_conversation_id':lead_id}}
 
 
 def save_visible_status(session, item, receipt):

@@ -3,7 +3,7 @@
   if (!window.createTenantVoiceRecorder || !window.createTenantVoiceStore || !window.acquireTenantMicrophone) return;
   const store=window.createTenantVoiceStore();
   const words={
-    ru:{mic:'Записать голосовое',stop:'Остановить',cancel:'Отменить',discard:'Удалить запись',retrySave:'Сохранить запись снова',send:'Отправить голосовое',check:'Проверить статус',
+    ru:{mic:'Записать голосовое',stop:'Остановить',cancel:'Отменить',discard:'Удалить запись',retrySave:'Сохранить запись снова',send:'Отправить голосовое',check:'Проверить статус',manualSeen:'Нашёл в WhatsApp',manualNotSeen:'Не вижу в WhatsApp',manualUnsure:'Не уверен',manualSaved:'Ручная проверка сохранена отдельно от статуса провайдера.',manualValue_seen:'Вы отметили: сообщение найдено в WhatsApp.',manualValue_not_seen:'Вы отметили: сообщение не найдено.',manualValue_unsure:'Вы отметили: результат ручной проверки неясен.',
       requesting:'Ожидаем разрешение на микрофон…',recording:'Запись',saving:'Сохраняем запись на устройстве…',draft:'Прослушайте запись перед отправкой. Она хранится на устройстве до отправки, удаления или выхода из аккаунта.',
       sending:'Отправляем…',unknown:'Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.',accepted:'Провайдер принял сообщение. Доставка клиенту пока не подтверждена.',
       delivered:'Доставка подтверждена.',read:'Сообщение прочитано.',failed:'Провайдер сообщил об ошибке доставки. Проверьте историю.',
@@ -13,7 +13,7 @@
       conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.',disabled:'Отправка голосовых временно отключена.',
       voice_manual_mode_unavailable:'Отправка не выполнена: безопасный режим отправки недоступен. Запись сохранена.',
       voice_attribution_unresolved:'Отправка не выполнена: в этом диалоге ещё не разрешён статус предыдущего голосового сообщения. Запись сохранена.'},
-    az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',
+    az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',manualSeen:'WhatsApp-da tapdım',manualNotSeen:'WhatsApp-da görünmür',manualUnsure:'Əmin deyiləm',manualSaved:'Əl ilə yoxlama provayder statusundan ayrı saxlanıldı.',manualValue_seen:'Qeyd etdiniz: mesaj WhatsApp-da tapıldı.',manualValue_not_seen:'Qeyd etdiniz: mesaj tapılmadı.',manualValue_unsure:'Qeyd etdiniz: əl ilə yoxlamanın nəticəsi aydın deyil.',
       requesting:'Mikrofon icazəsi gözlənilir…',recording:'Yazılır',saving:'Yazı cihazda saxlanılır…',draft:'Göndərməzdən əvvəl dinləyin. Yazı göndərilənə, silinənə və ya hesabdan çıxana qədər cihazda saxlanılır.',
       sending:'Göndərilir…',unknown:'Nəticə məlum deyil. WhatsApp çatını əl ilə yoxlayın və mesajı təkrar göndərməyin.',accepted:'Provayder qəbul etdi. Müştəriyə çatdırılma hələ təsdiqlənməyib.',
       delivered:'Çatdırılma təsdiqləndi.',read:'Mesaj oxunub.',failed:'Provayder çatdırılma xətası bildirdi. Tarixçəni yoxlayın.',
@@ -23,7 +23,7 @@
       conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.',disabled:'Səs göndərilməsi müvəqqəti bağlıdır.',
       voice_manual_mode_unavailable:'Göndərilmədi: təhlükəsiz göndərmə rejimi əlçatan deyil. Yazı saxlanılıb.',
       voice_attribution_unresolved:'Göndərilmədi: bu dialoqda əvvəlki səs mesajının vəziyyəti hələ aydın deyil. Yazı saxlanılıb.'},
-    en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',
+    en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',manualSeen:'I found it in WhatsApp',manualNotSeen:'I do not see it',manualUnsure:'Not sure',manualSaved:'Your manual check is stored separately from provider status.',manualValue_seen:'You marked the message as found in WhatsApp.',manualValue_not_seen:'You marked the message as not found.',manualValue_unsure:'You marked the manual check as inconclusive.',
       requesting:'Waiting for microphone permission…',recording:'Recording',saving:'Saving recording on this device…',draft:'Listen before sending. The recording stays on this device until sent, deleted or you sign out.',
       sending:'Sending…',unknown:'The outcome is unknown. Check the WhatsApp chat manually; do not resend.',accepted:'The provider accepted the message. Customer delivery is not yet confirmed.',
       delivered:'Delivery confirmed.',read:'Message read.',failed:'The provider reported a delivery failure. Check the history.',
@@ -52,13 +52,14 @@
   function duration(value){const seconds=Math.max(0,Math.floor((value||0)/1000));return Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');}
   function draw(session){
     if(!same(session))return;
-    const snap=session.recorder.snapshot(), entry=session.entry, recording=['requesting','recording','stopping'].includes(snap.state);
+    const snap=session.recorder.snapshot(), entry=session.entry, receipt=session.receipt, recording=['requesting','recording','stopping'].includes(snap.state);
     const unstored=snap.state==='ready'&&!entry;
     session.mic.hidden=!session.maySend||recording||unstored||!!entry||session.saving;
     session.stop.hidden=snap.state!=='recording';session.cancel.hidden=!recording;
     session.discard.hidden=!entry||entry.state!=='draft';session.send.hidden=!session.maySend||!entry||entry.state!=='draft';
     session.retrySave.hidden=!unstored;session.discardUnstored.hidden=!unstored;
-    session.check.hidden=!entry||entry.state==='draft';
+    session.check.hidden=!receipt||receipt.state!=='unknown';
+    for(const [button,outcome] of session.manualButtons||[]){button.hidden=!receipt||receipt.state!=='unknown';button.disabled=!!session.busy||!!session.saving;button.dataset.manualOutcome=outcome;}
     for(const node of [session.mic,session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check]) node.disabled=!!session.busy||!!session.saving;
     session.audio.hidden=!entry?.blob;
     if(entry?.blob && session.renderedId!==entry.request_id){
@@ -68,7 +69,8 @@
     if(!entry?.blob && session.url){URL.revokeObjectURL(session.url);session.url='';session.audio.removeAttribute('src');session.renderedId='';}
     session.duration.textContent=entry?duration(entry.durationMs):snap.state==='recording'?duration(snap.durationMs):'';
     session.status.textContent=session.message || (session.saving?text('saving'):snap.state==='requesting'?text('requesting'):
-      snap.state==='recording'?text('recording'):entry?.state==='draft'?text('draft'):entry?text('unknown'):'');
+      snap.state==='recording'?text('recording'):entry?.state==='draft'?text('draft'):receipt?.manualConfirmation?.outcome?text('manualValue_'+receipt.manualConfirmation.outcome):receipt?.state==='unknown'?text('unknown'):
+      receipt?.state==='accepted'?text(receipt.deliveryState==='read'?'read':receipt.deliveryState==='delivered'?'delivered':'accepted'):'');
   }
   async function saveStopped(session){
     const blob=session.recorder.recording();if(!blob || session.saving)return;
@@ -103,17 +105,20 @@
   }
   function node(tag,label,handler){const n=document.createElement(tag);if(label)n.textContent=text(label);if(tag==='button'){n.type='button';n.className='outline';n.onclick=handler;}return n;}
   function create(scopeValue,maySend){
-    const session={scope:scopeValue,maySend,entry:null,busy:false,saving:false,message:'',release:null,host:node('section'),url:'',renderedId:''};
+    const session={scope:scopeValue,maySend,entry:null,receipt:null,busy:false,saving:false,message:'',release:null,host:node('section'),url:'',renderedId:''};
     session.host.className='operator-customer-voice';session.host.setAttribute('aria-label',text('mic'));session.host.style.cssText='display:grid;gap:8px;min-width:0;margin-top:8px';
     session.mic=node('button','mic',()=>void start(session));session.mic.classList.add('operator-voice-mic');session.mic.textContent='🎙';session.mic.title=text('mic');session.mic.setAttribute('aria-label',text('mic'));session.mic.style.cssText='min-width:44px;min-height:44px';
     session.stop=node('button','stop',()=>session.recorder.stop());session.cancel=node('button','cancel',()=>{session.message='';session.recorder.cancel();draw(session);});
     session.discard=node('button','discard',()=>void discard(session));session.retrySave=node('button','retrySave',()=>void saveStopped(session));
     session.discardUnstored=node('button','discard',()=>{session.message='';session.recorder.cancel();draw(session);});
     session.send=node('button','send',()=>void send(session));session.check=node('button','check',()=>void check(session));
+    session.manualButtons=[['seen','manualSeen'],['not_seen','manualNotSeen'],['unsure','manualUnsure']].map(([outcome,label])=>{
+      const button=node('button',label,()=>void manualConfirmation(session,outcome));return [button,outcome];
+    });
     session.audio=node('audio');session.audio.controls=true;session.audio.preload='metadata';session.audio.style.cssText='width:100%;max-width:100%';
     session.duration=node('span');session.status=node('p');session.status.setAttribute('role','status');session.status.setAttribute('aria-live','polite');
     const actions=node('div');actions.style.cssText='display:flex;flex-wrap:wrap;align-items:center;gap:8px';
-    actions.append(session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check,session.duration);
+    actions.append(session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check,...session.manualButtons.map(([button])=>button),session.duration);
     session.host.append(session.audio,actions,session.status);
     session.recorder=window.createTenantVoiceRecorder({onChange:snapshot=>recorderChanged(session,snapshot)});
     session.timer=setInterval(()=>{const state=session.recorder.snapshot().state;if(state==='recording')draw(session);
@@ -163,8 +168,8 @@
   }
   async function readJson(response){try{return await response.json();}catch{return {success:false,keep_request:true};}}
   async function accepted(session,entry,result){
-    await store.removeAccepted(session.scope.key,entry.request_id);
-    session.entry=await store.get(session.scope.key)||null;session.recorder.cancel();
+    await store.removeAccepted(session.scope.key,entry.request_id,result.delivery_state);
+    session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.recorder.cancel();
     session.message=text(result.delivery_state==='read'?'read':result.delivery_state==='delivered'?'delivered':result.delivery_state==='failed'?'failed':'accepted');
     draw(session);if(same(session))await operator()?.openDialog?.({...operator().currentDialog},true);
   }
@@ -179,25 +184,26 @@
       const data=new FormData();data.append('command',JSON.stringify(command));data.append('file',entry.blob,'voice');
       let response,result;
       try{response=await fetch('/api/platform/crm/chat/send-voice',{method:'POST',credentials:'same-origin',body:data});result=await readJson(response);}
-      catch{await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');return;}
+      catch{await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.message=text('unknown');return;}
       if(response.ok&&result.success&&result.provider_accepted===true){await accepted(session,entry,result);return;}
       if(response.status===401||response.status===403||(response.status===409&&result.error_code==='voice_identity_changed')){
         if(result.keep_request===false)await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
         else await store.markUnknown(session.scope.key,entry.request_id);
         if(!same(session))return;
+        if(result.keep_request!==false){session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);}
         if(response.status===401||response.status===409)await forgetUser();else stopCurrent(true);return;
       }
-      if(response.status===409&&result.keep_request===false&&['voice_manual_mode_unavailable','voice_attribution_unresolved'].includes(result.error_code)){
+      if(response.status===409&&result.keep_request===false&&['voice_manual_mode_unavailable'].includes(result.error_code)){
         await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
         session.entry=await store.get(session.scope.key)||null;session.message=text(result.error_code);return;
       }
       if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
-      await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');
+      await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.message=text('unknown');
     }catch{session.message=text('storage');}
     finally{session.busy=false;draw(session);}
   }
   async function check(session){
-    const entry=session.entry;if(!same(session)||!entry||entry.state==='draft'||session.busy)return;
+    const entry=session.receipt;if(!same(session)||!entry||entry.state!=='unknown'||session.busy)return;
     session.busy=true;session.message='';draw(session);
     try{
       const query=new URLSearchParams({lead_id:session.scope.lead,request_id:entry.request_id,expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user});
@@ -206,8 +212,24 @@
       if(response.status===401||(response.status===409&&result.error_code==='voice_identity_changed')){await forgetUser();return;}
       if(response.status===403){stopCurrent(true);return;}
       if(response.ok&&result.success&&result.provider_accepted===true)await accepted(session,entry,result);
-      else session.message=text('unknown');
+      else {session.receipt={...entry,manualConfirmation:result.manual_confirmation||entry.manualConfirmation};await store.updateReceipt(session.scope.key,entry.request_id,{manualConfirmation:session.receipt.manualConfirmation});session.message=text('unknown');}
     }catch{session.message=text('unknown');}finally{session.busy=false;draw(session);}
+  }
+  async function manualConfirmation(session,outcome){
+    const receipt=session.receipt;if(!same(session)||!receipt||receipt.state!=='unknown'||session.busy)return;
+    session.busy=true;session.message='';draw(session);
+    try{
+      const response=await fetch('/api/platform/crm/chat/voice-manual-confirmation',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({request_id:receipt.request_id,lead_id:Number(session.scope.lead),expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user,outcome})});
+      const result=await readJson(response);
+      if(!same(session))return;
+      if(response.status===401||(response.status===409&&result.error_code==='voice_identity_changed')){await forgetUser();return;}
+      if(response.status===403){stopCurrent(true);return;}
+      if(!response.ok||!result.success)throw Error('manual_check_unavailable');
+      session.receipt={...receipt,manualConfirmation:result.manual_confirmation};
+      await store.updateReceipt(session.scope.key,receipt.request_id,{manualConfirmation:session.receipt.manualConfirmation});
+      session.message=text('manualSaved');
+    }catch{session.message=text('error');}finally{session.busy=false;draw(session);}
   }
   function scanStatuses(session){
     if(!same(session)||document.hidden)return;
@@ -245,11 +267,11 @@
       const ownerVersion=await store.ownerVersion();
       const response=await fetch('/api/platform/crm/chat/voice-capability?'+query,{credentials:'same-origin',cache:'no-store'}),result=await readJson(response);
       if(token!==revision||scope()?.key!==route.key||scope()?.policy!==route.policy||!response.ok)return;
-      if(!result.enabled&&(!result.recovery_enabled||!await store.get(route.key)))return;
+      if(!result.enabled&&(!result.recovery_enabled||(!await store.get(route.key)&&!(await store.latestReceipt(route.key)))))return;
       if(!await store.activate(route.tenant,route.user,ownerVersion)||token!==revision)return;
       const session=create(route,result.enabled===true);session.saving=true;current=session;
       actions.insertBefore(session.mic,sendButton);composer.append(session.host);draw(session);
-      try{voiceBroadcast?.postMessage({active:true,tenant:route.tenant,user:route.user});session.entry=await store.get(route.key)||null;}
+      try{voiceBroadcast?.postMessage({active:true,tenant:route.tenant,user:route.user});session.entry=await store.get(route.key)||null;session.receipt=await store.latestReceipt(route.key);}
       catch{session.message=text('storage');}
       finally{session.saving=false;if(same(session)){draw(session);scanStatuses(session);}}
     }catch{/* Unavailable capability remains hidden. */}

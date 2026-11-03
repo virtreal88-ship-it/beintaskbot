@@ -12,11 +12,13 @@ TENANT = 'a9c11a16-01d5-469a-a6c1-9a726975ae42'
 CHANNEL = '9644b2f2-786c-43f4-b58e-2b9b5f69d554'
 REQUEST = '79d6467b-3ca6-4557-9e12-b9da059c0611'
 MESSAGE = '6b9f1ac1-d693-4f9f-a400-d9b8372306f8'
+OPERATION = '7d92af34-d4db-4983-a1a7-56e8249c6e6e'
 JID = '994500000000@s.whatsapp.net'
 SESSION = {'tenant_id': TENANT, 'telegram_id': 20}
 COMMAND = {'request_id': REQUEST, 'lead_id': 7, 'text': '', 'file': {'mime': 'audio/ogg'}}
-ROUTE = {'channel_id': CHANNEL, 'conversation_id': JID, 'api_key': 'synthetic'}
-RECEIPT = {'id': MESSAGE, 'channelId': CHANNEL, 'conversationId': JID, 'clientMessageId': REQUEST,
+ROUTE = {'channel_id': CHANNEL, 'conversation_id': JID, 'api_key': 'synthetic','author_id':20,'crm_conversation_id':7}
+RECEIPT = {'id': MESSAGE, 'operationId': OPERATION, 'channelId': CHANNEL, 'conversationId': JID, 'clientMessageId': REQUEST,
+           'authorId':'20','crmConversationId':'7',
            'retrySafe': False, 'status': 'sent', 'providerAccepted': True, 'delivered': False,
            'externalMessageId': 'PROVIDER123'}
 
@@ -35,6 +37,7 @@ class ReceiptContract(unittest.TestCase):
         result = _checked_receipt(RECEIPT, ROUTE, REQUEST)
         self.assertTrue(result['provider_accepted']); self.assertFalse(result['delivered'])
         self.assertEqual(result['provider_message_id'], 'PROVIDER123')
+        self.assertEqual(result['operation_id'],OPERATION)
         for change in ({'channelId': 'other'}, {'conversationId': 'other'}, {'clientMessageId': MESSAGE},
                        {'retrySafe': True}, {'status': 'invented'}):
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -89,13 +92,13 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
         with patch('tenant_connect_transport.requests.request',return_value=response):
             with self.assertRaises(ConnectPreflightError) as raised:
                 _request('synthetic','POST','/v1/channels/test/customer-voice',{},
-                         safe_preflight_codes=('voice_manual_mode_unavailable','voice_attribution_unresolved'))
+                         safe_preflight_codes=('voice_manual_mode_unavailable',))
         self.assertEqual(raised.exception.code,'voice_manual_mode_unavailable')
         response=Mock(status_code=409,json=Mock(return_value={'error':'unknown'}))
         with patch('tenant_connect_transport.requests.request',return_value=response):
             with self.assertRaises(Exception) as raised:
                 _request('synthetic','POST','/v1/channels/test/customer-voice',{},
-                         safe_preflight_codes=('voice_manual_mode_unavailable','voice_attribution_unresolved'))
+                         safe_preflight_codes=('voice_manual_mode_unavailable',))
         self.assertNotIsInstance(raised.exception,ConnectPreflightError)
 
     async def test_other_provider_is_blocked_before_submission(self):

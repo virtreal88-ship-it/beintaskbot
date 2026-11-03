@@ -116,7 +116,12 @@ async function main(){
     assert.equal(safeRetry.request_id,'new-safe-id');assert.equal(safeRetry.state,'draft');assert.ok(safeRetry.blob);
     assert.equal(await page.evaluate(()=>createTenantVoiceStore().claim('synthetic-storage-race','new-safe-id')),true);
     const activeId='new-safe-id';
-    await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');await s.removeAccepted('synthetic-storage-race',id);},activeId);
+    await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');
+      const receipt=await s.getReceipt('synthetic-storage-race',id);if(receipt?.state!=='unknown'||receipt.blob!==null)throw Error('unknown operation not archived separately');
+      if(await s.get('synthetic-storage-race'))throw Error('unknown operation still blocks a new draft');
+      if(!await s.createDraft({key:'synthetic-storage-race',request_id:'next-id',state:'draft',blob:new Blob(['next'])}))throw Error('new draft was blocked by old unknown');
+      if(await s.claim('synthetic-storage-race',id))throw Error('old unknown operation was reusable');
+      await s.removeAccepted('synthetic-storage-race','next-id');},activeId);
     await race.locator('.operator-voice-mic').click();await race.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
     const logout=await page.evaluate(async()=>{
       const s=createTenantVoiceStore(),a=JSON.stringify(['tenant','20','101','channel','a']),b=JSON.stringify(['tenant','20','102','channel','b']);

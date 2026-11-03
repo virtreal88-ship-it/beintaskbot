@@ -17,7 +17,7 @@ from tenant_chat_ai_api import handler as chat_ai_handler
 from tenant_chat_ai_api import model_management_handler as chat_ai_model_handler
 from tenant_chat_send_api import handler as chat_send_handler, receipt_handler as chat_receipt_handler
 from tenant_chat_upload_api import handler as chat_upload_handler
-from tenant_customer_voice_api import handler as customer_voice_handler, receipt_handler as customer_voice_receipt_handler, capability_handler as customer_voice_capability_handler, status_handler as customer_voice_status_handler
+from tenant_customer_voice_api import handler as customer_voice_handler, receipt_handler as customer_voice_receipt_handler, capability_handler as customer_voice_capability_handler, status_handler as customer_voice_status_handler, manual_confirmation_handler as customer_voice_manual_confirmation_handler
 from tenant_chat_history_api import handler as chat_history_handler
 from tenant_chat_attachment_api import handler as chat_attachment_handler
 from tenant_chat_review_api import handler as chat_review_handler
@@ -86,6 +86,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/crm/chat/send-file', chat_upload_handler(member, origin, context.crm_request, context.wait_slot, logger), ('POST',)),
         ('/api/platform/crm/chat/send-voice', customer_voice_handler(member, origin, logger), ('POST',)),
         ('/api/platform/crm/chat/voice-receipt', customer_voice_receipt_handler(member, logger), ('GET',)),
+        ('/api/platform/crm/chat/voice-manual-confirmation', customer_voice_manual_confirmation_handler(member, origin, logger), ('POST',)),
         ('/api/platform/crm/chat/voice-capability', customer_voice_capability_handler(member, logger), ('GET',)),
         ('/api/platform/crm/chat/voice-status', customer_voice_status_handler(member, logger), ('GET',)),
         ('/api/platform/crm/chat/history', chat_history_handler(member, logger), ('GET',)),

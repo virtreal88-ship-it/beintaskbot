@@ -7,8 +7,24 @@
   function db() {
     if (!indexedDB) return Promise.reject(new Error('voice_storage_unavailable'));
     if (!opened) opened = new Promise((resolve, reject) => {
-      const request = indexedDB.open('beintaskbot-customer-voice', 2);
-      request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('drafts')) request.result.createObjectStore('drafts', {keyPath:'key'}); if (!request.result.objectStoreNames.contains('epochs')) request.result.createObjectStore('epochs'); };
+      const request = indexedDB.open('beintaskbot-customer-voice', 3);
+      request.onupgradeneeded = () => {
+        const upgrade=request.transaction;
+        if (!request.result.objectStoreNames.contains('drafts')) request.result.createObjectStore('drafts', {keyPath:'key'});
+        if (!request.result.objectStoreNames.contains('receipts')) {
+          const receipts=request.result.createObjectStore('receipts',{keyPath:'receiptKey'});receipts.createIndex('byKey','key');
+          const drafts=upgrade.objectStore('drafts'),cursor=drafts.openCursor();
+          cursor.onsuccess=()=>{const row=cursor.result;if(!row)return;const value=row.value;
+            if(value.state==='unknown'||value.state==='sending'){
+              receipts.put({...value,receiptKey:JSON.stringify([value.key,value.request_id]),state:'unknown',blob:null});row.delete();
+            }
+            row.continue();
+          };
+        } else {
+          const receipts=upgrade.objectStore('receipts');if(!receipts.indexNames.contains('byKey'))receipts.createIndex('byKey','key');
+        }
+        if (!request.result.objectStoreNames.contains('epochs')) request.result.createObjectStore('epochs');
+      };
       request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); opened = null; }; resolve(request.result); };
       request.onerror = () => { opened = null; reject(new Error('voice_storage_unavailable')); };
       request.onblocked = () => { opened = null; reject(new Error('voice_storage_unavailable')); };
@@ -40,10 +56,26 @@
       tx.onabort = tx.onerror = () => reject(new Error('voice_storage_unavailable'));
     });
   }
+  async function receiptChange(key,id,transform) {
+    const database=await db();return new Promise((resolve,reject)=>{
+      let changed=false;const tx=database.transaction(['drafts','receipts'],'readwrite'),drafts=tx.objectStore('drafts'),receipts=tx.objectStore('receipts');
+      const request=drafts.get(key);request.onsuccess=()=>{
+        const old=request.result;if(!old||old.request_id!==id)return;
+        const next=transform(old);if(next===undefined)return;
+        if(next===null)drafts.delete(key);else drafts.put(next);
+        if(next===null||next.state==='unknown'||next.state==='accepted'){
+          const state=next?.state||'unknown';receipts.put({...old,...(next||{}),receiptKey:JSON.stringify([key,id]),key,request_id:id,state,blob:null});
+          if(next&&next!==null)drafts.delete(key);
+        }
+        changed=true;
+      };
+      tx.oncomplete=()=>resolve(changed);tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));
+    });
+  }
   async function purgeUser(tenant,user) {
     const database=await db();
     return new Promise((resolve,reject)=>{
-      const tx=database.transaction(['drafts','epochs'],'readwrite'),cursor=tx.objectStore('drafts').openCursor();
+      const tx=database.transaction(['drafts','receipts','epochs'],'readwrite'),cursor=tx.objectStore('drafts').openCursor();
       const epochs=tx.objectStore('epochs');
       const key=JSON.stringify([tenant,user]),get=epochs.get(key),active=epochs.get('active-owner');
       get.onsuccess=()=>epochs.put((get.result||0)+1,key);
@@ -60,6 +92,8 @@
         }catch{/* Ignore unrelated or malformed local entries. */}
         row.continue();
       };
+      const receipts=tx.objectStore('receipts').openCursor();receipts.onsuccess=()=>{const row=receipts.result;if(!row)return;
+        try{const value=row.value,scope=JSON.parse(value.key);if(Array.isArray(scope)&&scope[0]===tenant&&scope[1]===user)row.delete();}catch{}row.continue();};
       tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));
     });
   }
@@ -68,7 +102,7 @@
   }
   async function activate(tenant,user,expectedVersion) {
     const database=await db();return new Promise((resolve,reject)=>{
-      let activated=false;const tx=database.transaction(['drafts','epochs'],'readwrite'),epochs=tx.objectStore('epochs'),drafts=tx.objectStore('drafts');
+      let activated=false;const tx=database.transaction(['drafts','receipts','epochs'],'readwrite'),epochs=tx.objectStore('epochs'),drafts=tx.objectStore('drafts');
       const version=epochs.get('owner-version'),owner=epochs.get('active-owner'),key=JSON.stringify([tenant,user]);
       owner.onsuccess=()=>{
         if((version.result||0)!==expectedVersion)return;
@@ -103,12 +137,27 @@
       tx.oncomplete=()=>resolve(created);tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));
     });
   }
+  async function receiptsFor(key) {
+    const database=await db();return new Promise((resolve,reject)=>{const tx=database.transaction('receipts','readonly'),req=tx.objectStore('receipts').index('byKey').getAll(key);
+      tx.oncomplete=()=>resolve((req.result||[]).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)));
+      tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));});
+  }
+  async function latestReceipt(key) { return (await receiptsFor(key))[0]||null; }
   return { get: key => transact('readonly', store => store.get(key)),
     createDraft: entry => change(entry.key, old => old ? undefined : entry),
     epoch,activeEpoch,createScopedDraft,ownerVersion,activate,
     claim: (key, id) => change(key, old => old?.request_id===id && old.state==='draft' ? {...old,state:'sending'} : undefined),
-    markUnknown: (key, id) => change(key, old => old?.request_id===id && old.state==='sending' ? {...old,state:'unknown'} : undefined),
+    markUnknown: (key, id) => receiptChange(key,id,old=>old.state==='sending'?{...old,state:'unknown',blob:null}:undefined),
     releaseDraft: (key, id, nextId) => change(key, old => old?.request_id===id && old.state==='sending' ? {...old,request_id:nextId,state:'draft'} : undefined),
     removeDraft: (key, id) => change(key, old => old?.request_id===id && old.state==='draft' ? null : undefined),
-    removeAccepted: (key, id) => change(key, old => old?.request_id===id ? null : undefined),purgeUser };
+    removeAccepted: async (key,id,deliveryState='sent') => {
+      const database=await db();return new Promise((resolve,reject)=>{let changed=false;const tx=database.transaction(['drafts','receipts'],'readwrite'),drafts=tx.objectStore('drafts'),receipts=tx.objectStore('receipts'),req=drafts.get(key),receiptKey=JSON.stringify([key,id]),saved=receipts.get(receiptKey);
+        req.onsuccess=()=>{const old=req.result;if(old?.request_id===id){receipts.put({...old,receiptKey,key,request_id:id,state:'accepted',deliveryState,blob:null});drafts.delete(key);changed=true;}};
+        saved.onsuccess=()=>{if(!req.result&&saved.result){receipts.put({...saved.result,state:'accepted',deliveryState,blob:null});changed=true;}};
+        tx.oncomplete=()=>resolve(changed);tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));});
+    },
+    getReceipt:async(key,id)=>{const all=await receiptsFor(key);return all.find(row=>row.request_id===id)||null;},
+    latestReceipt,receiptsFor,
+    updateReceipt:async(key,id,values)=>{const database=await db();return new Promise((resolve,reject)=>{let changed=false;const tx=database.transaction('receipts','readwrite'),store=tx.objectStore('receipts'),req=store.get(JSON.stringify([key,id]));req.onsuccess=()=>{if(!req.result)return;store.put({...req.result,...values});changed=true;};tx.oncomplete=()=>resolve(changed);tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));});},
+    purgeUser };
 });

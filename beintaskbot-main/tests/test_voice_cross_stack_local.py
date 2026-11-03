@@ -85,15 +85,17 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls):cls._cleanup()
 
     async def asyncSetUp(self):
-        from tenant_customer_voice_api import handler,receipt_handler,status_handler,capability_handler
+        from tenant_customer_voice_api import handler,receipt_handler,status_handler,capability_handler,manual_confirmation_handler
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         self.origin='http://127.0.0.1:'+str(port)
         app=web.Application();member=lambda request:{'tenant_id':TENANT,'telegram_id':int(request.headers.get('X-Test-Actor','20'))}
         send=handler(member,self.origin,MockLogger());receipt=receipt_handler(member,MockLogger());status=status_handler(member,MockLogger())
+        manual=manual_confirmation_handler(member,self.origin,MockLogger())
         app.router.add_post('/send',send);app.router.add_get('/receipt',receipt);app.router.add_get('/status',status)
         app.router.add_post('/api/platform/crm/chat/send-voice',send)
         app.router.add_get('/api/platform/crm/chat/voice-receipt',receipt)
+        app.router.add_post('/api/platform/crm/chat/voice-manual-confirmation',manual)
         app.router.add_get('/api/platform/crm/chat/voice-status',status)
         app.router.add_get('/api/platform/crm/chat/voice-capability',capability_handler(member,MockLogger()))
         docs=Path(__file__).resolve().parents[1]/'docs'
@@ -158,15 +160,30 @@ class CrossStackVoice(unittest.IsolatedAsyncioTestCase):
         query={'lead_id':'7','request_id':request_id,'expected_tenant_id':TENANT,'expected_user_id':'20'}
         pending=await self.client.get('/receipt',params=query);pending_payload=await pending.json()
         self.assertEqual(pending.status,200,f'{pending_payload}');self.assertEqual(pending_payload.get('state'),'unknown')
+        manual=await self.client.post('/api/platform/crm/chat/voice-manual-confirmation',json={'lead_id':7,'request_id':request_id,
+            'expected_tenant_id':TENANT,'expected_user_id':'20','outcome':'seen'},headers={'Origin':self.origin})
+        manual_payload=await manual.json();self.assertEqual(manual.status,200,f'{manual_payload}')
+        self.assertEqual(manual_payload,{'success':True,'manual_confirmation':manual_payload.get('manual_confirmation'),'provider_state':'unknown'})
+        self.assertEqual(manual_payload['manual_confirmation']['outcome'],'seen')
+        with psycopg.connect(self.dsn,row_factory=dict_row) as conn:
+            saved=conn.execute('''SELECT outcome FROM saas_customer_voice_manual_checks WHERE tenant_id=%s AND actor_id=20 AND request_id=%s''',(TENANT,request_id)).fetchone()
+            provider_state=conn.execute('''SELECT state FROM saas_chat_send_receipts WHERE tenant_id=%s AND actor_id=20 AND request_id=%s''',(TENANT,request_id)).fetchone()
+        self.assertEqual(saved['outcome'],'seen');self.assertEqual(provider_state['state'],'unknown')
+        unauthorized=await self.client.post('/api/platform/crm/chat/voice-manual-confirmation',json={'lead_id':7,'request_id':request_id,
+            'expected_tenant_id':TENANT,'expected_user_id':'21','outcome':'not_seen'},headers={'Origin':self.origin,'X-Test-Actor':'21'})
+        self.assertEqual(unauthorized.status,403)
+        with psycopg.connect(self.dsn) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM saas_customer_voice_manual_checks WHERE tenant_id=%s AND request_id=%s',(TENANT,request_id)).fetchone()[0],1)
+        pending=await self.client.get('/receipt',params=query);self.assertEqual((await pending.json()).get('manual_confirmation',{}).get('outcome'),'seen')
         duplicate=await self.client.post('/send',data=self.form(request_id),headers={'Origin':self.origin})
         duplicate_payload=await duplicate.json();self.assertEqual(duplicate.status,409,f'{duplicate_payload}')
         self.assertTrue(duplicate_payload.get('keep_request'))
         refreshed=await self.client.get('/receipt',params=query);self.assertEqual((await refreshed.json()).get('state'),'unknown')
-        blocked=await self.client.post('/send',data=self.form(str(uuid.uuid4())),headers={'Origin':self.origin})
-        blocked_payload=await blocked.json();self.assertEqual(blocked.status,409,f'{blocked_payload}')
-        self.assertEqual(blocked_payload.get('error_code'),'voice_attribution_unresolved')
-        self.assertEqual(await self.count(),before+1)
+        later_id=str(uuid.uuid4());later=await self.client.post('/send',data=self.form(later_id),headers={'Origin':self.origin})
+        later_payload=await later.json();self.assertIn(later.status,(200,503),f'{later_payload}')
+        self.assertEqual(await self.count(),before+2)
         self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':request_id}))['deleted'],1)
+        self.assertEqual((await self.control_post('cleanup-unknown',{'requestId':later_id}))['deleted'],1)
 
     async def test_unknown_voice_does_not_block_an_unrelated_text(self):
         from tenant_chat_send_service import run as send_text
