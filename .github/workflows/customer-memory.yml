@@ -1,11 +1,16 @@
-name: Customer memory policy
+name: Customer memory policy and storage
 
 on:
   pull_request:
     paths:
       - '.github/workflows/customer-memory.yml'
       - 'beintaskbot-main/tenant_customer_memory*.py'
+      - 'beintaskbot-main/tenant_platform_schema_crm.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_customer_memory*.py'
+      - 'beintaskbot-main/tests/test_tenant_web_routes.py'
+      - 'beintaskbot-main/tests/test_tenant_crm_identity.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
   push:
     branches: [codex/customer-memory]
 
@@ -13,9 +18,22 @@ permissions:
   contents: read
 
 jobs:
-  policy:
+  memory:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: isolated-fixture
+        ports: ['55463:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CUSTOMER_MEMORY_TEST_DSN: postgresql://postgres:isolated-fixture@127.0.0.1:55463/postgres
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      PYTHONPATH: tests/isolated_database_guard:.:tests
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -24,5 +42,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Test isolated decision policy
-        run: python -m unittest discover -s tests -p 'test_customer_memory_policy.py' -v
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Exercise memory policy, PostgreSQL and HTTP
+        run: python -m unittest discover -s tests -p 'test_customer_memory*.py' -v
+      - name: Exercise existing CRM and route regressions
+        run: python -m pytest -q tests/test_tenant_web_routes.py tests/test_tenant_crm_identity.py
