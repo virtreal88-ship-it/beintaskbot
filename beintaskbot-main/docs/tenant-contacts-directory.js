@@ -11,7 +11,15 @@ en:{title:'Contacts',source:'Source',native:'Beintaskbot',kommo:'Kommo — saved
 const t=key=>(copy[window.tenantI18n?.language]||copy.en)[key]||key;
 let profile=null,profileKey='',paused=true,epoch=0,listRevision=0,cardRevision=0,formRevision=0,page=null,readState='idle',readError='',source='',query='',offset=0,limit=50,flight=null,loadedKey='',loadedAt=0,debounce=null,card=null,formState=null,navigating=false,lastRoute='',message='',routeRevision=0,accessProof=null,bindingError=false;
 const identity=data=>data?.member?String(data.member.tenant_id)+':'+String(data.member.telegram_id):'';
-const fingerprint=data=>JSON.stringify([identity(data),data?.member?.active,data?.member?.role,[...(Array.isArray(data?.member?.permissions)?data.member.permissions:[])].sort(),data?.capabilities?.modules?.customers,data?.capabilities?.modules?.deals,data?.capabilities?.pipeline_scope,data?.capabilities?.deal_board,data?.member?.workflow,(data?.integrations||[]).filter(item=>item.provider==='kommo')]);
+// Profile consumers expose integrations as either records or a provider-keyed
+// map. Normalize only the Kommo comparison data; listing flags remain authority.
+function kommoMetadata(value){
+ const record=item=>item!==null&&typeof item==='object'&&!Array.isArray(item);
+ if(Array.isArray(value))return value.filter(item=>record(item)&&item.provider==='kommo').map(item=>({provider:'kommo',...item}));
+ if(!record(value))return [];
+ return Object.entries(value).filter(([provider,item])=>provider==='kommo'||record(item)&&item.provider==='kommo').map(([,item])=>record(item)?{provider:'kommo',...item}:{provider:'kommo',value:item});
+}
+const fingerprint=data=>JSON.stringify([identity(data),data?.member?.active,data?.member?.role,[...(Array.isArray(data?.member?.permissions)?data.member.permissions:[])].sort(),data?.capabilities?.modules?.customers,data?.capabilities?.modules?.deals,data?.capabilities?.pipeline_scope,data?.capabilities?.deal_board,data?.member?.workflow,kommoMetadata(data?.integrations)]);
 const active=()=>!paused&&!accessProof&&profile?.member?.active===true;
 const visible=()=>view.classList.contains('active');
 const scope=()=>({epoch,owner:identity(profile),tenant:String(profile?.member?.tenant_id||''),user:String(profile?.member?.telegram_id||'')});

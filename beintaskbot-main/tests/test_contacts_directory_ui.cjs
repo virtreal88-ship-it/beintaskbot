@@ -97,6 +97,24 @@ const submit=b=>b.d.getElementById('nativeContactForm').dispatchEvent(new b.w.Ev
   const b=await controllerOnly({success:true,member:{tenant_id:tenant,telegram_id:11,role:'owner',active:true,permissions:{'not-a-grant':false}},capabilities:{modules:{customers:true}}});try{assert.equal(b.calls.length,1);assert.match(b.d.getElementById('customersList').textContent,/No contacts yet/);assert.match(b.d.getElementById('customerCount').textContent,/Found: 0/);assert.deepEqual(b.errors,[]);}finally{b.close()}
  }
  console.log('PASS CRM01 isolated controller tolerates a non-list legacy permission value without inferring grants or waiving global module errors');
+ {
+  const base={success:true,member:{tenant_id:tenant,telegram_id:11,role:'owner',active:true,permissions:[]},capabilities:{modules:{customers:true}}};
+  for(const integrations of [{},[],null,[null,'unrelated',42,{provider:'waba',status:'connected'}],{waba:{status:'connected'}},{kommo:{status:'connected',account_id:'100',metadata:{account_id:'100'}}}]){
+   const b=await controllerOnly({...base,integrations});try{assert.equal(b.calls.length,1);assert.match(b.d.getElementById('customersList').textContent,/No contacts yet/);assert.deepEqual(b.errors,[])}finally{b.close()}
+  }
+  for(const shape of ['array','provider-map']){
+   const metadata=(account,status)=>shape==='array'?[null,{provider:'kommo',status,account_id:account,metadata:{account_id:account}}]:{kommo:{status,account_id:account,metadata:{account_id:account}},waba:{status:'connected'}};
+   const b=await controllerOnly({...base,integrations:metadata('100','connected')},{source:'kommo',rows:[{...external(),display_name:'OLD ACCOUNT CACHE'}]});try{
+    for(const [account,status,name]of [['200','connected','CURRENT ACCOUNT CACHE'],['200','disconnected','CURRENT DISCONNECTED CACHE']]){
+     b.f.holdNextBody=true;b.d.getElementById('customersRefresh').click();await until(()=>b.f.pendingBodies.length===1);const release=b.f.pendingBodies.shift(),before=b.calls.length;
+     b.f.rows=[{...external(),key:'kommo:'+account+':501',account_id:account,contact_id:'501',display_name:name}];b.d.dispatchEvent(new b.w.CustomEvent('tenant-profile',{detail:{...base,integrations:metadata(account,status)}}));await settle();
+     assert.equal(b.calls.length,before+1,'changed '+shape+' account/connection metadata requires a fresh scoped listing');assert.match(b.d.getElementById('customersList').textContent,new RegExp(name));release();await settle();assert.match(b.d.getElementById('customersList').textContent,new RegExp(name));assert.doesNotMatch(b.d.getElementById('customersList').textContent,/OLD ACCOUNT CACHE/);if(status==='disconnected')assert.doesNotMatch(b.d.getElementById('customersList').textContent,/CURRENT ACCOUNT CACHE/);
+    }
+    assert.deepEqual(b.errors,[]);
+   }finally{b.close()}
+  }
+ }
+ console.log('PASS CRM01 integration shapes: array/map/empty profiles are safe and Kommo account/connection changes discard delayed old listing bodies');
  for(const language of ['ru','az','en']){const b=await mount({language});try{assert.equal(b.d.getElementById('contactsTitle').textContent,{ru:'Контакты',az:'Əlaqələr',en:'Contacts'}[language]);b.d.querySelector('[data-contact-open]').click();await until(()=>modal(b)?.textContent.includes('PRIVATE CONTACT A'));assert.match(modal(b).textContent,/PRIVATE CONTACT A/);assert.equal(writes(b).length,0);assert.deepEqual(b.errors,[])}finally{b.close()}}
  console.log('PASS CRM01 RU/AZ/EN contact service labels preserve customer content');
 })().catch(error=>{console.error(error.stack||error);process.exitCode=1});

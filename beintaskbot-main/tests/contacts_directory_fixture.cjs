@@ -48,13 +48,14 @@ async function reauthorize(b,change){change(b.f);await b.w.tenantRequestCoordina
 /* Controller-only boundary for a malformed legacy permission value. Other app
    consumers have independently recorded baseline exceptions for that shape;
    this test neither loads those modules nor waives any errors from this one. */
-async function controllerOnly(profile){
+async function controllerOnly(profile,config={}){
  const errors=[],calls=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));
+ const f={rows:config.rows||[],source:config.source||'native',holdNextBody:false,pendingBodies:[]};
  const dom=new JSDOM(fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8'),{url:'https://fixture.test/app?view=customers',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:vc});
  const w=dom.window;w.Headers=Headers;w.Response=Response;w.tenantI18n={language:'en'};w.tenantProfileSnapshot=profile;
  w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-customers'));
- w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href);calls.push({url:url.pathname+url.search,options});assert.equal(url.pathname,'/api/platform/crm/native/contacts');assert.equal(url.searchParams.get('listing'),'1');assert.equal(url.searchParams.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(url.searchParams.get('expected_user_id'),String(profile.member.telegram_id));return new Response(JSON.stringify({success:true,data:[],total:0,source_total:0,limit:50,offset:0,next_offset:null,source:'native',sources:[{source:'native',allowed:true,available:true,state:'ready'}],state:'empty',actions}),{headers:{'Content-Type':'application/json'}})};
+ w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href);calls.push({url:url.pathname+url.search,options});assert.equal(url.pathname,'/api/platform/crm/native/contacts');assert.equal(url.searchParams.get('listing'),'1');assert.equal(url.searchParams.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(url.searchParams.get('expected_user_id'),String(profile.member.telegram_id));const payload=JSON.stringify({success:true,data:clone(f.rows),total:f.rows.length,source_total:f.rows.length,limit:50,offset:0,next_offset:null,source:f.source,sources:[{source:'native',allowed:true,available:true,state:'ready'},{source:'kommo',allowed:true,available:true,state:'cached',historical:true}],state:f.rows.length?'ready':'empty',actions:f.source==='native'?actions:{view:true,create:false,update:false,archive:false}});if(f.holdNextBody){f.holdNextBody=false;return new Response(new ReadableStream({start(controller){f.pendingBodies.push(()=>{controller.enqueue(new TextEncoder().encode(payload));controller.close()})}}),{headers:{'Content-Type':'application/json'}})}return new Response(payload,{headers:{'Content-Type':'application/json'}})};
  w.eval(fs.readFileSync(path.join(docs,'tenant-contacts-directory.js'),'utf8'));await settle();
- return{w,d:w.document,errors,calls,close:()=>w.close()};
+ return{w,d:w.document,f,errors,calls,close:()=>w.close()};
 }
 module.exports={mount,native,external,actions,tenant,contactA,contactB,company,settle,until,directoryReads,writes,type,search,selectSource,formInput,reauthorize,controllerOnly};

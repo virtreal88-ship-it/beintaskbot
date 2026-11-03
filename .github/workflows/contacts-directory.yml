@@ -25,6 +25,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_crm_sync_ui.cjs'
       - 'beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs'
       - 'beintaskbot-main/tests/test_app_loading_performance.cjs'
+      - 'beintaskbot-main/tests/case-deeplink-smoke.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
   workflow_dispatch:
 permissions:
@@ -97,3 +98,4 @@ jobs:
           node tests/test_employee_card_ui.cjs
           node tests/test_notification_case_targets_ui.cjs
           node tests/test_operator_case_recovery_ui.cjs
+          node tests/case-deeplink-smoke.cjs
