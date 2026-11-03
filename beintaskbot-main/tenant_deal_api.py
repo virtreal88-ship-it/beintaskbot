@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aiohttp import web
+from tenant_crm_list_states import query as list_query,read as read_list,current_profile,CRMListError
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,22 @@ def _deal_access(context: DealApiContext, profile: dict | None) -> bool:
 
 
 def handlers(context: DealApiContext) -> dict[str, Callable]:
+    def list_error(exc):
+        return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
+                                 headers={'Cache-Control':'no-store','Vary':'Cookie'})
+
+    async def intent(request,profile,*,exact=False):
+        values=request.rel_url.query
+        if not any(key in values for key in ('listing','read','expected_tenant_id','expected_user_id')):
+            return profile,None
+        params=list_query(request,profile)
+        if (exact and params.get('listing')) or (not exact and params.get('read')):
+            raise CRMListError('crm_invalid_query')
+        if params.get('listing') and 'lead_id' in params:
+            raise CRMListError('crm_invalid_query')
+        if exact and not params.get('lead_id'):
+            raise CRMListError('crm_invalid_query')
+        return profile,params
     async def sync_status(request: web.Request) -> web.Response:
         profile = context.member(request)
         policy = context.policy(profile or {})
@@ -45,6 +62,23 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
 
     async def deals(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return list_error(CRMListError('crm_forbidden',403))
+        try:
+            profile,params=await intent(request,profile)
+            if params is not None:
+                refreshing=str(request.rel_url.query.get('refresh') or '').lower() in {'1','true','yes'}
+                if not refreshing:
+                    result=await asyncio.to_thread(read_list,profile,entity='deal',source='saved',
+                        search=params.get('search',''),pipeline_ids=params['pipeline_ids'],
+                        status_ids=params['status_ids'],limit=params.get('limit'),offset=params.get('offset',0))
+                    return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store','Vary':'Cookie'})
+                profile=await asyncio.to_thread(current_profile,profile)
+        except CRMListError as exc:
+            return list_error(exc)
+        except Exception:
+            context.logger.exception('CRM deal list read unavailable')
+            return list_error(CRMListError('crm_unavailable',503))
         if not _deal_access(context, profile):
             return web.json_response({"success": False, "error": "Sövdələşmələr üçün icazəniz yoxdur."}, status=403)
         should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
@@ -77,6 +111,18 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
 
     async def deal(request: web.Request) -> web.Response:
         profile = context.member(request)
+        if not profile:
+            return list_error(CRMListError('crm_forbidden',403))
+        try:
+            profile,params=await intent(request,profile,exact=True)
+            if params is not None:
+                result=await asyncio.to_thread(read_list,profile,entity='deal',source='saved',identifier=params['lead_id'])
+                return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store','Vary':'Cookie'})
+        except CRMListError as exc:
+            return list_error(exc)
+        except Exception:
+            context.logger.exception('CRM deal detail read unavailable')
+            return list_error(CRMListError('crm_unavailable',503))
         if not _deal_access(context, profile):
             return web.json_response({"success": False, "error": "Sövdələşmə üçün icazəniz yoxdur."}, status=403)
         try:

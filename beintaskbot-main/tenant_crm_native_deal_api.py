@@ -8,6 +8,7 @@ from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
 from tenant_crm_request_context import require_expected_context, CRMContextError, native_policy_profile
+from tenant_crm_list_states import query as list_query,read as read_list,CRMListError
 
 
 def _jsonable(value):
@@ -26,10 +27,23 @@ def handler(member_from_request,origin,logger):
         profile = native_policy_profile(profile)
         policy=TenantPolicy(profile)
         tenant_id=str(profile['tenant_id']); deal_id=request.match_info.get('id')
-        if deal_id:
-            try: UUID(deal_id)
-            except (TypeError,ValueError): return web.json_response({'success':False,'error':'invalid_id'},status=400)
         try:
+            if request.method=='GET' and any(key in request.query for key in ('listing','read','expected_tenant_id','expected_user_id')):
+                if not any(key in request.query for key in ('listing','read')):
+                    require_expected_context(request,profile)
+                params=list_query(request,profile)
+                if (params.get('listing') or params.get('read')) and 'lead_id' in params:
+                    raise CRMListError('crm_invalid_query')
+                if (params.get('listing') and deal_id) or (params.get('read') and not deal_id):
+                    raise CRMListError('crm_invalid_query')
+                if 'options' not in request.query:
+                    result=await asyncio.to_thread(read_list,profile,entity='deal',identifier=deal_id,
+                        search=params.get('search',''),limit=params.get('limit'),offset=params.get('offset',0),
+                        pipeline_ids=params['pipeline_ids'],status_ids=params['status_ids'])
+                    return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store','Vary':'Cookie'})
+            if deal_id:
+                try:UUID(deal_id)
+                except (TypeError,ValueError):return web.json_response({'success':False,'error':'invalid_id'},status=400)
             require_expected_context(request, profile)
             if request.method=='GET':
                 if not policy.allows_action('deals','view'):
@@ -59,6 +73,9 @@ def handler(member_from_request,origin,logger):
             except Exception:
                 logger.warning('CRM deal sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success':True,'deal':_jsonable(result)})
+        except CRMListError as exc:
+            return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
+                                     headers={'Cache-Control':'no-store','Vary':'Cookie'})
         except CRMContextError as exc:
             return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
                                      headers={'Cache-Control':'no-store','Vary':'Cookie'})
