@@ -24,6 +24,8 @@ PYTHONPATH=beintaskbot-main:experiments/copilot_realtime_adapter:experiments/voi
   test_linearization.Linearization.test_writer_started_before_L_cannot_commit_until_after_L \
   test_linearization.Linearization.test_legacy_source_then_budget_vs_dispatch_budget_then_epoch_deadlocks \
   test_linearization.Linearization.test_truncate_bypasses_row_triggers \
+  test_linearization.Linearization.test_zero_row_legacy_clear_does_not_invalidate \
+  test_linearization.Linearization.test_quote_can_expire_after_grant_check_before_commit \
   test_linearization.Linearization.test_uninstrumented_identity_source_does_not_increment_epoch
 ```
 
@@ -84,6 +86,25 @@ revision refer to the same version. This implementation rejects tenant moves,
 misses an illustrative owner identity table and does not intercept TRUNCATE;
 the latter two counterexamples are explicitly tested. They do not assert those
 operations occur in production.
+
+An independent review identified a particularly relevant current-writer gap:
+the legacy scoped thread clear can issue a DELETE when there is no row. No row
+trigger fires, so even an otherwise comprehensive row-trigger set cannot see
+that semantic clear; a stale intent can still be committed. The synthetic test
+reproduces this exact SQL shape. A durable scoped clear event/protocol with
+fleet-wide writer coverage is required; retain hard-off while old clear writers
+can execute.
+
+The intent stores a scope fingerprint and epoch, but **not** the exact
+authorized provider payload or its hash. A real protocol must bind and verify
+the exact immutable bytes before external transmission, including the initial
+context upload. Moreover the underlying grant checks its expiry before later
+locks and before commit. The synthetic expiry test deliberately pauses the
+transaction past expiry and shows it can still commit. Checking database time
+after locks is necessary for an eventual design, but a pause before commit or
+network can still cross a deadline; the permitted quote-validity instant and
+maximum queueing delay need an explicit enforceable contract. The PoC is not a
+production-ready admission, pricing or dispatch mechanism.
 
 The trigger ordering also has an observed synthetic deadlock: a writer holding
 the epoch and then acquiring the existing tenant budget advisory lock conflicts

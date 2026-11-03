@@ -1,6 +1,7 @@
 """Isolated PostgreSQL model; not a migration, not a live provider client."""
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -240,6 +241,28 @@ class Linearization(IntegratedSynthetic):
             conn.execute('TRUNCATE saas_crm_messages')
             after=conn.execute('SELECT epoch FROM experiment_epoch WHERE tenant_id=%s',(self.tenant,)).fetchone()['epoch']
         self.assertEqual(before,after)
+
+    def test_zero_row_legacy_clear_does_not_invalidate(self):
+        # A clear is semantically meaningful even when no row is present. The
+        # legacy DELETE can affect zero rows; row triggers cannot observe it.
+        with patch.object(grant,'ENFORCEMENT_VERIFIED',True),patch.object(grant,'RECONCILIATION_VERIFIED',True),patch.object(spend,'limit_microusd',return_value=0):
+            expected=self.snapshot();scope=self.scope()
+            with self.scoped() as conn:
+                cleared=conn.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s AND requested_by=%s AND channel_id=%s AND conversation_id=%s',
+                                     (self.tenant,7,self.channel,self.conversation))
+                self.assertEqual(cleared.rowcount,0)
+            self.assertEqual(self.dispatch(scope,expected),scope['request_id'])
+
+    def test_quote_can_expire_after_grant_check_before_commit(self):
+        # Illustrates a missing quote-expiry-at-commit boundary, not live spend.
+        scope=self.scope();expected=self.snapshot()
+        expiry=datetime.now(timezone.utc)+timedelta(seconds=1)
+        def delay(_pid):
+            remaining=(expiry-datetime.now(timezone.utc)).total_seconds()
+            if remaining>0:threading.Event().wait(remaining+0.05)
+        with patch.object(grant,'ENFORCEMENT_VERIFIED',True),patch.object(grant,'RECONCILIATION_VERIFIED',True),patch.object(spend,'limit_microusd',return_value=0),patch.object(grant,'EXPIRES',expiry):
+            self.assertEqual(self.dispatch(scope,expected,delay),scope['request_id'])
+        self.assertGreaterEqual(datetime.now(timezone.utc),expiry)
 
     def test_uninstrumented_identity_source_does_not_increment_epoch(self):
         # Existing route-conflict code can read owner identity assertions;
