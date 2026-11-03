@@ -225,6 +225,24 @@ class WireBudgetTests(base.BoundSenderTests):
                 fake.assert_not_called()
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'opening')
         asyncio.run(run())
+    def test_caller_scope_mutation_after_open_commit_does_not_rebind_socket(self):
+        async def run():
+            s=session_tests.scope();original_scope=copy.deepcopy(s);self.call(budget.reserve_session,s)
+            committed=threading.Event();release=threading.Event();original=integration._consume_open
+            def pause(*args):
+                result=original(*args);committed.set()
+                if not release.wait(5):raise RuntimeError('test_timeout')
+                return result
+            with patch.object(integration,'_consume_open',pause):
+                task=asyncio.create_task(integration.connect_synthetic(self.dsn,s,Guard()))
+                self.assertTrue(await asyncio.to_thread(committed.wait,3))
+                s['actor_id']+=1;s['source_fingerprint']='b'*64;release.set()
+                wire=await task
+            await wire.open(SNAPSHOT,**OPTIONS)
+            with local_connect(self.dsn) as conn:
+                rows=conn.execute('SELECT scope_fingerprint FROM saas_voice_bound_sender_receipt').fetchall()
+                self.assertEqual({r['scope_fingerprint'] for r in rows},{budget._fingerprint(original_scope)})
+        asyncio.run(run())
     def test_unsafe_provider_ack_never_sends_context_and_marks_uncertain(self):
         async def run():
             s=session_tests.scope();self.call(budget.reserve_session,s)

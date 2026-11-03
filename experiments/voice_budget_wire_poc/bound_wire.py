@@ -164,6 +164,9 @@ def _consume_open(dsn,scope):
 
 async def connect_synthetic(dsn,scope,guard):
     if ENABLED_SYNTHETIC is not True:raise ValueError('wire_integration_disabled')
+    # Detach scope before first await; caller mutation cannot make the future
+    # socket represent a different identity than the durable opening hold.
+    scope=budget._scope(json.loads(json.dumps(scope,allow_nan=False)))
     # Session hold and one-use open transition must commit before *creating*
     # even this fake socket; duplicate or uncertain open never reconnects.
     issued=await asyncio.to_thread(_consume_open,dsn,scope)
