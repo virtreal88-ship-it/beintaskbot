@@ -93,10 +93,15 @@ These remain release blockers.
 
 `voice_test_grant.sql` is a **one-shot review artifact**, not integrated in the
 repository migration runner. A second application fails rather than being
-idempotent. Its added `dispatching` state needs an explicitly versioned upgrade
-for any existing schema; the v1 CHECK constraint does not admit it. Version
-handling, partial migration recovery, migration review,
-privilege boundaries and safe deployment/rollback remain release blockers.
+idempotent. `migration_dispatch_v2.sql` is a separate candidate versioned,
+transactional, idempotent upgrade for exactly known v1/v2 CHECK definitions;
+it rejects an unknown or inconsistent schema and never edits existing rows.
+`rollback_dispatch_v1.sql` rejects enabled grant, incomplete holds and installed
+provenance, requires externally verified upstream shutdown, and preserves rows.
+Its safety is not proof that old/new workers are compatible. A hardcoded
+constraint representation can differ on other PostgreSQL versions, where it
+will deliberately refuse. Migration runner integration, real permissions,
+partial deployment recovery, review, and cutover remain release blockers.
 Do not run it in production. Existing tenant budget code is not modified.
 Tests temporarily patch the code gate and enable only a disposable test DB.
 
