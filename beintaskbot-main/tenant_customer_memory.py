@@ -142,11 +142,13 @@ def add_fact(profile,contact,data):
         raise TenantLinearError('Invalid fact.',400)
     if data['category'] not in _CATEGORIES or data['source_kind'] not in _SOURCE_KINDS or data['reliability'] not in _STATUSES:
         raise TenantLinearError('Invalid fact.',400)
-    value=_text(data['value']); fact=identifier(data['request_id'])
+    value=_text(data['value']); request_id=identifier(data['request_id'])
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=_guard(cur,profile,'update'); contact=_subject(cur,tenant,contact)
+            # Client request identifiers never address another tenant's primary key.
+            fact=str(uuid.uuid5(uuid.UUID(tenant),request_id))
             link=_link(cur,tenant,policy,contact,data['link_id'],lock='UPDATE')
             source,source_version=_source(cur,tenant,link,data['source_message_id'])
             raw=source.get('raw') if isinstance(source.get('raw'),dict) else {}
@@ -193,7 +195,7 @@ def read(profile,contact):
             tenant,_,policy=_guard(cur,profile,'view');contact=_subject(cur,tenant,contact)
             cur.execute('''SELECT id FROM saas_customer_memory_links WHERE tenant_id=%s::uuid
               AND contact_id=%s::uuid AND state='confirmed' ORDER BY id''',(tenant,contact))
-            candidates=cur.fetchall(); links=[]; facts=[]
+            candidates=cur.fetchall(); links=[]; facts=[]; scanned=0
             for candidate in candidates:
                 try:
                     link=_link(cur,tenant,policy,contact,str(candidate['id']))
@@ -202,11 +204,13 @@ def read(profile,contact):
                 if len(links) >= 50: break
                 links.append({'id':str(link['id']),'version':link['version'],
                               'channel_id':str(link['channel_id']),'conversation_id':link['conversation_id']})
+                if scanned >= 100: continue
                 cur.execute('''SELECT * FROM saas_customer_memory_facts WHERE tenant_id=%s::uuid
                   AND contact_id=%s::uuid AND link_id=%s::uuid ORDER BY updated_at DESC,id LIMIT 50''',
                   (tenant,contact,str(link['id'])))
                 for fact in cur.fetchall():
-                    if len(facts) >= 50: break
+                    if len(facts) >= 50 or scanned >= 100: break
+                    scanned+=1
                     if fact['link_version']!=link['version']: continue
                     try: _,version=_source(cur,tenant,link,str(fact['source_message_id']))
                     except TenantLinearError: continue

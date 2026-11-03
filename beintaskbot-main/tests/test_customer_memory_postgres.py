@@ -143,6 +143,8 @@ class CustomerMemoryPostgresTests(unittest.TestCase):
                 payload={'action':'confirm_link','channel_id':self.channel,'conversation_id':self.jid,'confirm':True}
                 response=await client.post(path,json=payload)
                 self.assertEqual(response.status,403)
+                response=await client.post(path,data='x'*20001,headers={'Origin':'https://example.test','Content-Type':'application/json'})
+                self.assertEqual(response.status,413)
                 response=await client.post(path,json=payload,headers={'Origin':'https://example.test'})
                 self.assertEqual(response.status,200)
                 with _connect() as conn:
