@@ -75,5 +75,6 @@ class TranscriptDraft:
                 turn=self.items[item]
                 turn.update(text=state['text'],transcript_status='complete',transcript_quality='automatic_unverified')
                 self.playback_evidence[turn['turn_sequence']]='device_playback_complete'
+            state['text']=None
         entries=[dict(turn) for turn in self.turns]
         return _validated_entries(self.binding,entries) if entries else []
