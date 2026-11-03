@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import Mock, patch
@@ -39,6 +40,21 @@ class VoiceHttp(unittest.IsolatedAsyncioTestCase):
         self.check.side_effect=TenantLinearError('Нет доступа.',403)
         response=await self.client.post('/preflight',headers=self.headers,json=self.body)
         self.assertEqual(response.status,403)
+
+    async def test_chunked_oversize_rejected_before_authority(self):
+        async def body():
+            for _ in range(10):yield b'x'*1024
+        response=await self.client.post('/preflight',headers={**self.headers,'Content-Type':'application/json'},data=body())
+        self.assertEqual(response.status,413);self.check.assert_not_called()
+
+    async def test_conflicting_content_length_and_chunked_is_rejected(self):
+        reader,writer=await asyncio.open_connection(self.client.server.host,self.client.server.port)
+        try:
+            writer.write(b'POST /preflight HTTP/1.1\r\nHost: localhost\r\nOrigin: https://crm.pro.az\r\nX-Synthetic-Login: yes\r\nContent-Type: application/json\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n')
+            await writer.drain();status=await asyncio.wait_for(reader.readline(),2)
+            self.assertIn(b'400',status);self.check.assert_not_called()
+        finally:
+            writer.close();await writer.wait_closed()
 
     async def test_websocket_never_upgrades_and_has_no_provider(self):
         response=await self.client.get('/ws?expected_tenant_id=tenant-synthetic&expected_user_id=7',headers={**self.headers,
