@@ -3,6 +3,7 @@
 Authenticating and constructing the real Copilot dependencies remain explicit
 injected server responsibilities. This file contains no credential or provider.
 """
+import asyncio
 import base64
 import json
 import time
@@ -15,10 +16,13 @@ class SocketClient:
         if event.get('type') == 'audio':
             event={'type':'audio','item_id':event['item_id'],
                    'pcm_base64':base64.b64encode(event['pcm']).decode('ascii')}
-        if not self.ws.closed:
-            await self.ws.send_json(event)
-            if event.get('type')=='ended':
-                await self.ws.close()
+        if self.ws.closed:
+            if event.get('type') == 'ended':
+                return  # already disconnected; no client notification possible
+            raise ConnectionError('voice_socket_closed')
+        await self.ws.send_json(event)
+        if event.get('type')=='ended':
+            await self.ws.close()
 
 
 def make_handler(*, allowed_origins, authenticate, build_session):
@@ -43,17 +47,32 @@ def make_handler(*, allowed_origins, authenticate, build_session):
             raise web.HTTPBadRequest()
         await ws.prepare(request)
         session=None
-        count=0
-        window=time.monotonic()
+        reader=None
+        incoming=asyncio.Queue(maxsize=60)
         try:
             session=build_session(scope, SocketClient(ws))
+            async def read_frames():
+                count=0;window=time.monotonic()
+                try:
+                    async for message in ws:
+                        now=time.monotonic()
+                        if now-window>=1:count=0;window=now
+                        count+=1
+                        if count>60 or session._opening or session.closed or incoming.full():
+                            break
+                        incoming.put_nowait(message)
+                finally:
+                    await session.end('disconnected')
+                    await ws.close()
+                    while incoming.full(): incoming.get_nowait()
+                    incoming.put_nowait(None)
+            # A dedicated single reader detects disconnect even while open is
+            # pending; client frames before ready cause a fail-closed stop.
+            reader=asyncio.create_task(read_frames())
             await session.start()
-            async for message in ws:
-                now=time.monotonic()
-                if now-window>=1:
-                    count=0;window=now
-                count+=1
-                if count>60:
+            while True:
+                message=await incoming.get()
+                if message is None:
                     break
                 if message.type == WSMsgType.BINARY:
                     await session.receive_client({'type':'audio','pcm':bytes(message.data)})
@@ -78,5 +97,8 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     await session.end('disconnected')
             finally:
                 await ws.close()
+                if reader is not None:
+                    reader.cancel()
+                    await asyncio.gather(reader, return_exceptions=True)
         return ws
     return handler
