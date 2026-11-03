@@ -61,13 +61,14 @@
     session.check.hidden=!receipt||receipt.state!=='unknown';
     for(const [button,outcome] of session.manualButtons||[]){button.hidden=!receipt||receipt.state!=='unknown';button.disabled=!!session.busy||!!session.saving;button.dataset.manualOutcome=outcome;}
     for(const node of [session.mic,session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check]) node.disabled=!!session.busy||!!session.saving;
-    session.audio.hidden=!entry?.blob;
-    if(entry?.blob && session.renderedId!==entry.request_id){
+    const playback=entry?.blob?entry:receipt?.blob?receipt:null;
+    session.audio.hidden=!playback;
+    if(playback?.blob && session.renderedId!==playback.request_id){
       if(session.url)URL.revokeObjectURL(session.url);
-      session.url=URL.createObjectURL(entry.blob);session.audio.src=session.url;session.renderedId=entry.request_id;
+      session.url=URL.createObjectURL(playback.blob);session.audio.src=session.url;session.renderedId=playback.request_id;
     }
-    if(!entry?.blob && session.url){URL.revokeObjectURL(session.url);session.url='';session.audio.removeAttribute('src');session.renderedId='';}
-    session.duration.textContent=entry?duration(entry.durationMs):snap.state==='recording'?duration(snap.durationMs):'';
+    if(!playback && session.url){URL.revokeObjectURL(session.url);session.url='';session.audio.removeAttribute('src');session.renderedId='';}
+    session.duration.textContent=entry?duration(entry.durationMs):receipt?duration(receipt.durationMs):snap.state==='recording'?duration(snap.durationMs):'';
     session.status.textContent=session.message || (session.saving?text('saving'):snap.state==='requesting'?text('requesting'):
       snap.state==='recording'?text('recording'):entry?.state==='draft'?text('draft'):receipt?.manualConfirmation?.outcome?text('manualValue_'+receipt.manualConfirmation.outcome):receipt?.state==='unknown'?text('unknown'):
       receipt?.state==='accepted'?text(receipt.deliveryState==='read'?'read':receipt.deliveryState==='delivered'?'delivered':'accepted'):'');
