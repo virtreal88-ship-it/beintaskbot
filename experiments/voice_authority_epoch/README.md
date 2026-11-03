@@ -129,3 +129,12 @@ python -m unittest -v test_epoch_pg.EpochLeasePostgres
 This class includes the inherited lease and authorization regressions.
 Some tests intentionally **reproduce failures**. A green result is evidence the
 counterexample occurred, not evidence of safe external delivery or rollout.
+
+An independent reviewer tested exact code commit
+`e4ad377f99d4c101c98694a122b83b2372744ef1` on disposable PostgreSQL:
+40/40 epoch-class tests, 34/34 base lease tests (these sets overlap), and
+3/3 additional barrier tests using real `ScopedAuthority.check`/`voice.check`
+with synthetic data and a mock provider. Those three tests are preserved in
+`independent_review_test.py`: one confirms the pre-claim snapshot check, while
+two intentionally reproduce the post-claim and split-reader gaps. This record
+does not claim that those gaps were fixed or that production was tested.
