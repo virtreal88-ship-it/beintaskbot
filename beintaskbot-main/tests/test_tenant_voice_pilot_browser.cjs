@@ -70,7 +70,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   await new Promise(resolve=>{const timer=setInterval(()=>{if(released){clearInterval(timer);resolve();}},0);});
   return{idle,text:root.querySelector('[role=status]').textContent,disabled:root.querySelector('button').disabled,released,closed,connections};
  });
- assert.deepEqual(startup.idle,{text:'Голосовой режим выключен',disabled:false,released:0,connections:0});
+ assert.deepEqual(startup.idle,{text:'Голосовой разговор не начат',disabled:false,released:0,connections:0});
  assert.equal(startup.text,'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.');
  assert.equal(startup.disabled,false);assert.equal(startup.released,1);assert.equal(startup.connections,0);
  await lifecyclePage.close();
