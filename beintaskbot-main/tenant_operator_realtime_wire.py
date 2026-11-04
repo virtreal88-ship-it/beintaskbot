@@ -224,15 +224,24 @@ class _RealtimeWire:
         try:
             if event['type']!='session.updated':raise ValueError()
             s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
-            good=(s['id']==session_id and s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
-              and s['tool_choice']=='none' and s['max_output_tokens']==OUTPUT_LIMIT and s['instructions']==expected['instructions']
-              and incoming['format']=={'type':'audio/pcm','rate':24000}
-              and incoming['transcription']=={'model':'gpt-transcribe','languages':['ru','az']}
-              and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is False
-              and vad['idle_timeout_ms'] is None
-              and set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'}
-              and audio['output']['format']=={'type':'audio/pcm','rate':24000})
-            if not good:raise ValueError()
+            checks={
+              'id':s.get('id')==session_id,'type':s.get('type')=='realtime','model':s.get('model')==MODEL,
+              'output_modalities':s.get('output_modalities')==['audio'],'tools':s.get('tools')==[],
+              'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
+              'instructions':s.get('instructions')==expected['instructions'],
+              'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
+              'audio.input.transcription':incoming.get('transcription')=={'model':'gpt-transcribe','languages':['ru','az']},
+              'audio.input.turn_detection.type':vad.get('type')=='server_vad',
+              'audio.input.turn_detection.create_response':vad.get('create_response') is False,
+              'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is False,
+              'audio.input.turn_detection.idle_timeout_ms':vad.get('idle_timeout_ms') is None,
+              'audio.input.turn_detection.fields':set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'},
+              'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
+            }
+            mismatch=[name for name,valid in checks.items() if not valid]
+            if mismatch:
+                _LOG.warning('realtime_session_readback_mismatch fields=%s',','.join(mismatch))
+                raise ValueError()
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
 
     async def bind_claim(self,scope,receipt):
