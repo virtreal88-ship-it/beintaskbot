@@ -1,21 +1,25 @@
-/* Experimental view/controller. Not registered in /app or connected to a server. */
+/* Voice controls; callers must complete server preflight before mounting. */
 (function(root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountExperimentalCopilotVoice = factory;
-})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document}) {
+})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
+  const catalog={ru:{off:'Голосовой режим выключен',start:'Начать голосовой разговор',mute:'Выключить микрофон',unmute:'Включить микрофон',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Отключаем микрофон…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Слушаю',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
+    az:{off:'Səs rejimi söndürülüb',start:'Səsli söhbətə başla',mute:'Mikrofonu söndür',unmute:'Mikrofonu aç',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Mikrofon söndürülür…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Dinləyirəm',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
+  const labels=catalog[language]||catalog.ru;
   const document = root.ownerDocument;
-  const status = document.createElement('p'); status.setAttribute('role','status'); status.textContent='Голосовой режим выключен';
-  const start = document.createElement('button'); start.type='button';start.textContent='Начать голосовой разговор';
-  const mute = document.createElement('button'); mute.type='button';mute.textContent='Выключить микрофон';mute.hidden=true;
-  const end = document.createElement('button'); end.type='button';end.textContent='Завершить разговор';end.hidden=true;
+  const status = document.createElement('p'); status.setAttribute('role','status'); status.textContent=labels.off;
+  const start = document.createElement('button'); start.type='button';start.textContent=labels.start;
+  const mute = document.createElement('button'); mute.type='button';mute.textContent=labels.mute;mute.hidden=true;
+  const end = document.createElement('button'); end.type='button';end.textContent=labels.end;end.hidden=true;
   root.append(status,start,mute,end);
   let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0;
-  const uncertain='Завершение разговора не подтверждено; текстовый чат доступен.';
-  const playbackFailure='Ошибка воспроизведения. '+uncertain;
-  const microphoneUncertain='Не удалось подтвердить отключение микрофона. Текстовый чат доступен.';
+  const uncertain=labels.uncertain;
+  const playbackFailure=labels.playback+uncertain;
+  const microphoneUncertain=labels.microphone;
+  function idle(){if(!running && !ending && cleanupPending===0){try{onIdle();}catch(_){}}}
   function send(event){
     if(!channel)return;
     const version=generation;
@@ -49,19 +53,21 @@
     })().then(()=>{
       cleanupPending--;start.disabled=voiceBlocked || cleanupPending>0;
       if(!destroyed && !voiceBlocked && cleanupPending===0 && generation===stopVersion)
-        status.textContent=reason==='ended'?'Разговор завершён':reason;
+        status.textContent=reason==='ended'?labels.ended:reason;
+      idle();
     }).catch(()=>{
       cleanupPending--;
       voiceBlocked=true;start.disabled=true;
       if(!destroyed)status.textContent=microphoneUncertain;
+      idle();
     });
-    muted=false;mute.textContent='Выключить микрофон';
-    if(!destroyed) status.textContent=voiceBlocked?reason:'Отключаем микрофон…';
+    muted=false;mute.textContent=labels.mute;
+    if(!destroyed) status.textContent=voiceBlocked?reason:labels.disconnecting;
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
   async function begin() {
     if(running || destroyed || voiceBlocked || cleanupPending>0)return;
-    running=true;start.disabled=true;end.hidden=false;status.textContent='Подключение…';
+    running=true;start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
     const version=++generation;
     try {
       const held=await acquireMicrophone();
@@ -78,7 +84,7 @@
         if(version!==generation)return;
         if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
-          if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent='AI отвечает';}
+          if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent=labels.responding;}
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});
@@ -87,38 +93,40 @@
           else if(event.type==='interrupt'){
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});
-            status.textContent='Слушаю';
-          } else if(event.type==='ready')status.textContent='Слушаю';
-          else if(event.type==='ended')await stop('Соединение завершено',true);
+            status.textContent=labels.listening;
+          } else if(event.type==='ready')status.textContent=labels.listening;
+          else if(event.type==='ended')await stop(labels.connectionEnded,true);
           else if(event.type==='end_unconfirmed')await stop(uncertain);
         } catch (_) { await stop(playbackFailure); }
       });
       if(version!==generation){await socket.close();return;}
-      channel=socket;mute.hidden=false;status.textContent='Слушаю';
+      channel=socket;mute.hidden=false;status.textContent=labels.listening;
     } catch(error) {
       if(version!==generation)return;
       const code=error?.message==='microphone_stop_unconfirmed'?microphoneUncertain:
-        error?.name==='NotAllowedError'?'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.':
-        error?.message==='microphone_busy'?'Микрофон уже используется в другом режиме.':
-        'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.';
+        error?.name==='NotAllowedError'?labels.denied:
+        error?.message==='microphone_busy'?labels.busy:
+        labels.failed;
       await stop(code,false,error?.message==='microphone_stop_unconfirmed');
     }
   }
   start.addEventListener('click',begin);
-  end.addEventListener('click',()=>{
+  function finish(){
     if(!channel){void stop(uncertain);return;}
     try{audio?.stopNow?.();}catch(_){}
-    muted=true;ending=true;end.disabled=true;status.textContent='Завершение разговора…';
+    muted=true;ending=true;end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
     send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
-  });
+  }
+  end.addEventListener('click',finish);
   mute.addEventListener('click',()=>{
     if(!audio||!channel)return;
     muted=!muted;audio.mute(muted);send({type:'mute',muted});
-    mute.textContent=muted?'Включить микрофон':'Выключить микрофон';
-    status.textContent=muted?'Микрофон выключен':'Слушаю';
+    mute.textContent=muted?labels.unmute:labels.mute;
+    status.textContent=muted?labels.muted:labels.listening;
   });
   const hide=()=>{if(lifecycle?.visibilityState==='hidden')void stop(uncertain);};
   lifecycle?.addEventListener?.('visibilitychange',hide);
-  return {start:begin,stop,destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);await stop();root.replaceChildren();}};
+  return {start:begin,stop,end:finish,isActive:()=>running||ending||cleanupPending>0,
+          destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);await stop();root.replaceChildren();}};
 });

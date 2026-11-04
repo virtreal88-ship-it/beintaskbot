@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import uuid
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect
@@ -18,6 +19,21 @@ from tenant_operator_realtime_wire import create_production_provider
 from tenant_assigned_agent_prompt import assigned_guidance
 
 _EXECUTOR='copilot-voice-server'
+
+
+def require_pilot(scope):
+    """Admit exactly one server-configured tenant and actor; unset means off."""
+    tenant=os.environ.get('COPILOT_VOICE_PILOT_TENANT_ID','')
+    actor=os.environ.get('COPILOT_VOICE_PILOT_ACTOR_ID','')
+    try:
+        if str(uuid.UUID(tenant))!=tenant or not actor.isascii() or not actor.isdecimal() or actor.startswith('0'):
+            raise ValueError()
+        actor_id=int(actor)
+        if not 1<=actor_id<2**63:raise ValueError()
+    except (ValueError,TypeError,AttributeError):
+        raise TenantLinearError('Голосовой режим пока недоступен.',503) from None
+    if scope.tenant!=tenant or type(scope.actor) is not int or scope.actor!=actor_id:
+        raise TenantLinearError('Голосовой режим недоступен.',403)
 
 
 def require_voice_budget_ready():
@@ -42,15 +58,18 @@ class ScopedAuthority:
             raise TenantLinearError('Нет доступа.',403)
         profile=dict(profile);route=dict(route)
         scope=await asyncio.to_thread(voice.check,profile,route)
+        require_pilot(scope)
         return cls(profile,route,scope)
 
     def recheck(self,cur):
+        require_pilot(self.scope)
         actual=voice.authorize(cur,self.profile,self.route)
         if actual!=self.scope:raise TenantLinearError('Доступ или настройки изменились.',409)
         return actual
 
     async def check(self,session_scope,_stage):
         if session_scope!=self.session_scope:raise TenantLinearError('Диалог недоступен.',403)
+        require_pilot(self.scope)
         await asyncio.to_thread(voice.check,self.profile,self.route,expected=self.scope)
 
 
@@ -99,6 +118,19 @@ class CopilotContext:
 class ScopedBudget:
     def __init__(self,authority,session_id):
         self.authority=authority;self.session_id=session_id
+
+    async def reserve_session(self,scope,session_id):
+        if scope!=self.authority.session_scope or session_id!=self.session_id:
+            raise TenantLinearError('Область бюджета не совпадает.',403)
+        return await asyncio.to_thread(self._reserve_session,scope,session_id)
+
+    def _reserve_session(self,scope,session_id):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                self.authority.recheck(cur)
+                receipt=grant.reserve_session(cur,scope,session_id)
+            # The connection context commits before a receipt reaches Session.
+        return receipt
 
     def _check_scope(self,item):
         s=self.authority.scope

@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const openAudio=require('./audio.js');
+const openAudio=require('../../beintaskbot-main/docs/tenant-copilot-voice-audio.js');
 
 function fixture({badDisconnect=false,failTrack=false,badRate=false}={}){
   let first=0,second=0;

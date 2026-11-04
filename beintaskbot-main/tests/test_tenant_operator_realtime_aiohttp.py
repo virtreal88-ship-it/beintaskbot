@@ -153,6 +153,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def assert_current(self,*_):assert self.held
             async def release(self,*_):self.held=False;return True
         class Ledger:
+            async def reserve_session(self,scope,session_id):
+                return {'state':'reserved','scope':scope,'session_id':session_id,'reserved_microusd':5_000_000}
             async def reserve(self,s):return {**s,'state':'reserved','reserved_microusd':MINIMUM_HOLD}
             async def claim(self,s):
                 return {**s,'state':'claimed','reserved_microusd':MINIMUM_HOLD,'model':MODEL,'quote_version':QUOTE,
@@ -297,6 +299,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def release(self,*_):self.held=False;return True
         class Ledger:
             events=[]
+            async def reserve_session(self,scope,session_id):
+                return {'state':'reserved','scope':scope,'session_id':session_id,'reserved_microusd':5_000_000}
             async def reserve(self,s):
                 self.events.append('reserve');return {**s,'state':'reserved','reserved_microusd':MINIMUM_HOLD}
             async def claim(self,s):

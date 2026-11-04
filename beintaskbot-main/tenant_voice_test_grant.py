@@ -76,6 +76,61 @@ def _lock(cur):
         raise TenantLinearError('voice_test_grant_disabled_or_frozen',409)
 
 
+def _session_scope(scope, session_id):
+    if not isinstance(scope,tuple) or len(scope)!=4:
+        raise TenantLinearError('voice_test_session_scope_invalid',409)
+    tenant,actor,channel,conversation=scope
+    data=_scope({'request_id':session_id,'session_id':session_id,'tenant_id':tenant,
+                 'actor_id':actor,'channel_id':channel,'conversation_id':conversation,
+                 'response_number':1,'executor':'copilot-voice-server'})
+    if scope!=(data['tenant_id'],data['actor_id'],data['channel_id'],data['conversation_id']) or session_id!=data['session_id']:
+        raise TenantLinearError('voice_test_session_scope_invalid',409)
+    return data
+
+
+def _require_session_escrow(cur, s):
+    cur.execute('''SELECT session_id::text AS session_id,fingerprint,reserved_microusd,state
+      FROM saas_voice_test_session_escrow WHERE grant_key=%s FOR UPDATE''',(GRANT_KEY,))
+    row=cur.fetchone()
+    if (not row or row.get('session_id')!=s['session_id'] or row.get('fingerprint')!=_session_fingerprint(s)
+        or row.get('reserved_microusd')!=CAP or row.get('state')!='reserved'):
+        raise TenantLinearError('voice_test_session_escrow_unavailable',409)
+
+
+def reserve_session(cur, scope, session_id):
+    """Conservatively reserve the whole pilot cap under the shared grant lock.
+
+    The caller must reauthorize and commit before provider I/O. This escrow is
+    never automatically released; a verified session cost bound and settlement
+    path and integration with the existing tenant cap are still prerequisites
+    for enabling live admission. This bookkeeping does not bound provider usage.
+    """
+    _ready();s=_session_scope(scope,session_id);_lock(cur)
+    if datetime.now(timezone.utc)>=EXPIRES:raise TenantLinearError('voice_test_quote_expired',409)
+    return _reserve_session_locked(cur,scope,session_id,s)
+
+
+def _reserve_session_locked(cur,scope,session_id,s):
+    # Caller must hold the shared grant row lock in the same transaction.
+    cur.execute('''SELECT session_id::text AS session_id,fingerprint,reserved_microusd,state
+      FROM saas_voice_test_session_escrow WHERE grant_key=%s FOR UPDATE''',(GRANT_KEY,))
+    previous=cur.fetchone()
+    fingerprint=_session_fingerprint(s)
+    if previous:
+        # A commit followed by a lost response leaves the provider outcome
+        # unknown. Never turn a retry into permission to open it again.
+        raise TenantLinearError('voice_test_session_escrow_unavailable',409)
+    else:
+        cur.execute(_GLOBAL_USAGE_SQL)
+        row=cur.fetchone()
+        if not row or row.get('used')!=0:
+            raise TenantLinearError('voice_test_budget_exhausted',429)
+        cur.execute('''INSERT INTO saas_voice_test_session_escrow
+          (grant_key,session_id,fingerprint,reserved_microusd,state) VALUES(%s,%s::uuid,%s,%s,'reserved')''',
+          (GRANT_KEY,session_id,fingerprint,CAP))
+    return {'state':'reserved','scope':scope,'session_id':session_id,'reserved_microusd':CAP}
+
+
 def reserve(cur, scope):
     """Reserve global + tenant budget atomically in caller's transaction.
 
@@ -85,6 +140,7 @@ def reserve(cur, scope):
     """
     _ready();s=_scope(scope);_lock(cur)
     if datetime.now(timezone.utc)>=EXPIRES: raise TenantLinearError('voice_test_quote_expired',409)
+    _require_session_escrow(cur,s)
     fp=_fingerprint(s)
     session_fp=_session_fingerprint(s)
     cur.execute('''INSERT INTO saas_voice_test_session(session_id,tenant_id,actor_id,channel_id,conversation_id,executor,fingerprint)
@@ -134,6 +190,7 @@ def claim(cur,scope):
     """
     _ready();s=_scope(scope);_lock(cur)
     if datetime.now(timezone.utc)>=EXPIRES: raise TenantLinearError('voice_test_quote_expired',409)
+    _require_session_escrow(cur,s)
     cur.execute('SELECT * FROM saas_voice_test_hold WHERE request_id=%s AND fingerprint=%s FOR UPDATE',
                 (s['request_id'],_fingerprint(s)))
     row=cur.fetchone()
@@ -181,6 +238,7 @@ def issue_dispatch(cur,scope):
     """
     _ready();s=_scope(scope);_lock(cur)
     if datetime.now(timezone.utc)>=EXPIRES:raise TenantLinearError('voice_test_quote_expired',409)
+    _require_session_escrow(cur,s)
     cur.execute('''SELECT * FROM saas_voice_test_hold WHERE request_id=%s AND fingerprint=%s FOR UPDATE''',
                 (s['request_id'],_fingerprint(s)))
     row=cur.fetchone()

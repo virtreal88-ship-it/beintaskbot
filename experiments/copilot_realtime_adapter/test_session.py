@@ -13,6 +13,8 @@ class Authority:
 
 class Ledger:
     def __init__(self): self.events=[]; self.deny=False
+    async def reserve_session(self,scope,session_id):
+        return {'state':'reserved','scope':scope,'session_id':session_id,'reserved_microusd':5_000_000}
     async def reserve(self, scope):
         if self.deny: raise Refused('budget')
         self.events.append(('reserve', scope.copy()))
@@ -83,6 +85,27 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.start()
 
     async def asyncTearDown(self): await self.session.end('test_end')
+
+    async def test_missing_session_budget_never_opens_provider_and_releases_lease(self):
+        class NoSessionBudget(Ledger):
+            async def reserve_session(self,scope,session_id):raise Refused('budget_unavailable')
+        ledger=NoSessionBudget();provider=Provider(ledger);lease=Lease()
+        session=Session(('tenant',42,'channel','another'),authority=Authority(),ledger=ledger,lease=lease,
+                        context=Context(),provider=provider,client=Client())
+        with self.assertRaisesRegex(Refused,'budget_unavailable'):await session.start()
+        self.assertIsNone(provider.config)
+        self.assertFalse(lease.held)
+
+    async def test_unmatched_session_budget_never_opens_provider(self):
+        class WrongSessionBudget(Ledger):
+            async def reserve_session(self,scope,session_id):
+                return {'state':'reserved','scope':scope,'session_id':'other','reserved_microusd':5_000_000}
+        ledger=WrongSessionBudget();provider=Provider(ledger);lease=Lease()
+        session=Session(('tenant',42,'channel','another'),authority=Authority(),ledger=ledger,lease=lease,
+                        context=Context(),provider=provider,client=Client())
+        with self.assertRaisesRegex(Refused,'session_budget_unconfirmed'):await session.start()
+        self.assertIsNone(provider.config)
+        self.assertFalse(lease.held)
 
     async def turn(self):
         self.input_id+=1

@@ -1,18 +1,28 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const mount=require('./browser.js');
+const mount=require('../../beintaskbot-main/docs/tenant-copilot-voice-controller.js');
 
-function setup({open,connectOverride}={}){
+function setup({open,connectOverride,language}={}){
   const lifecycle={visibilityState:'visible',listeners:{},addEventListener(k,v){this.listeners[k]=v;},removeEventListener(k){delete this.listeners[k];}};
   const document={createElement(){return {hidden:false,textContent:'',disabled:false,handlers:{},setAttribute(){},addEventListener(k,f){this.handlers[k]=f;}};}};
   const root={ownerDocument:document,children:[],append(...xs){this.children.push(...xs);},replaceChildren(){this.children=[];}};
   let released=0,closed=0,channelClosed=0,cb;
   const sent=[],heard=[];
   const audio={play:(id,data)=>heard.push([id,data]),interrupt:()=>0,mute:()=>{},close:async()=>{closed++;}};
-  const view=mount(root,{lifecycle,acquireMicrophone:async()=>()=>{released++;},openAudio:open|| (async()=>audio),
+  const view=mount(root,{language,lifecycle,acquireMicrophone:async()=>()=>{released++;},openAudio:open|| (async()=>audio),
     connect:connectOverride|| (async onEvent=>{cb=onEvent;return {send:e=>sent.push(e),close:async()=>{channelClosed++;}};})});
   return {view,root,lifecycle,sent,heard,audio,emit:e=>cb(e),released:()=>released,closed:()=>closed,channelClosed:()=>channelClosed};
 }
+
+test('Azerbaijani controls show listening, mute, and normal end states',async()=>{
+  const x=setup({language:'az'});
+  assert.equal(x.root.children[1].textContent,'Səsli söhbətə başla');
+  await x.view.start();assert.equal(x.root.children[0].textContent,'Dinləyirəm');
+  x.root.children[2].handlers.click();assert.equal(x.root.children[2].textContent,'Mikrofonu aç');
+  await x.emit({type:'ended'});
+  assert.equal(x.root.children[0].textContent,'Bağlantı bitdi');
+  assert.equal(x.released(),1);
+});
 
 test('controls open, mute, interrupt and release audio and shared lease',async()=>{
   const x=setup();await x.view.start();assert.match(x.root.children[0].textContent,/Слушаю/);
