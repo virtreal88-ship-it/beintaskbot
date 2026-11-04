@@ -7,12 +7,17 @@ connection is possible without explicitly injected dependencies.
 import asyncio
 import base64
 import binascii
+import logging
+import re
 import time
 import uuid
 
 
 class Refused(Exception):
     pass
+
+
+_LOG=logging.getLogger(__name__)
 
 
 class Session:
@@ -646,6 +651,8 @@ class Session:
         return True
 
     async def end(self, reason):
+        safe_reason=reason if isinstance(reason,str) and re.fullmatch(r'[a-z_]{1,48}',reason) else 'unknown'
+        _LOG.info('realtime_voice_session_ended reason=%s',safe_reason)
         self._stop_requested = True
         if self._opening and self.closed:
             if self._open_task and not self._open_task.done():
