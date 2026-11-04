@@ -34,8 +34,9 @@ EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.cs
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
 EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
+EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
-EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-microphone-lease.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js']
+EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
@@ -71,6 +72,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('administrator/approvals', ('GET','POST')),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
     ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
+    ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
     ('dialogs/legacy-continuation', ('GET','POST')),
@@ -127,7 +129,7 @@ FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_hand
     'customer_voice_handler', 'customer_voice_receipt_handler', 'customer_voice_capability_handler', 'customer_voice_status_handler',
     'customer_voice_manual_confirmation_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
-    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):

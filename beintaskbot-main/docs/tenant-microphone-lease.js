@@ -1,4 +1,4 @@
-/* One origin-wide microphone owner across tabs and voice modes. */
+/* Coordinate cooperative AI and customer voice modes across origin tabs. */
 ((root, make) => {
   if (typeof module === 'object' && module.exports) module.exports = make;
   else root.acquireTenantMicrophone = make;

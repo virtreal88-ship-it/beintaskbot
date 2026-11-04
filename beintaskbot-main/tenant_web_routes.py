@@ -34,6 +34,7 @@ from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
+from tenant_operator_voice_api import handler as operator_voice_handler
 from tenant_dialog_consultations_api import handler as dialog_consultations_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
@@ -142,6 +143,8 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/audio-transcription', dialog_audio_transcription_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/asr-comparison', owner_asr_comparison_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('GET', 'POST')),
+        ('dialogs/copilot-voice/preflight', operator_voice_handler(member, origin, logger, 'preflight'), ('POST',)),
+        ('dialogs/copilot-voice/ws', operator_voice_handler(member, origin, logger, 'ws'), ('GET',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),
         ('dialogs/agent-assignment', operator_handler(member, origin, logger, 'agent_assignment'), ('GET', 'POST')),
         ('dialogs/agent-assignment-bulk', operator_handler(member, origin, logger, 'agent_assignment_bulk'), ('GET', 'POST')),
