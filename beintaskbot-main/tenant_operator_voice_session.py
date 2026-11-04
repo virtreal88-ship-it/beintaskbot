@@ -14,6 +14,11 @@ class Refused(Exception):
 
 _LOG=logging.getLogger(__name__)
 
+# Provider startup includes credential retrieval, the WebSocket upgrade and the
+# Realtime session handshake.  Keep it bounded, but longer than the provider's
+# own network deadline so a healthy but slow upgrade is not cancelled early.
+PROVIDER_OPEN_DEADLINE=12
+
 
 def _require_live_session_admission(scope,session_id,authority,lease,provider,pilot_policy):
     """Bind construction to the policy enforced by start() and the provider."""
@@ -195,11 +200,22 @@ class Session:
             # context, no function tools, and never expose a permanent key.
             self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
                                                                     transcription=None, reconnect=False))
-            done, pending = await asyncio.wait({self._open_task}, timeout=3)
+            done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
                 self._open_task.cancel()
+                _LOG.warning('realtime_voice_start_failed stage=provider_open reason=timeout')
                 raise Refused('provider_open_timeout')
-            await self._open_task
+            try:
+                await self._open_task
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                # Exception messages can contain provider response details;
+                # only the runtime class is safe to record here.
+                reason=type(error).__name__
+                if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',reason):reason='UnknownError'
+                _LOG.warning('realtime_voice_start_failed stage=provider_open reason=%s',reason)
+                raise
             if self._stop_requested: raise Refused('session_stopped_during_start')
             await self.authority.check(self.scope, 'post_open')
             await self.lease.assert_current(self.scope, self.fence)

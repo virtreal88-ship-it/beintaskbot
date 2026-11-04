@@ -126,7 +126,15 @@ async def _open_openai_socket(api_key,owner):
     owner._opening_session=session
     try:
         ws=await _connect_websocket(session,OPENAI_URL+'?model='+MODEL,{'Authorization':'Bearer '+api_key})
-    except BaseException:
+    except BaseException as error:
+        if not isinstance(error,asyncio.CancelledError):
+            # The handshake body may contain provider details. Preserve only
+            # the exception class and numeric HTTP status needed to diagnose access.
+            status=getattr(error,'status',None)
+            if type(status) is not int or not 100<=status<=599:status='none'
+            kind=type(error).__name__
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',kind):kind='UnknownError'
+            _LOG.warning('realtime_provider_connect_failed stage=websocket_upgrade error=%s status=%s',kind,status)
         await owner._close_opening_session()
         raise
     socket=AiohttpRealtimeSocket(ws,owned_session=session)
