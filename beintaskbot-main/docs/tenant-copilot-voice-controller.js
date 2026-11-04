@@ -125,7 +125,13 @@
     mute.textContent=muted?labels.unmute:labels.mute;
     status.textContent=muted?labels.muted:labels.listening;
   });
-  const hide=()=>{if(lifecycle?.visibilityState==='hidden')void stop(uncertain);};
+  const hide=()=>{
+    if(lifecycle?.visibilityState!=='hidden'||(!running&&!ending))return;
+    // A page hide before the WebSocket admission is confirmed is only a local
+    // startup interruption. Do not mark a server session's end as unknown
+    // when no server session could have been opened yet.
+    void stop(serverInitiated?uncertain:labels.failed,!serverInitiated);
+  };
   lifecycle?.addEventListener?.('visibilitychange',hide);
   return {start:begin,stop,end:finish,isActive:()=>running||ending||cleanupPending>0,
           destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);await stop();root.replaceChildren();}};

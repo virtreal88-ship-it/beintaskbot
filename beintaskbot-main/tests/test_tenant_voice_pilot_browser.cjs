@@ -52,4 +52,26 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.requests.some(x=>/\/crm\/chat\/send/.test(x.url))),false);
  await page.close();
  }
+ const lifecyclePage=await browser.newPage();
+ await lifecyclePage.route('https://test.local/**',route=>route.fulfill({contentType:'text/html',body:'<main id="root"></main>'}));
+ await lifecyclePage.goto('https://test.local/lifecycle');
+ await lifecyclePage.addScriptTag({path:path.join(root,'docs/tenant-copilot-voice-controller.js')});
+ const startup=await lifecyclePage.evaluate(async()=>{
+  const root=document.getElementById('root'),lifecycle=new EventTarget();let hidden=false,resolveOpening,released=0,closed=0,connections=0;
+  Object.defineProperty(lifecycle,'visibilityState',{get:()=>hidden?'hidden':'visible'});
+  const opening=new Promise(resolve=>{resolveOpening=()=>resolve({stopNow(){},close:async()=>{closed++;}});});
+  const controller=window.mountExperimentalCopilotVoice(root,{acquireMicrophone:async()=>()=>released++,
+   openAudio:()=>opening,connect:async()=>{connections++;return{send(){},close:async()=>{}};},lifecycle,language:'ru'});
+  hidden=true;lifecycle.dispatchEvent(new Event('visibilitychange'));
+  const idle={text:root.querySelector('[role=status]').textContent,disabled:root.querySelector('button').disabled,released,connections};
+  hidden=false;
+  const starting=controller.start();await new Promise(resolve=>setTimeout(resolve,0));
+  hidden=true;lifecycle.dispatchEvent(new Event('visibilitychange'));resolveOpening();await starting;
+  await new Promise(resolve=>{const timer=setInterval(()=>{if(released){clearInterval(timer);resolve();}},0);});
+  return{idle,text:root.querySelector('[role=status]').textContent,disabled:root.querySelector('button').disabled,released,closed,connections};
+ });
+ assert.deepEqual(startup.idle,{text:'Голосовой режим выключен',disabled:false,released:0,connections:0});
+ assert.equal(startup.text,'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.');
+ assert.equal(startup.disabled,false);assert.equal(startup.released,1);assert.equal(startup.connections,0);
+ await lifecyclePage.close();
 }finally{await browser.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
