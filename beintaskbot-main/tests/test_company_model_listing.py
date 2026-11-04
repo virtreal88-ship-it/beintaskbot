@@ -54,7 +54,7 @@ def test_catalogue_opt_in_only_uses_company_get_and_never_returns_key(db,catalog
     post.assert_not_called()
 
 
-@pytest.mark.parametrize('status,expected',[(200,True),(404,False),(403,False)])
+@pytest.mark.parametrize('status,expected',[(200,True),(404,None),(403,None)])
 def test_fixed_realtime_check_uses_company_key_and_redacts_provider_body(db,catalogue,status,expected):
     _,cfg,get,post=catalogue
     catalogue_response=get.return_value
@@ -160,7 +160,7 @@ def test_authenticated_mcp_returns_safe_realtime_http_status(db,catalogue):
             assert result.status==200
             payload=json.loads((await result.json())['result']['content'][0]['text'])
             check=payload['provider_models']['realtime_model_check']
-            assert check['http_status']==404 and check['available'] is False
+            assert check['http_status']==404 and check['available'] is None
             assert 'private' not in json.dumps(payload)
     asyncio.run(check());assert get.call_count==2;post.assert_not_called()
 

@@ -482,9 +482,9 @@ def _company_models(cur,cfg,check_realtime=False):
         try:
             result['realtime_model_check']=realtime_model_availability(profile)
         except TenantLinearError:
-            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':False,
+            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':None,
               'error':'Сохранённый ключ Chat AI компании недоступен.'}
         except Exception:
-            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':False,
+            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':None,
               'error':'Не удалось выполнить проверку модели.'}
     return result

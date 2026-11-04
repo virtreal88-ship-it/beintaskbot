@@ -107,7 +107,7 @@ def check_realtime_model(key):
     messages={401:'OpenAI отклонил ключ.',403:'OpenAI отказал в доступе к проекту или модели.',
               404:'OpenAI не нашёл модель или не предоставил доступ к ней.',
               429:'OpenAI ограничил запросы или доступную квоту.'}
-    return {'model':model,'http_status':status,'available':False,'generation_access_verified':False,
+    return {'model':model,'http_status':status,'available':None,'generation_access_verified':False,
             'error':messages.get(status,'OpenAI отклонил проверку модели.')}
 
 
