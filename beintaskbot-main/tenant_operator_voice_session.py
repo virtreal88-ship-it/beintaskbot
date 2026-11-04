@@ -181,7 +181,7 @@ class Session:
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
             self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
-                                                                    transcription='gpt-transcribe', reconnect=False))
+                                                                    transcription=None, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=3)
             if pending:
                 self._open_task.cancel()

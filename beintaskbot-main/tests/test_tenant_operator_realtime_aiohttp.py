@@ -66,7 +66,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         wire=_RealtimeWire(self.socket,OneUseGuard())
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[{'text':'синтетический mətn'}],'extra_context':{}}
-        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
+        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         scope={'request_id':str(uuid.uuid4()),'tenant_id':str(uuid.uuid4()),'session_id':str(uuid.uuid4()),
                'channel_id':str(uuid.uuid4()),'conversation_id':'synthetic','actor_id':7,'response_number':1,'executor':'test'}
         receipt={**scope,'state':'claimed','model':MODEL,'quote_version':QUOTE,'reserved_microusd':MINIMUM_HOLD,
@@ -81,7 +81,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         settings=self.received[0]['session'];vad=settings['audio']['input']['turn_detection']
         self.assertEqual(settings['max_output_tokens'],4096)
         self.assertFalse(vad['create_response']);self.assertFalse(vad['interrupt_response']);self.assertIsNone(vad['idle_timeout_ms'])
-        self.assertEqual(settings['audio']['input']['transcription'],{'model':'gpt-transcribe','languages':['ru','az']})
+        self.assertNotIn('transcription',settings['audio']['input'])
         self.assertEqual(settings['tools'],[]);self.assertEqual(settings['tool_choice'],'none')
         self.assertNotIn('синтетический',settings['instructions'])
         self.assertEqual(self.received[1]['item']['role'],'user')
@@ -106,7 +106,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         async def credential():called.append(True);return 'synthetic-key'
         provider=OpenAIRealtimeProvider(credential,OneUseGuard())
         with self.assertRaises(TenantLinearError):await provider.open({},tools=[],create_response=False,
-                            interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
+                            interrupt_response=False,transcription=None,reconnect=False)
         self.assertEqual(called,[])
 
     async def test_composed_provider_protocol_over_loopback_with_test_connector(self):
@@ -119,7 +119,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                   'lines':[],'extra_context':{}}
         with patch('tenant_operator_realtime_wire._require_live_admission'),\
              patch('tenant_operator_realtime_wire._open_openai_socket',test_connector):
-            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
+            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
             self.assertTrue(provider.ready);self.assertEqual(calls,['credential','connector'])
             self.assertNotIn('synthetic-key-never-log',json.dumps(self.received))
             await provider.close();self.assertTrue(self.ws.closed)
@@ -129,7 +129,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         provider=OpenAIRealtimeProvider(bad_credential,OneUseGuard())
         with patch('tenant_operator_realtime_wire._require_live_admission'):
             with self.assertRaisesRegex(ValueError,'provider_credential_unavailable') as failure:
-                await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
+                await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception))
         async def credential():return 'synthetic-secret-do-not-log'
         async def test_connector(_,_owner):return self.socket
@@ -139,7 +139,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
              patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
             with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
-                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
+                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
 
     async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
@@ -310,7 +310,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
              patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
              patch('tenant_operator_realtime_wire._connect_websocket',cancelled_connect):
             task=asyncio.create_task(provider.open({},tools=[],create_response=False,
-                                         interrupt_response=False,transcription='gpt-transcribe',reconnect=False))
+                                         interrupt_response=False,transcription=None,reconnect=False))
             await entered.wait();task.cancel()
             with self.assertRaises(asyncio.CancelledError):await task
             closing=asyncio.create_task(provider.close());await asyncio.sleep(0)
