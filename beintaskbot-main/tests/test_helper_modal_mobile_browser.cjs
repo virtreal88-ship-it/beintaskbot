@@ -105,7 +105,16 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:window.tenantProfileSnapshot})));
     await page.evaluate(route=>window.tenantOperator.openDialog(route,true),dialog);
     await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'','logout destroys retained helper drafts');
-    if(width<=900){const historyCalls=calls.filter(c=>c.path.endsWith('/dialogs/history')).length;await page.evaluate(()=>window.tenantOperator.closeDialog());await panel.waitFor({state:'hidden'});await page.waitForFunction(()=>!history.state?.operatorHelper);assert.equal(await page.evaluate(()=>window.tenantOperator.currentDialog.lead_id),41);assert.equal(calls.filter(c=>c.path.endsWith('/dialogs/history')).length,historyCalls,'layer close keeps the existing dialog, does not destroy/reload it');}
+    if(width<=900){
+      // The profile restoration above can still have a list refresh in flight.
+      // Its legitimate appendNewMessages request must finish before measuring
+      // whether closing the helper itself reloads the conversation.
+      await page.evaluate(()=>window.tenantOperator.refresh());
+      const historyCalls=calls.filter(c=>c.path.endsWith('/dialogs/history')).length;
+      await page.evaluate(()=>window.tenantOperator.closeDialog());await panel.waitFor({state:'hidden'});await page.waitForFunction(()=>!history.state?.operatorHelper);
+      assert.equal(await page.evaluate(()=>window.tenantOperator.currentDialog.lead_id),41);
+      assert.equal(calls.filter(c=>c.path.endsWith('/dialogs/history')).length,historyCalls,'layer close keeps the existing dialog, does not destroy/reload it');
+    }
     assert.equal(await page.evaluate(()=>window.documentLifetime),documentLifetime);assert.equal(navigations,1,'no document reload from data, media, profile or modal updates');
     assert.deepEqual(errors,[]);assert.equal(calls.filter(c=>c.path.endsWith('/dialogs/copilot')).length,1,'only the explicitly requested fixture generation');assert.equal(calls.some(c=>/\/dispatch$|chat\/send|transcrib/.test(c.path)),false,'no sends or ASR');
     console.log('PASS helper modal '+width+'x'+height+': backdrop, mode/type/templates, focus/cursor, closed draft, keyboard bounds, Back, scoped reopen, late history, logout, media object/playhead, polling/visibility and no reload');
