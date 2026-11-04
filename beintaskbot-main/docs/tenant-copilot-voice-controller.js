@@ -5,8 +5,8 @@
 })(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
-  const catalog={ru:{off:'Голосовой режим выключен',start:'Начать голосовой разговор',mute:'Выключить микрофон',unmute:'Включить микрофон',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Отключаем микрофон…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Слушаю',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
-    az:{off:'Səs rejimi söndürülüb',start:'Səsli söhbətə başla',mute:'Mikrofonu söndür',unmute:'Mikrofonu aç',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Mikrofon söndürülür…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Dinləyirəm',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
+  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',mute:'Выключить микрофон',unmute:'Включить микрофон',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Отключаем микрофон…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Слушаю',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
+    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',mute:'Mikrofonu söndür',unmute:'Mikrofonu aç',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Mikrofon söndürülür…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Dinləyirəm',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikрофон icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
   const document = root.ownerDocument;
   const status = document.createElement('p'); status.setAttribute('role','status'); status.textContent=labels.off;
@@ -125,7 +125,13 @@
     mute.textContent=muted?labels.unmute:labels.mute;
     status.textContent=muted?labels.muted:labels.listening;
   });
-  const hide=()=>{if(lifecycle?.visibilityState==='hidden')void stop(uncertain);};
+  const hide=()=>{
+    if(lifecycle?.visibilityState!=='hidden'||(!running&&!ending))return;
+    // A page hide before the WebSocket admission is confirmed is only a local
+    // startup interruption. Do not mark a server session's end as unknown
+    // when no server session could have been opened yet.
+    void stop(serverInitiated?uncertain:labels.failed,!serverInitiated);
+  };
   lifecycle?.addEventListener?.('visibilitychange',hide);
   return {start:begin,stop,end:finish,isActive:()=>running||ending||cleanupPending>0,
           destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);await stop();root.replaceChildren();}};
