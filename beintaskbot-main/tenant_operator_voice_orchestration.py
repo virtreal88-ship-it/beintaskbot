@@ -231,14 +231,7 @@ def _compose_server_session(authority,client,lease,session_id):
                    executor=_EXECUTOR,session_id=session_id)
 
 
-def _require_pilot_lease_verified():
-    # The pilot has no hard dollar cap, but must not accept a second session
-    # while a previous provider connection has an uncertain shutdown.
-    raise TenantLinearError('Безопасность голосового сеанса пока не подтверждена.',503)
-
-
 def _compose_pilot_session(authority,client,lease,session_id):
-    _require_pilot_lease_verified()
     policy=PilotAdmission(authority,lease,authority.session_scope,session_id)
     provider=create_pilot_provider(policy,ServerCredentialLoader(authority))
     return Session(authority.session_scope,authority=authority,ledger=None,lease=lease,
@@ -269,7 +262,6 @@ async def open_server_session(request,profile,origin=None):
     route={'provider':'connect','lead_id':request.query.get('lead_id'),
            'channel_id':request.query.get('channel_id'),'conversation_id':request.query.get('conversation_id')}
     authority=await ScopedAuthority.create(profile,route)
-    _require_pilot_lease_verified()
     session_id=str(uuid.uuid4())
     lease=_create_server_lease(authority,session_id)  # independently hard-off
     from tenant_operator_voice_gateway import make_handler

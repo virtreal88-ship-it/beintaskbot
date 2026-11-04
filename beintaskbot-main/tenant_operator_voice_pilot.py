@@ -1,8 +1,4 @@
-"""Owner-scoped, no-budget voice admission; not connected to live transport.
-
-This policy does not prove the distributed lease or remote shutdown. The
-existing live admission gates must remain closed until those are verified.
-"""
+"""Single server-owned admission policy for the owner-only voice pilot."""
 import asyncio
 import uuid
 
@@ -12,7 +8,7 @@ class PilotAdmissionError(Exception):
 
 
 class PilotAdmission:
-    """In-memory one-use response permits subordinate to an existing lease."""
+    """One admission object binds owner auth, session identity, and lease."""
     def __init__(self, authority, lease, scope, session_id):
         if not isinstance(scope,tuple) or len(scope)!=4 or not all(str(x) for x in scope):
             raise PilotAdmissionError('scope_invalid')
@@ -23,13 +19,35 @@ class PilotAdmission:
         self.authority=authority;self.lease=lease;self.scope=scope;self.session_id=session_id
         self._fence=None;self._permits={};self._lock=asyncio.Lock();self._closed=False
 
+    def validate_binding(self,scope,session_id,authority,lease):
+        """Synchronous constructor-time check; it cannot grant live admission."""
+        if (self._closed or scope!=self.scope or session_id!=self.session_id or
+            authority is not self.authority or lease is not self.lease or
+            not callable(getattr(authority,'check',None)) or
+            not callable(getattr(lease,'claim',None)) or
+            not callable(getattr(lease,'assert_current',None)) or
+            not callable(getattr(lease,'release',None))):
+            raise PilotAdmissionError('admission_binding_invalid')
+        return True
+
     async def admit(self,scope,session_id,fence):
         async with self._lock:
-            if self._closed or self._fence is not None or scope!=self.scope or session_id!=self.session_id or not fence:
+            self.validate_binding(scope,session_id,self.authority,self.lease)
+            if self._fence is not None or type(fence) is not int or fence<=0:
                 raise PilotAdmissionError('admission_invalid')
             await self.authority.check(scope,'pilot_admit')
             await self.lease.assert_current(scope,fence)
             self._fence=fence
+
+    async def assert_live(self,scope,session_id):
+        """Recheck owner authorization and the current durable lease."""
+        async with self._lock:
+            self.validate_binding(scope,session_id,self.authority,self.lease)
+            if self._fence is None:
+                raise PilotAdmissionError('admission_invalid')
+            await self.authority.check(scope,'pilot_live_admission')
+            await self.lease.assert_current(scope,self._fence)
+            return True
 
     async def issue(self,scope,request_id):
         async with self._lock:
