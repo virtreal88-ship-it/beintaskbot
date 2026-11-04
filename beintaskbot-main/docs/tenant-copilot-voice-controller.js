@@ -15,7 +15,7 @@
   const end = document.createElement('button'); end.type='button';end.textContent=labels.end;end.hidden=true;
   root.append(status,start,mute,end);
   let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null;
-  let serverInitiated=false, voiceBlocked=false, cleanupPending=0;
+  let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false;
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
   const microphoneUncertain=labels.microphone;
@@ -31,6 +31,7 @@
     if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
     if(reason===uncertain || reason===playbackFailure || reason===microphoneUncertain)voiceBlocked=true;
     serverInitiated=false;
+    hideAfterConnect=false;
     const stopVersion=++generation;
     running=false; ending=false; cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
@@ -101,6 +102,10 @@
       });
       if(version!==generation){await socket.close();return;}
       channel=socket;mute.hidden=false;status.textContent=labels.listening;
+      if(hideAfterConnect||lifecycle?.visibilityState==='hidden'){
+        hideAfterConnect=false;
+        finish();
+      }
     } catch(error) {
       if(version!==generation)return;
       const code=error?.message==='microphone_stop_unconfirmed'?microphoneUncertain:
@@ -112,7 +117,10 @@
   }
   start.addEventListener('click',begin);
   function finish(){
-    if(!channel){void stop(uncertain);return;}
+    if(!channel){
+      if(serverInitiated){hideAfterConnect=true;ending=true;end.disabled=true;status.textContent=labels.ending;return;}
+      void stop(labels.failed,true);return;
+    }
     try{audio?.stopNow?.();}catch(_){}
     muted=true;ending=true;end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
@@ -127,10 +135,20 @@
   });
   const hide=()=>{
     if(lifecycle?.visibilityState!=='hidden'||(!running&&!ending))return;
-    // A page hide before the WebSocket admission is confirmed is only a local
-    // startup interruption. Do not mark a server session's end as unknown
-    // when no server session could have been opened yet.
-    void stop(serverInitiated?uncertain:labels.failed,!serverInitiated);
+    if(ending)return;
+    if(!serverInitiated){
+      // Before the WebSocket attempt, hiding the page only interrupts local
+      // microphone startup; no server session exists to end.
+      void stop(labels.failed,true);
+      return;
+    }
+    if(!channel){
+      // Let the handshake resolve. If it reaches ready, end it cleanly as soon
+      // as the channel is available; aborting here would create a disconnect.
+      hideAfterConnect=true;
+      return;
+    }
+    finish();
   };
   lifecycle?.addEventListener?.('visibilitychange',hide);
   return {start:begin,stop,end:finish,isActive:()=>running||ending||cleanupPending>0,

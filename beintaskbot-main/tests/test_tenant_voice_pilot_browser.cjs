@@ -73,5 +73,35 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.deepEqual(startup.idle,{text:'Голосовой разговор не начат',disabled:false,released:0,connections:0});
  assert.equal(startup.text,'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.');
  assert.equal(startup.disabled,false);assert.equal(startup.released,1);assert.equal(startup.connections,0);
+ const hiddenSession=await lifecyclePage.evaluate(async()=>{
+  const root=document.createElement('section');document.body.append(root);let hidden=false,resolveConnect,sent=[],released=0,closed=0;
+  const lifecycle=new EventTarget();Object.defineProperty(lifecycle,'visibilityState',{get:()=>hidden?'hidden':'visible'});
+  const controller=window.mountExperimentalCopilotVoice(root,{acquireMicrophone:async()=>()=>released++,
+   openAudio:async()=>({mute(){},play(){},interrupt(){return 0;},finished:async()=>true,stopNow(){},close:async()=>{}}),
+   connect:async onEvent=>new Promise(resolve=>{resolveConnect=()=>{onEvent({type:'ready'});resolve({send(event){sent.push(event);if(event.type==='end')setTimeout(()=>onEvent({type:'ended'}),0);},close:async()=>{closed++;}});};}),
+   lifecycle,language:'ru'});
+  const starting=controller.start();await new Promise(resolve=>setTimeout(resolve,0));
+  hidden=true;lifecycle.dispatchEvent(new Event('visibilitychange'));
+  const beforeReady={status:root.querySelector('[role=status]').textContent,closed,sent:sent.length};
+  resolveConnect();await starting;
+  await new Promise(resolve=>{const timer=setInterval(()=>{if(root.querySelector('[role=status]').textContent==='Соединение завершено'){clearInterval(timer);resolve();}},0);});
+  return{beforeReady,status:root.querySelector('[role=status]').textContent,sent,released,closed};
+ });
+ assert.deepEqual(hiddenSession.beforeReady,{status:'Подключение…',closed:0,sent:0});
+ assert.equal(hiddenSession.sent.some(event=>event.type==='end'),true);
+ assert.equal(hiddenSession.status,'Соединение завершено');assert.equal(hiddenSession.released,1);assert.equal(hiddenSession.closed,1);
+ const hiddenActive=await lifecyclePage.evaluate(async()=>{
+  const root=document.createElement('section');document.body.append(root);let hidden=false,sent=[],closed=0;
+  const lifecycle=new EventTarget();Object.defineProperty(lifecycle,'visibilityState',{get:()=>hidden?'hidden':'visible'});
+  const controller=window.mountExperimentalCopilotVoice(root,{acquireMicrophone:async()=>()=>{},
+   openAudio:async()=>({mute(){},play(){},interrupt(){return 0;},finished:async()=>true,stopNow(){},close:async()=>{}}),
+   connect:async onEvent=>{onEvent({type:'ready'});return{send(event){sent.push(event);if(event.type==='end')setTimeout(()=>onEvent({type:'ended'}),0);},close:async()=>{closed++;}};},
+   lifecycle,language:'ru'});
+  await controller.start();hidden=true;lifecycle.dispatchEvent(new Event('visibilitychange'));
+  await new Promise(resolve=>{const timer=setInterval(()=>{if(root.querySelector('[role=status]').textContent==='Соединение завершено'){clearInterval(timer);resolve();}},0);});
+  return{status:root.querySelector('[role=status]').textContent,sent,closed};
+ });
+ assert.equal(hiddenActive.sent.some(event=>event.type==='end'),true);
+ assert.equal(hiddenActive.status,'Соединение завершено');assert.equal(hiddenActive.closed,1);
  await lifecyclePage.close();
 }finally{await browser.close();}})().catch(error=>{console.error(error);process.exitCode=1;});
