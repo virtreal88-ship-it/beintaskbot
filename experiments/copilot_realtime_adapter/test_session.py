@@ -269,6 +269,24 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.input_bytes,60)
         self.assertEqual(len([event for event in self.provider.events if event['type']=='input_audio_buffer.append']),1)
 
+    async def test_expired_session_rejects_audio_before_watchdog_wakes(self):
+        self.session.watchdog.cancel()
+        self.session.started-=2
+        with self.assertRaisesRegex(Refused,'session_duration_limit'):
+            await self.session.receive_client({'type':'audio','pcm':bytes(100)})
+        self.assertFalse(any(event['type']=='input_audio_buffer.append' for event in self.provider.events))
+        self.assertTrue(self.provider.closed)
+
+    async def test_expired_session_rejects_response_before_watchdog_wakes(self):
+        self.session.watchdog.cancel()
+        await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
+        await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        self.session.started-=2
+        with self.assertRaisesRegex(Refused,'session_duration_limit'):
+            await self.session.receive_provider({'type':'input_audio_buffer.committed','item_id':'expired-input'})
+        self.assertFalse(any(event['type']=='response.create' for event in self.provider.events))
+        self.assertTrue(self.provider.closed)
+
     async def test_budget_refusal_prevents_dispatch_and_closes(self):
         self.ledger.deny=True
         with self.assertRaises(Refused): await self.turn()

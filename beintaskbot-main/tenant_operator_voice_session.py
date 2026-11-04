@@ -108,6 +108,12 @@ class Session:
         async with self.io_lock:
             if self.closed:
                 raise Refused('session_closed')
+            # A busy event loop or a slow authorization/lease check can delay
+            # the watchdog. Do not initiate billable input or a new response
+            # after the session deadline while waiting for that watchdog.
+            if (event.get('type') in ('input_audio_buffer.append','response.create') and
+                self.started and time.monotonic()-self.started >= self.max_seconds):
+                raise Refused('session_duration_limit')
             await self.provider.send(event)
 
     async def _send_client(self, event):
