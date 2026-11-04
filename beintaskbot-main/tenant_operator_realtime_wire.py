@@ -239,7 +239,11 @@ class _RealtimeWire:
             }
             mismatch=[name for name,valid in checks.items() if not valid]
             if mismatch:
-                _LOG.warning('realtime_session_readback_mismatch fields=%s',','.join(mismatch))
+                observed=incoming.get('transcription')
+                observed_model=_safe_provider_error(observed.get('model')) if isinstance(observed,dict) else 'absent'
+                observed_keys=','.join(sorted(k for k in observed if isinstance(k,str) and re.fullmatch(r'[a-z_]{1,32}',k))) if isinstance(observed,dict) else 'none'
+                _LOG.warning('realtime_session_readback_mismatch fields=%s transcription_model=%s transcription_keys=%s',
+                             ','.join(mismatch),observed_model,observed_keys)
                 raise ValueError()
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
 
