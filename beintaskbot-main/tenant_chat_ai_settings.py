@@ -97,10 +97,10 @@ def available_models(session):
     return {'models': provider_models(key)}
 
 
-def realtime_model_availability(session):
+def realtime_model_availability(session,model):
     """Use only the authorized company's saved key; never return the key."""
     _tenant, _metadata, key = _company_key(session)
-    return check_realtime_model(key)
+    return check_realtime_model(key,model)
 
 
 def test_model(session, model):

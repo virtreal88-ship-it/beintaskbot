@@ -55,23 +55,31 @@ def test_catalogue_opt_in_only_uses_company_get_and_never_returns_key(db,catalog
 
 
 @pytest.mark.parametrize('status,expected',[(200,True),(404,None),(403,None)])
-def test_fixed_realtime_check_uses_company_key_and_redacts_provider_body(db,catalogue,status,expected):
+@pytest.mark.parametrize('model',['gpt-realtime-2.1-mini','gpt-realtime-2.1'])
+def test_fixed_realtime_check_uses_company_key_and_redacts_provider_body(db,catalogue,status,expected,model):
     _,cfg,get,post=catalogue
     catalogue_response=get.return_value
     check_response=Mock(status_code=status,json=Mock(return_value={
-        'id':'gpt-realtime-2.1-mini','error':{'message':'synthetic-secret-must-not-escape'}}))
+        'id':model,'error':{'message':'synthetic-secret-must-not-escape'}}))
     get.side_effect=[catalogue_response,check_response]
-    result=read(db,cfg,{'list_provider_models':True,'id':'gpt-realtime-2.1-mini'})['provider_models']
+    result=read(db,cfg,{'list_provider_models':True,'id':model})['provider_models']
     check=result['realtime_model_check']
     assert check['http_status']==status and check['available'] is expected
     assert check['generation_access_verified'] is False
     assert 'synthetic-secret' not in json.dumps(result)
     assert get.call_count==2
     args,kwargs=get.call_args
-    assert args==('https://api.openai.com/v1/models/gpt-realtime-2.1-mini',)
+    assert args==('https://api.openai.com/v1/models/'+model,)
     assert kwargs['headers']['Authorization']=='Bearer synthetic-company-key'
     assert kwargs['allow_redirects'] is False and kwargs['timeout']==(3,10)
     post.assert_not_called()
+
+
+def test_unknown_model_is_not_requested_from_provider(db,catalogue):
+    _,cfg,get,post=catalogue
+    result=read(db,cfg,{'list_provider_models':True,'id':'gpt-unapproved'})['provider_models']
+    assert 'realtime_model_check' not in result
+    get.assert_called_once();post.assert_not_called()
 
 
 def test_realtime_check_never_runs_for_revoked_connection(db,catalogue):
@@ -155,12 +163,12 @@ def test_authenticated_mcp_returns_safe_realtime_http_status(db,catalogue):
         async with TestClient(TestServer(app)) as client:
             result=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/call',
                 'params':{'name':'company_ai_settings_read','arguments':{
-                    'list_provider_models':True,'id':'gpt-realtime-2.1-mini'}}},
+                    'list_provider_models':True,'id':'gpt-realtime-2.1'}}},
                 headers={'Authorization':'Bearer '+token})
             assert result.status==200
             payload=json.loads((await result.json())['result']['content'][0]['text'])
             check=payload['provider_models']['realtime_model_check']
-            assert check['http_status']==404 and check['available'] is None
+            assert check['model']=='gpt-realtime-2.1' and check['http_status']==404 and check['available'] is None
             assert 'private' not in json.dumps(payload)
     asyncio.run(check());assert get.call_count==2;post.assert_not_called()
 
