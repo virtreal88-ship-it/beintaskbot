@@ -64,6 +64,11 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError,'unsafe_session_readback'):await wire.open(self.snapshot,**self.options)
             with self.assertRaises(ValueError):await wire.send({'type':'response.create'})
 
+    async def test_provider_null_transcription_readback_is_disabled(self):
+        wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input'].__setitem__('transcription',None)),Guard())
+        await wire.open(self.snapshot,**self.options)
+        self.assertTrue(wire.ready)
+
     async def test_one_committed_scoped_claim_per_response(self):
         await self.open()
         with self.assertRaisesRegex(ValueError,'claim_missing'):await self.wire.send({'type':'response.create'})
