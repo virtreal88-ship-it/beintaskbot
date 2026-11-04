@@ -93,12 +93,12 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         read_history.assert_not_called();draft_context.assert_not_called()
         authority.recheck.assert_called_once()
 
-    async def test_http_open_fails_closed_on_unverified_budget_before_lease_or_provider(self):
+    async def test_http_pilot_fails_closed_on_unverified_lease_before_provider(self):
         authority=SimpleNamespace(session_scope=('t',7,'c','d'))
         request=SimpleNamespace(query={'lead_id':'1','channel_id':'c','conversation_id':'d'})
         with patch.object(service.ScopedAuthority,'create',new=AsyncMock(return_value=authority)) as create, \
              patch.object(service,'_create_server_lease') as lease, \
-             patch.object(service,'create_production_provider') as provider:
+             patch.object(service,'create_pilot_provider') as provider:
             with self.assertRaises(TenantLinearError) as error:
                 await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example')
         self.assertEqual(error.exception.status,503)

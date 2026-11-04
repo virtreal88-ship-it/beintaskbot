@@ -59,7 +59,7 @@ class VoiceHttp(unittest.IsolatedAsyncioTestCase):
 
     async def test_websocket_never_upgrades_and_has_no_provider(self):
         with patch.object(api,'open_server_session',wraps=orchestration.open_server_session) as gate,\
-             patch.object(orchestration,'create_production_provider') as provider:
+             patch.object(orchestration,'create_pilot_provider') as provider:
             response=await self.client.get('/ws?expected_tenant_id=tenant-synthetic&expected_user_id=7',headers={**self.headers,
                 'Connection':'Upgrade','Upgrade':'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':'dGhlIHNhbXBsZSBub25jZQ=='})
             gate.assert_awaited_once();provider.assert_not_called()
