@@ -15,8 +15,10 @@ class Authority:
 
 class Lease:
     def __init__(self):self.current=True
+    async def claim(self,scope):return 1
     async def assert_current(self,scope,fence):
         if not self.current or fence!=1:raise PilotAdmissionError('lease_lost')
+    async def release(self,scope,fence):return True
 
 
 class Tests(unittest.IsolatedAsyncioTestCase):

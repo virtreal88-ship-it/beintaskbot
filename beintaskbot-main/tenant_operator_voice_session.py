@@ -1,9 +1,4 @@
-"""Local-only Realtime gateway prototype; NOT an HTTP endpoint or provider client.
-
-All authority, ledger, session lease, context, transport and persistence must be
-provided by trusted server implementations.  None is shipped here. No provider
-connection is possible without explicitly injected dependencies.
-"""
+"""Server-owned Realtime session lifecycle and admission enforcement."""
 import asyncio
 import base64
 import binascii
@@ -18,6 +13,15 @@ class Refused(Exception):
 
 
 _LOG=logging.getLogger(__name__)
+
+
+def _require_live_session_admission(scope,session_id,authority,lease,provider,pilot_policy):
+    """Bind construction to the policy enforced by start() and the provider."""
+    from tenant_operator_voice_pilot import PilotAdmission
+    if type(pilot_policy) is not PilotAdmission or getattr(provider,'guard',None) is not pilot_policy:
+        raise Refused('live_admission_dependencies_invalid')
+    try:pilot_policy.validate_binding(scope,session_id,authority,lease)
+    except Exception:raise Refused('live_admission_dependencies_invalid') from None
 
 
 class Session:
@@ -70,6 +74,8 @@ class Session:
         if pilot_policy is not None and (pilot_policy.scope!=scope or pilot_policy.session_id!=self.session_id or
                                          pilot_policy.authority is not authority or pilot_policy.lease is not lease):
             raise Refused('pilot_policy_scope_mismatch')
+        if getattr(provider,'mock_only',None) is not True:
+            _require_live_session_admission(scope,self.session_id,authority,lease,provider,pilot_policy)
         self.transcript = None
         if history is not None:
             try:
@@ -141,10 +147,12 @@ class Session:
     async def start(self):
         if self.open_attempted or self._stop_requested:
             raise Refused('session_already_started')
+        if self.pilot_policy is not None:
+            try:self.pilot_policy.validate_binding(self.scope,self.session_id,self.authority,self.lease)
+            except Exception:raise Refused('live_admission_dependencies_invalid') from None
         self.open_attempted = True
         self._opening = True
-        # These calls are deliberately abstract and must fail closed.  In
-        # particular, reserve must be atomic across all voice-test executors.
+        # All pilot admission dependencies are server-owned and fail closed.
         try:
             await self.authority.check(self.scope, 'start')
             if self._stop_requested: raise Refused('session_stopped_during_start')
@@ -160,8 +168,8 @@ class Session:
             if not self.fence:
                 raise Refused('session_already_active')
             if self._stop_requested: raise Refused('session_stopped_during_start')
-            # Provider opening and audio input may be billable before any
-            # response reservation. Require a durable whole-session hold first.
+            # The owner pilot intentionally has no monetary reserve. It does
+            # require owner authorization and the durable user lease.
             if self.pilot_policy is not None:
                 await self.pilot_policy.admit(self.scope,self.session_id,self.fence)
             else:
@@ -202,6 +210,10 @@ class Session:
             await self._send_client({'type': 'ready'})
             if self._stop_requested: raise Refused('session_stopped_during_start')
         except BaseException:
+            # Failed or uncertain startup must never leave a dispatch permit.
+            if self.pilot_policy is not None:
+                try:await asyncio.shield(self.pilot_policy.close())
+                except BaseException:pass
             if self._open_task and not self._open_task.done():
                 self._open_task.cancel()
                 self._open_task.add_done_callback(self._consume_task)

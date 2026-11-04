@@ -62,6 +62,21 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         await self.session.close()
         await self.runner.cleanup()
 
+    async def admitted_policy(self, scope=None):
+        scope=scope or (str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic-dialog')
+        session_id=str(uuid.uuid4())
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            held=True
+            async def claim(self,_):self.held=True;return 1
+            async def assert_current(self,*_):
+                if not self.held:raise ValueError('lease_not_current')
+            async def release(self,*_):self.held=False;return True
+        lease=Lease();policy=PilotAdmission(Authority(),lease,scope,session_id)
+        await policy.admit(scope,session_id,1)
+        return policy,lease
+
     async def test_real_aiohttp_frames_use_policy_and_one_claim(self):
         wire=_RealtimeWire(self.socket,OneUseGuard())
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
@@ -114,11 +129,11 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         async def credential():calls.append('credential');return 'synthetic-key-never-log'
         async def test_connector(value,_owner):
             self.assertEqual(value,'synthetic-key-never-log');calls.append('connector');return self.socket
-        provider=OpenAIRealtimeProvider(credential,OneUseGuard())
+        policy,_=await self.admitted_policy()
+        provider=OpenAIRealtimeProvider(credential,policy)
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[],'extra_context':{}}
-        with patch('tenant_operator_realtime_wire._require_live_admission'),\
-             patch('tenant_operator_realtime_wire._open_openai_socket',test_connector):
+        with patch('tenant_operator_realtime_wire._open_openai_socket',test_connector):
             await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
             self.assertTrue(provider.ready);self.assertEqual(calls,['credential','connector'])
             self.assertNotIn('synthetic-key-never-log',json.dumps(self.received))
@@ -126,17 +141,17 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_redacts_loader_and_readback_errors(self):
         async def bad_credential():raise ValueError('synthetic-secret-do-not-log')
-        provider=OpenAIRealtimeProvider(bad_credential,OneUseGuard())
-        with patch('tenant_operator_realtime_wire._require_live_admission'):
-            with self.assertRaisesRegex(ValueError,'provider_credential_unavailable') as failure:
-                await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
+        policy,_=await self.admitted_policy()
+        provider=OpenAIRealtimeProvider(bad_credential,policy)
+        with self.assertRaisesRegex(ValueError,'provider_credential_unavailable') as failure:
+            await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception))
         async def credential():return 'synthetic-secret-do-not-log'
         async def test_connector(_,_owner):return self.socket
-        provider=OpenAIRealtimeProvider(credential,OneUseGuard())
+        policy,_=await self.admitted_policy()
+        provider=OpenAIRealtimeProvider(credential,policy)
         snapshot={'existing_copilot_instructions':'Never send messages.', 'lines':[],'extra_context':{}}
-        with patch('tenant_operator_realtime_wire._require_live_admission'),\
-             patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
+        with patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
             with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
                 await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
@@ -151,8 +166,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def revalidate(self,_):return True
         class Lease:
             held=False
-            async def claim(self,_):self.held=True;return 'fence'
+            async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
             async def reserve_session(self,scope,session_id):
@@ -175,8 +191,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                   pilot_policy=policy,session_id=session_id)
         # The loopback peer is synthetic; only the test substitutes the network
         # connector, while the production policy still requires the exact pilot.
-        with patch('tenant_operator_realtime_wire._require_live_admission'),\
-             patch('tenant_operator_realtime_wire._open_openai_socket',connector):
+        with patch('tenant_operator_realtime_wire._open_openai_socket',connector):
             session=Session(scope,**deps)
             try:
                 await session.start()
@@ -305,9 +320,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         owned=SlowSession()
         async def cancelled_connect(*_args):raise asyncio.CancelledError()
         async def credential():return 'synthetic-key'
-        provider=OpenAIRealtimeProvider(credential,OneUseGuard())
-        with patch('tenant_operator_realtime_wire._require_live_admission'),\
-             patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
+        policy,lease=await self.admitted_policy()
+        provider=OpenAIRealtimeProvider(credential,policy)
+        with patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
              patch('tenant_operator_realtime_wire._connect_websocket',cancelled_connect):
             task=asyncio.create_task(provider.open({},tools=[],create_response=False,
                                          interrupt_response=False,transcription=None,reconnect=False))
@@ -328,8 +343,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def revalidate(self,_):return True
         class Lease:
             held=False
-            async def claim(self,_):self.held=True;return 'fence'
+            async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
             events=[]

@@ -81,7 +81,9 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         class Authority:
             async def check(self,scope,stage):return True
         class Lease:
+            async def claim(self,scope):return 1
             async def assert_current(self,scope,fence):return True
+            async def release(self,scope,fence):return True
         scope=self.scope()
         session_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
         policy=PilotAdmission(Authority(),Lease(),session_scope,scope['session_id'])

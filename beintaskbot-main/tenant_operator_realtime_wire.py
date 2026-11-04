@@ -58,13 +58,16 @@ def _unique_object(pairs):
     return result
 
 
-def _require_live_admission(guard=None):
-    # Only the owner-scoped pilot policy may open a real provider connection.
-    # The legacy monetary-ledger route remains closed and no environment flag
-    # can turn it on.
+async def _require_live_admission(guard,scope=None,session_id=None):
+    """Recheck the same owner authorization and lease admitted by Session.start."""
     from tenant_operator_voice_pilot import PilotAdmission
     if type(guard) is not PilotAdmission:
         raise TenantLinearError('Голосовой режим пока недоступен.',503)
+    try:
+        await guard.assert_live(guard.scope if scope is None else scope,
+                                guard.session_id if session_id is None else session_id)
+    except Exception:
+        raise TenantLinearError('Допуск или lease голосового сеанса недействителен.',503) from None
 
 
 class AiohttpRealtimeSocket:
@@ -118,7 +121,7 @@ class AiohttpRealtimeSocket:
 
 async def _open_openai_socket(api_key,owner):
     """Server-only connector scoped to the configured single-user pilot."""
-    _require_live_admission(getattr(owner,'guard',None))
+    await _require_live_admission(getattr(owner,'guard',None))
     session=_new_owned_session()
     owner._opening_session=session
     try:
@@ -134,7 +137,7 @@ async def _open_openai_socket(api_key,owner):
 def create_production_provider(*args,**kwargs):
     # Never accept loader, guard or endpoint from an HTTP request. Imported
     # lazily to avoid a dependency cycle; types are server-owned implementations.
-    _require_live_admission()
+    raise TenantLinearError('Платный провайдер доступен только через пилотный допуск.',503)
     from tenant_operator_voice_orchestration import ScopedDispatchGuard, ServerCredentialLoader
     if kwargs or len(args)!=2 or type(args[0]) is not ScopedDispatchGuard or type(args[1]) is not ServerCredentialLoader:
         raise ValueError('trusted_provider_dependencies_required')
@@ -349,7 +352,7 @@ class OpenAIRealtimeProvider(_RealtimeWire):
         if not self._opening_session.closed:raise ValueError('provider_cleanup_unconfirmed')
 
     async def open(self,snapshot,**options):
-        _require_live_admission(self.guard)
+        await _require_live_admission(self.guard)
         if self._closing:raise ValueError('provider_closed')
         try:
             credential=await asyncio.wait_for(self._credential_loader(),CONNECT_DEADLINE)
