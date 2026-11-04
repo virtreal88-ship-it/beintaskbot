@@ -229,7 +229,9 @@ class _RealtimeWire:
               'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
               'instructions':s.get('instructions')==expected['instructions'],
               'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
-              'audio.input.transcription':'transcription' not in incoming,
+              # OpenAI normalizes an omitted transcription config to null in
+              # session.updated. Null means no separate transcription model.
+              'audio.input.transcription':incoming.get('transcription') is None,
               'audio.input.turn_detection.type':vad.get('type')=='server_vad',
               'audio.input.turn_detection.create_response':vad.get('create_response') is False,
               'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is False,
@@ -239,11 +241,7 @@ class _RealtimeWire:
             }
             mismatch=[name for name,valid in checks.items() if not valid]
             if mismatch:
-                observed=incoming.get('transcription')
-                observed_model=_safe_provider_error(observed.get('model')) if isinstance(observed,dict) else 'absent'
-                observed_keys=','.join(sorted(k for k in observed if isinstance(k,str) and re.fullmatch(r'[a-z_]{1,32}',k))) if isinstance(observed,dict) else 'none'
-                _LOG.warning('realtime_session_readback_mismatch fields=%s transcription_model=%s transcription_keys=%s',
-                             ','.join(mismatch),observed_model,observed_keys)
+                _LOG.warning('realtime_session_readback_mismatch fields=%s',','.join(mismatch))
                 raise ValueError()
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
 
