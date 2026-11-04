@@ -174,9 +174,11 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         snapshot={'existing_copilot_instructions':'Never send messages.', 'lines':[],'extra_context':{}}
         with patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
-            with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
-                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
+            with self.assertLogs('tenant_operator_realtime_wire',level='WARNING') as captured:
+                with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
+                    await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
+        self.assertNotIn('synthetic-secret','\n'.join(captured.output))
 
     async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
         class Authority:

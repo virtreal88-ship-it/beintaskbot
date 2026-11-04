@@ -382,7 +382,10 @@ class OpenAIRealtimeProvider(_RealtimeWire):
             await self.socket.close()
             raise
         except Exception as error:
-            reason=_safe_provider_error(str(error))
+            # Protocol/provider exception text can contain untrusted response
+            # content. Emit only a fixed runtime class in production logs.
+            reason=type(error).__name__
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',reason):reason='UnknownError'
             _LOG.warning('realtime_provider_open_failed stage=context_or_session reason=%s',reason)
             try:await self.socket.close()
             except Exception:raise ValueError('provider_cleanup_unconfirmed') from None
