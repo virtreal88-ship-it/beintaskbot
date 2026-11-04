@@ -71,11 +71,13 @@ be saved as exact speech merely by dividing its transcript by duration.
 
 ## Browser and transport
 
-`browser.js` is an unmounted view with start, status, mute and end. It requires
+`docs/tenant-copilot-voice-controller.js` provides start, status, mute and end.
+It is mounted in the assistant only after server preflight, which currently
+always refuses activation. It requires
 the existing `acquireTenantMicrophone` helper by injection and fails closed if
 it is unavailable. The microphone helper is now part of current main; reuse it through dependency
 injection and do not add another microphone mutex. Its `beintaskbot-microphone-v1` Web Lock is
-origin-wide when supported. `audio.js` is a provisional PCM16 mono 24 kHz Web
+origin-wide when supported. `docs/tenant-copilot-voice-audio.js` is a provisional PCM16 mono 24 kHz Web
 Audio capture/player; it refuses unsupported 24 kHz contexts. It is untested
 on real iOS/Android and uses deprecated ScriptProcessor. Do not ship it without
 an AudioWorklet, resampling, echo-cancellation and mobile/browser validation.
@@ -87,7 +89,7 @@ real conversational acceptance criteria.
 
 `websocket.py` provides an unregistered aiohttp boundary with explicit
 origin allowlisting, an injected pre-upgrade authentication callback, a 9,600
-byte frame cap and a simple 60-frame/second limit. `channel.js` implements the
+byte frame cap and a simple 60-frame/second limit. `docs/tenant-copilot-voice-channel.js` implements the
 matching same-origin browser transport. The loopback aiohttp test exercises
 synthetic audio, interruptions and a mock provider. Those injected callbacks
 do not establish real production authentication or authorization.

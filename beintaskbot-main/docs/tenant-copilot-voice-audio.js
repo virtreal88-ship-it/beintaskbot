@@ -1,4 +1,4 @@
-/* Local experiment only. PCM is transient and never written to disk. */
+/* PCM audio is transient and never written to disk. */
 (function(root,factory){
   if(typeof module==='object' && module.exports)module.exports=factory;
   else root.openExperimentalCopilotAudio=factory;

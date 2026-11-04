@@ -19,8 +19,8 @@ test('Chromium fake microphone is exclusive across two tabs and stops',async()=>
     for(const page of [first,second]){
       await page.goto(origin);
       await page.addScriptTag({path:helper});
-      await page.addScriptTag({path:path.join(__dirname,'audio.js')});
-      await page.addScriptTag({path:path.join(__dirname,'browser.js')});
+      await page.addScriptTag({path:path.join(__dirname,'../../beintaskbot-main/docs/tenant-copilot-voice-audio.js')});
+      await page.addScriptTag({path:path.join(__dirname,'../../beintaskbot-main/docs/tenant-copilot-voice-controller.js')});
       await page.evaluate(()=>{
         const old=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
         navigator.mediaDevices.getUserMedia=async(...args)=>{const stream=await old(...args);window.testStream=stream;return stream;};

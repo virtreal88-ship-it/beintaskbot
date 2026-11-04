@@ -13,7 +13,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
    Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>{window.micCalls++;throw Error('not allowed');}},configurable:true});
    window.fetch=async(url,options={})=>{url=String(url);window.requests.push({url,method:options.method||'GET'});let result={};if(url.includes('/dialogs/history'))result={dialog:window.testRoute,messages:[{id:'one',external_id:'one',direction:'incoming',message_type:'text',body:'synthetic'}]};else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[]};else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};return{ok:true,json:async()=>({success:true,result})};};
   });
-  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
+  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-copilot-voice-audio.js','docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
   await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
   await page.locator('#operatorCopilotToggle').click();
   const section=page.locator('[data-copilot-voice]');assert.equal(await section.count(),1);assert.equal(await section.isHidden(),true);
@@ -21,7 +21,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   await page.evaluate(()=>document.querySelector('[data-copilot-voice] button').onclick());
   assert.match(await section.locator('[role=status]').textContent(),/недоступен/);
   assert.equal(await page.locator('#operatorCopilotAsk').isEnabled(),true);assert.equal(await page.locator('#chatText').isEnabled(),true);
-  assert.equal(await page.evaluate(()=>window.micCalls),0);assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.url.includes('copilot-voice')).length),0);
+  assert.equal(await page.evaluate(()=>window.micCalls),0);assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.url.includes('copilot-voice/preflight')).length),1);
   await page.close();
  }
 }finally{await browser.close();}})().catch(error=>{console.error(error);process.exitCode=1;});

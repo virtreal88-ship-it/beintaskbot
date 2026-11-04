@@ -1,4 +1,4 @@
-/* Same-origin transport for the isolated gateway; not registered in /app. */
+/* Same-origin transport for the private Copilot voice gateway. */
 (function(root,factory){
   if(typeof module==='object' && module.exports)module.exports=factory;
   else root.connectExperimentalCopilotVoice=factory;
@@ -8,16 +8,24 @@
   if(url.protocol==='http:' && !['127.0.0.1','localhost'].includes(url.hostname))throw new Error('voice_https_required');
   url.protocol=url.protocol==='https:'?'wss:':'ws:';
   const socket=new env.WebSocket(url.toString());
-  let terminal=false;
+  let terminal=false,ready=false,opened=false,settled=false,resolveReady,rejectReady;
   socket.binaryType='arraybuffer';
-  await new Promise((resolve,reject)=>{
-    const timer=env.setTimeout(()=>{socket.close();reject(new Error('voice_connect_timeout'));},5000);
-    socket.onopen=()=>{env.clearTimeout(timer);resolve();};
-    socket.onerror=()=>{env.clearTimeout(timer);socket.close();reject(new Error('voice_connect_failed'));};
-  });
+  const admission=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject;});
+  const timer=env.setTimeout(()=>fail('voice_connect_timeout'),5000);
+  function fail(code){
+    if(!settled){settled=true;env.clearTimeout(timer);rejectReady(new Error(code));}
+    terminal=true;socket.close();
+  }
+  socket.onopen=()=>{opened=true;};
+  socket.onerror=()=>{if(!ready)fail('voice_connect_failed');
+                      else if(!terminal){terminal=true;socket.close();onEvent({type:'end_unconfirmed'});}};
   socket.onmessage=event=>{
     try{
       const msg=JSON.parse(event.data);
+      if(!ready){
+        if(!opened || msg.type!=='ready')throw new Error('voice_not_ready');
+        ready=true;settled=true;env.clearTimeout(timer);resolveReady();onEvent({type:'ready'});return;
+      }
       if(msg.type==='audio'){
         if(typeof msg.pcm_base64!=='string'||msg.pcm_base64.length>12800)throw new Error('invalid_audio');
         const raw=env.atob(msg.pcm_base64),pcm=Uint8Array.from(raw,ch=>ch.charCodeAt(0));
@@ -26,9 +34,11 @@
         if(['ended','end_unconfirmed'].includes(msg.type))terminal=true;
         onEvent(msg);
       } else if(msg.type==='error'){terminal=true;onEvent({type:'end_unconfirmed'});}
-    }catch(_){terminal=true;socket.close();onEvent({type:'end_unconfirmed'});}
+    }catch(_){if(!ready)fail('voice_not_ready');else{terminal=true;socket.close();onEvent({type:'end_unconfirmed'});}}
   };
-  socket.onclose=()=>{if(!terminal)onEvent({type:'end_unconfirmed'});};
+  socket.onclose=()=>{if(!ready){if(!settled){settled=true;env.clearTimeout(timer);rejectReady(new Error('voice_connect_failed'));}}
+                       else if(!terminal)onEvent({type:'end_unconfirmed'});};
+  await admission;
   return {
     send(event){
       if(socket.readyState!==env.WebSocket.OPEN)throw new Error('voice_disconnected');
