@@ -14,14 +14,26 @@
   const win=document.defaultView||globalThis;
   let controller=null,disposed=false,checking=false;
   const abort=()=>{void section.disposeVoice().catch(()=>{});};
+  const pagehide=()=>{
+    // Mobile browsers may dispatch pagehide while the app is being
+    // backgrounded or restored from history. Ask the server to end first;
+    // destroy() closes the WebSocket immediately and loses that acknowledgement.
+    if(controller?.isActive?.()){void controller.end?.();return;}
+    abort();
+  };
   section.isVoiceActive=()=>!!controller?.isActive?.();
-  section.endVoice=()=>{if(controller?.isActive?.())controller.end();};
+  section.endVoice=()=>controller?.isActive?.()?controller.end?.():Promise.resolve(false);
   section.disposeVoice=async()=>{
     if(disposed)return;disposed=true;
-    win.removeEventListener?.('pagehide',abort);
+    win.removeEventListener?.('pagehide',pagehide);
     document.removeEventListener?.('tenant-auth-invalid',abort);
     document.removeEventListener?.('tenant-chat-close',abort);
-    if(controller)await controller.destroy();
+    if(controller){
+      if(controller.isActive?.()){
+        try{await Promise.race([Promise.resolve(controller.end?.()),new Promise(resolve=>setTimeout(resolve,2200))]);}catch(_){}
+      }
+      await controller.destroy();
+    }
   };
   section.activateVoice=async()=>{
     if(disposed||checking||controller||typeof options.preflight!=='function')return;
@@ -41,7 +53,7 @@
     }catch(_){/* Denied, stale, or unreachable: leave voice hidden. */}
     finally{checking=false;}
   };
-  win.addEventListener?.('pagehide',abort);
+  win.addEventListener?.('pagehide',pagehide);
   document.addEventListener?.('tenant-auth-invalid',abort);
   document.addEventListener?.('tenant-chat-close',abort);
   return section;

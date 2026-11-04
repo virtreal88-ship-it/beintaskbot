@@ -14,11 +14,12 @@
   const mute = document.createElement('button'); mute.type='button';mute.textContent=labels.mute;mute.hidden=true;
   const end = document.createElement('button'); end.type='button';end.textContent=labels.end;end.hidden=true;
   root.append(status,start,mute,end);
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null;
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false;
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
   const microphoneUncertain=labels.microphone;
+  function settleEnd(confirmed){if(resolveEnd){const resolve=resolveEnd;resolveEnd=null;endPromise=null;resolve(confirmed);}}
   function idle(){if(!running && !ending && cleanupPending===0){try{onIdle();}catch(_){}}}
   function send(event){
     if(!channel)return;
@@ -33,6 +34,7 @@
     serverInitiated=false;
     hideAfterConnect=false;
     const stopVersion=++generation;
+    settleEnd(confirmed);
     running=false; ending=false; cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
@@ -62,7 +64,7 @@
       if(!destroyed)status.textContent=microphoneUncertain;
       idle();
     });
-    muted=false;mute.textContent=labels.mute;
+    muted=false;endSent=false;mute.textContent=labels.mute;
     if(!destroyed) status.textContent=voiceBlocked?reason:labels.disconnecting;
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
@@ -118,13 +120,17 @@
   start.addEventListener('click',begin);
   function finish(){
     if(!channel){
-      if(serverInitiated){hideAfterConnect=true;ending=true;end.disabled=true;status.textContent=labels.ending;return;}
-      void stop(labels.failed,true);return;
+      if(serverInitiated){hideAfterConnect=true;ending=true;end.disabled=true;status.textContent=labels.ending;if(!endPromise)endPromise=new Promise(resolve=>{resolveEnd=resolve;});return endPromise;}
+      void stop(labels.failed,true);return Promise.resolve(false);
     }
+    if(endSent)return endPromise||Promise.resolve(false);
+    if(!endPromise)endPromise=new Promise(resolve=>{resolveEnd=resolve;});
+    endSent=true;
     try{audio?.stopNow?.();}catch(_){}
     muted=true;ending=true;end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
     send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
+    return endPromise;
   }
   end.addEventListener('click',finish);
   mute.addEventListener('click',()=>{

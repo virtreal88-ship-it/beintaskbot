@@ -52,6 +52,28 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.requests.some(x=>/\/crm\/chat\/send/.test(x.url))),false);
  await page.close();
  }
+ const wrapperPage=await browser.newPage();
+ await wrapperPage.route('https://test.local/**',route=>route.fulfill({contentType:'text/html',body:'<main id="root"></main>'}));
+ await wrapperPage.goto('https://test.local/wrapper');
+ for(const file of ['docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js'])await wrapperPage.addScriptTag({path:path.join(root,file)});
+ await wrapperPage.evaluate(()=>{
+  window.voiceEvents=[];window.closedSockets=0;window.released=0;
+  class FakeSocket{static OPEN=1;constructor(){this.readyState=0;setTimeout(()=>{this.readyState=1;this.onopen?.();setTimeout(()=>this.emit({type:'ready'}),0);},0);}emit(value){this.onmessage?.({data:JSON.stringify(value)});}send(value){if(typeof value!=='string')return;const item=JSON.parse(value);window.voiceEvents.push(item);if(item.type==='end')setTimeout(()=>this.emit({type:'ended'}),0);}close(){if(this.readyState===3)return;this.readyState=3;window.closedSockets++;this.onclose?.();}}
+  window.WebSocket=FakeSocket;window.acquireTenantMicrophone=async()=>()=>window.released++;
+  window.openExperimentalCopilotAudio=async()=>({mute(){},play(){},interrupt(){return 0;},finished:async()=>true,stopNow(){},close:async()=>{}});
+ });
+ await wrapperPage.evaluate(()=>{window.voiceSection=window.mountTenantCopilotVoice(document.getElementById('root'),{preflight:async()=>({available:true}),isCurrent:()=>true,socketPath:'/api/voice',language:'ru'});window.voiceSection.activateVoice();});
+ await wrapperPage.getByRole('button',{name:'Начать голосовой разговор'}).click();
+ await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Слушаю');
+ await wrapperPage.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+ await wrapperPage.waitForFunction(()=>window.released===1&&window.closedSockets===1);
+ assert.equal(await wrapperPage.evaluate(()=>window.voiceEvents.filter(x=>x.type==='end').length),1,'pagehide sends end and waits for server acknowledgement before closing');
+ await wrapperPage.getByRole('button',{name:'Начать голосовой разговор'}).click();
+ await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Слушаю');
+ await wrapperPage.evaluate(()=>document.dispatchEvent(new Event('tenant-chat-close')));
+ await wrapperPage.waitForFunction(()=>window.released===2&&window.closedSockets===2);
+ assert.equal(await wrapperPage.evaluate(()=>window.voiceEvents.filter(x=>x.type==='end').length),2,'dialog disposal also waits for graceful end');
+ await wrapperPage.close();
  const lifecyclePage=await browser.newPage();
  await lifecyclePage.route('https://test.local/**',route=>route.fulfill({contentType:'text/html',body:'<main id="root"></main>'}));
  await lifecyclePage.goto('https://test.local/lifecycle');
