@@ -170,7 +170,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription!='gpt-transcribe'
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -188,7 +188,6 @@ class _RealtimeWire:
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
-                            'transcription':{'model':'gpt-transcribe','languages':['ru','az']},
                             'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
@@ -233,7 +232,7 @@ class _RealtimeWire:
               'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
               'instructions':s.get('instructions')==expected['instructions'],
               'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
-              'audio.input.transcription':incoming.get('transcription')=={'model':'gpt-transcribe','languages':['ru','az']},
+              'audio.input.transcription':'transcription' not in incoming,
               'audio.input.turn_detection.type':vad.get('type')=='server_vad',
               'audio.input.turn_detection.create_response':vad.get('create_response') is False,
               'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is False,

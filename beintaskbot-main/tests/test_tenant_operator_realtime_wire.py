@@ -34,7 +34,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.socket=Socket();self.guard=Guard();self.wire=SyntheticRealtimeWire(self.socket,self.guard)
         self.snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.',
                        'lines':[],'extra_context':{}}
-        self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':'gpt-transcribe','reconnect':False}
+        self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':None,'reconnect':False}
 
     async def open(self):await self.wire.open(self.snapshot,**self.options)
 
