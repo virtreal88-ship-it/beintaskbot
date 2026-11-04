@@ -15,25 +15,27 @@ class Refused(Exception):
     pass
 
 
-def _require_live_session_admission():
-    # No feature flag or request can bypass source, history and billing gates.
-    raise Refused('real_provider_not_supported')
-
-
 class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
     MAX_OUTPUT_BYTES = 4_800_000
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
-                 max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None):
-        if any(x is None for x in (authority, ledger, lease, context, provider, client)):
+                 max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
+                 pilot_policy=None):
+        if any(x is None for x in (authority, lease, context, provider, client)) or (ledger is None and pilot_policy is None):
             raise Refused('trusted_dependencies_missing')
         if getattr(provider, 'mock_only', None) is not True:
             from tenant_operator_realtime_wire import OpenAIRealtimeProvider
-            if type(provider) is not OpenAIRealtimeProvider:raise Refused('provider_not_trusted')
-            _require_live_session_admission()
-        if not callable(getattr(provider,'bind_claim',None)):
+            from tenant_operator_voice_pilot import PilotAdmission
+            if (type(provider) is not OpenAIRealtimeProvider or type(pilot_policy) is not PilotAdmission or
+                provider.guard is not pilot_policy or history is not None):
+                raise Refused('provider_not_trusted')
+        if pilot_policy is not None:
+            from tenant_operator_voice_pilot import PilotAdmission
+            if type(pilot_policy) is not PilotAdmission or history is not None:
+                raise Refused('pilot_policy_invalid')
+        if not callable(getattr(provider,'bind_pilot_claim' if pilot_policy is not None else 'bind_claim',None)):
             raise Refused('provider_claim_binding_required')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
             raise Refused('invalid_scope')
@@ -41,10 +43,16 @@ class Session:
             raise Refused('invalid_limits')
         self.scope = scope  # (tenant, actor, channel, conversation), server-derived
         self.authority, self.ledger, self.lease = authority, ledger, lease
+        self.pilot_policy=pilot_policy
         self.history = history
         self.history_clear_revision = None
         self.context, self.provider, self.client = context, provider, client
         self.max_seconds, self.idle_seconds, self.poll_seconds = max_seconds, idle_seconds, poll_seconds
+        # Wall-clock expiry alone does not bound audio uploaded faster than
+        # real time. Count all attempted PCM input before provider I/O, since
+        # a failed write can still have reached the provider.
+        self.max_input_bytes = int(max_seconds * self.SAMPLE_RATE * 2)
+        self.input_bytes = 0
         self.started = self.activity = 0
         self.closed = True
         self.open_attempted = False
@@ -54,6 +62,9 @@ class Session:
             self.session_id = str(uuid.UUID(session_id)) if session_id is not None else str(uuid.uuid4())
         except (ValueError,TypeError,AttributeError):
             raise Refused('invalid_session_id') from None
+        if pilot_policy is not None and (pilot_policy.scope!=scope or pilot_policy.session_id!=self.session_id or
+                                         pilot_policy.authority is not authority or pilot_policy.lease is not lease):
+            raise Refused('pilot_policy_scope_mismatch')
         self.transcript = None
         if history is not None:
             try:
@@ -103,6 +114,12 @@ class Session:
         async with self.io_lock:
             if self.closed:
                 raise Refused('session_closed')
+            # A busy event loop or a slow authorization/lease check can delay
+            # the watchdog. Do not initiate billable input or a new response
+            # after the session deadline while waiting for that watchdog.
+            if (event.get('type') in ('input_audio_buffer.append','response.create') and
+                self.started and time.monotonic()-self.started >= self.max_seconds):
+                raise Refused('session_duration_limit')
             await self.provider.send(event)
 
     async def _send_client(self, event):
@@ -131,8 +148,7 @@ class Session:
             if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
                 raise Refused('existing_copilot_context_unavailable')
             # Initial provider.open sends the context, so validate before open
-            # as well as before each response. This remains non-atomic with
-            # network I/O; immutable production gate remains closed.
+            # as well as before each response.
             await self.context.revalidate(self.scope)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             self.fence = await self.lease.claim(self.scope)
@@ -141,13 +157,16 @@ class Session:
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # Provider opening and audio input may be billable before any
             # response reservation. Require a durable whole-session hold first.
-            reserve_session=getattr(self.ledger,'reserve_session',None)
-            if not callable(reserve_session):raise Refused('session_budget_unavailable')
-            admission=await reserve_session(self.scope,self.session_id)
-            if (not isinstance(admission,dict) or admission.get('state')!='reserved' or
-                admission.get('scope')!=self.scope or admission.get('session_id')!=self.session_id or
-                type(admission.get('reserved_microusd')) is not int or admission['reserved_microusd']!=5_000_000):
-                raise Refused('session_budget_unconfirmed')
+            if self.pilot_policy is not None:
+                await self.pilot_policy.admit(self.scope,self.session_id,self.fence)
+            else:
+                reserve_session=getattr(self.ledger,'reserve_session',None)
+                if not callable(reserve_session):raise Refused('session_budget_unavailable')
+                admission=await reserve_session(self.scope,self.session_id)
+                if (not isinstance(admission,dict) or admission.get('state')!='reserved' or
+                    admission.get('scope')!=self.scope or admission.get('session_id')!=self.session_id or
+                    type(admission.get('reserved_microusd')) is not int or admission['reserved_microusd']!=5_000_000):
+                    raise Refused('session_budget_unconfirmed')
             if self._stop_requested: raise Refused('session_stopped_during_start')
             if self.history is not None:
                 # Fence legacy whole-snapshot writers before any provider I/O.
@@ -229,21 +248,23 @@ class Session:
             self.item is not None or self.closed):
             return
         self.response_number += 1
-        if self.response_number > 2:
+        if self.pilot_policy is None and self.response_number > 2:
             raise Refused('session_response_limit')
-        # Validate a server-owned context before reserving and again as close
-        # as possible to dispatch. This does not prove an atomic DB→network
-        # fence; production admission remains hard-disabled.
+        # Validate the server-owned context before issuing a one-use pilot
+        # permit and again as close as possible to dispatch.
         await self.context.revalidate(self.scope)
         tenant, actor, channel, conversation = self.scope
         input_item_id=self.pending_input_item_id
         reservation = {'request_id': str(uuid.uuid4()), 'tenant_id': str(tenant), 'session_id': self.session_id,
                        'actor_id': actor, 'channel_id':str(channel), 'conversation_id':str(conversation),
                        'response_number': self.response_number, 'executor': self.executor}
-        reserved=await self.ledger.reserve(reservation)
-        self._check_receipt(reserved,reservation,'reserved')
-        claimed=await self.ledger.claim(reservation)  # MUST commit before return
-        self._check_receipt(claimed,reservation,'claimed')
+        if self.pilot_policy is not None:
+            claimed=await self.pilot_policy.issue(self.scope,reservation['request_id'])
+        else:
+            reserved=await self.ledger.reserve(reservation)
+            self._check_receipt(reserved,reservation,'reserved')
+            claimed=await self.ledger.claim(reservation)  # MUST commit before return
+            self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
         self.current_input_item_id=input_item_id
         self.current_response_usage_microusd=None
@@ -257,15 +278,17 @@ class Session:
             await self.context.revalidate(self.scope)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
-            # A production transport must independently consume a committed
-            # one-use dispatch capability. Only the local mock protocol below
-            # implements this contract; the public provider is hard-disabled.
-            await self.provider.bind_claim(reservation,claimed)
+            # The provider consumes the one-use pilot permit before sending a
+            # response.create event upstream.
+            if self.pilot_policy is not None:
+                await self.provider.bind_pilot_claim(reservation,claimed)
+            else:
+                await self.provider.bind_claim(reservation,claimed)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
             await self._send_provider({'type': 'response.create'})
         except BaseException:
-            marked=await self.ledger.mark_unknown(reservation)
+            marked=await self.ledger.mark_unknown(reservation) if self.pilot_policy is None else {'state':'unknown'}
             if isinstance(marked,dict) and marked.get('state')=='unknown':
                 self.current_reservation=None
             raise
@@ -334,6 +357,9 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
+                if self.input_bytes + len(data) > self.max_input_bytes:
+                    raise Refused('session_input_limit')
+                self.input_bytes += len(data)
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
             return
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:
@@ -591,6 +617,9 @@ class Session:
         item_id=self.current_input_item_id
         if reservation is None or item_id is None or self.response_inflight:
             return False
+        if self.pilot_policy is not None:
+            self.current_reservation=None;self.current_input_item_id=None;self.current_response_usage_microusd=None
+            return True
         if self.current_response_usage_microusd is None:
             receipt=await self.ledger.mark_unknown(reservation)
             if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
@@ -667,7 +696,9 @@ class Session:
         reservation=self.current_reservation
         self.current_reservation=None
         async def hold_unknown():
-            if reservation:
+            if self.pilot_policy is not None:
+                await self.pilot_policy.close()
+            elif reservation:
                 await self.ledger.mark_unknown(reservation)
         # close and both drains are independent: close can unblock a running
         # send, but the lease remains held until *all* I/O is really drained.

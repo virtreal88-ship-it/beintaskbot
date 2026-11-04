@@ -1,0 +1,23 @@
+# Operator Copilot Realtime pilot
+
+The production route is enabled only for the exact tenant and employee named by
+`COPILOT_VOICE_PILOT_TENANT_ID` and `COPILOT_VOICE_PILOT_ACTOR_ID`. Both values
+are required; all other users remain unavailable. The current company Chat AI
+credential is decrypted server-side and is never sent to `/app`.
+
+The pilot uses `gpt-realtime-2.1-mini` and has no fixed dollar ceiling. Each
+session is limited to 120 seconds, 30 seconds idle time, 5,760,000 bytes of
+incoming PCM audio, 4,800,000 bytes of generated audio, and 4,096 output tokens.
+PostgreSQL fencing permits one session per tenant/user and keeps an uncertain
+session blocked until a confirmed provider close. Voice audio and conversation
+turns are not persisted. No CRM tools or customer-send actions are available.
+
+The legacy shared monetary-ledger route remains closed. Do not change its
+verification constants or flags to enable the pilot. The pilot admission policy
+is the explicit alternative and does not assert or enforce a dollar cap.
+
+For a live acceptance check, use the authenticated pilot employee in `/app`,
+open an eligible direct Connect dialog with AI assigned, start one brief voice
+session, exchange a short spoken turn, then end it and verify the server's
+confirmed `ended` event. A failed provider handshake is reported without
+logging or exposing the company key; verify model access using this same path.

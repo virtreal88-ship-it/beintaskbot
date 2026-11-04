@@ -1,9 +1,4 @@
-"""Server-owned Realtime protocol candidate. Live creation is hard disabled.
-
-Only injected sockets reach the wire today. The aiohttp transport is usable in
-isolated tests, but live connection requires a reviewed, immutable admission
-change and proof of the budget, source and history fences.
-"""
+"""Server-owned Realtime protocol for the single-account Copilot pilot."""
 import asyncio
 import base64
 import binascii
@@ -54,19 +49,17 @@ def _unique_object(pairs):
     return result
 
 
-def _require_live_admission():
-    # Never toggle through request arguments, deployment config or env vars.
-    # Claims, pre-open context linearization, writer cutover and billing are
-    # not yet proven with the actual upstream API.
-    raise TenantLinearError('Голосовой режим пока недоступен.',503)
+def _require_live_admission(guard=None):
+    # Only the owner-scoped pilot policy may open a real provider connection.
+    # The legacy monetary-ledger route remains closed and no environment flag
+    # can turn it on.
+    from tenant_operator_voice_pilot import PilotAdmission
+    if type(guard) is not PilotAdmission:
+        raise TenantLinearError('Голосовой режим пока недоступен.',503)
 
 
 class AiohttpRealtimeSocket:
-    """Bounded JSON adapter around an already-open aiohttp WebSocket.
-
-    This wrapper owns no key. Its caller owns the session. Production cannot
-    obtain a socket through this module while admission is disabled.
-    """
+    """Bounded JSON adapter around an already-open aiohttp WebSocket."""
     def __init__(self,ws,owned_session=None):
         self.ws=ws;self.owned_session=owned_session;self._close_task=None
 
@@ -99,15 +92,20 @@ class AiohttpRealtimeSocket:
         finally:
             if self.owned_session is not None:
                 await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
-        if not self.ws.closed:raise ValueError('wire_close_unconfirmed')
+        # aiohttp marks a socket closed even when the peer never replies and
+        # close() internally catches an error. Only a valid peer close frame,
+        # with no recorded transport exception, confirms clean shutdown.
+        code=self.ws.close_code
+        valid_code=(isinstance(code,int) and not isinstance(code,bool) and
+                    ((1000<=code<=1014 and code not in (1004,1005,1006)) or 3000<=code<=4999))
+        if not self.ws.closed or not valid_code or self.ws.exception() is not None:
+            raise ValueError('wire_close_unconfirmed')
         if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
 
 
 async def _open_openai_socket(api_key,owner):
-    """Future server-only connector. Gate fires before key use or any I/O."""
-    _require_live_admission()
-    # No caller-supplied session, proxy, endpoint, or trace hooks. This path
-    # remains blocked until key source, cancellation and remote billing proof.
+    """Server-only connector scoped to the configured single-user pilot."""
+    _require_live_admission(getattr(owner,'guard',None))
     session=_new_owned_session()
     owner._opening_session=session
     try:
@@ -128,6 +126,16 @@ def create_production_provider(*args,**kwargs):
     if kwargs or len(args)!=2 or type(args[0]) is not ScopedDispatchGuard or type(args[1]) is not ServerCredentialLoader:
         raise ValueError('trusted_provider_dependencies_required')
     return OpenAIRealtimeProvider(args[1].load,args[0])
+
+
+def create_pilot_provider(policy,credential_loader):
+    from tenant_operator_voice_pilot import PilotAdmission
+    from tenant_operator_voice_orchestration import ServerCredentialLoader
+    if type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader:
+        raise ValueError('trusted_provider_dependencies_required')
+    if policy.authority is not credential_loader.authority:
+        raise ValueError('pilot_authority_mismatch')
+    return OpenAIRealtimeProvider(credential_loader.load,policy)
 
 
 class _RealtimeWire:
@@ -227,6 +235,19 @@ class _RealtimeWire:
         if scope['request_id'] in self.seen:raise ValueError('claim_reused')
         self.bound=(dict(scope),dict(receipt))
 
+    async def bind_pilot_claim(self,scope,receipt):
+        # No financial reservation is represented by a pilot permit. This
+        # path still requires the exact server-owned policy and one-use guard.
+        from tenant_operator_voice_pilot import PilotAdmission
+        if type(self.guard) is not PilotAdmission or not self.ready or self.bound is not None:
+            raise ValueError('pilot_claim_not_available')
+        if not isinstance(scope,dict) or not isinstance(receipt,dict):raise ValueError('pilot_claim_invalid')
+        expected=(scope.get('tenant_id'),scope.get('actor_id'),scope.get('channel_id'),scope.get('conversation_id'))
+        if (expected!=self.guard.scope or scope.get('session_id')!=self.guard.session_id or
+            receipt.get('session_id')!=self.guard.session_id or receipt.get('request_id')!=scope.get('request_id') or
+            scope.get('request_id') in self.seen):raise ValueError('pilot_claim_scope_invalid')
+        self.bound=(dict(scope),dict(receipt))
+
     async def send(self,event):
         if not self.ready or not isinstance(event,dict):raise ValueError('session_not_ready')
         kind=event.get('type')
@@ -236,7 +257,13 @@ class _RealtimeWire:
             # This test callback must model an atomic, committed, globally
             # one-use dispatch capability; current production ledger has no
             # such reviewed integration, so the live factory stays blocked.
-            if await self.guard.consume(scope,receipt) is not True:raise ValueError('claim_not_consumed')
+            from tenant_operator_voice_pilot import PilotAdmission
+            if type(self.guard) is PilotAdmission:
+                admitted_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
+                consumed=await self.guard.consume(admitted_scope,receipt)
+            else:
+                consumed=await self.guard.consume(scope,receipt)
+            if consumed is not True:raise ValueError('claim_not_consumed')
             self.seen.add(scope['request_id'])
         elif kind=='input_audio_buffer.append' and set(event)=={'type','audio'}:
             try:audio=base64.b64decode(event['audio'],validate=True)
@@ -282,12 +309,7 @@ class SyntheticRealtimeWire(_RealtimeWire):
 
 
 class OpenAIRealtimeProvider(_RealtimeWire):
-    """Server-only provider composition. Not admitted by production Session.
-
-    The credential loader must eventually be supplied by the reviewed server
-    factory, never by a request. Both this class and its connector reject
-    before loading credentials while the immutable admission gate is closed.
-    """
+    """Server-only provider composition for the scoped no-tools pilot."""
     mock_only=False
 
     def __init__(self,credential_loader,claim_guard):
@@ -304,7 +326,7 @@ class OpenAIRealtimeProvider(_RealtimeWire):
         if not self._opening_session.closed:raise ValueError('provider_cleanup_unconfirmed')
 
     async def open(self,snapshot,**options):
-        _require_live_admission()
+        _require_live_admission(self.guard)
         if self._closing:raise ValueError('provider_closed')
         try:
             credential=await asyncio.wait_for(self._credential_loader(),CONNECT_DEADLINE)

@@ -43,7 +43,13 @@ class VoiceSessionLease:
                           lease_until>now() AS live FROM saas_operator_voice_lease
                           WHERE tenant_id=%s::uuid AND actor_id=%s FOR UPDATE''', self.key)
                         old = cur.fetchone()
-                        if old and old['state'] in _ACTIVE and old['live'] is True:
+                        # A starting owner must successfully renew to active
+                        # before any provider I/O. An expired starting row can
+                        # therefore be reclaimed under this same lock: the old
+                        # owner's renew then fails on fence and expiry. Expiry
+                        # of an active row does not prove provider shutdown.
+                        if old and not (old['state']=='closed' or
+                                        (old['state']=='starting' and old['live'] is False)):
                             conn.commit(); return None
                         if old:
                             next_fence = int(old['fence']) + 1

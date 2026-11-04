@@ -107,6 +107,16 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(provider.config)
         self.assertFalse(lease.held)
 
+    async def test_lost_starting_lease_never_opens_provider(self):
+        class LostBeforeOpen(Lease):
+            async def assert_current(self,scope,fence):raise Refused('lease_lost')
+        ledger=Ledger();provider=Provider(ledger);lease=LostBeforeOpen()
+        session=Session(('tenant',42,'channel','another'),authority=Authority(),ledger=ledger,lease=lease,
+                        context=Context(),provider=provider,client=Client())
+        with self.assertRaisesRegex(Refused,'lease_lost'):await session.start()
+        self.assertIsNone(provider.config)
+        self.assertFalse(lease.held)
+
     async def turn(self):
         self.input_id+=1
         item_id=f'user-{self.input_id}'
@@ -248,6 +258,44 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_client({'type':'mute','muted':True})
         await self.session.receive_client({'type':'audio','pcm':bytes(100)})
         self.assertEqual(self.provider.events,[{'type':'input_audio_buffer.clear'}])
+        self.assertEqual(self.session.input_bytes,0)
+
+    async def test_cumulative_audio_limit_closes_before_extra_provider_input(self):
+        self.session.max_input_bytes=200
+        await self.session.receive_client({'type':'audio','pcm':bytes(120)})
+        await self.session.receive_client({'type':'audio','pcm':bytes(80)})
+        with self.assertRaisesRegex(Refused,'session_input_limit'):
+            await self.session.receive_client({'type':'audio','pcm':bytes(2)})
+        inputs=[event for event in self.provider.events if event['type']=='input_audio_buffer.append']
+        self.assertEqual(sum(len(base64.b64decode(event['audio'])) for event in inputs),200)
+        self.assertTrue(self.provider.closed)
+        self.assertFalse(self.lease.held)
+
+    async def test_concurrent_audio_cannot_exceed_session_limit(self):
+        self.session.max_input_bytes=100
+        results=await asyncio.gather(*(self.session.receive_client({'type':'audio','pcm':bytes(60)})
+                                       for _ in range(2)),return_exceptions=True)
+        self.assertEqual(sum(isinstance(result,Refused) for result in results),1)
+        self.assertEqual(self.session.input_bytes,60)
+        self.assertEqual(len([event for event in self.provider.events if event['type']=='input_audio_buffer.append']),1)
+
+    async def test_expired_session_rejects_audio_before_watchdog_wakes(self):
+        self.session.watchdog.cancel()
+        self.session.started-=2
+        with self.assertRaisesRegex(Refused,'session_duration_limit'):
+            await self.session.receive_client({'type':'audio','pcm':bytes(100)})
+        self.assertFalse(any(event['type']=='input_audio_buffer.append' for event in self.provider.events))
+        self.assertTrue(self.provider.closed)
+
+    async def test_expired_session_rejects_response_before_watchdog_wakes(self):
+        self.session.watchdog.cancel()
+        await self.session.receive_provider({'type':'input_audio_buffer.speech_started'})
+        await self.session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+        self.session.started-=2
+        with self.assertRaisesRegex(Refused,'session_duration_limit'):
+            await self.session.receive_provider({'type':'input_audio_buffer.committed','item_id':'expired-input'})
+        self.assertFalse(any(event['type']=='response.create' for event in self.provider.events))
+        self.assertTrue(self.provider.closed)
 
     async def test_budget_refusal_prevents_dispatch_and_closes(self):
         self.ledger.deny=True
@@ -287,6 +335,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         entered=asyncio.Event();release=asyncio.Event()
         class SlowWS:
             closed=False
+            close_code=1000
+            def exception(inner):return None
             async def close(inner):entered.set();await release.wait();inner.closed=True
         wrapper=AiohttpRealtimeSocket(SlowWS());lease=Lease();provider=Provider(self.ledger)
         provider.close=wrapper.close
@@ -311,6 +361,14 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await other.end('test'));self.assertTrue(lease.held)
         self.assertEqual(client.events[-1],{'type':'end_unconfirmed'})
         self.assertNotIn('ended',[event['type'] for event in client.events])
+
+    async def test_failed_provider_close_keeps_lease_and_reports_uncertain(self):
+        async def unconfirmed_close():raise ValueError('wire_close_unconfirmed')
+        self.provider.close=unconfirmed_close
+        self.assertFalse(await self.session.end('network_failure'))
+        self.assertTrue(self.lease.held)
+        self.assertEqual(self.client.events[-1],{'type':'end_unconfirmed'})
+        self.assertNotIn('ended',[event['type'] for event in self.client.events])
 
     async def test_pending_provider_receive_keeps_lease_until_drained(self):
         entered=asyncio.Event();release=asyncio.Event();lease=Lease();provider=Provider(self.ledger)
