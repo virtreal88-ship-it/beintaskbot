@@ -99,7 +99,14 @@ class AiohttpRealtimeSocket:
         finally:
             if self.owned_session is not None:
                 await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
-        if not self.ws.closed:raise ValueError('wire_close_unconfirmed')
+        # aiohttp marks a socket closed even when the peer never replies and
+        # close() internally catches an error. Only a valid peer close frame,
+        # with no recorded transport exception, confirms clean shutdown.
+        code=self.ws.close_code
+        valid_code=(isinstance(code,int) and not isinstance(code,bool) and
+                    ((1000<=code<=1014 and code not in (1004,1005,1006)) or 3000<=code<=4999))
+        if not self.ws.closed or not valid_code or self.ws.exception() is not None:
+            raise ValueError('wire_close_unconfirmed')
         if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
 
 

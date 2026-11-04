@@ -335,6 +335,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         entered=asyncio.Event();release=asyncio.Event()
         class SlowWS:
             closed=False
+            close_code=1000
+            def exception(inner):return None
             async def close(inner):entered.set();await release.wait();inner.closed=True
         wrapper=AiohttpRealtimeSocket(SlowWS());lease=Lease();provider=Provider(self.ledger)
         provider.close=wrapper.close
@@ -359,6 +361,14 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await other.end('test'));self.assertTrue(lease.held)
         self.assertEqual(client.events[-1],{'type':'end_unconfirmed'})
         self.assertNotIn('ended',[event['type'] for event in client.events])
+
+    async def test_failed_provider_close_keeps_lease_and_reports_uncertain(self):
+        async def unconfirmed_close():raise ValueError('wire_close_unconfirmed')
+        self.provider.close=unconfirmed_close
+        self.assertFalse(await self.session.end('network_failure'))
+        self.assertTrue(self.lease.held)
+        self.assertEqual(self.client.events[-1],{'type':'end_unconfirmed'})
+        self.assertNotIn('ended',[event['type'] for event in self.client.events])
 
     async def test_pending_provider_receive_keeps_lease_until_drained(self):
         entered=asyncio.Event();release=asyncio.Event();lease=Lease();provider=Provider(self.ledger)

@@ -247,6 +247,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         ws_entered=asyncio.Event();ws_release=asyncio.Event();session_entered=asyncio.Event();session_release=asyncio.Event()
         class SlowWS:
             closed=False
+            close_code=1000
+            def exception(self):return None
             async def close(self):
                 ws_entered.set();await ws_release.wait();self.closed=True
         class SlowSession:
@@ -262,6 +264,35 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(slow_session.closed);self.assertFalse(wrapped._close_task.done())
         session_release.set();await wrapped.close()
         self.assertTrue(slow_ws.closed);self.assertTrue(slow_session.closed)
+
+    async def test_abnormal_or_unacknowledged_close_is_not_confirmed(self):
+        class BrokenWS:
+            closed=False
+            def __init__(self,code,error=None):self.close_code=code;self.error=error
+            def exception(self):return self.error
+            async def close(self):self.closed=True;return True
+        for code,error in [(1006,None),(None,None),(1000,ConnectionError('synthetic'))]:
+            wrapped=AiohttpRealtimeSocket(BrokenWS(code,error))
+            with self.assertRaisesRegex(ValueError,'wire_close_unconfirmed'):
+                await wrapped.close()
+
+    async def test_real_local_peer_abort_is_not_a_confirmed_close(self):
+        async def abort(request):
+            ws=web.WebSocketResponse();await ws.prepare(request)
+            request.transport.abort()
+            return ws
+        app=web.Application();app.router.add_get('/abort',abort)
+        runner=web.AppRunner(app);await runner.setup()
+        site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+        client=aiohttp.ClientSession()
+        try:
+            port=site._server.sockets[0].getsockname()[1]
+            ws=await client.ws_connect(f'http://127.0.0.1:{port}/abort')
+            await asyncio.wait_for(ws.receive(),1)
+            with self.assertRaisesRegex(ValueError,'wire_close_unconfirmed'):
+                await AiohttpRealtimeSocket(ws).close()
+        finally:
+            await client.close();await runner.cleanup()
 
     async def test_repeated_cancel_during_connect_cleanup_remains_observable(self):
         entered=asyncio.Event();release=asyncio.Event()
