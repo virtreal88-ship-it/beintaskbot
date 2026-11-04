@@ -147,6 +147,24 @@ def test_authenticated_mcp_opt_in_get_runs_off_event_loop(db,catalogue):
     asyncio.run(check());get.assert_called_once();post.assert_not_called()
 
 
+def test_authenticated_mcp_returns_safe_realtime_http_status(db,catalogue):
+    token,_,get,post=catalogue
+    get.side_effect=[get.return_value,Mock(status_code=404,json=Mock(return_value={'error':{'message':'private'}}))]
+    async def check():
+        app=web.Application();app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            result=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/call',
+                'params':{'name':'company_ai_settings_read','arguments':{
+                    'list_provider_models':True,'id':'gpt-realtime-2.1-mini'}}},
+                headers={'Authorization':'Bearer '+token})
+            assert result.status==200
+            payload=json.loads((await result.json())['result']['content'][0]['text'])
+            check=payload['provider_models']['realtime_model_check']
+            assert check['http_status']==404 and check['available'] is False
+            assert 'private' not in json.dumps(payload)
+    asyncio.run(check());assert get.call_count==2;post.assert_not_called()
+
+
 def test_explicit_false_remains_network_free(db,catalogue):
     _,cfg,get,post=catalogue
     assert 'provider_models' not in read(db,cfg,{'list_provider_models':False})
