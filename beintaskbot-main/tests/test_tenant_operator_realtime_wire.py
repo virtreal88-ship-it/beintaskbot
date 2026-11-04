@@ -5,6 +5,7 @@ import uuid
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_realtime_wire import SyntheticRealtimeWire,create_production_provider,MODEL,QUOTE,MINIMUM_HOLD
 from tenant_operator_voice_pilot import PilotAdmission
+from tenant_operator_voice_session import Session
 
 
 class Socket:
@@ -85,6 +86,37 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         await wire.bind_pilot_claim(scope,receipt);await wire.send({'type':'response.create'})
         with self.assertRaises(ValueError):await wire.bind_pilot_claim(scope,receipt)
         self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),1)
+
+    async def test_pilot_session_and_real_wire_complete_three_synthetic_turns(self):
+        class Authority:
+            async def check(self,scope,stage):return True
+        class Lease:
+            def __init__(self):self.held=False
+            async def claim(self,scope):self.held=True;return 1
+            async def assert_current(self,scope,fence):
+                if not self.held or fence!=1:raise ValueError('lease_lost')
+            async def release(self,scope,fence):self.held=False;return True
+        class Context:
+            async def read_authorized(self,scope):
+                return {'existing_copilot_instructions':'Never send messages or call tools.', 'lines':[], 'extra_context':{}}
+            async def revalidate(self,scope):return True
+        class Client:
+            async def send(self,event):return None
+        scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic');sid=str(uuid.uuid4())
+        authority=Authority();lease=Lease();policy=PilotAdmission(authority,lease,scope,sid)
+        wire=SyntheticRealtimeWire(Socket(),policy)
+        session=Session(scope,authority=authority,ledger=None,lease=lease,context=Context(),provider=wire,
+                        client=Client(),session_id=sid,pilot_policy=policy,max_seconds=5,idle_seconds=4)
+        await session.start()
+        for n in range(3):
+            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
+            await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
+            await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})
+        self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),3)
+        self.assertTrue(await session.end('test'))
+        self.assertFalse(lease.held);self.assertTrue(wire.socket.closed)
 
     async def test_wrong_scope_quote_or_missing_tenant_hold_cannot_bind(self):
         await self.open();scope=self.scope();good=self.receipt(scope)
