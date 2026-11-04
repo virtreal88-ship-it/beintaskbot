@@ -80,7 +80,7 @@ def definitions():
             tool['inputSchema']=audio_schema()
             tool['description']='Read at most 20 exact-channel/lead audio source and attempt metadata records. No customer text, JID, media, provider calls or attempt mutations. Requires channel_id and lead_id.'
         if tool['name']=='company_ai_settings_read':
-            tool['description']+=' Set list_provider_models=true for a free model-ID listing using only the saved company key. To additionally check Realtime model metadata, set id to gpt-realtime-2.1 or gpt-realtime-2.1-mini. Neither check verifies generation access.'
+            tool['description']+=' Set list_provider_models=true for a free model-ID listing using only the saved company key. To additionally check metadata for a documented Realtime model, set id to its exact model ID. This metadata check does not verify that a live Realtime session can be opened.'
     tools.append({'name':'administrator_testing_compare','description':'Compare two isolated AI Testing sessions for the same company agent. Returns aggregate lifecycle and token metrics only; it never reads test text, runs a model, or changes a session.',
       'inputSchema':{'type':'object','properties':{'baseline_session_id':{'type':'string'},'candidate_session_id':{'type':'string'}},'required':['baseline_session_id','candidate_session_id'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]})
