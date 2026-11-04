@@ -139,6 +139,16 @@ class Session:
             if not self.fence:
                 raise Refused('session_already_active')
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            # Provider opening and audio input may be billable before any
+            # response reservation. Require a durable whole-session hold first.
+            reserve_session=getattr(self.ledger,'reserve_session',None)
+            if not callable(reserve_session):raise Refused('session_budget_unavailable')
+            admission=await reserve_session(self.scope,self.session_id)
+            if (not isinstance(admission,dict) or admission.get('state')!='reserved' or
+                admission.get('scope')!=self.scope or admission.get('session_id')!=self.session_id or
+                type(admission.get('reserved_microusd')) is not int or admission['reserved_microusd']!=5_000_000):
+                raise Refused('session_budget_unconfirmed')
+            if self._stop_requested: raise Refused('session_stopped_during_start')
             if self.history is not None:
                 # Fence legacy whole-snapshot writers before any provider I/O.
                 # A subsequent context read catches a text turn that won the

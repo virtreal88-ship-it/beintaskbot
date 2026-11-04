@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock,Mock,patch
 
@@ -20,6 +21,29 @@ class FakeConnection:
 
 
 class Orchestration(unittest.IsolatedAsyncioTestCase):
+    def test_pilot_is_exactly_one_server_configured_user_and_tenant(self):
+        tenant=str(uuid.uuid4());scope=SimpleNamespace(tenant=tenant,actor=7)
+        with patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':tenant,'COPILOT_VOICE_PILOT_ACTOR_ID':'7'},clear=True):
+            service.require_pilot(scope)
+            for rejected in (SimpleNamespace(tenant=str(uuid.uuid4()),actor=7),SimpleNamespace(tenant=tenant,actor=8)):
+                with self.assertRaises(TenantLinearError):service.require_pilot(rejected)
+        with patch.dict('os.environ',{},clear=True):
+            with self.assertRaises(TenantLinearError):service.require_pilot(scope)
+        for bad_actor in ('0','07','-7','7.0','7 '):
+            with patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':tenant,'COPILOT_VOICE_PILOT_ACTOR_ID':bad_actor},clear=True):
+                with self.assertRaises(TenantLinearError):service.require_pilot(scope)
+
+    async def test_revoked_pilot_is_denied_before_live_authority_check(self):
+        tenant=str(uuid.uuid4());scope=SimpleNamespace(tenant=tenant,actor=7,channel_id='c',conversation_id='d')
+        authority=service.ScopedAuthority({}, {}, scope)
+        with patch.dict('os.environ',{},clear=True),patch.object(service.voice,'check') as check:
+            with self.assertRaises(TenantLinearError):await authority.check(authority.session_scope,'ongoing')
+            check.assert_not_called()
+
+    async def test_real_session_reservation_is_fail_closed(self):
+        budget=service.ScopedBudget(None,'unused')
+        with self.assertRaises(TenantLinearError):await budget.reserve_session(('t',7,'c','d'),'unused')
+
     def test_voice_context_uses_only_live_assigned_instructions(self):
         scope=SimpleNamespace(tenant='t',actor=7,channel_id='c',conversation_id='d',lead_id=1,
                               agent_binding='binding',config_version='v1')
