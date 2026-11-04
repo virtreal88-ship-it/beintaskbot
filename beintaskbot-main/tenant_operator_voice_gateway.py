@@ -5,8 +5,12 @@ Dependency callbacks are server code only, never parsed from the request.
 import asyncio
 import base64
 import json
+import logging
+import re
 import time
 from aiohttp import WSMsgType, web
+
+_LOG=logging.getLogger(__name__)
 
 
 class SocketClient:
@@ -81,7 +85,11 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         await session.receive_provider(event)
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    detail=str(exc)
+                    code=(detail if detail.startswith('provider_error_') and
+                          re.fullmatch(r'provider_error_[A-Za-z0-9_-]{1,48}',detail) else type(exc).__name__)
+                    _LOG.warning('realtime_voice_provider_reader_failed code=%s',code)
                     await session.end('provider_disconnected')
                     await ws.close()
             if callable(getattr(session.provider,'receive',None)):
