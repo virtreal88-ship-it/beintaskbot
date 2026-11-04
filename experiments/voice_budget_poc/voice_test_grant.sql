@@ -8,6 +8,16 @@ CREATE TABLE saas_voice_test_grant (
 );
 INSERT INTO saas_voice_test_grant(grant_key,cap_microusd,enabled)
 VALUES('voice-test-owner-5usd-2026',5000000,false);
+-- One whole-pilot escrow. Never release automatically: reconciliation of
+-- provider usage, including pre-response input, must first be proven.
+CREATE TABLE saas_voice_test_session_escrow (
+  grant_key TEXT PRIMARY KEY REFERENCES saas_voice_test_grant(grant_key),
+  session_id UUID NOT NULL UNIQUE,
+  fingerprint TEXT NOT NULL,
+  reserved_microusd BIGINT NOT NULL CHECK(reserved_microusd=5000000),
+  state TEXT NOT NULL CHECK(state IN ('reserved','unknown')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE saas_voice_test_session (
   session_id UUID PRIMARY KEY, tenant_id UUID NOT NULL, actor_id BIGINT NOT NULL,
   channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, executor TEXT NOT NULL,

@@ -120,9 +120,17 @@ class ScopedBudget:
         self.authority=authority;self.session_id=session_id
 
     async def reserve_session(self,scope,session_id):
-        # A committed whole-session reservation and trustworthy settlement are
-        # not implemented. Never authorize provider I/O from a response-only hold.
-        raise TenantLinearError('Резерв голосовой сессии пока недоступен.',503)
+        if scope!=self.authority.session_scope or session_id!=self.session_id:
+            raise TenantLinearError('Область бюджета не совпадает.',403)
+        return await asyncio.to_thread(self._reserve_session,scope,session_id)
+
+    def _reserve_session(self,scope,session_id):
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                self.authority.recheck(cur)
+                receipt=grant.reserve_session(cur,scope,session_id)
+            # The connection context commits before a receipt reaches Session.
+        return receipt
 
     def _check_scope(self,item):
         s=self.authority.scope

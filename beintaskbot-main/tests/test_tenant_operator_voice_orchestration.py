@@ -41,8 +41,36 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
             check.assert_not_called()
 
     async def test_real_session_reservation_is_fail_closed(self):
-        budget=service.ScopedBudget(None,'unused')
-        with self.assertRaises(TenantLinearError):await budget.reserve_session(('t',7,'c','d'),'unused')
+        scope=('t',7,'c','d')
+        authority=SimpleNamespace(session_scope=scope,recheck=Mock())
+        budget=service.ScopedBudget(authority,'unused')
+        with patch.object(service,'_connect',return_value=FakeConnection()):
+            with self.assertRaises(TenantLinearError):await budget.reserve_session(scope,'unused')
+
+    async def test_session_receipt_is_returned_only_after_transaction_commit(self):
+        scope=('t',7,'c','d');events=[]
+        class CommittingConnection(FakeConnection):
+            def __exit__(self,*_args):events.append('commit');return False
+        authority=SimpleNamespace(session_scope=scope,recheck=lambda _cur:events.append('authorized'))
+        budget=service.ScopedBudget(authority,'session')
+        def reserve(_cur,actual_scope,session_id):
+            events.append('reserved');return {'scope':actual_scope,'session_id':session_id}
+        with patch.object(service,'_connect',return_value=CommittingConnection()), \
+             patch.object(service.grant,'reserve_session',side_effect=reserve):
+            result=await budget.reserve_session(scope,'session')
+        self.assertEqual(events,['authorized','reserved','commit'])
+        self.assertEqual(result,{'scope':scope,'session_id':'session'})
+
+    async def test_failed_commit_never_returns_a_session_receipt(self):
+        scope=('t',7,'c','d')
+        class FailedCommit(FakeConnection):
+            def __exit__(self,*_args):raise RuntimeError('commit_unconfirmed')
+        authority=SimpleNamespace(session_scope=scope,recheck=Mock())
+        budget=service.ScopedBudget(authority,'session')
+        with patch.object(service,'_connect',return_value=FailedCommit()), \
+             patch.object(service.grant,'reserve_session',return_value={'state':'reserved'}):
+            with self.assertRaisesRegex(RuntimeError,'commit_unconfirmed'):
+                await budget.reserve_session(scope,'session')
 
     def test_voice_context_uses_only_live_assigned_instructions(self):
         scope=SimpleNamespace(tenant='t',actor=7,channel_id='c',conversation_id='d',lead_id=1,
