@@ -45,6 +45,11 @@ class Session:
         self.history_clear_revision = None
         self.context, self.provider, self.client = context, provider, client
         self.max_seconds, self.idle_seconds, self.poll_seconds = max_seconds, idle_seconds, poll_seconds
+        # Wall-clock expiry alone does not bound audio uploaded faster than
+        # real time. Count all attempted PCM input before provider I/O, since
+        # a failed write can still have reached the provider.
+        self.max_input_bytes = int(max_seconds * self.SAMPLE_RATE * 2)
+        self.input_bytes = 0
         self.started = self.activity = 0
         self.closed = True
         self.open_attempted = False
@@ -334,6 +339,9 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
+                if self.input_bytes + len(data) > self.max_input_bytes:
+                    raise Refused('session_input_limit')
+                self.input_bytes += len(data)
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
             return
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:

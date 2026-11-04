@@ -248,6 +248,26 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_client({'type':'mute','muted':True})
         await self.session.receive_client({'type':'audio','pcm':bytes(100)})
         self.assertEqual(self.provider.events,[{'type':'input_audio_buffer.clear'}])
+        self.assertEqual(self.session.input_bytes,0)
+
+    async def test_cumulative_audio_limit_closes_before_extra_provider_input(self):
+        self.session.max_input_bytes=200
+        await self.session.receive_client({'type':'audio','pcm':bytes(120)})
+        await self.session.receive_client({'type':'audio','pcm':bytes(80)})
+        with self.assertRaisesRegex(Refused,'session_input_limit'):
+            await self.session.receive_client({'type':'audio','pcm':bytes(2)})
+        inputs=[event for event in self.provider.events if event['type']=='input_audio_buffer.append']
+        self.assertEqual(sum(len(base64.b64decode(event['audio'])) for event in inputs),200)
+        self.assertTrue(self.provider.closed)
+        self.assertFalse(self.lease.held)
+
+    async def test_concurrent_audio_cannot_exceed_session_limit(self):
+        self.session.max_input_bytes=100
+        results=await asyncio.gather(*(self.session.receive_client({'type':'audio','pcm':bytes(60)})
+                                       for _ in range(2)),return_exceptions=True)
+        self.assertEqual(sum(isinstance(result,Refused) for result in results),1)
+        self.assertEqual(self.session.input_bytes,60)
+        self.assertEqual(len([event for event in self.provider.events if event['type']=='input_audio_buffer.append']),1)
 
     async def test_budget_refusal_prevents_dispatch_and_closes(self):
         self.ledger.deny=True
