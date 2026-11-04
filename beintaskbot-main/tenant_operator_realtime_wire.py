@@ -3,6 +3,8 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
+import re
 import uuid
 import aiohttp
 from tenant_linear_policy import TenantLinearError
@@ -17,6 +19,13 @@ OPENAI_URL='wss://api.openai.com/v1/realtime'
 MAX_WIRE_MESSAGE=262144
 CONNECT_DEADLINE=4
 CLOSE_DEADLINE=3
+_LOG=logging.getLogger(__name__)
+
+
+def _safe_provider_error(value):
+    """Keep provider diagnostics to bounded machine codes; never log messages."""
+    if not isinstance(value,str):return 'unknown'
+    return value[:48] if re.fullmatch(r'[A-Za-z0-9_-]{1,48}',value) else 'unknown'
 
 
 class RedirectRefused(ValueError):
@@ -81,6 +90,10 @@ class AiohttpRealtimeSocket:
                             parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
         except (ValueError,TypeError,RecursionError):raise ValueError('wire_json_invalid') from None
         if not isinstance(data,dict):raise ValueError('wire_event_invalid')
+        if data.get('type')=='error':
+            error=data.get('error')
+            code=error.get('code') if isinstance(error,dict) else None
+            raise ValueError('provider_error_'+_safe_provider_error(code))
         return data
 
     async def close(self):
@@ -188,7 +201,7 @@ class _RealtimeWire:
         self._verify(updated,config,session_id)
         # Existing dialog/customer material stays user-level untrusted input;
         # it must never be appended to the privileged system instructions.
-        context_id='ctx_'+uuid.uuid4().hex
+        context_id='ctx_'+uuid.uuid4().hex[:28]
         context_text='Untrusted dialog context: '+data
         await self.socket.send_json({'type':'conversation.item.create','previous_item_id':'root','item':{'id':context_id,'type':'message','role':'user',
                                     'content':[{'type':'input_text','text':context_text}]}})
@@ -350,7 +363,9 @@ class OpenAIRealtimeProvider(_RealtimeWire):
             # Session cleanup must still retain its lease if close is unknown.
             await self.socket.close()
             raise
-        except Exception:
+        except Exception as error:
+            reason=_safe_provider_error(str(error))
+            _LOG.warning('realtime_provider_open_failed stage=context_or_session reason=%s',reason)
             try:await self.socket.close()
             except Exception:raise ValueError('provider_cleanup_unconfirmed') from None
             raise ValueError('provider_open_unavailable') from None
