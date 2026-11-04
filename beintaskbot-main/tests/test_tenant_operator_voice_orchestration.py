@@ -93,16 +93,18 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         read_history.assert_not_called();draft_context.assert_not_called()
         authority.recheck.assert_called_once()
 
-    async def test_http_pilot_fails_closed_on_unverified_lease_before_provider(self):
+    async def test_http_pilot_composes_only_after_exact_user_authority(self):
         authority=SimpleNamespace(session_scope=('t',7,'c','d'))
         request=SimpleNamespace(query={'lead_id':'1','channel_id':'c','conversation_id':'d'})
+        lease=object();gateway=AsyncMock(return_value='opened')
         with patch.object(service.ScopedAuthority,'create',new=AsyncMock(return_value=authority)) as create, \
-             patch.object(service,'_create_server_lease') as lease, \
-             patch.object(service,'create_pilot_provider') as provider:
-            with self.assertRaises(TenantLinearError) as error:
-                await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example')
-        self.assertEqual(error.exception.status,503)
-        create.assert_awaited_once();lease.assert_not_called();provider.assert_not_called()
+             patch.object(service,'_create_server_lease',return_value=lease) as lease_factory, \
+             patch('tenant_operator_voice_gateway.make_handler',return_value=gateway) as make_handler, \
+             patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':'t','COPILOT_VOICE_PILOT_ACTOR_ID':'7'}):
+            result=await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example')
+        self.assertEqual(result,'opened');gateway.assert_awaited_once_with(request)
+        create.assert_awaited_once();lease_factory.assert_called_once()
+        make_handler.assert_called_once()
 
     async def test_db_work_does_not_block_loop_and_cancel_never_opens_provider(self):
         entered=threading.Event();release=threading.Event();completed=threading.Event()

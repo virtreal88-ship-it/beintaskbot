@@ -15,11 +15,6 @@ class Refused(Exception):
     pass
 
 
-def _require_live_session_admission():
-    # No feature flag or request can bypass source, history and billing gates.
-    raise Refused('real_provider_not_supported')
-
-
 class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
@@ -32,8 +27,10 @@ class Session:
             raise Refused('trusted_dependencies_missing')
         if getattr(provider, 'mock_only', None) is not True:
             from tenant_operator_realtime_wire import OpenAIRealtimeProvider
-            if type(provider) is not OpenAIRealtimeProvider:raise Refused('provider_not_trusted')
-            _require_live_session_admission()
+            from tenant_operator_voice_pilot import PilotAdmission
+            if (type(provider) is not OpenAIRealtimeProvider or type(pilot_policy) is not PilotAdmission or
+                provider.guard is not pilot_policy or history is not None):
+                raise Refused('provider_not_trusted')
         if pilot_policy is not None:
             from tenant_operator_voice_pilot import PilotAdmission
             if type(pilot_policy) is not PilotAdmission or history is not None:
@@ -151,8 +148,7 @@ class Session:
             if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
                 raise Refused('existing_copilot_context_unavailable')
             # Initial provider.open sends the context, so validate before open
-            # as well as before each response. This remains non-atomic with
-            # network I/O; immutable production gate remains closed.
+            # as well as before each response.
             await self.context.revalidate(self.scope)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             self.fence = await self.lease.claim(self.scope)
@@ -254,9 +250,8 @@ class Session:
         self.response_number += 1
         if self.pilot_policy is None and self.response_number > 2:
             raise Refused('session_response_limit')
-        # Validate a server-owned context before reserving and again as close
-        # as possible to dispatch. This does not prove an atomic DB→network
-        # fence; production admission remains hard-disabled.
+        # Validate the server-owned context before issuing a one-use pilot
+        # permit and again as close as possible to dispatch.
         await self.context.revalidate(self.scope)
         tenant, actor, channel, conversation = self.scope
         input_item_id=self.pending_input_item_id
@@ -283,9 +278,8 @@ class Session:
             await self.context.revalidate(self.scope)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
-            # A production transport must independently consume a committed
-            # one-use dispatch capability. Only the local mock protocol below
-            # implements this contract; the public provider is hard-disabled.
+            # The provider consumes the one-use pilot permit before sending a
+            # response.create event upstream.
             if self.pilot_policy is not None:
                 await self.provider.bind_pilot_claim(reservation,claimed)
             else:

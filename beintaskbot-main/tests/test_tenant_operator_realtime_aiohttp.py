@@ -17,6 +17,7 @@ from tenant_operator_realtime_wire import (
 )
 from tenant_operator_voice_session import Session
 from tenant_operator_voice_session import Refused
+from tenant_operator_voice_pilot import PilotAdmission
 
 
 class OneUseGuard:
@@ -97,7 +98,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_live_connector_fails_before_socket_or_key_use(self):
         class Forbidden:
             def __getattr__(self,name):raise AssertionError('I/O attempted')
-        with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),Forbidden())
+        owner=type('Owner',(),{'guard':None})()
+        with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),owner)
 
     async def test_provider_gate_fires_before_credential_loader(self):
         called=[]
@@ -140,7 +142,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
 
-    async def test_real_provider_session_composition_is_blocked_but_loopback_testable(self):
+    async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
         class Authority:
             async def check(self,*_):pass
         class Context:
@@ -165,14 +167,15 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def send(self,event):self.events.append(event)
         async def credential():return 'synthetic-key'
         async def connector(_value,_owner):return self.socket
-        provider=OpenAIRealtimeProvider(credential,OneUseGuard());lease=Lease();client=Client()
-        deps=dict(authority=Authority(),ledger=Ledger(),lease=lease,context=Context(),provider=provider,client=client)
+        authority=Authority();provider=None;lease=Lease();client=Client()
         scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic')
-        with self.assertRaisesRegex(Refused,'real_provider_not_supported'):Session(scope,**deps)
-        # Overrides apply to this isolated test only. The production factories
-        # and live socket connector remain immutable refusals in normal code.
-        with patch('tenant_operator_voice_session._require_live_session_admission'),\
-             patch('tenant_operator_realtime_wire._require_live_admission'),\
+        session_id=str(uuid.uuid4());policy=PilotAdmission(authority,lease,scope,session_id)
+        provider=OpenAIRealtimeProvider(credential,policy)
+        deps=dict(authority=authority,ledger=None,lease=lease,context=Context(),provider=provider,client=client,
+                  pilot_policy=policy,session_id=session_id)
+        # The loopback peer is synthetic; only the test substitutes the network
+        # connector, while the production policy still requires the exact pilot.
+        with patch('tenant_operator_realtime_wire._require_live_admission'),\
              patch('tenant_operator_realtime_wire._open_openai_socket',connector):
             session=Session(scope,**deps)
             try:

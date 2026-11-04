@@ -5,7 +5,7 @@ from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_voice_context import check
-from tenant_operator_voice_orchestration import open_server_session
+from tenant_operator_voice_orchestration import open_server_session, require_pilot
 
 
 def handler(member_from_request,origin,logger,resource):
@@ -30,18 +30,20 @@ def handler(member_from_request,origin,logger,resource):
                 if not isinstance(data,dict):raise TenantLinearError('Некорректный запрос.',400)
                 _expected(data,profile)
                 route={k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
-                await asyncio.to_thread(check,profile,route)
-                # Do not reveal context, issue a token, reserve money, acquire
-                # a session, upgrade or connect while enforcement is missing.
-                return web.json_response({'success':True,'result':{'available':False}},headers=headers)
+                scope=await asyncio.to_thread(check,profile,route)
+                require_pilot(scope)
+                # Availability is scoped to the one server-configured account.
+                # The actual credential/model check happens on the real
+                # provider handshake, never through browser-supplied secrets.
+                return web.json_response({'success':True,'result':{'available':True}},headers=headers)
             if resource=='ws':
                 # _origin only accepts mutation verbs; a WebSocket handshake
                 # is GET, so use its exact canonical Origin check directly.
                 if request.method!='GET' or request.headers.get('Origin','').rstrip('/')!=origin.rstrip('/'):
                     raise TenantLinearError('Источник запроса недоступен.',403)
                 _expected(request.query,profile)
-                # The server-owned orchestrator has an immutable cutover gate;
-                # it refuses before any upgrade or provider/network operation.
+                # Authentication and single-user policy are checked by the
+                # server-owned orchestrator before the WebSocket upgrade.
                 return await open_server_session(request,profile,origin)
             raise TenantLinearError('Метод не поддерживается.',405)
         except TenantLinearError as error:
