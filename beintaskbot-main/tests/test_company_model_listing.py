@@ -55,7 +55,7 @@ def test_catalogue_opt_in_only_uses_company_get_and_never_returns_key(db,catalog
 
 
 @pytest.mark.parametrize('status,expected',[(200,True),(404,None),(403,None)])
-@pytest.mark.parametrize('model',['gpt-realtime-2.1-mini','gpt-realtime-2.1'])
+@pytest.mark.parametrize('model',sorted(provider.REALTIME_METADATA_MODELS))
 def test_fixed_realtime_check_uses_company_key_and_redacts_provider_body(db,catalogue,status,expected,model):
     _,cfg,get,post=catalogue
     catalogue_response=get.return_value

@@ -93,7 +93,18 @@ def list_models(key):
     return models[:200]
 
 
-REALTIME_METADATA_MODELS=frozenset({'gpt-realtime-2.1-mini','gpt-realtime-2.1'})
+# Exact public IDs from OpenAI's current Realtime model catalog, plus the
+# explicitly requested legacy alias. These are metadata-only checks; a 200
+# response does not establish that a Realtime session can be opened.
+REALTIME_METADATA_MODELS=frozenset({
+    'gpt-realtime',
+    'gpt-realtime-1.5',
+    'gpt-realtime-2',
+    'gpt-realtime-2.1',
+    'gpt-realtime-2.1-mini',
+    'gpt-realtime-translate',
+    'gpt-live-1',
+})
 
 
 def check_realtime_model(key,model):
