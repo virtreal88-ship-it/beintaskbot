@@ -130,6 +130,19 @@ def create_production_provider(*args,**kwargs):
     return OpenAIRealtimeProvider(args[1].load,args[0])
 
 
+def create_pilot_provider(policy,credential_loader):
+    # The explicitly owner-approved pilot does not claim a monetary bound.
+    # Provider access remains blocked until lease and shutdown are verified.
+    _require_live_admission()
+    from tenant_operator_voice_pilot import PilotAdmission
+    from tenant_operator_voice_orchestration import ServerCredentialLoader
+    if type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader:
+        raise ValueError('trusted_provider_dependencies_required')
+    if policy.authority is not credential_loader.authority:
+        raise ValueError('pilot_authority_mismatch')
+    return OpenAIRealtimeProvider(credential_loader.load,policy)
+
+
 class _RealtimeWire:
     def __init__(self,socket,claim_guard):
         if not callable(getattr(claim_guard,'consume',None)):
@@ -227,6 +240,19 @@ class _RealtimeWire:
         if scope['request_id'] in self.seen:raise ValueError('claim_reused')
         self.bound=(dict(scope),dict(receipt))
 
+    async def bind_pilot_claim(self,scope,receipt):
+        # No financial reservation is represented by a pilot permit. This
+        # path still requires the exact server-owned policy and one-use guard.
+        from tenant_operator_voice_pilot import PilotAdmission
+        if type(self.guard) is not PilotAdmission or not self.ready or self.bound is not None:
+            raise ValueError('pilot_claim_not_available')
+        if not isinstance(scope,dict) or not isinstance(receipt,dict):raise ValueError('pilot_claim_invalid')
+        expected=(scope.get('tenant_id'),scope.get('actor_id'),scope.get('channel_id'),scope.get('conversation_id'))
+        if (expected!=self.guard.scope or scope.get('session_id')!=self.guard.session_id or
+            receipt.get('session_id')!=self.guard.session_id or receipt.get('request_id')!=scope.get('request_id') or
+            scope.get('request_id') in self.seen):raise ValueError('pilot_claim_scope_invalid')
+        self.bound=(dict(scope),dict(receipt))
+
     async def send(self,event):
         if not self.ready or not isinstance(event,dict):raise ValueError('session_not_ready')
         kind=event.get('type')
@@ -236,7 +262,13 @@ class _RealtimeWire:
             # This test callback must model an atomic, committed, globally
             # one-use dispatch capability; current production ledger has no
             # such reviewed integration, so the live factory stays blocked.
-            if await self.guard.consume(scope,receipt) is not True:raise ValueError('claim_not_consumed')
+            from tenant_operator_voice_pilot import PilotAdmission
+            if type(self.guard) is PilotAdmission:
+                admitted_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
+                consumed=await self.guard.consume(admitted_scope,receipt)
+            else:
+                consumed=await self.guard.consume(scope,receipt)
+            if consumed is not True:raise ValueError('claim_not_consumed')
             self.seen.add(scope['request_id'])
         elif kind=='input_audio_buffer.append' and set(event)=={'type','audio'}:
             try:audio=base64.b64decode(event['audio'],validate=True)

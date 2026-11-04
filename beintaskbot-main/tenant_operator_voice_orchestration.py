@@ -15,7 +15,8 @@ import tenant_operator_voice_context as voice
 import tenant_operator_copilot as copilot
 import tenant_voice_test_grant as grant
 from tenant_operator_voice_session import Session
-from tenant_operator_realtime_wire import create_production_provider
+from tenant_operator_realtime_wire import create_production_provider, create_pilot_provider
+from tenant_operator_voice_pilot import PilotAdmission
 from tenant_assigned_agent_prompt import assigned_guidance
 
 _EXECUTOR='copilot-voice-server'
@@ -230,6 +231,21 @@ def _compose_server_session(authority,client,lease,session_id):
                    executor=_EXECUTOR,session_id=session_id)
 
 
+def _require_pilot_lease_verified():
+    # The pilot has no hard dollar cap, but must not accept a second session
+    # while a previous provider connection has an uncertain shutdown.
+    raise TenantLinearError('Безопасность голосового сеанса пока не подтверждена.',503)
+
+
+def _compose_pilot_session(authority,client,lease,session_id):
+    _require_pilot_lease_verified()
+    policy=PilotAdmission(authority,lease,authority.session_scope,session_id)
+    provider=create_pilot_provider(policy,ServerCredentialLoader(authority))
+    return Session(authority.session_scope,authority=authority,ledger=None,lease=lease,
+                   context=CopilotContext(authority),provider=provider,client=client,history=None,
+                   executor=_EXECUTOR,session_id=session_id,pilot_policy=policy)
+
+
 async def prepare_server_session(profile,route,client,lease):
     # Internal server/test entry; never bind client or lease to request data.
     authority=await ScopedAuthority.create(profile,route)
@@ -253,7 +269,7 @@ async def open_server_session(request,profile,origin=None):
     route={'provider':'connect','lead_id':request.query.get('lead_id'),
            'channel_id':request.query.get('channel_id'),'conversation_id':request.query.get('conversation_id')}
     authority=await ScopedAuthority.create(profile,route)
-    require_voice_budget_ready()
+    _require_pilot_lease_verified()
     session_id=str(uuid.uuid4())
     lease=_create_server_lease(authority,session_id)  # independently hard-off
     from tenant_operator_voice_gateway import make_handler
@@ -262,5 +278,5 @@ async def open_server_session(request,profile,origin=None):
         return authority.session_scope
     def build(scope,client):
         if scope!=authority.session_scope:raise TenantLinearError('Доступ изменился.',403)
-        return _compose_server_session(authority,client,lease,session_id)
+        return _compose_pilot_session(authority,client,lease,session_id)
     return await make_handler(allowed_origins={origin},authenticate=authenticate,build_session=build)(request)
