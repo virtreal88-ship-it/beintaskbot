@@ -43,7 +43,11 @@ class VoiceSessionLease:
                           lease_until>now() AS live FROM saas_operator_voice_lease
                           WHERE tenant_id=%s::uuid AND actor_id=%s FOR UPDATE''', self.key)
                         old = cur.fetchone()
-                        if old and old['state'] in _ACTIVE and old['live'] is True:
+                        # Expiry means ownership is stale, not that the old
+                        # provider connection has stopped. Do not transfer an
+                        # uncertain session to a new owner until cleanup has
+                        # explicitly closed it.
+                        if old and old['state'] in _ACTIVE:
                             conn.commit(); return None
                         if old:
                             next_fence = int(old['fence']) + 1
