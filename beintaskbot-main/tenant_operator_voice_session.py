@@ -157,18 +157,22 @@ class Session:
             except Exception:raise Refused('live_admission_dependencies_invalid') from None
         self.open_attempted = True
         self._opening = True
+        stage='owner_auth'
         # All pilot admission dependencies are server-owned and fail closed.
         try:
             await self.authority.check(self.scope, 'start')
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            stage='context_read'
             snapshot = await self.context.read_authorized(self.scope)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             if not isinstance(snapshot, dict) or not snapshot.get('existing_copilot_instructions'):
                 raise Refused('existing_copilot_context_unavailable')
             # Initial provider.open sends the context, so validate before open
             # as well as before each response.
+            stage='context_revalidation'
             await self.context.revalidate(self.scope)
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            stage='lease_claim'
             self.fence = await self.lease.claim(self.scope)
             if not self.fence:
                 raise Refused('session_already_active')
@@ -176,8 +180,10 @@ class Session:
             # The owner pilot intentionally has no monetary reserve. It does
             # require owner authorization and the durable user lease.
             if self.pilot_policy is not None:
+                stage='pilot_admission'
                 await self.pilot_policy.admit(self.scope,self.session_id,self.fence)
             else:
+                stage='budget_admission'
                 reserve_session=getattr(self.ledger,'reserve_session',None)
                 if not callable(reserve_session):raise Refused('session_budget_unavailable')
                 admission=await reserve_session(self.scope,self.session_id)
@@ -190,42 +196,43 @@ class Session:
                 # Fence legacy whole-snapshot writers before any provider I/O.
                 # A subsequent context read catches a text turn that won the
                 # row lock just before this marker was committed.
+                stage='history_begin'
                 await self.lease.assert_current(self.scope,self.fence)
                 self.history_clear_revision=await self.history.begin(self.fence)
+                stage='history_revalidation'
                 await self.context.revalidate(self.scope)
+            stage='dispatch_authorization'
             await self.authority.check(self.scope, 'dispatch')
+            stage='dispatch_lease'
             await self.lease.assert_current(self.scope,self.fence)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
+            stage='provider_open'
             self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
                                                                     transcription=None, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
                 self._open_task.cancel()
-                _LOG.warning('realtime_voice_start_failed stage=provider_open reason=timeout')
                 raise Refused('provider_open_timeout')
-            try:
-                await self._open_task
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                # Exception messages can contain provider response details;
-                # only the runtime class is safe to record here.
-                reason=type(error).__name__
-                if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',reason):reason='UnknownError'
-                _LOG.warning('realtime_voice_start_failed stage=provider_open reason=%s',reason)
-                raise
+            await self._open_task
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            stage='post_open_authorization'
             await self.authority.check(self.scope, 'post_open')
+            stage='post_open_lease'
             await self.lease.assert_current(self.scope, self.fence)
             if self._stop_requested: raise Refused('session_stopped_during_start')
             self.closed = False
             self.started = self.activity = time.monotonic()
             self.watchdog = asyncio.create_task(self._watch())
+            stage='client_ready'
             await self._send_client({'type': 'ready'})
             if self._stop_requested: raise Refused('session_stopped_during_start')
-        except BaseException:
+        except BaseException as error:
+            if not isinstance(error,asyncio.CancelledError):
+                reason=type(error).__name__
+                if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',reason):reason='UnknownError'
+                _LOG.warning('realtime_voice_start_failed stage=%s reason=%s',stage,reason)
             # Failed or uncertain startup must never leave a dispatch permit.
             if self.pilot_policy is not None:
                 try:await asyncio.shield(self.pilot_policy.close())
