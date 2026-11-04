@@ -93,6 +93,24 @@ def list_models(key):
     return models[:200]
 
 
+def check_realtime_model(key):
+    """Read one fixed model's metadata, without inference or secret output."""
+    model='gpt-realtime-2.1-mini'
+    response=requests.get('https://api.openai.com/v1/models/'+model,
+        headers={'Authorization':'Bearer '+key},timeout=(3,10),allow_redirects=False)
+    status=int(response.status_code)
+    if status==200:
+        payload=response.json()
+        if not isinstance(payload,dict) or payload.get('id')!=model:
+            raise ValueError('Unexpected model metadata')
+        return {'model':model,'http_status':status,'available':True,'generation_access_verified':False}
+    messages={401:'OpenAI отклонил ключ.',403:'OpenAI отказал в доступе к проекту или модели.',
+              404:'OpenAI не нашёл модель или не предоставил доступ к ней.',
+              429:'OpenAI ограничил запросы или доступную квоту.'}
+    return {'model':model,'http_status':status,'available':None,'generation_access_verified':False,
+            'error':messages.get(status,'OpenAI отклонил проверку модели.')}
+
+
 def probe_model(key, model):
     """One minimal, context-free Responses call to confirm a selected model."""
     result = generate(key, model, 'summary', [], 'Return exactly OK.',
