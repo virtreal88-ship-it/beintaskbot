@@ -53,6 +53,34 @@ def test_catalogue_opt_in_only_uses_company_get_and_never_returns_key(db,catalog
     assert get.call_args.kwargs['timeout']==(3,10)
     post.assert_not_called()
 
+
+@pytest.mark.parametrize('status,expected',[(200,True),(404,False),(403,False)])
+def test_fixed_realtime_check_uses_company_key_and_redacts_provider_body(db,catalogue,status,expected):
+    _,cfg,get,post=catalogue
+    catalogue_response=get.return_value
+    check_response=Mock(status_code=status,json=Mock(return_value={
+        'id':'gpt-realtime-2.1-mini','error':{'message':'synthetic-secret-must-not-escape'}}))
+    get.side_effect=[catalogue_response,check_response]
+    result=read(db,cfg,{'list_provider_models':True,'id':'gpt-realtime-2.1-mini'})['provider_models']
+    check=result['realtime_model_check']
+    assert check['http_status']==status and check['available'] is expected
+    assert check['generation_access_verified'] is False
+    assert 'synthetic-secret' not in json.dumps(result)
+    assert get.call_count==2
+    args,kwargs=get.call_args
+    assert args==('https://api.openai.com/v1/models/gpt-realtime-2.1-mini',)
+    assert kwargs['headers']['Authorization']=='Bearer synthetic-company-key'
+    assert kwargs['allow_redirects'] is False and kwargs['timeout']==(3,10)
+    post.assert_not_called()
+
+
+def test_realtime_check_never_runs_for_revoked_connection(db,catalogue):
+    _,cfg,get,post=catalogue
+    db.execute('UPDATE saas_ai_learning_mcp_tokens SET revoked_at=now()');db.commit()
+    with pytest.raises(TenantLinearError):
+        read(db,cfg,{'list_provider_models':True,'id':'gpt-realtime-2.1-mini'})
+    get.assert_not_called();post.assert_not_called()
+
 @pytest.mark.parametrize('violation',['read_scope','owner','revoked','expired','tenant','connection','token_hash'])
 def test_current_owner_tenant_and_connection_are_checked_before_network(db,catalogue,violation):
     _,cfg,get,post=catalogue
