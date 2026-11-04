@@ -70,7 +70,7 @@ class Cursor:
 
 
 class VoiceLeaseTests(unittest.IsolatedAsyncioTestCase):
-    async def test_competing_owners_fence_old_session_and_recover_after_expiry(self):
+    async def test_expired_session_is_not_replaced_until_cleanup_confirms_close(self):
         store=Store();authority=FakeAuthority()
         first=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000001')
         second=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000002')
@@ -79,12 +79,25 @@ class VoiceLeaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await second.claim(authority.session_scope))
             await first.assert_current(authority.session_scope,1)
             store.rows[('tenant',17)]['live']=False
-            self.assertEqual(await second.claim(authority.session_scope),2)
+            self.assertIsNone(await second.claim(authority.session_scope))
             with self.assertRaises(TenantLinearError):
                 await first.assert_current(authority.session_scope,1)
+            self.assertTrue(await first.release(authority.session_scope,1))
+            self.assertEqual(await second.claim(authority.session_scope),2)
             await second.assert_current(authority.session_scope,2)
             self.assertFalse(await first.release(authority.session_scope,1))
             self.assertTrue(await second.release(authority.session_scope,2))
+
+    async def test_expired_starting_session_stays_blocked(self):
+        store=Store();authority=FakeAuthority()
+        first=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000011')
+        second=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000012')
+        with patch.object(lease_module,'_connect',store.connect):
+            self.assertEqual(await first.claim(authority.session_scope),1)
+            store.rows[('tenant',17)]['live']=False
+            self.assertIsNone(await second.claim(authority.session_scope))
+            self.assertTrue(await first.release(authority.session_scope,1))
+            self.assertEqual(await second.claim(authority.session_scope),2)
 
     async def test_concurrent_claim_has_exactly_one_winner(self):
         store=Store();first_authority=FakeAuthority();second_authority=FakeAuthority()
