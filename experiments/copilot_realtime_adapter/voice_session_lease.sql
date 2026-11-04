@@ -1,9 +1,10 @@
--- Review-only additive migration. Keep session admission closed until this
--- migration, table permissions and lease expiry behavior are validated.
+-- REVIEW ONLY: this file is not imported or executed by application startup.
+-- Apply once to an isolated, approved PostgreSQL test database only. Do not
+-- apply to production until lease fencing and expiry behavior are accepted.
 BEGIN;
 SET LOCAL lock_timeout = '250ms';
-CREATE TABLE IF NOT EXISTS saas_operator_voice_lease (
-  tenant_id UUID NOT NULL,
+CREATE TABLE saas_operator_voice_lease (
+  tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
   channel_id UUID NOT NULL,
   conversation_id TEXT NOT NULL CHECK(length(conversation_id) BETWEEN 1 AND 200),
   session_id UUID NOT NULL UNIQUE,
@@ -16,6 +17,6 @@ CREATE TABLE IF NOT EXISTS saas_operator_voice_lease (
   closed_at TIMESTAMPTZ,
   PRIMARY KEY(tenant_id,channel_id,conversation_id)
 );
-CREATE INDEX IF NOT EXISTS saas_operator_voice_lease_expiry_idx
+CREATE INDEX saas_operator_voice_lease_expiry_idx
   ON saas_operator_voice_lease(lease_until) WHERE state IN ('starting','active');
 COMMIT;
