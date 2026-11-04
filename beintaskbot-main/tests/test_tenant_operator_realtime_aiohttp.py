@@ -116,6 +116,27 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         owner=type('Owner',(),{'guard':None})()
         with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),owner)
 
+    async def test_websocket_upgrade_diagnostic_keeps_status_but_redacts_body(self):
+        class Owner:
+            guard=object()
+            _opening_session=None
+            async def _close_opening_session(self):
+                await self._opening_session.close()
+        owner=Owner()
+        request=aiohttp.RequestInfo(url=aiohttp.client_reqrep.URL('https://api.openai.com/v1/realtime'),
+                                    method='GET',headers={},real_url=aiohttp.client_reqrep.URL('https://api.openai.com/v1/realtime'))
+        failure=aiohttp.ClientResponseError(request,(),status=404,message='synthetic-secret-provider-body')
+        with patch('tenant_operator_realtime_wire._require_live_admission',return_value=None),\
+             patch('tenant_operator_realtime_wire._connect_websocket',side_effect=failure),\
+             self.assertLogs('tenant_operator_realtime_wire',level='WARNING') as captured:
+            with self.assertRaises(aiohttp.ClientResponseError):
+                await _open_openai_socket('synthetic-api-key',owner)
+        joined='\n'.join(captured.output)
+        self.assertIn('stage=websocket_upgrade',joined)
+        self.assertIn('status=404',joined)
+        self.assertNotIn('synthetic-secret',joined)
+        self.assertNotIn('synthetic-api-key',joined)
+
     async def test_provider_gate_fires_before_credential_loader(self):
         called=[]
         async def credential():called.append(True);return 'synthetic-key'
@@ -153,9 +174,11 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         snapshot={'existing_copilot_instructions':'Never send messages.', 'lines':[],'extra_context':{}}
         with patch('tenant_operator_realtime_wire._open_openai_socket',test_connector),\
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
-            with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
-                await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
+            with self.assertLogs('tenant_operator_realtime_wire',level='WARNING') as captured:
+                with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
+                    await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
+        self.assertNotIn('synthetic-secret','\n'.join(captured.output))
 
     async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
         class Authority:

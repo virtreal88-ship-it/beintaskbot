@@ -170,6 +170,21 @@ class LiveAdmission(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await session.end('test'))
         self.assertTrue(provider.closed)
 
+    async def test_provider_startup_may_complete_after_previous_three_second_cutoff(self):
+        class SlowProvider(MockProvider):
+            async def open(self, *_args, **_kwargs):
+                await asyncio.sleep(3.05)
+                self.opens += 1
+
+        provider = SlowProvider()
+        session = Session(self.scope, authority=self.authority, ledger=None, lease=self.lease,
+                          context=Context(), provider=provider, client=Client(),
+                          session_id=self.session_id, pilot_policy=self.policy,
+                          max_seconds=30, idle_seconds=10)
+        await session.start()
+        self.assertEqual(provider.opens, 1)
+        await session.end('test')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -11,7 +11,9 @@
   let terminal=false,ready=false,opened=false,settled=false,resolveReady,rejectReady;
   socket.binaryType='arraybuffer';
   const admission=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject;});
-  const timer=env.setTimeout(()=>fail('voice_connect_timeout'),5000);
+  // Worker startup bounds provider creation and the Realtime handshake at
+  // 12 seconds. Allow a small transport/scheduling margin before failing.
+  const timer=env.setTimeout(()=>fail('voice_connect_timeout'),15000);
   function fail(code){
     if(!settled){settled=true;env.clearTimeout(timer);rejectReady(new Error(code));}
     terminal=true;socket.close();
