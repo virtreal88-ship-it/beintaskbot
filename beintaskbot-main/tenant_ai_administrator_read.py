@@ -80,7 +80,7 @@ def definitions():
             tool['inputSchema']=audio_schema()
             tool['description']='Read at most 20 exact-channel/lead audio source and attempt metadata records. No customer text, JID, media, provider calls or attempt mutations. Requires channel_id and lead_id.'
         if tool['name']=='company_ai_settings_read':
-            tool['description']+=' Set list_provider_models=true for a free model-ID listing using only the saved company key. To additionally check the fixed Realtime model metadata, set id=gpt-realtime-2.1-mini. Neither check verifies generation access.'
+            tool['description']+=' Set list_provider_models=true for a free model-ID listing using only the saved company key. To additionally check Realtime model metadata, set id to gpt-realtime-2.1 or gpt-realtime-2.1-mini. Neither check verifies generation access.'
     tools.append({'name':'administrator_testing_compare','description':'Compare two isolated AI Testing sessions for the same company agent. Returns aggregate lifecycle and token metrics only; it never reads test text, runs a model, or changes a session.',
       'inputSchema':{'type':'object','properties':{'baseline_session_id':{'type':'string'},'candidate_session_id':{'type':'string'}},'required':['baseline_session_id','candidate_session_id'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]})
@@ -440,11 +440,13 @@ def read(cur,cfg,name,args):
         result['photo_configuration']={'model':(cur.fetchone() or {}).get('photo_model') or '',
           'tariffs':{model:tariff_status(model) for model in MODELS}}
     if name=='company_ai_settings_read' and args.get('list_provider_models') is True:
-        result['provider_models']=_company_models(cur,cfg,check_realtime=args.get('id')=='gpt-realtime-2.1-mini')
+        from tenant_chat_ai_provider import REALTIME_METADATA_MODELS
+        model=args.get('id') if args.get('id') in REALTIME_METADATA_MODELS else None
+        result['provider_models']=_company_models(cur,cfg,check_realtime=model)
     return result
 
 
-def _company_models(cur,cfg,check_realtime=False):
+def _company_models(cur,cfg,check_realtime=None):
     """Revalidate the current owner connection, then reuse the UI's fixed GET."""
     from tenant_chat_ai_settings import authorize, available_models
     from tenant_chat_ai_provider import ChatAIProviderError
@@ -480,11 +482,11 @@ def _company_models(cur,cfg,check_realtime=False):
     if check_realtime:
         from tenant_chat_ai_settings import realtime_model_availability
         try:
-            result['realtime_model_check']=realtime_model_availability(profile)
+            result['realtime_model_check']=realtime_model_availability(profile,check_realtime)
         except TenantLinearError:
-            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':None,
+            result['realtime_model_check']={'model':check_realtime,'available':None,
               'error':'Сохранённый ключ Chat AI компании недоступен.'}
         except Exception:
-            result['realtime_model_check']={'model':'gpt-realtime-2.1-mini','available':None,
+            result['realtime_model_check']={'model':check_realtime,'available':None,
               'error':'Не удалось выполнить проверку модели.'}
     return result

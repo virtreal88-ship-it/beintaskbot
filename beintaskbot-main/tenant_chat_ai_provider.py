@@ -93,9 +93,12 @@ def list_models(key):
     return models[:200]
 
 
-def check_realtime_model(key):
-    """Read one fixed model's metadata, without inference or secret output."""
-    model='gpt-realtime-2.1-mini'
+REALTIME_METADATA_MODELS=frozenset({'gpt-realtime-2.1-mini','gpt-realtime-2.1'})
+
+
+def check_realtime_model(key,model):
+    """Read allowlisted model metadata, without inference or secret output."""
+    if model not in REALTIME_METADATA_MODELS:raise ValueError('Unsupported Realtime model')
     response=requests.get('https://api.openai.com/v1/models/'+model,
         headers={'Authorization':'Bearer '+key},timeout=(3,10),allow_redirects=False)
     status=int(response.status_code)
