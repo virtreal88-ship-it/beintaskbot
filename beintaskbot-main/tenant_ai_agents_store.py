@@ -633,7 +633,165 @@ def _recipient_covers_dialog(scopes, provider, channel_id, conversation_id):
                for scope in (scopes or []))
 
 
-def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_version=None):
+def _archive_transfer_snapshot(cur, tenant, agent_uuid, replacement_uuid, *, lock=False):
+    """Read a bounded, secret-free transfer snapshot used for preview fencing."""
+    cur.execute('''SELECT id,name,version,enabled,archived_at,role,scopes
+      FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id IN (%s::uuid,%s::uuid)
+      ORDER BY id''', (tenant, agent_uuid, replacement_uuid))
+    agent_rows = cur.fetchall()
+    by_id = {str(row['id']): row for row in agent_rows}
+    source, replacement = by_id.get(str(agent_uuid)), by_id.get(str(replacement_uuid))
+    if not source or source.get('archived_at'):
+        raise TenantLinearError('Agent tapılmadı.', 404)
+    if not replacement or replacement.get('archived_at') or replacement.get('role', 'primary') != 'primary':
+        raise TenantLinearError('Qəbul edən arxivdə olmayan əsas agent olmalıdır.', 409)
+
+    cur.execute('''SELECT provider,channel_id,conversation_id,state,revision,agent_assignment_id
+      FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
+      ORDER BY provider,channel_id,conversation_id''' + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    dialogs = cur.fetchall()
+    cur.execute("SELECT group_jid,revision,state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' AND assignments @> jsonb_build_array(jsonb_build_object('agent_id',%s::text)) ORDER BY group_jid" + (' FOR UPDATE' if lock else ''), (tenant, str(agent_uuid)))
+    groups = []
+    for row in cur.fetchall():
+        slots = [dict(slot) for slot in (row.get('assignments') or [])
+                 if str((slot or {}).get('agent_id') or '') == str(agent_uuid)]
+        if slots:
+            groups.append({'group_jid': row['group_jid'], 'revision': row['revision'],
+                           'state': row['state'], 'slots': slots})
+    cur.execute('''SELECT provider,conversation_id,channel_id,event_fingerprint,state,revision,attempts,
+      (lease_token IS NOT NULL OR lease_until>now()) AS leased
+      FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
+      ORDER BY provider,channel_id,conversation_id''' + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    jobs = cur.fetchall()
+    active_states = "('queued','processing','drafted','unknown')"
+    cur.execute(f'''SELECT j.agent_id,j.provider,j.conversation_id,j.state,j.event_fingerprint
+      FROM saas_ai_agent_jobs j WHERE j.tenant_id=%s::uuid AND j.state IN {active_states}
+        AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs source_job
+          WHERE source_job.tenant_id=j.tenant_id AND source_job.agent_id=%s::uuid
+            AND source_job.state='queued' AND source_job.attempts=0
+            AND source_job.lease_token IS NULL AND (source_job.lease_until IS NULL OR source_job.lease_until<=now())
+            AND source_job.event_fingerprint=j.event_fingerprint
+            AND (source_job.agent_id<>j.agent_id OR source_job.provider<>j.provider
+                 OR source_job.conversation_id<>j.conversation_id))
+      ORDER BY j.event_fingerprint,j.agent_id,j.provider,j.conversation_id''' + (' FOR UPDATE OF j' if lock else ''),
+      (tenant, agent_uuid))
+    shared_jobs = cur.fetchall()
+    cur.execute(f'''SELECT r.id,r.agent_id,r.state,r.event_fingerprint FROM saas_ai_agent_runs r
+      WHERE r.tenant_id=%s::uuid AND r.agent_id<>%s::uuid AND r.state IN ('generating','unknown')
+        AND r.event_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs source_job
+          WHERE source_job.tenant_id=%s::uuid AND source_job.agent_id=%s::uuid AND source_job.state='queued'
+            AND source_job.attempts=0 AND source_job.lease_token IS NULL
+            AND (source_job.lease_until IS NULL OR source_job.lease_until<=now()))
+      ORDER BY r.event_fingerprint,r.agent_id,r.id''' + (' FOR UPDATE OF r' if lock else ''),
+      (tenant, agent_uuid, tenant, agent_uuid))
+    shared_runs = cur.fetchall()
+    cur.execute('''SELECT d.id,d.agent_id,d.state,d.source_fingerprint FROM saas_ai_agent_drafts d
+      WHERE d.tenant_id=%s::uuid AND d.agent_id<>%s::uuid AND d.state IN ('pending','sending')
+        AND d.source_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs source_job
+          WHERE source_job.tenant_id=%s::uuid AND source_job.agent_id=%s::uuid AND source_job.state='queued'
+            AND source_job.attempts=0 AND source_job.lease_token IS NULL
+            AND (source_job.lease_until IS NULL OR source_job.lease_until<=now()))
+      ORDER BY d.source_fingerprint,d.agent_id,d.id''' + (' FOR UPDATE OF d' if lock else ''),
+      (tenant, agent_uuid, tenant, agent_uuid))
+    shared_drafts = cur.fetchall()
+    cur.execute('''SELECT fingerprint,state,error_code FROM saas_tenant_webhook_events
+      WHERE tenant_id=%s::uuid AND fingerprint IN
+        (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid)
+      ORDER BY fingerprint''' + (' FOR UPDATE' if lock else ''), (tenant, tenant, agent_uuid))
+    events = cur.fetchall()
+    cur.execute("SELECT id,state FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state IN ('generating','unknown') ORDER BY id" + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    runs = cur.fetchall()
+    cur.execute("SELECT id,state FROM saas_ai_agent_action_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state IN ('running','unknown') ORDER BY id" + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    action_runs = cur.fetchall()
+    cur.execute("SELECT id,state FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state IN ('pending','sending') ORDER BY id" + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    drafts = cur.fetchall()
+    cur.execute("SELECT id,status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND analysis_agent_id=%s::uuid AND status IN ('awaiting_budget','running','paused') ORDER BY id" + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid))
+    campaigns = cur.fetchall()
+    cur.execute("SELECT t.id,t.state FROM saas_ai_test_turns t JOIN saas_ai_test_sessions s ON s.tenant_id=t.tenant_id AND s.id=t.session_id WHERE s.tenant_id=%s::uuid AND s.agent_id=%s::uuid AND t.state IN ('generating','unknown') ORDER BY t.id" + (' FOR UPDATE OF t' if lock else ''), (tenant, agent_uuid))
+    turns = cur.fetchall()
+    cur.execute("SELECT id,status FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND (principal_agent_id=%s::uuid OR expert_agent_id=%s::uuid) AND status='running' ORDER BY id" + (' FOR UPDATE' if lock else ''), (tenant, agent_uuid, agent_uuid))
+    expert_tasks = cur.fetchall()
+
+    unsupported = [row for row in dialogs if not _recipient_covers_dialog(
+        replacement.get('scopes') or [], row['provider'], row.get('channel_id'), row['conversation_id'])]
+    unsupported_groups = [g for g in groups for slot in g['slots'] if not _recipient_covers_dialog(
+        replacement.get('scopes') or [], 'connect', slot.get('channel_id'), g['group_jid'])]
+    active_jobs = [row for row in jobs if row['state'] == 'processing' or
+                   (row['state'] == 'queued' and (int(row.get('attempts') or 0) > 0 or row.get('leased')))]
+    active_runs = [row for row in runs if row['state'] == 'generating']
+    active_actions = [row for row in action_runs if row['state'] == 'running']
+    active_drafts = [row for row in drafts if row['state'] == 'sending']
+    active_turns = [row for row in turns if row['state'] == 'generating']
+    blockers = {
+        'unsupported_dialogs': len(unsupported),
+        'unsupported_groups': len(unsupported_groups),
+        'active_jobs': len(active_jobs),
+        'active_runs': len(active_runs),
+        'active_actions': len(active_actions),
+        'sending_drafts': len(active_drafts),
+        'active_test_turns': len(active_turns),
+        'active_expert_tasks': len(expert_tasks),
+        'active_campaigns': len(campaigns),
+        'processing_events': sum(row['state'] == 'processing' for row in events),
+        'shared_event_work': len(shared_jobs)+len(shared_runs)+len(shared_drafts),
+        'unknown_jobs': sum(row['state'] == 'unknown' for row in jobs),
+        'unknown_runs': sum(row['state'] == 'unknown' for row in runs),
+        'unknown_actions': sum(row['state'] == 'unknown' for row in action_runs),
+        'unknown_test_turns': sum(row['state'] == 'unknown' for row in turns),
+        'queued_jobs_cancellable': sum(row['state'] == 'queued' and not row.get('leased') and int(row.get('attempts') or 0) == 0 for row in jobs),
+        'pending_drafts_rejected': sum(row['state'] == 'pending' for row in drafts),
+    }
+    # Hash only canonical server-side authority and state, never prompt/message content.
+    snapshot = {
+        'source': {k: source.get(k) for k in ('id','version','enabled','archived_at')},
+        'replacement': {k: replacement.get(k) for k in ('id','version','enabled','role','scopes')},
+        'dialogs': dialogs, 'groups': groups, 'jobs': jobs, 'events': events,
+        'shared_jobs': shared_jobs, 'shared_runs': shared_runs, 'shared_drafts': shared_drafts, 'runs': runs,
+        'action_runs': action_runs, 'drafts': drafts, 'campaigns': campaigns,
+        'turns': turns, 'expert_tasks': expert_tasks,
+    }
+    digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str,
+                                       separators=(',', ':')).encode()).hexdigest()
+    return {'source': source, 'replacement': replacement, 'dialogs': dialogs,
+            'groups': groups, 'jobs': jobs, 'drafts': drafts, 'blockers': blockers,
+            'hash': digest, 'snapshot': snapshot}
+
+
+def preview_agent_archive_transfer(profile, agent_id, replacement_agent_id):
+    """Read owner-scoped impact and compatibility before archive-and-transfer."""
+    agent_uuid, replacement_uuid = identifier(agent_id), identifier(replacement_agent_id)
+    if agent_uuid == replacement_uuid:
+        raise TenantLinearError('Qəbul edən agent silinən agentdən fərqli olmalıdır.', 409)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor = _authorize(cur, profile)
+            _require_owner(cur, tenant, actor)
+            data = _archive_transfer_snapshot(cur, tenant, agent_uuid, replacement_uuid)
+            # Unknown outcomes remain historical and are never retried. They are
+            # disclosed but do not stop a paused ownership transfer.
+            blockers = {key: value for key, value in data['blockers'].items() if key not in {
+                'unknown_jobs','unknown_runs','unknown_actions','unknown_test_turns',
+                'queued_jobs_cancellable','pending_drafts_rejected'}}
+            blocked = any(value is True or (isinstance(value, int) and value > 0)
+                          for value in blockers.values())
+            _audit(cur, tenant, actor, 'ai_agent_archive_transfer_preview', 'ai_agent', agent_uuid,
+                   {'replacement_agent_id': str(replacement_uuid), 'allowed': not blocked,
+                    'assigned_dialogs': len(data['dialogs']), 'group_bindings': len(data['groups'])})
+            return {'agent_id': str(agent_uuid), 'agent_name': data['source']['name'],
+                'agent_version': int(data['source']['version']),
+                'replacement_agent_id': str(replacement_uuid), 'replacement_name': data['replacement']['name'],
+                'replacement_version': int(data['replacement']['version']), 'allowed': not blocked,
+                'snapshot_hash': data['hash'], 'dialog_count': len(data['dialogs']),
+                'group_count': sum(len(group['slots']) for group in data['groups']),
+                'channel_summary': sorted({f"{row['provider']}:{row.get('channel_id') or 'default'}" for row in data['dialogs']} |
+                    {f"connect:{slot.get('channel_id') or 'default'}" for group in data['groups'] for slot in group['slots']}),
+                'impact': data['blockers'], 'provider_calls_started': False,
+                'automatic_replies_enabled': False}
+
+
+def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_version=None,
+                 expected_replacement_version=None, expected_preview_hash=None):
     """Archive an agent and atomically move its dialogue bindings.
 
     Historical runs, drafts, knowledge and test sessions deliberately keep the
@@ -650,18 +808,32 @@ def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_versi
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             _require_owner(cur, tenant, actor)
-            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid
-              FOR UPDATE''', (tenant,agent_uuid))
-            source = cur.fetchone()
+            # Match assignment lock order: exact dialogue/group routes first,
+            # then agent rows in stable UUID order. This avoids archive-vs-
+            # reassignment deadlocks while the rows are being transferred.
+            cur.execute('''SELECT provider,channel_id,conversation_id FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid ORDER BY provider,channel_id,conversation_id''',
+              (tenant,agent_uuid))
+            for route in cur.fetchall():
+                lock_dialog(cur, tenant, route['provider'], route.get('channel_id') or '', route['conversation_id'])
+            cur.execute("SELECT group_jid FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' AND assignments @> jsonb_build_array(jsonb_build_object('agent_id',%s::text)) ORDER BY group_jid",(tenant,str(agent_uuid)))
+            from tenant_ai_group_coordination import lock_group
+            for group in cur.fetchall():
+                lock_group(cur, tenant, group['group_jid'])
+            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid
+              AND id IN (%s::uuid,%s::uuid) ORDER BY id FOR UPDATE''',(tenant,agent_uuid,replacement_uuid))
+            locked_agents={str(row['id']):row for row in cur.fetchall()}
+            source=locked_agents.get(str(agent_uuid));replacement=locked_agents.get(str(replacement_uuid))
             if not source or source.get('archived_at'):
                 raise TenantLinearError('Agent tapılmadı.', 404)
             if expected_version is not None and int(source['version']) != int(expected_version):
                 raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
-            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid
-              AND archived_at IS NULL FOR UPDATE''', (tenant,replacement_uuid))
-            replacement = cur.fetchone()
             if not replacement or replacement.get('role', 'primary') != 'primary':
-                raise TenantLinearError('Qəbul edən aktiv əsas agent olmalıdır.', 409)
+                raise TenantLinearError('Qəbul edən arxivdə olmayan əsas agent olmalıdır.', 409)
+            if replacement.get('archived_at'):
+                raise TenantLinearError('Qəbul edən arxivdə olmayan əsas agent olmalıdır.', 409)
+            if expected_replacement_version is not None and int(replacement['version']) != int(expected_replacement_version):
+                raise TenantLinearError('Qəbul edən agent dəyişib. Yeniləyin.', 409)
             cur.execute('''SELECT tenant_id,provider,channel_id,conversation_id,state,agent_assignment_id
               FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
               FOR UPDATE''', (tenant,agent_uuid))
@@ -670,11 +842,21 @@ def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_versi
                 replacement.get('scopes') or [], row['provider'], row.get('channel_id'), row['conversation_id'])]
             if uncovered:
                 raise TenantLinearError('Qəbul edən agent bütün təyin edilmiş dialoq kanallarına icazəli deyil.', 409)
+            transfer_snapshot = _archive_transfer_snapshot(cur, tenant, agent_uuid, replacement_uuid, lock=True)
+            if expected_preview_hash is not None and transfer_snapshot['hash'] != str(expected_preview_hash):
+                raise TenantLinearError('Təsdiqdən əvvəl agentin dialoqları və ya iş vəziyyəti dəyişib. Yenidən yoxlayın.', 409)
+            blockers = transfer_snapshot['blockers']
+            active_blockers = ('unsupported_dialogs','unsupported_groups','active_jobs','processing_events','shared_event_work','active_runs',
+                'active_actions','sending_drafts','active_test_turns','active_expert_tasks','active_campaigns')
+            if any(int(blockers[key]) > 0 for key in active_blockers):
+                raise TenantLinearError('Transfer preview-də göstərilən aktiv iş və ya əhatə dairəsi maneəsi aradan qaldırılmadan agenti köçürmək olmaz.', 409)
             # Fence pending source work before changing bindings. A terminal
-            # result stays historical; no replacement job is created.
+            # result stays historical; no replacement job is created. Only
+            # never-attempted, unleased queue rows may be stopped here.
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
               lease_token=NULL,lease_until=NULL,error_code='agent_archived',updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state IN ('queued','processing')''', (tenant,agent_uuid))
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='queued'
+                AND attempts=0 AND lease_token IS NULL AND (lease_until IS NULL OR lease_until<=now())''', (tenant,agent_uuid))
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='agent_archived'
               WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN
               (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND error_code='agent_archived')''',
@@ -687,7 +869,9 @@ def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_versi
             # Group assignments are a separate authority registry. Preserve
             # its stopped state while moving only compatible source slots.
             cur.execute('''SELECT group_jid,assignments FROM saas_ai_group_coordination
-              WHERE tenant_id=%s::uuid AND provider='connect' FOR UPDATE''', (tenant,))
+              WHERE tenant_id=%s::uuid AND provider='connect'
+                AND assignments @> jsonb_build_array(jsonb_build_object('agent_id',%s::text))
+              ORDER BY group_jid FOR UPDATE''', (tenant,str(agent_uuid)))
             for group in cur.fetchall():
                 slots = group.get('assignments') or []
                 changed = False

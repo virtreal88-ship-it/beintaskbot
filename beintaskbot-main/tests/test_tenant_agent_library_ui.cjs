@@ -4,12 +4,12 @@ const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,f
 const A='00000000-0000-0000-0000-000000000101',B='00000000-0000-0000-0000-000000000102',CA='00000000-0000-0000-0000-000000000201',CB='00000000-0000-0000-0000-000000000202';
 const tick=async()=>{for(let i=0;i<15;i++)await new Promise(r=>setImmediate(r));};
 function channel(id,name,extra={}){return {id:'connect:'+id,provider:'connect',channel_id:id,type:'whatsapp',name,connection:{state:'connected',source:'cached',checked_at:null},ai:{supported:true,available:true,reason_codes:[]},capabilities:{text_replies:true,drafts:true,groups:true,incoming_voice:true,voice_replies:false,crm_actions:false},scope:{provider:'connect',channel_id:id},requirements:[],...extra};}
-function setup({role='owner',channels,denied=false}={}){
+function setup({role='owner',channels,denied=false,initialAgents=[],deletePreviewName='Nizam Ai'}={}){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[],errors=[];
  w.alert=()=>{};w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=function(){};w.addEventListener('error',e=>errors.push(e.error));
  const member={tenant_id:A,telegram_id:11,role,active:true},company={enabled:true,auto_send_enabled:false,emergency_stop:false,max_replies_per_chat:20,company_instructions:'Company rules'};
  let rows=channels||[channel(CA,'Основной номер'),channel(CB,'Техническая поддержка'),channel('off','Неактивный номер',{connection:{state:'disabled'},ai:{supported:true,available:false,reason_codes:['channel_inactive']}}),channel('instagram','Instagram',{type:'instagram'}),{id:'kommo:wa',provider:'kommo',channel_id:'wa',type:'unknown',name:'CRM — продажи',connection:{state:'connected'},ai:{supported:true,available:true,reason_codes:[]},capabilities:{text_replies:true,drafts:true},scope:{provider:'kommo',channel_id:'wa'},requirements:['pipeline_id','stage_id']}];
- const agents=new Map(),triggers=new Map(),knowledge=new Map();let failAgent=false,failUpload=false,delayAgent=false,release,failCatalog=false;
+ const agents=new Map(initialAgents.map(agent=>[agent.id,{...agent}])),triggers=new Map(),knowledge=new Map();let failAgent=false,failUpload=false,delayAgent=false,release,failCatalog=false;
  const result=value=>({ok:true,status:200,json:async()=>({success:true,result:structuredClone(value)})});
  w.fetch=async(url,init={})=>{
   const u=new URL(String(url),'https://crm.test'),method=init.method||'GET',data=init.body instanceof w.FormData?Object.fromEntries(init.body):init.body?JSON.parse(init.body):null;calls.push({path:u.pathname,url:String(url),method,data});
@@ -32,6 +32,13 @@ function setup({role='owner',channels,denied=false}={}){
    if(failAgent){failAgent=false;throw Error('Ответ создания потерян');}
    if(delayAgent){delayAgent=false;return await new Promise(resolve=>release=()=>resolve(result(saved)));}return result(saved);
   }
+  if(u.pathname.includes('/archive-transfer-preview')&&method==='GET')return result({agent_id:'source',agent_version:4,replacement_agent_id:u.searchParams.get('replacement_agent_id'),replacement_name:'Replacement',replacement_version:7,allowed:true,snapshot_hash:'a'.repeat(64),dialog_count:2,group_count:1,channel_summary:[CA],impact:{queued_jobs_cancellable:1,pending_drafts_rejected:0,unknown_jobs:1}});
+  if(u.pathname.endsWith('/archive-transfer')&&method==='POST'){
+   const source=[...agents.values()].find(a=>u.pathname.includes(a.id));if(source)agents.delete(source.id);
+   return result({archived:true,replacement_agent_id:data.replacement_agent_id,transferred_dialogs:2});
+  }
+  if(u.pathname.endsWith('/delete-preview')&&method==='GET')return result({agent_id:'source',name:deletePreviewName,version:4,irreversible:true,confirmation_required:true,impact:{assigned_dialogs:2,queued_jobs:1,runs:3,knowledge_sources:1,active_executions:0,active_campaigns:0}});
+  if(u.pathname.includes('/agents/')&&method==='DELETE')return result({deleted:true});
   if(u.pathname.endsWith('/triggers')&&method==='POST'){const saved=triggers.get(data.setup_key)||{id:'trigger-'+(triggers.size+1),...data};triggers.set(data.setup_key,saved);return result(saved);}
   if(u.pathname.includes('/agents/')&&method==='PATCH'){const agent=[...agents.values()].find(a=>u.pathname.endsWith(a.id));Object.assign(agent,data,{version:agent.version+1});return result(agent);}
   if(u.pathname.endsWith('/dialogs'))return result({dialogs:[],next_offset:null});
@@ -45,7 +52,26 @@ function choose(app,id){const box=app.d.querySelector(`[name=agentCreationChanne
 function setFile(app,name='manual.txt'){const file=new app.w.File(['Router manual'],name,{type:'text/plain',lastModified:123});Object.defineProperty(app.d.getElementById('nightAgentKnowledgeFile'),'files',{configurable:true,value:[file]});return file;}
 async function nextAll(app){for(let i=0;i<12&&app.d.getElementById('nightAgentWizard').dataset.step!=='9';i++){app.d.getElementById('nightAgentNext').click();await tick();}assert.equal(app.d.getElementById('nightAgentWizard').dataset.step,'9',app.d.getElementById('nightAgentNotice').textContent);}
 async function open(app){await tick();app.d.getElementById('view-ai_agents').classList.add('active');app.d.dispatchEvent(new app.w.CustomEvent('tenant-view',{detail:{view:'ai_agents'}}));await tick();if(app.member.role==='worker'){assert.equal(app.d.querySelector('[data-ai-overview-create]').disabled,true,'unauthorized UI entry stays disabled');app.d.dispatchEvent(new app.w.CustomEvent('tenant-ai-create-request'));}else app.d.querySelector('[data-ai-overview-create]').click();await tick();assert.equal(app.d.getElementById('agentTemplateLibrary').hidden,false);}
+async function archiveTransferUiTest(){
+ const source={id:'source',name:'Nizam Ai',role:'primary',enabled:false,version:4,scopes:[{provider:'connect',channel_id:CA}]};
+ const replacement={id:'replacement',name:'Night support',role:'primary',enabled:false,version:7,scopes:[{provider:'connect',channel_id:CA}]};
+ const app=setup({initialAgents:[source,replacement],deletePreviewName:'Nizam Ai current'}),{d,w}=app;await tick();
+ d.getElementById('view-ai_agents').classList.add('active');d.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'ai_agents'}}));await tick();
+ const sourceRow=[...d.querySelectorAll('[data-delete-agent]')].find(button=>button.dataset.deleteAgent==='source');assert.ok(sourceRow,'owner can open removal flow for an intentionally disabled source agent');sourceRow.click();await tick();
+ const target=d.querySelector('[data-transfer-target]');assert.ok(target);assert.equal(target.options.length,2);assert.equal(d.querySelector('[data-permanent]').open,false,'irreversible delete stays a separate collapsed action');
+ const nameInput=d.querySelector('[data-delete-name]'),permanentButton=d.querySelector('[data-delete-confirm]');assert.equal(permanentButton.disabled,true);nameInput.value='Nizam Ai';nameInput.dispatchEvent(new w.Event('input'));assert.equal(permanentButton.disabled,true,'stale list name cannot confirm permanent deletion');nameInput.value='Nizam Ai current';nameInput.dispatchEvent(new w.Event('input'));assert.equal(permanentButton.disabled,false,'permanent delete requires the fresh exact preview name, independently');
+ target.value='replacement';target.dispatchEvent(new w.Event('change'));await tick();
+ const preview=app.calls.find(call=>call.path.endsWith('/archive-transfer-preview'));assert.ok(preview);assert.equal(new URL(preview.url,'https://crm.test').searchParams.get('replacement_agent_id'),'replacement');
+ const transfer=d.querySelector('[data-transfer-confirm]');assert.equal(transfer.disabled,false,'a compatible, disabled replacement can receive a paused transfer');
+ transfer.click();transfer.click();await tick();
+ const posts=app.calls.filter(call=>call.path.endsWith('/archive-transfer')&&call.method==='POST');assert.equal(posts.length,1,'double-click cannot issue duplicate transfer calls');
+ assert.deepEqual(posts[0].data,{replacement_agent_id:'replacement',expected_version:4,expected_replacement_version:7,expected_preview_hash:'a'.repeat(64),expected_tenant_id:A,expected_user_id:11});
+ assert.equal(app.calls.filter(call=>call.method==='DELETE').length,0,'transfer never invokes permanent deletion');
+ assert.equal(app.agents.has('source'),false);assert.equal(app.agents.get('replacement').enabled,false,'transfer does not enable the replacement');
+ assert.equal(app.errors.length,0,String(app.errors[0]));w.close();
+}
 async function run(){
+ await archiveTransferUiTest();
  const app=setup();await open(app);const {d,w}=app;
  assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,0,'no new header action');assert.equal(d.querySelectorAll('[data-ai-overview-create]').length,1);
  assert.equal(d.querySelectorAll('[data-library-category]').length,5);assert.equal(d.querySelectorAll('[data-agent-template]').length,1);assert.match(d.getElementById('agentLibraryCards').textContent,/Оператор технической поддержки/);assert.equal(d.getElementById('agentLibraryBlank').disabled,false);

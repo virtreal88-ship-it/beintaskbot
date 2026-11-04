@@ -7,6 +7,11 @@ assert.match(html,/id="aiStoppingPolicy"[\s\S]*?id="aiResponseManagementDescript
 assert.ok(!expert.includes('id="aiNewExpert"'),'Expert creation is not duplicated inside the editor');
 assert.match(agents,/aiEditorPage/);assert.match(agents,/confirmDiscardEditor/);assert.match(agents,/beforeunload/);assert.match(agents,/returnEditorHome/);
 assert.match(agents,/delete-preview/,'agent delete impact is read before the irreversible confirmation');
+assert.match(agents,/archive-transfer-preview/,'dialog transfer requires a server-side compatibility preview');
+assert.match(agents,/archive-transfer/,'dialog transfer is a distinct action from permanent deletion');
+assert.match(agents,/expected_preview_hash/,'transfer confirmation is bound to the preview snapshot');
+assert.match(agents,/deleteName\.value!==currentAgentName\(\)/,'permanent deletion requires typing the exact fresh preview name');
+assert.match(agents,/leave paused|left paused|pauzada saxlayır/,'transfer UI explains that it never resumes the recipient');
 assert.match(agents,/data-delete-status/,'delete dialog exposes server validation errors');
 assert.match(agents,/confirm_agent_id:agent\.id/,'the exact selected agent ID is repeated as confirmation');
 assert.match(agents,/opener\?\.focus/,'delete dialog restores focus after close');
