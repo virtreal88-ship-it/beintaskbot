@@ -15,7 +15,7 @@ CREATE TABLE saas_operator_voice_lease (
   lease_until TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   closed_at TIMESTAMPTZ,
-  PRIMARY KEY(tenant_id,channel_id,conversation_id)
+  PRIMARY KEY(tenant_id,actor_id)
 );
 CREATE INDEX saas_operator_voice_lease_expiry_idx
   ON saas_operator_voice_lease(lease_until) WHERE state IN ('starting','active');
