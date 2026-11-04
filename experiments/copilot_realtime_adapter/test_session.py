@@ -107,6 +107,16 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(provider.config)
         self.assertFalse(lease.held)
 
+    async def test_lost_starting_lease_never_opens_provider(self):
+        class LostBeforeOpen(Lease):
+            async def assert_current(self,scope,fence):raise Refused('lease_lost')
+        ledger=Ledger();provider=Provider(ledger);lease=LostBeforeOpen()
+        session=Session(('tenant',42,'channel','another'),authority=Authority(),ledger=ledger,lease=lease,
+                        context=Context(),provider=provider,client=Client())
+        with self.assertRaisesRegex(Refused,'lease_lost'):await session.start()
+        self.assertIsNone(provider.config)
+        self.assertFalse(lease.held)
+
     async def turn(self):
         self.input_id+=1
         item_id=f'user-{self.input_id}'
