@@ -93,6 +93,38 @@ def list_models(key):
     return models[:200]
 
 
+# Exact public IDs from OpenAI's current Realtime model catalog, plus the
+# explicitly requested legacy alias. These are metadata-only checks; a 200
+# response does not establish that a Realtime session can be opened.
+REALTIME_METADATA_MODELS=frozenset({
+    'gpt-realtime',
+    'gpt-realtime-1.5',
+    'gpt-realtime-2',
+    'gpt-realtime-2.1',
+    'gpt-realtime-2.1-mini',
+    'gpt-realtime-translate',
+    'gpt-live-1',
+})
+
+
+def check_realtime_model(key,model):
+    """Read allowlisted model metadata, without inference or secret output."""
+    if model not in REALTIME_METADATA_MODELS:raise ValueError('Unsupported Realtime model')
+    response=requests.get('https://api.openai.com/v1/models/'+model,
+        headers={'Authorization':'Bearer '+key},timeout=(3,10),allow_redirects=False)
+    status=int(response.status_code)
+    if status==200:
+        payload=response.json()
+        if not isinstance(payload,dict) or payload.get('id')!=model:
+            raise ValueError('Unexpected model metadata')
+        return {'model':model,'http_status':status,'available':True,'generation_access_verified':False}
+    messages={401:'OpenAI отклонил ключ.',403:'OpenAI отказал в доступе к проекту или модели.',
+              404:'OpenAI не нашёл модель или не предоставил доступ к ней.',
+              429:'OpenAI ограничил запросы или доступную квоту.'}
+    return {'model':model,'http_status':status,'available':None,'generation_access_verified':False,
+            'error':messages.get(status,'OpenAI отклонил проверку модели.')}
+
+
 def probe_model(key, model):
     """One minimal, context-free Responses call to confirm a selected model."""
     result = generate(key, model, 'summary', [], 'Return exactly OK.',

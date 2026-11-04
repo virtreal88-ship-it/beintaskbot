@@ -20,7 +20,7 @@ class PilotAdmission:
         self._fence=None;self._permits={};self._lock=asyncio.Lock();self._closed=False
 
     def validate_binding(self,scope,session_id,authority,lease):
-        """Synchronous constructor-time check; it cannot grant live admission."""
+        """Constructor-time binding check; it cannot grant live admission."""
         if (self._closed or scope!=self.scope or session_id!=self.session_id or
             authority is not self.authority or lease is not self.lease or
             not callable(getattr(authority,'check',None)) or

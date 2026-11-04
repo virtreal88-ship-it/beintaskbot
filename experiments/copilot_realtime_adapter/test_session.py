@@ -34,9 +34,9 @@ class Lease:
     def __init__(self): self.held=False
     async def claim(self, scope):
         if self.held: return None
-        self.held=True; return 'fence'
+        self.held=True; return 1
     async def assert_current(self, scope, fence):
-        if not self.held or fence != 'fence': raise Refused('lease_lost')
+        if not self.held or fence != 1: raise Refused('lease_lost')
     async def release(self, scope, fence): self.held=False;return True
 
 

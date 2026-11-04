@@ -1,4 +1,4 @@
-"""Server-owned Realtime protocol adapter with owner-pilot admission checks."""
+"""Server-owned Realtime protocol for the single-account Copilot pilot."""
 import asyncio
 import base64
 import binascii
@@ -49,25 +49,20 @@ def _unique_object(pairs):
     return result
 
 
-async def _require_live_admission(policy,scope=None,session_id=None):
-    """Use the owner pilot's single authorization and lease policy."""
+async def _require_live_admission(guard,scope=None,session_id=None):
+    """Recheck the same owner authorization and lease admitted by Session.start."""
     from tenant_operator_voice_pilot import PilotAdmission
-    if type(policy) is not PilotAdmission:
+    if type(guard) is not PilotAdmission:
         raise TenantLinearError('Голосовой режим пока недоступен.',503)
     try:
-        await policy.assert_live(policy.scope if scope is None else scope,
-                                 policy.session_id if session_id is None else session_id)
+        await guard.assert_live(guard.scope if scope is None else scope,
+                                guard.session_id if session_id is None else session_id)
     except Exception:
         raise TenantLinearError('Допуск или lease голосового сеанса недействителен.',503) from None
-    return True
 
 
 class AiohttpRealtimeSocket:
-    """Bounded JSON adapter around an already-open aiohttp WebSocket.
-
-    This wrapper owns no key. Its caller owns the session. Production cannot
-    obtain a socket through this module while admission is disabled.
-    """
+    """Bounded JSON adapter around an already-open aiohttp WebSocket."""
     def __init__(self,ws,owned_session=None):
         self.ws=ws;self.owned_session=owned_session;self._close_task=None
 
@@ -112,9 +107,8 @@ class AiohttpRealtimeSocket:
 
 
 async def _open_openai_socket(api_key,owner):
-    """Server-only connector. Recheck admission before opening provider I/O."""
-    await _require_live_admission(owner.guard)
-    # No caller-supplied session, proxy, endpoint, or trace hooks.
+    """Server-only connector scoped to the configured single-user pilot."""
+    await _require_live_admission(getattr(owner,'guard',None))
     session=_new_owned_session()
     owner._opening_session=session
     try:
@@ -138,7 +132,6 @@ def create_production_provider(*args,**kwargs):
 
 
 def create_pilot_provider(policy,credential_loader):
-    # Construction performs no network I/O; open() requires the admitted policy.
     from tenant_operator_voice_pilot import PilotAdmission
     from tenant_operator_voice_orchestration import ServerCredentialLoader
     if type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader:
@@ -319,7 +312,7 @@ class SyntheticRealtimeWire(_RealtimeWire):
 
 
 class OpenAIRealtimeProvider(_RealtimeWire):
-    """Server-only provider; credentials load only after pilot admission."""
+    """Server-only provider composition for the scoped no-tools pilot."""
     mock_only=False
 
     def __init__(self,credential_loader,claim_guard):

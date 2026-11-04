@@ -96,7 +96,7 @@ class LiveAdmission(unittest.IsolatedAsyncioTestCase):
 
         other = PilotAdmission(self.authority, self.lease, self.scope, str(uuid.uuid4()))
         wrong_provider = self.make_real_provider(lambda: None)
-        with self.assertRaisesRegex(Refused, 'pilot_policy_scope_mismatch'):
+        with self.assertRaisesRegex(Refused, 'provider_not_trusted'):
             Session(self.scope, authority=self.authority, ledger=None, lease=self.lease,
                     context=Context(), provider=wrong_provider, client=Client(),
                     session_id=self.session_id, pilot_policy=other)

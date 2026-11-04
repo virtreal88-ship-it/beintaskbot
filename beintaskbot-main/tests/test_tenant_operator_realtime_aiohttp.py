@@ -57,25 +57,25 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.ws=await self.session.ws_connect(f'http://127.0.0.1:{port}/local',max_msg_size=MAX_WIRE_MESSAGE)
         self.socket=AiohttpRealtimeSocket(self.ws)
 
+    async def asyncTearDown(self):
+        await self.socket.close()
+        await self.session.close()
+        await self.runner.cleanup()
+
     async def admitted_policy(self, scope=None):
         scope=scope or (str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic-dialog')
         session_id=str(uuid.uuid4())
         class Authority:
             async def check(self,*_):return None
         class Lease:
-            held=False
+            held=True
             async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):
                 if not self.held:raise ValueError('lease_not_current')
             async def release(self,*_):self.held=False;return True
-        lease=Lease();lease.held=True;policy=PilotAdmission(Authority(),lease,scope,session_id)
+        lease=Lease();policy=PilotAdmission(Authority(),lease,scope,session_id)
         await policy.admit(scope,session_id,1)
         return policy,lease
-
-    async def asyncTearDown(self):
-        await self.socket.close()
-        await self.session.close()
-        await self.runner.cleanup()
 
     async def test_real_aiohttp_frames_use_policy_and_one_claim(self):
         wire=_RealtimeWire(self.socket,OneUseGuard())
@@ -111,9 +111,10 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):await self.socket.send_json({'data':'x'*MAX_WIRE_MESSAGE})
 
     async def test_live_connector_fails_before_socket_or_key_use(self):
-        class Owner:
-            guard=object()
-        with self.assertRaises(TenantLinearError):await _open_openai_socket('synthetic-only',Owner())
+        class Forbidden:
+            def __getattr__(self,name):raise AssertionError('I/O attempted')
+        owner=type('Owner',(),{'guard':None})()
+        with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),owner)
 
     async def test_provider_gate_fires_before_credential_loader(self):
         called=[]
@@ -156,7 +157,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription='gpt-transcribe',reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
 
-    async def test_real_provider_session_composition_is_blocked_but_loopback_testable(self):
+    async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
         class Authority:
             async def check(self,*_):pass
         class Context:
@@ -167,6 +168,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             held=False
             async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
             async def reserve_session(self,scope,session_id):
@@ -181,13 +183,14 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def send(self,event):self.events.append(event)
         async def credential():return 'synthetic-key'
         async def connector(_value,_owner):return self.socket
+        authority=Authority();provider=None;lease=Lease();client=Client()
         scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic')
-        authority=Authority();lease=Lease();client=Client();sid=str(uuid.uuid4())
-        policy=PilotAdmission(authority,lease,scope,sid);provider=OpenAIRealtimeProvider(credential,policy)
+        session_id=str(uuid.uuid4());policy=PilotAdmission(authority,lease,scope,session_id)
+        provider=OpenAIRealtimeProvider(credential,policy)
         deps=dict(authority=authority,ledger=None,lease=lease,context=Context(),provider=provider,client=client,
-                  session_id=sid,pilot_policy=policy)
-        # Only the provider socket is replaced with this local loopback socket;
-        # constructor, start, authorization, lease, and provider gates are real.
+                  pilot_policy=policy,session_id=session_id)
+        # The loopback peer is synthetic; only the test substitutes the network
+        # connector, while the production policy still requires the exact pilot.
         with patch('tenant_operator_realtime_wire._open_openai_socket',connector):
             session=Session(scope,**deps)
             try:
@@ -317,9 +320,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         owned=SlowSession()
         async def cancelled_connect(*_args):raise asyncio.CancelledError()
         async def credential():return 'synthetic-key'
-        provider=OpenAIRealtimeProvider(credential,OneUseGuard())
-        with patch('tenant_operator_realtime_wire._require_live_admission'),\
-             patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
+        policy,lease=await self.admitted_policy()
+        provider=OpenAIRealtimeProvider(credential,policy)
+        with patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
              patch('tenant_operator_realtime_wire._connect_websocket',cancelled_connect):
             task=asyncio.create_task(provider.open({},tools=[],create_response=False,
                                          interrupt_response=False,transcription='gpt-transcribe',reconnect=False))
@@ -340,8 +343,9 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def revalidate(self,_):return True
         class Lease:
             held=False
-            async def claim(self,_):self.held=True;return 'fence'
+            async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
             events=[]

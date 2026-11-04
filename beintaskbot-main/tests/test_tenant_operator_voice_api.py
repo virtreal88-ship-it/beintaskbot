@@ -25,10 +25,17 @@ class VoiceHttp(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.client.close();self.patcher.stop()
 
-    async def test_preflight_checks_existing_profile_then_reports_disabled(self):
-        response=await self.client.post('/preflight',headers=self.headers,json=self.body)
-        self.assertEqual(response.status,200);self.assertEqual(await response.json(),{'success':True,'result':{'available':False}})
+    async def test_preflight_checks_existing_profile_and_exact_pilot_authority(self):
+        with patch.object(api,'require_pilot') as pilot:
+            response=await self.client.post('/preflight',headers=self.headers,json=self.body)
+        self.assertEqual(response.status,200);self.assertEqual(await response.json(),{'success':True,'result':{'available':True}})
         self.check.assert_called_once_with(self.profile,{'provider':'connect','lead_id':41,'channel_id':'synthetic','conversation_id':'synthetic'})
+        pilot.assert_called_once_with(self.check.return_value)
+
+    async def test_preflight_is_unavailable_outside_exact_configured_pilot(self):
+        with patch.object(api,'require_pilot',side_effect=TenantLinearError('Голосовой режим недоступен.',403)):
+            response=await self.client.post('/preflight',headers=self.headers,json=self.body)
+        self.assertEqual(response.status,403)
 
     async def test_missing_or_changed_profile_and_origin_never_reach_authority(self):
         for headers,body,status in [({'Origin':'https://crm.pro.az'},self.body,403),

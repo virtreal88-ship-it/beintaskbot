@@ -263,7 +263,7 @@ async def open_server_session(request,profile,origin=None):
            'channel_id':request.query.get('channel_id'),'conversation_id':request.query.get('conversation_id')}
     authority=await ScopedAuthority.create(profile,route)
     session_id=str(uuid.uuid4())
-    lease=_create_server_lease(authority,session_id)  # independently hard-off
+    lease=_create_server_lease(authority,session_id)
     from tenant_operator_voice_gateway import make_handler
     async def authenticate(_request):
         await authority.check(authority.session_scope,'connect')

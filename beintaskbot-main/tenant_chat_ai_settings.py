@@ -4,7 +4,7 @@ import re
 from tenant_platform import _connect, _fernet
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_policy import configuration
-from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model
+from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model
 from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError, identifier
 
@@ -95,6 +95,12 @@ def available_models(session):
     """Explicit owner/admin check; only IDs are returned and no tokens are generated."""
     _tenant, _metadata, key = _company_key(session)
     return {'models': provider_models(key)}
+
+
+def realtime_model_availability(session,model):
+    """Use only the authorized company's saved key; never return the key."""
+    _tenant, _metadata, key = _company_key(session)
+    return check_realtime_model(key,model)
 
 
 def test_model(session, model):
