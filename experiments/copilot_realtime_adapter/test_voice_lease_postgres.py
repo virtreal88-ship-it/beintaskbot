@@ -193,16 +193,23 @@ asyncio.run(run())
         # provider_opened_at column. The trigger must clear the previous
         # session's marker when its identity/fence changes.
         next_session=str(uuid.uuid4());next_owner=str(uuid.uuid4())
+        next_channel=str(uuid.uuid4());next_conversation='synthetic-next'
         with self.connect() as conn:
-            conn.execute('''UPDATE saas_operator_voice_lease
-              SET session_id=%s::uuid,owner_id=%s::uuid,fence=fence+1,state='starting',
-                  lease_until=now()+interval '15 seconds',updated_at=now(),closed_at=NULL
-              WHERE tenant_id=%s AND actor_id=7 AND state='closed' AND fence=1''',
-              (next_session,next_owner,self.tenant))
-            conn.execute('''UPDATE saas_operator_voice_lease SET state='active',
-                lease_until=now()-interval '1 second',updated_at=now()
-              WHERE tenant_id=%s AND actor_id=7 AND session_id=%s::uuid AND owner_id=%s::uuid AND fence=2''',
-              (self.tenant,next_session,next_owner))
+            reclaimed=conn.execute('''UPDATE saas_operator_voice_lease SET
+                session_id=%s::uuid,channel_id=%s::uuid,conversation_id=%s,
+                owner_id=%s::uuid,fence=%s,state='starting',
+                lease_until=now()+(%s*interval '1 second'),updated_at=now(),closed_at=NULL
+              WHERE tenant_id=%s::uuid AND actor_id=%s AND fence=%s RETURNING fence''',
+              (next_session,next_channel,next_conversation,next_owner,2,15,self.tenant,7,1)).fetchone()
+            self.assertEqual(reclaimed[0],2)
+            renewed=conn.execute('''UPDATE saas_operator_voice_lease SET state='active',
+                lease_until=now()+(%s*interval '1 second'),updated_at=now()
+              WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid AND conversation_id=%s
+                AND session_id=%s::uuid AND owner_id=%s::uuid AND fence=%s
+                AND state IN ('starting','active') AND lease_until>now() RETURNING fence''',
+              (15,self.tenant,7,next_channel,next_conversation,next_session,next_owner,2)).fetchone()
+            self.assertEqual(renewed[0],2)
+            conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
             marker=conn.execute('SELECT provider_opened_at FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=7',(self.tenant,)).fetchone()[0]
         self.assertIsNone(marker)
         self.assertIsNone(await lease_module.VoiceSessionLease(authority,str(uuid.uuid4())).claim(authority.session_scope))
