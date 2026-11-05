@@ -11,6 +11,16 @@ from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect
 
 LEASE_SECONDS = 15
+# OpenAI documents a hard maximum Realtime session duration of 60 minutes.
+# `updated_at` is written when the lease becomes active immediately before
+# provider startup, again after startup succeeds, and on later renewals. The
+# provider-open path has a 12-second deadline; the five-minute grace below
+# exceeds that bounded gap. Thus an active row untouched beyond this provider
+# lifetime plus the margin cannot still own a live provider session. A mere
+# 15-second lease expiry is intentionally insufficient.
+REALTIME_SESSION_MAX_SECONDS = 60 * 60
+ACTIVE_RECOVERY_GRACE_SECONDS = 5 * 60
+ACTIVE_RECOVERY_AFTER_SECONDS = REALTIME_SESSION_MAX_SECONDS + ACTIVE_RECOVERY_GRACE_SECONDS
 _ACTIVE = ('starting', 'active')
 
 
@@ -40,16 +50,26 @@ class VoiceSessionLease:
                                 ('copilot-voice-lease:' + ':'.join(map(str,self.key)),))
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
-                          lease_until>now() AS live FROM saas_operator_voice_lease
-                          WHERE tenant_id=%s::uuid AND actor_id=%s FOR UPDATE''', self.key)
+                          lease_until>now() AS live,
+                          (state='active' AND updated_at <= now() - (%s * interval '1 second'))
+                            AS provider_session_expired
+                          FROM saas_operator_voice_lease
+                          WHERE tenant_id=%s::uuid AND actor_id=%s FOR UPDATE''',
+                          (ACTIVE_RECOVERY_AFTER_SECONDS,*self.key))
                         old = cur.fetchone()
                         # A starting owner must successfully renew to active
                         # before any provider I/O. An expired starting row can
                         # therefore be reclaimed under this same lock: the old
                         # owner's renew then fails on fence and expiry. Expiry
-                        # of an active row does not prove provider shutdown.
+                        # of an active row alone does not prove provider
+                        # shutdown. Reclaim an active row only after its last
+                        # successful post-open heartbeat is older than the
+                        # provider's documented maximum session lifetime plus
+                        # a margin. The incremented fence makes stale owners
+                        # unable to renew or release the new lease.
                         if old and not (old['state']=='closed' or
-                                        (old['state']=='starting' and old['live'] is False)):
+                                        (old['state']=='starting' and old['live'] is False) or
+                                        (old['state']=='active' and old['provider_session_expired'] is True)):
                             conn.commit(); return None
                         if old:
                             next_fence = int(old['fence']) + 1
