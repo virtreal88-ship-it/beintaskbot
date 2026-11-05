@@ -180,6 +180,33 @@ asyncio.run(run())
         self.assertEqual(await replacement.claim(authority.session_scope),2)
         self.assertTrue(await replacement.release(authority.session_scope,2))
 
+    async def test_old_main_closed_row_reclaim_clears_previous_provider_marker(self):
+        authority=Authority(self.tenant)
+        first=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        self.assertEqual(await first.claim(authority.session_scope),1)
+        await first.assert_current(authority.session_scope,1)
+        await first.confirm_provider_open(authority.session_scope,1)
+        self.assertTrue(await first.release(authority.session_scope,1))
+        with self.connect() as conn:
+            conn.execute("UPDATE saas_operator_voice_lease SET provider_opened_at=now()-interval '66 minutes' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+        # The old main writer reuses a closed row but does not mention the new
+        # provider_opened_at column. The trigger must clear the previous
+        # session's marker when its identity/fence changes.
+        next_session=str(uuid.uuid4());next_owner=str(uuid.uuid4())
+        with self.connect() as conn:
+            conn.execute('''UPDATE saas_operator_voice_lease
+              SET session_id=%s::uuid,owner_id=%s::uuid,fence=fence+1,state='starting',
+                  lease_until=now()+interval '15 seconds',updated_at=now(),closed_at=NULL
+              WHERE tenant_id=%s AND actor_id=7 AND state='closed' AND fence=1''',
+              (next_session,next_owner,self.tenant))
+            conn.execute('''UPDATE saas_operator_voice_lease SET state='active',
+                lease_until=now()-interval '1 second',updated_at=now()
+              WHERE tenant_id=%s AND actor_id=7 AND session_id=%s::uuid AND owner_id=%s::uuid AND fence=2''',
+              (self.tenant,next_session,next_owner))
+            marker=conn.execute('SELECT provider_opened_at FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=7',(self.tenant,)).fetchone()[0]
+        self.assertIsNone(marker)
+        self.assertIsNone(await lease_module.VoiceSessionLease(authority,str(uuid.uuid4())).claim(authority.session_scope))
+
     async def test_cancelled_provider_open_is_not_reclaimed_by_age(self):
         entered=asyncio.Event();cancel_seen=asyncio.Event();finish=asyncio.Event()
         authority=Authority(self.tenant);sid=str(uuid.uuid4())

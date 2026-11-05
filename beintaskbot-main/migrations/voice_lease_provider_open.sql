@@ -19,6 +19,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Older writers do not know about provider_opened_at and therefore do not
+  -- clear it when reusing a closed row. Never let a new owner inherit the
+  -- prior session's provider-open timestamp as recovery evidence.
+  IF NEW.session_id IS DISTINCT FROM OLD.session_id
+     OR NEW.owner_id IS DISTINCT FROM OLD.owner_id
+     OR NEW.fence IS DISTINCT FROM OLD.fence THEN
+    NEW.provider_opened_at := NULL;
+  END IF;
+
   IF OLD.state = 'starting'
      AND OLD.provider_opened_at IS NULL
      AND OLD.lease_until <= clock_timestamp()
