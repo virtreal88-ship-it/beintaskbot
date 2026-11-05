@@ -11,6 +11,26 @@ import time
 from aiohttp import WSMsgType, web
 
 _LOG=logging.getLogger(__name__)
+_SAFE_EVENT_TYPE=re.compile(r'^(?:session|conversation|response|input_audio_buffer|output_audio_buffer|rate_limits|error)\.[a-z0-9_]+(?:\.[a-z0-9_]+){0,4}$')
+_SAFE_FAILURE_CODES=frozenset({
+    'provider_configuration_changed','provider_session_changed','provider_conversation_invalid',
+    'provider_event_invalid','provider_event_forbidden','provider_item_forbidden',
+    'provider_context_unconfirmed','unsafe_session_readback','session_not_ready',
+    'wire_json_invalid','wire_event_invalid','unmatched_input_transcript_delta',
+    'unmatched_input_transcript','unmatched_input_transcript_failure','invalid_committed_input',
+    'unmatched_committed_input','unreserved_response','unreserved_or_duplicate_response',
+    'invalid_audio_completion','invalid_provider_audio','input_response_pending',
+})
+
+
+def _provider_failure_fields(stage,event,exc):
+    """Return only fixed failure codes and protocol metadata for safe logs."""
+    raw_code=exc.args[0] if len(exc.args)==1 and isinstance(exc.args[0],str) else None
+    code=raw_code if raw_code in _SAFE_FAILURE_CODES else 'provider_error'
+    raw_type=event.get('type') if isinstance(event,dict) else None
+    event_type=raw_type if isinstance(raw_type,str) and _SAFE_EVENT_TYPE.fullmatch(raw_type) else 'unavailable'
+    safe_stage=stage if stage in ('provider_receive','provider_event') else 'provider_error'
+    return code,safe_stage,event_type
 
 
 class SocketClient:
@@ -79,17 +99,21 @@ def make_handler(*, allowed_origins, authenticate, build_session):
             reader=asyncio.create_task(read_frames())
             await session.start()
             async def read_provider():
+                stage='provider_receive'
+                event=None
                 try:
                     while not session.closed:
                         event=await session.next_provider_event()
+                        stage='provider_event'
                         await session.receive_provider(event)
+                        stage='provider_receive'
+                        event=None
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    detail=str(exc)
-                    code=(detail if detail.startswith('provider_error_') and
-                          re.fullmatch(r'provider_error_[A-Za-z0-9_-]{1,48}',detail) else type(exc).__name__)
-                    _LOG.warning('realtime_voice_provider_reader_failed code=%s',code)
+                    code,safe_stage,event_type=_provider_failure_fields(stage,event,exc)
+                    _LOG.warning('realtime_voice_provider_reader_failed code=%s stage=%s event_type=%s',
+                                 code,safe_stage,event_type)
                     await session.end('provider_disconnected')
                     await ws.close()
             if callable(getattr(session.provider,'receive',None)):
