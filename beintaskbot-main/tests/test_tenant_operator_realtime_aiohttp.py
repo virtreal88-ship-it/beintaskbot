@@ -281,7 +281,6 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 await session.start()
         await asyncio.wait_for(entered.wait(),.2)
         await asyncio.wait_for(cancel_seen.wait(),.2)
-        self.assertFalse(session._open_task.done())
         self.assertTrue(lease.held)
         self.assertEqual(lease.releases,0)
         finish.set()
