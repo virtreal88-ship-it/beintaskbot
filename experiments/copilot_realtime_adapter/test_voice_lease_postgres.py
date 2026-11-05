@@ -159,6 +159,27 @@ asyncio.run(run())
         self.assertEqual(await second.claim(a.session_scope),2)
         self.assertTrue(await second.release(a.session_scope,2))
 
+    async def test_database_fence_blocks_old_main_expired_starting_reclaim(self):
+        authority=Authority(self.tenant);old=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        self.assertEqual(await old.claim(authority.session_scope),1)
+        self.expire(7)
+        # This is the takeover UPDATE issued by the pre-migration writer on
+        # main: it sees an expired `starting` row, increments fence and replaces
+        # the session. The trigger must reject it during a mixed-version rollout.
+        with self.assertRaises(psycopg.errors.ObjectNotInPrerequisiteState):
+            with self.connect() as conn:
+                conn.execute('''UPDATE saas_operator_voice_lease
+                  SET session_id=%s::uuid,owner_id=%s::uuid,fence=fence+1,state='starting',
+                      lease_until=now()+interval '15 seconds',updated_at=now()
+                  WHERE tenant_id=%s AND actor_id=%s AND fence=1''',
+                  (str(uuid.uuid4()),str(uuid.uuid4()),self.tenant,7))
+        replacement=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        self.assertIsNone(await replacement.claim(authority.session_scope))
+        # A normal release by the current fenced owner remains available.
+        self.assertTrue(await old.release(authority.session_scope,1))
+        self.assertEqual(await replacement.claim(authority.session_scope),2)
+        self.assertTrue(await replacement.release(authority.session_scope,2))
+
     async def test_cancelled_provider_open_is_not_reclaimed_by_age(self):
         entered=asyncio.Event();cancel_seen=asyncio.Event();finish=asyncio.Event()
         authority=Authority(self.tenant);sid=str(uuid.uuid4())
