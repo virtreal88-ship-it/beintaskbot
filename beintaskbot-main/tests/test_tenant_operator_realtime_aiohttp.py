@@ -12,7 +12,7 @@ from aiohttp import web
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_realtime_wire import (
     AiohttpRealtimeSocket, _RealtimeWire, OpenAIRealtimeProvider, _open_openai_socket, _new_owned_session,
-    _connect_websocket, RedirectRefused,
+    _connect_websocket, RedirectRefused, SafeRealtimeFailure,
     MAX_WIRE_MESSAGE, MINIMUM_HOLD, MODEL, QUOTE,
 )
 from tenant_operator_voice_session import Session
@@ -46,6 +46,22 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         fields=_provider_failure_fields('unexpected-stage',event,failure)
         self.assertEqual(fields,('provider_error','provider_error','unavailable'))
         self.assertNotIn('synthetic-private',repr(fields))
+
+    def test_provider_failure_diagnostic_classifies_safe_provider_codes_and_event(self):
+        failure=SafeRealtimeFailure('model_not_found',event_type='error')
+        self.assertEqual(_provider_failure_fields('provider_receive',None,failure),
+                         ('model_not_found','provider_receive','error'))
+        unknown=SafeRealtimeFailure('synthetic-secret-code',event_type='error')
+        self.assertEqual(_provider_failure_fields('provider_receive',None,unknown),
+                         ('provider_error','provider_receive','error'))
+
+    def test_provider_failure_diagnostic_distinguishes_socket_and_parse_failures(self):
+        self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('websocket_closed')),
+                         ('websocket_closed','provider_receive','unavailable'))
+        self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('websocket_error')),
+                         ('websocket_error','provider_receive','unavailable'))
+        self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('provider_json_invalid')),
+                         ('provider_json_invalid','provider_receive','unavailable'))
 
     async def asyncSetUp(self):
         self.received=[]
@@ -355,8 +371,33 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_peer_disconnect_fails_closed(self):
         await self.socket.receive_json()
         await self.server_socket.close()
-        with self.assertRaisesRegex(ValueError,'wire_socket_closed_or_nontext'):
+        with self.assertRaises(SafeRealtimeFailure) as caught:
             await asyncio.wait_for(self.socket.receive_json(),1)
+        self.assertEqual(caught.exception.diagnostic_code,'websocket_closed')
+
+    async def test_unexpected_binary_provider_frame_is_not_misreported_as_close(self):
+        await self.socket.receive_json()
+        await self.server_socket.send_bytes(b'private binary payload')
+        with self.assertRaises(SafeRealtimeFailure) as caught:
+            await self.socket.receive_json()
+        self.assertEqual(caught.exception.diagnostic_code,'websocket_nontext_frame')
+
+    async def test_provider_error_event_exposes_only_allowlisted_code(self):
+        await self.socket.receive_json()
+        await self.server_socket.send_json({'type':'error','error':{'code':'model_not_found',
+            'message':'synthetic secret details'}})
+        with self.assertRaises(SafeRealtimeFailure) as caught:
+            await self.socket.receive_json()
+        fields=_provider_failure_fields('provider_receive',None,caught.exception)
+        self.assertEqual(fields,('model_not_found','provider_receive','error'))
+        self.assertNotIn('synthetic secret',repr(fields))
+
+    async def test_malformed_provider_json_has_distinct_safe_category(self):
+        await self.socket.receive_json()
+        await self.server_socket.send_str('{malformed synthetic secret}')
+        with self.assertRaises(SafeRealtimeFailure) as caught:
+            await self.socket.receive_json()
+        self.assertEqual(caught.exception.diagnostic_code,'provider_json_invalid')
 
     async def test_owned_socket_closes_its_client_session(self):
         port=self.site._server.sockets[0].getsockname()[1]
