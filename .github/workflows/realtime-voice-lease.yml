@@ -56,7 +56,8 @@ jobs:
             --mount "type=bind,src=$SOCKET_DIR,dst=/var/run/postgresql" \
             --env POSTGRES_HOST_AUTH_METHOD=trust postgres:16
           cleanup() {
-            docker exec realtime-voice-lease-pg pg_ctl -D /var/lib/postgresql/data stop -m fast >/dev/null 2>&1 || true
+            docker exec --user postgres realtime-voice-lease-pg pg_ctl -D /var/lib/postgresql/data stop -m fast >/dev/null 2>&1 || true
+            docker exec realtime-voice-lease-pg rm -f /var/run/postgresql/.s.PGSQL.5432 /var/run/postgresql/.s.PGSQL.5432.lock >/dev/null 2>&1 || true
             docker rm --force realtime-voice-lease-pg >/dev/null 2>&1 || true
             rm -rf "$SOCKET_DIR"
           }
