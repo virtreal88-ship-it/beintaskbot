@@ -233,6 +233,11 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             session=Session(scope,**deps)
             try:
                 await session.start()
+                # Realtime may report a created message item separately from
+                # the added/done notifications. Accept it only under the same
+                # strict message-role checks as the other item events.
+                await session.receive_provider({'type':'conversation.item.created',
+                    'item':{'id':'synthetic-context','type':'message','role':'user','content':[]}})
                 await session.receive_provider({'type':'input_audio_buffer.speech_started'})
                 await session.receive_client({'type':'audio','pcm':bytes(480)})
                 await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
