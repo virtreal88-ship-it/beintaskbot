@@ -7,6 +7,7 @@ on:
       - 'beintaskbot-main/tenant_operator_realtime_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/migrations/voice_lease_provider_open.sql'
       - 'experiments/copilot_realtime_adapter/**'
       - '.github/workflows/realtime-voice-lease.yml'
@@ -41,10 +42,7 @@ jobs:
       - name: Run lease and PostgreSQL integration tests
         working-directory: experiments/copilot_realtime_adapter
         env:
-          # The PostgreSQL fixture pins TEST_DATABASE_URL to its private Unix
-          # socket and rejects network DSNs itself. Do not inherit the generic
-          # guard, which intentionally rejects this local socket connection.
-          PYTHONPATH: ../../beintaskbot-main:../../beintaskbot-main/tests:.
+          PYTHONPATH: ../../beintaskbot-main:../../beintaskbot-main/tests/isolated_database_guard:../../beintaskbot-main/tests:.
           TEST_DATABASE_URL: host=/tmp/bein-lease-pg.${{ github.run_id }}${{ github.run_attempt }} dbname=voice_lease_test user=postgres
         run: |
           set -euo pipefail
