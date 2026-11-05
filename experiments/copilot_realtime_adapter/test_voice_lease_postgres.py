@@ -16,7 +16,7 @@ from unittest.mock import patch
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
-from session import Session  # Adds the application module path.
+from session import Refused, Session  # Adds the application module path.
 from tenant_operator_voice_pilot import PilotAdmission
 from test_pilot_admission import MockPilotProvider
 from test_session import Context, Client
@@ -158,6 +158,46 @@ asyncio.run(run())
         self.assertTrue(await first.release(a.session_scope,1))
         self.assertEqual(await second.claim(a.session_scope),2)
         self.assertTrue(await second.release(a.session_scope,2))
+
+    async def test_cancelled_provider_open_is_not_reclaimed_by_age(self):
+        entered=asyncio.Event();cancel_seen=asyncio.Event();finish=asyncio.Event()
+        authority=Authority(self.tenant);sid=str(uuid.uuid4())
+        lease=lease_module.VoiceSessionLease(authority,sid)
+        policy=PilotAdmission(authority,lease,authority.session_scope,sid)
+
+        class CancellationResistantProvider(MockPilotProvider):
+            async def open(self,snapshot,**config):
+                entered.set()
+                try:await finish.wait()
+                except asyncio.CancelledError:
+                    cancel_seen.set()
+                    await finish.wait()
+
+        provider=CancellationResistantProvider(policy)
+        session=Session(authority.session_scope,authority=authority,ledger=None,lease=lease,context=Context(),
+                        provider=provider,client=Client(),session_id=sid,pilot_policy=policy,
+                        max_seconds=5,idle_seconds=4)
+        replacement=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        try:
+            with patch('tenant_operator_voice_session.PROVIDER_OPEN_DEADLINE',.01):
+                with self.assertRaisesRegex(Refused,'provider_open_timeout'):
+                    await session.start()
+            await asyncio.wait_for(entered.wait(),1)
+            await asyncio.wait_for(cancel_seen.wait(),1)
+            self.expire(7)
+            self.assertIsNone(await replacement.claim(authority.session_scope))
+            finish.set()
+            await asyncio.gather(session._open_task,return_exceptions=True)
+            # A provider-open coroutine that finished only after cancellation
+            # still has no confirmed-open timestamp and cannot be age-reclaimed.
+            self.assertIsNone(await replacement.claim(authority.session_scope))
+        finally:
+            finish.set()
+            if session._open_task is not None:
+                await asyncio.gather(session._open_task,return_exceptions=True)
+            await provider.close()
+            if lease.fence is not None:
+                await lease.release(authority.session_scope,lease.fence)
 
     async def test_legacy_active_row_without_open_marker_stays_blocked(self):
         channel=str(uuid.uuid4());owner=str(uuid.uuid4());session=str(uuid.uuid4())
