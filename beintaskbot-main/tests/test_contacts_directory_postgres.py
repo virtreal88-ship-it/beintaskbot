@@ -49,6 +49,7 @@ def _lead(f, ident, name, *, tenant=A, pipeline=10, stage=101, account='100', co
 def directory(staff, monkeypatch):
     f = staff
     for name in ('tenant_crm_native_contacts', 'tenant_crm_store', 'tenant_crm_contact_listing',
+                 'tenant_crm_list_states',
                  'tenant_crm_native_companies', 'tenant_crm_native_deals', 'tenant_crm_sync_outbox'):
         module = importlib.import_module(name)
         if hasattr(module, '_connect'):

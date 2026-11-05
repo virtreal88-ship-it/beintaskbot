@@ -1,28 +1,58 @@
 """Fresh membership/deal authority and bounded history in one transaction."""
 import uuid
+from psycopg.errors import SerializationFailure
 from tenant_platform import _connect, _read_tenant_workflow
-from tenant_chat_history_schema import ensure_schema
 from tenant_chat_history_cursor import encode, decode
 from tenant_crm_queries import public_crm_row
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
 
 
+def _require_schema(conn):
+    """Existing optional history indexes are never installed by a read."""
+    with conn.cursor() as cur:
+        cur.execute('''SELECT bool_and(to_regclass(name) IS NOT NULL) AS ready
+          FROM unnest(%s::text[]) AS required(name)''', ([
+            'saas_tenants','saas_tenant_members','saas_tenant_pipelines',
+            'saas_tenant_pipeline_stages','saas_tenant_workflow_policies',
+            'saas_crm_deals','saas_crm_messages'],))
+        if not (cur.fetchone() or {}).get('ready'):
+            raise TenantLinearError('Tarixçə saxlanması hazır deyil.',503)
+
+
 def page(session: dict, lead_id: object, cursor: str = '', limit: object = 120) -> dict:
+    for attempt in range(2):
+        try:
+            return _page(session,lead_id,cursor,limit)
+        except SerializationFailure:
+            if attempt:
+                raise TenantLinearError('Tarixçə əlçatan deyil. Yenidən yoxlayın.',503) from None
+
+
+def _page(session: dict, lead_id: object, cursor: str = '', limit: object = 120) -> dict:
     lead, size = int(str(lead_id)), int(str(limit))
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
     if not 0 < lead < 2**63 or not 1 <= size <= 120:
         raise ValueError('Invalid page')
     position = decode(cursor, session, lead)
     with _connect() as conn:
-        ensure_schema(conn)
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+        _require_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+            cur.execute('SELECT status,modules FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,))
+            company=cur.fetchone()
+            if not company or company['status']!='active':
+                raise TenantLinearError('İcazə yoxdur.',403)
+            cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
+              WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
+              ORDER BY policy_key FOR SHARE''',(tenant,['members','modules']))
+            cur.fetchall()
+            cur.execute('SELECT * FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',(tenant,actor))
             profile = cur.fetchone()
-            if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
+            if not profile or profile['active'] is not True:
                 raise TenantLinearError('İcazə yoxdur.', 403)
-            policy = TenantPolicy({**profile, 'tenant_id':tenant, 'workflow':_read_tenant_workflow(cur, tenant)})
+            policy = TenantPolicy({**profile,'tenant_status':company['status'],'modules':company['modules'],
+                                  'tenant_id':tenant,'workflow':_read_tenant_workflow(cur,tenant)})
             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
             if not policy.can_access_deal(cur.fetchone()):
                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)

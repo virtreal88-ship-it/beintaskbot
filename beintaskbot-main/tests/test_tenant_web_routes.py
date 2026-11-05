@@ -33,6 +33,7 @@ EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support
 EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
 EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
+EXPECTED_ASSETS += ['/assets/tenant-company-deal-list-states.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
 EXPECTED_ASSETS += ['/assets/tenant-copilot-voice-audio.js','/assets/tenant-copilot-voice-controller.js','/assets/tenant-copilot-voice-channel.js']

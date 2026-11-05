@@ -452,8 +452,9 @@ function TasksTable({ rows = [], settings = {} }) {
   </Card.Root>;
 }
 
-function DealTable({ rows = [], customer = false, onOpen }) {
-  if (!rows.length) return <Empty>Bu filtr üzrə məlumat tapılmadı.</Empty>;
+function DealTable({ rows = [], customer = false, onOpen, settings = {} }) {
+  const labels=settings.labels || {};
+  if (!rows.length) return <Empty>{settings.empty || 'Bu filtr üzrə məlumat tapılmadı.'}</Empty>;
   return (
     <Card.Root
       borderColor="app.line"
@@ -466,35 +467,35 @@ function DealTable({ rows = [], customer = false, onOpen }) {
           <Table.Header bg="app.raised">
             <Table.Row>
               <Table.ColumnHeader>
-                {customer ? "Müştəri" : "Sövdələşmə"}
+                {customer ? "Müştəri" : labels.deal || "Sövdələşmə"}
               </Table.ColumnHeader>
-              <Table.ColumnHeader>Mərhələ</Table.ColumnHeader>
-              <Table.ColumnHeader>Son mesaj</Table.ColumnHeader>
-              <Table.ColumnHeader>Yenilənib</Table.ColumnHeader>
+              <Table.ColumnHeader>{labels.stage || "Mərhələ"}</Table.ColumnHeader>
+              <Table.ColumnHeader>{labels.lastMessage || "Son mesaj"}</Table.ColumnHeader>
+              <Table.ColumnHeader>{labels.updated || "Yenilənib"}</Table.ColumnHeader>
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {rows.map((deal) => (
               <Table.Row
-                key={deal.kommo_lead_id}
+                key={String(deal.id || deal.kommo_lead_id)}
                 cursor="pointer"
                 _hover={{ bg: "app.raised" }}
-                onClick={() => onOpen?.(deal.kommo_lead_id)}
+                onClick={settings.source ? undefined : () => onOpen?.(deal.kommo_lead_id)}
               >
                 <Table.Cell>
                   <Text fontWeight="600" color="app.ink">
-                    {customer ? deal.contact_name || deal.name : deal.name}
+                    {settings.source ? <Button variant="plain" minH="44px" h="auto" px="0" maxW="100%" whiteSpace="normal" textAlign="start" data-crm-list-open={String(deal.id || deal.kommo_lead_id)} onClick={() => onOpen?.(String(deal.id || deal.kommo_lead_id))}>{deal.title || deal.name}</Button> : customer ? deal.contact_name || deal.name : deal.name}
                   </Text>
                   <Text fontSize="xs" color="app.muted">
-                    {deal.phone || deal.contact_name || "Məlumat yoxdur"}
+                    {deal.phone || deal.contact_name || labels.noDetails || "Məlumat yoxdur"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell>
-                  <StatusBadge>{deal.stage_name || "Mərhələ"}</StatusBadge>
+                  <StatusBadge>{deal.stage_name || labels.noStage || "Mərhələ"}</StatusBadge>
                 </Table.Cell>
                 <Table.Cell maxW="330px">
                   <Text truncate color="app.muted">
-                    {deal.last_message || "Son mesaj yoxdur"}
+                    {deal.last_message || labels.noMessage || "Son mesaj yoxdur"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell whiteSpace="nowrap">
@@ -509,24 +510,24 @@ function DealTable({ rows = [], customer = false, onOpen }) {
   );
 }
 
-function DealKanban({ rows = [], onOpen }) {
+function DealKanban({ rows = [], onOpen, settings = {} }) {
   const groups = useMemo(() => {
     const result = new Map();
     rows.forEach((row) => {
-      const key = row.stage_name || "Mərhələ";
+      const key = settings.source ? `${row.pipeline_name || ""} · ${row.stage_name || settings.labels?.noStage || "—"}` : row.stage_name || "Mərhələ";
       if (!result.has(key)) result.set(key, []);
       result.get(key).push(row);
     });
     return [...result.entries()];
-  }, [rows]);
-  if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
+  }, [rows, settings.source, settings.labels?.noStage]);
+  if (!groups.length) return <Empty>{settings.empty || "Kanbanda sövdələşmə yoxdur."}</Empty>;
   return (
-    <Flex gap="4" align="flex-start" overflowX="auto" pb="3">
+    <Flex gap="4" align="flex-start" overflowX="auto" pb="3" data-crm-board-scroll>
       {groups.map(([stage, items]) => (
         <Box
           key={stage}
-          minW="300px"
-          w="300px"
+          minW="min(300px, calc(100vw - 72px))"
+          w="min(300px, calc(100vw - 72px))"
           bg="app.raised"
           borderRadius="xl"
           p="3"
@@ -538,18 +539,24 @@ function DealKanban({ rows = [], onOpen }) {
           <Stack gap="3">
             {items.map((deal) => (
               <Card.Root
-                key={deal.kommo_lead_id}
+                as={settings.source ? "button" : undefined}
+                type={settings.source ? "button" : undefined}
+                data-crm-list-open={settings.source ? String(deal.id || deal.kommo_lead_id) : undefined}
+                minH={settings.source ? "44px" : undefined}
+                textAlign="start"
+                width="100%"
+                key={String(deal.id || deal.kommo_lead_id)}
                 borderWidth="1px"
                 borderColor="app.line"
                 shadow="xs"
                 cursor="pointer"
                 _hover={{ shadow: "md", borderColor: "brand.500" }}
-                onClick={() => onOpen?.(deal.kommo_lead_id)}
+                onClick={() => onOpen?.(String(deal.id || deal.kommo_lead_id))}
               >
                 <Card.Body p="4">
-                  <Text fontWeight="600">{deal.contact_name || deal.name}</Text>
+                  <Text fontWeight="600">{deal.title || deal.contact_name || deal.name}</Text>
                   <Text fontSize="sm" color="app.muted">
-                    {deal.phone || "Telefon yoxdur"}
+                    {deal.phone || settings.labels?.noPhone || "Telefon yoxdur"}
                   </Text>
                   <Text mt="2" fontSize="xs" color="app.muted" lineClamp="2">
                     {deal.last_message || deal.name}
@@ -560,7 +567,7 @@ function DealKanban({ rows = [], onOpen }) {
                     fontSize="xs"
                     color="app.muted"
                   >
-                    <span>#{deal.kommo_lead_id}</span>
+                    <span>{settings.source ? deal.source_label || settings.labels?.[settings.source] || "" : "#"+deal.kommo_lead_id}</span>
                     <span>
                       {formatDate(deal.source_updated_at || deal.synced_at)}
                     </span>
@@ -575,14 +582,15 @@ function DealKanban({ rows = [], onOpen }) {
   );
 }
 
-function DealsView({ rows = [], customer = false, onOpen }) {
-  const [mode, setMode] = useState(
+function DealsView({ rows = [], customer = false, onOpen, settings = {} }) {
+  const [legacyMode, setMode] = useState(
     customer ? "table" : localStorage.getItem("tenant-deal-view") || "kanban",
   );
+  const mode=settings.mode || legacyMode;
   if (customer) return <DealTable rows={rows} customer onOpen={onOpen} />;
   return (
     <Stack gap="3">
-      <Flex justify="flex-end" gap="2">
+      {!settings.mode && <Flex justify="flex-end" gap="2">
         <Button
           size="sm"
           variant={mode === "table" ? "solid" : "outline"}
@@ -605,11 +613,11 @@ function DealsView({ rows = [], customer = false, onOpen }) {
         >
           Kanban
         </Button>
-      </Flex>
+      </Flex>}
       {mode === "kanban" ? (
-        <DealKanban rows={rows} onOpen={onOpen} />
+        <DealKanban rows={rows} onOpen={onOpen} settings={settings} />
       ) : (
-        <DealTable rows={rows} onOpen={onOpen} />
+        <DealTable rows={rows} onOpen={onOpen} settings={settings} />
       )}
     </Stack>
   );
@@ -2443,10 +2451,10 @@ function SettingsHub() {
 
 window.tenantChakraCRM = {
   renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksTable rows={rows} settings={settings} />),
-  renderDeals: (target, rows, customer, onOpen) =>
+  renderDeals: (target, rows, customer, onOpen, settings = {}) =>
     mount(
       target,
-      <DealsView rows={rows} customer={customer} onOpen={onOpen} />,
+      <DealsView rows={rows} customer={customer} onOpen={onOpen} settings={settings} />,
     ),
 };
 mount("aiDashboard", <AIDashboard />);

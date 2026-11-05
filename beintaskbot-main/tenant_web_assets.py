@@ -86,6 +86,7 @@ ASSETS = (
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
+    ('/assets/tenant-company-deal-list-states.js', 'tenant-company-deal-list-states.js', 'no-store'),
     ('/assets/tenant-contacts-directory.js', 'tenant-contacts-directory.js', 'no-store'),
     ('/assets/tenant-members-ui.js', 'tenant-members-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-members-ui.css', 'tenant-members-ui.css', 'no-cache, max-age=0, must-revalidate'),
