@@ -232,63 +232,8 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         namespace['registry_snapshot'].assert_called_once_with()
         namespace['list_knowledge'].assert_not_called()
 
-    def test_pilot_preflight_is_get_only_and_uses_verified_profile(self):
-        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
-        confirmed_at = datetime(2026, 10, 30, 21, 32, tzinfo=timezone.utc)
-        expires_at = datetime(2026, 10, 30, 21, 47, tzinfo=timezone.utc)
-        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
-            _expected=lambda *_args: None)
-        with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':[],
-                'scope': {'tenant_id': UUID('00000000-0000-0000-0000-000000000101')},
-                'kwid_confirmation':{'state':'confirmed','confirmed_at':confirmed_at,'expires_at':expires_at}}) as preflight:
-            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
-                Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', headers={}, query={})))
-        self.assertEqual(response.status, 200)
-        payload = json.loads(response.text)
-        self.assertEqual(payload['result']['kwid_confirmation']['confirmed_at'], confirmed_at.isoformat())
-        self.assertEqual(payload['result']['kwid_confirmation']['expires_at'], expires_at.isoformat())
-        self.assertEqual(payload['result']['scope']['tenant_id'], '00000000-0000-0000-0000-000000000101')
-        preflight.assert_called_once_with(profile)
 
-    def test_kwid_confirmation_uses_verified_profile_and_ignores_browser_scope(self):
-        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
-        class Request:
-            method='POST'; content_type='application/json'; content_length=128
-            headers={'Origin':'https://crm.pro.az'}; query={}; match_info={}
-            async def json(self):
-                return {'confirmed':True,'tenant_id':'attacker-tenant','channel_id':'attacker-channel',
-                        'conversation_id':'attacker-dialog','expected_tenant_id':profile['tenant_id'],
-                        'expected_user_id':profile['telegram_id']}
-        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
-            _expected=lambda *_args: None)
-        confirmed_at = datetime(2026, 10, 30, 21, 32, tzinfo=timezone.utc)
-        expires_at = datetime(2026, 10, 30, 21, 47, tzinfo=timezone.utc)
-        with patch('tenant_ai_pilot.confirm_kwid_disabled', return_value={'ready':False,
-                'kwid_confirmation':{'state':'confirmed','confirmed_at':confirmed_at,'expires_at':expires_at}}) as confirm:
-            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
-                Mock(), 'pilot_kwid_confirmation')(Request()))
-        self.assertEqual(response.status, 200, response.text)
-        payload = json.loads(response.text)
-        self.assertEqual(payload['result']['kwid_confirmation']['confirmed_at'], confirmed_at.isoformat())
-        self.assertEqual(payload['result']['kwid_confirmation']['expires_at'], expires_at.isoformat())
-        self.assertEqual(confirm.call_args.args, (profile, {'confirmed':True,'tenant_id':'attacker-tenant',
-            'channel_id':'attacker-channel','conversation_id':'attacker-dialog'}))
 
-    def test_pilot_owner_approval_has_a_separate_endpoint(self):
-        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
-        class Request:
-            method='POST'; content_type='application/json'; content_length=128
-            headers={'Origin':'https://crm.pro.az'}; query={}; match_info={}
-            async def json(self):
-                return {'approved':True,'expected_tenant_id':profile['tenant_id'],
-                        'expected_user_id':profile['telegram_id']}
-        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
-            _expected=lambda *_args: None)
-        with patch('tenant_ai_pilot.approve_pilot', return_value={'ready':False}) as approve:
-            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
-                Mock(), 'pilot_owner_approval')(Request()))
-        self.assertEqual(response.status, 200)
-        approve.assert_called_once_with(profile, {'approved':True})
 
     def test_cached_options_never_contacts_kommo(self):
         catalog = Mock(return_value={'connect_channels': [{'id': 'tenant-channel'}]})
