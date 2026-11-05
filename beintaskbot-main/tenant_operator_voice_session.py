@@ -624,7 +624,7 @@ class Session:
             return
         if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
             return
-        if kind in ('conversation.item.added','conversation.item.done'):
+        if kind in ('conversation.item.added','conversation.item.created','conversation.item.done'):
             item=event.get('item')
             if isinstance(item,dict) and item.get('type')=='message' and item.get('role') in ('user','assistant'):
                 return
