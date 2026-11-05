@@ -48,21 +48,27 @@ class Cursor:
             tenant,actor,channel,conversation,session,owner,fence,ttl=args
             key=(tenant,actor)
             self.store.rows[key]={'session_id':session,'actor_id':actor,'channel':channel,'conversation':conversation,'owner_id':owner,'fence':fence,
-                                  'state':'starting','live':True}
+                                  'state':'starting','live':True,'provider_opened_at':None,'provider_session_expired':False}
             self.row={'fence':fence}
         elif "SET session_id=%s::uuid" in sql:
             session,channel,conversation,owner,fence,ttl,tenant,actor,expected=args
             key=(tenant,actor);old=self.store.rows[key]
             if old['fence']==expected:
                 self.store.rows[key]={'session_id':session,'actor_id':actor,'channel':channel,'conversation':conversation,'owner_id':owner,'fence':fence,
-                                      'state':'starting','live':True}
+                                      'state':'starting','live':True,'provider_opened_at':None,'provider_session_expired':False}
                 self.row={'fence':fence}
             else:self.row=None
-        elif "SET state='active'" in sql:
+        elif "provider_opened_at=COALESCE(provider_opened_at,now())" in sql:
             ttl,tenant,actor,channel,conversation,session,owner,fence=args
             key=(tenant,actor);old=self.store.rows.get(key)
             if old and old['session_id']==session and old['channel']==channel and old['conversation']==conversation and old['owner_id']==owner and old['fence']==fence and old['state'] in ('starting','active') and old['live']:
-                old['state']='active';self.row={'fence':fence}
+                old['state']='active';old['provider_opened_at']='confirmed';self.row={'fence':fence}
+            else:self.row=None
+        elif "lease_until=now()+(%s*interval '1 second')" in sql:
+            ttl,tenant,actor,channel,conversation,session,owner,fence=args
+            key=(tenant,actor);old=self.store.rows.get(key)
+            if old and old['session_id']==session and old['channel']==channel and old['conversation']==conversation and old['owner_id']==owner and old['fence']==fence and old['state'] in ('starting','active') and old['live']:
+                self.row={'fence':fence}
             else:self.row=None
         elif "SET state='closed'" in sql:
             tenant,actor,channel,conversation,session,owner,fence=args
@@ -93,18 +99,32 @@ class VoiceLeaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await first.release(authority.session_scope,1))
             self.assertTrue(await second.release(authority.session_scope,2))
 
-    async def test_expired_starting_session_can_be_reclaimed_before_provider_io(self):
+    async def test_expired_starting_session_remains_blocked_without_provider_confirmation(self):
         store=Store();authority=FakeAuthority()
         first=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000011')
         second=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000012')
         with patch.object(lease_module,'_connect',store.connect):
             self.assertEqual(await first.claim(authority.session_scope),1)
             store.rows[('tenant',17)]['live']=False
+            self.assertIsNone(await second.claim(authority.session_scope))
+            with self.assertRaises(TenantLinearError):await first.assert_current(authority.session_scope,1)
+            self.assertTrue(await first.release(authority.session_scope,1))
             self.assertEqual(await second.claim(authority.session_scope),2)
-            with self.assertRaises(TenantLinearError):
-                await first.assert_current(authority.session_scope,1)
-            self.assertFalse(await first.release(authority.session_scope,1))
             await second.assert_current(authority.session_scope,2)
+
+    async def test_confirmed_provider_open_can_be_reclaimed_only_after_max_lifetime(self):
+        store=Store();authority=FakeAuthority()
+        first=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000013')
+        second=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000014')
+        with patch.object(lease_module,'_connect',store.connect):
+            self.assertEqual(await first.claim(authority.session_scope),1)
+            await first.assert_current(authority.session_scope,1)
+            await first.confirm_provider_open(authority.session_scope,1)
+            self.assertEqual(store.rows[('tenant',17)]['state'],'active')
+            store.rows[('tenant',17)]['live']=False
+            store.rows[('tenant',17)]['provider_session_expired']=True
+            self.assertEqual(await second.claim(authority.session_scope),2)
+            with self.assertRaises(TenantLinearError):await first.assert_current(authority.session_scope,1)
 
     async def test_competing_recovery_claims_have_one_winner(self):
         store=Store();authority=FakeAuthority()
@@ -113,6 +133,8 @@ class VoiceLeaseTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(lease_module,'_connect',store.connect):
             self.assertEqual(await leases[0].claim(authority.session_scope),1)
             store.rows[('tenant',17)]['live']=False
+            store.rows[('tenant',17)]['state']='active'
+            store.rows[('tenant',17)]['provider_session_expired']=True
             results=await asyncio.gather(*(item.claim(authority.session_scope) for item in leases[1:]))
             self.assertEqual(sorted(value for value in results if value is not None),[2])
 

@@ -83,6 +83,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         class Lease:
             async def claim(self,scope):return 1
             async def assert_current(self,scope,fence):return True
+            async def confirm_provider_open(self,scope,fence):return True
             async def release(self,scope,fence):return True
         scope=self.scope()
         session_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
@@ -102,6 +103,8 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             async def claim(self,scope):self.held=True;return 1
             async def assert_current(self,scope,fence):
                 if not self.held or fence!=1:raise ValueError('lease_lost')
+            async def confirm_provider_open(self,scope,fence):
+                await self.assert_current(scope,fence);return True
             async def release(self,scope,fence):self.held=False;return True
         class Context:
             async def read_authorized(self,scope):

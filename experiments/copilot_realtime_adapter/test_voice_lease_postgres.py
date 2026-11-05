@@ -53,6 +53,7 @@ class RealPostgresLeaseTests(unittest.IsolatedAsyncioTestCase):
             conn.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(cls.schema)))
             conn.execute('CREATE TABLE saas_tenants (id uuid PRIMARY KEY)')
             conn.execute(Path(__file__).with_name('voice_session_lease.sql').read_text())
+            conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_open.sql').read_text())
 
     @classmethod
     def tearDownClass(cls):
@@ -72,9 +73,12 @@ class RealPostgresLeaseTests(unittest.IsolatedAsyncioTestCase):
         self.patch.stop()
         with self.connect() as conn:conn.execute('DELETE FROM saas_tenants WHERE id=%s',(self.tenant,))
 
-    def expire(self,actor):
+    def expire(self,actor,*,provider_age=False):
         with self.connect() as conn:
-            conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND actor_id=%s",(self.tenant,actor))
+            if provider_age:
+                conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second', provider_opened_at=now()-interval '66 minutes' WHERE tenant_id=%s AND actor_id=%s",(self.tenant,actor))
+            else:
+                conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND actor_id=%s",(self.tenant,actor))
 
     def crash_after_claim(self,authority,active):
         source='''
@@ -91,7 +95,9 @@ async def run():
     authority=Authority();lease=module.VoiceSessionLease(authority,str(uuid.uuid4()))
     fence=await lease.claim(authority.session_scope)
     if fence!=1:raise RuntimeError('claim failed')
-    if sys.argv[4]=='active':await lease.assert_current(authority.session_scope,fence)
+    if sys.argv[4]=='active':
+        await lease.assert_current(authority.session_scope,fence)
+        await lease.confirm_provider_open(authority.session_scope,fence)
 asyncio.run(run())
 os._exit(0)
 '''
@@ -143,17 +149,27 @@ asyncio.run(run())
             for process in processes:
                 if process.poll() is None:process.kill();process.wait()
 
-    async def test_restart_before_provider_open_reclaims_and_fences_old_owner(self):
+    async def test_expired_starting_lease_stays_blocked_after_uncertain_open(self):
         a=Authority(self.tenant);first=lease_module.VoiceSessionLease(a,str(uuid.uuid4()))
         second=lease_module.VoiceSessionLease(a,str(uuid.uuid4()))
         self.assertEqual(await first.claim(a.session_scope),1);self.expire(7)
-        self.assertEqual(await second.claim(a.session_scope),2)
+        self.assertIsNone(await second.claim(a.session_scope))
         with self.assertRaises(TenantLinearError):await first.assert_current(a.session_scope,1)
-        self.assertFalse(await first.release(a.session_scope,1))
-        await second.assert_current(a.session_scope,2)
+        self.assertTrue(await first.release(a.session_scope,1))
+        self.assertEqual(await second.claim(a.session_scope),2)
         self.assertTrue(await second.release(a.session_scope,2))
 
-    async def test_restart_with_uncertain_active_provider_remains_blocked(self):
+    async def test_legacy_active_row_without_open_marker_stays_blocked(self):
+        channel=str(uuid.uuid4());owner=str(uuid.uuid4());session=str(uuid.uuid4())
+        with self.connect() as conn:
+            conn.execute('''INSERT INTO saas_operator_voice_lease
+              (tenant_id,channel_id,conversation_id,session_id,actor_id,owner_id,fence,state,lease_until,updated_at)
+              VALUES(%s,%s,%s,%s,9,%s,1,'active',now()-interval '1 hour',now()-interval '2 hours')''',
+              (self.tenant,channel,'legacy',session,owner))
+        lease=lease_module.VoiceSessionLease(Authority(self.tenant,actor=9),str(uuid.uuid4()))
+        self.assertIsNone(await lease.claim(lease.scope))
+
+    async def test_restart_with_uncertain_provider_open_remains_blocked(self):
         a=Authority(self.tenant);first=lease_module.VoiceSessionLease(a,str(uuid.uuid4()))
         second=lease_module.VoiceSessionLease(a,str(uuid.uuid4()))
         self.assertEqual(await first.claim(a.session_scope),1)
@@ -163,16 +179,20 @@ asyncio.run(run())
         self.assertEqual(await second.claim(a.session_scope),2)
         self.assertTrue(await second.release(a.session_scope,2))
 
-    async def test_process_exit_reclaims_starting_but_not_uncertain_active(self):
+    async def test_process_exit_never_reclaims_uncertain_open_but_reclaims_confirmed_expired(self):
         starting=Authority(self.tenant);self.crash_after_claim(starting,False);self.expire(7)
         replacement=lease_module.VoiceSessionLease(starting,str(uuid.uuid4()))
-        self.assertEqual(await replacement.claim(starting.session_scope),2)
-        self.assertTrue(await replacement.release(starting.session_scope,2))
-        # Reset the already closed synthetic row for an independent crash case.
+        self.assertIsNone(await replacement.claim(starting.session_scope))
+        # A starting row has no confirmed provider-open instant. Keep it
+        # fail-closed and set up an independently confirmed active session.
         with self.connect() as conn:conn.execute('DELETE FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=%s',(self.tenant,7))
-        active=Authority(self.tenant);self.crash_after_claim(active,True);self.expire(7)
+        active=Authority(self.tenant);self.crash_after_claim(active,True);self.expire(7,provider_age=True)
         later=lease_module.VoiceSessionLease(active,str(uuid.uuid4()))
-        self.assertIsNone(await later.claim(active.session_scope))
+        self.assertEqual(await later.claim(active.session_scope),2)
+        stale=lease_module.VoiceSessionLease(active,str(uuid.uuid4()));stale.fence=1
+        with self.assertRaises(TenantLinearError):await stale.assert_current(active.session_scope,1)
+        self.assertFalse(await stale.release(active.session_scope,1))
+        self.assertTrue(await later.release(active.session_scope,2))
 
     async def test_same_actor_different_tenants_are_isolated(self):
         other=str(uuid.uuid4())

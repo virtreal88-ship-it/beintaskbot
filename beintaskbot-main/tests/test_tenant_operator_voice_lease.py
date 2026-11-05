@@ -75,7 +75,7 @@ def test_expired_active_lease_is_not_reclaimed_before_provider_lifetime():
         assert _lease()._transaction('claim') is None
 
     select, params = cursor.statements[-1]
-    assert "updated_at <= now() - (%s * interval '1 second')" in select
+    assert "provider_opened_at <= now() - (%s * interval '1 second')" in select
     assert params == (ACTIVE_RECOVERY_AFTER_SECONDS, *Authority.session_scope[:2])
     assert ACTIVE_RECOVERY_AFTER_SECONDS > REALTIME_SESSION_MAX_SECONDS
     assert ACTIVE_RECOVERY_GRACE_SECONDS > PROVIDER_OPEN_DEADLINE
@@ -102,3 +102,19 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
     assert params[4] == 5  # new fencing token
     assert params[-1] == 4  # compare-and-swap against the old token
     assert conn.commits == 1
+
+
+def test_old_starting_lease_is_never_reclaimed_without_confirmed_provider_open():
+    cursor = Cursor([{
+        'session_id': str(uuid.uuid4()), 'actor_id': 77, 'owner_id': str(uuid.uuid4()),
+        'fence': 4, 'state': 'starting', 'live': False,
+        'provider_session_expired': False,
+    }])
+    conn = Connection(cursor)
+
+    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+        assert _lease()._transaction('claim') is None
+
+    select, _params = cursor.statements[-1]
+    assert "provider_opened_at IS NOT NULL" in select
+    assert len(cursor.statements) == 2

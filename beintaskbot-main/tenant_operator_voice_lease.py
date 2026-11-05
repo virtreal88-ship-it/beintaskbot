@@ -12,11 +12,9 @@ from tenant_platform import _connect
 
 LEASE_SECONDS = 15
 # OpenAI documents a hard maximum Realtime session duration of 60 minutes.
-# `updated_at` is written when the lease becomes active immediately before
-# provider startup, again after startup succeeds, and on later renewals. The
-# provider-open path has a 12-second deadline; the five-minute grace below
-# exceeds that bounded gap. Thus an active row untouched beyond this provider
-# lifetime plus the margin cannot still own a live provider session. A mere
+# Only `provider_opened_at`, committed after provider startup succeeds, can
+# make an active lease age-recoverable. Uncertain startup remains fail-closed.
+# The five-minute margin covers provider shutdown and scheduling delay; a mere
 # 15-second lease expiry is intentionally insufficient.
 REALTIME_SESSION_MAX_SECONDS = 60 * 60
 ACTIVE_RECOVERY_GRACE_SECONDS = 5 * 60
@@ -51,30 +49,25 @@ class VoiceSessionLease:
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
                           lease_until>now() AS live,
-                          (state='active' AND updated_at <= now() - (%s * interval '1 second'))
+                          (state='active' AND provider_opened_at IS NOT NULL AND
+                           provider_opened_at <= now() - (%s * interval '1 second'))
                             AS provider_session_expired
                           FROM saas_operator_voice_lease
                           WHERE tenant_id=%s::uuid AND actor_id=%s FOR UPDATE''',
                           (ACTIVE_RECOVERY_AFTER_SECONDS,*self.key))
                         old = cur.fetchone()
-                        # A starting owner must successfully renew to active
-                        # before any provider I/O. An expired starting row can
-                        # therefore be reclaimed under this same lock: the old
-                        # owner's renew then fails on fence and expiry. Expiry
-                        # of an active row alone does not prove provider
-                        # shutdown. Reclaim an active row only after its last
-                        # successful lease update is older than the
-                        # provider's documented maximum session lifetime plus
-                        # a margin. The incremented fence makes stale owners
-                        # unable to renew or release the new lease.
+                        # `starting` means provider startup may be in flight or
+                        # its outcome is unknown, so never age-reclaim it.
+                        # Reclaim `active` only when the provider-open marker
+                        # proves startup completed and its maximum lifetime
+                        # elapsed. The incremented fence blocks stale owners.
                         if old and not (old['state']=='closed' or
-                                        (old['state']=='starting' and old['live'] is False) or
                                         (old['state']=='active' and old['provider_session_expired'] is True)):
                             conn.commit(); return None
                         if old:
                             next_fence = int(old['fence']) + 1
                             cur.execute('''UPDATE saas_operator_voice_lease SET session_id=%s::uuid,channel_id=%s::uuid,conversation_id=%s,
-                              owner_id=%s::uuid,fence=%s,state='starting',lease_until=now()+(%s*interval '1 second'),
+                              owner_id=%s::uuid,fence=%s,state='starting',provider_opened_at=NULL,lease_until=now()+(%s*interval '1 second'),
                               updated_at=now(),closed_at=NULL WHERE tenant_id=%s::uuid
                               AND actor_id=%s AND fence=%s RETURNING fence''',
                               (self.session_id,self.channel,self.conversation,self.owner_id,next_fence,LEASE_SECONDS,*self.key,old['fence']))
@@ -91,7 +84,18 @@ class VoiceSessionLease:
                         conn.commit()
                         return next_fence
                     if operation == 'renew':
+                        cur.execute('''UPDATE saas_operator_voice_lease SET
+                          lease_until=now()+(%s*interval '1 second'),updated_at=now()
+                          WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid AND conversation_id=%s
+                            AND session_id=%s::uuid AND owner_id=%s::uuid AND fence=%s
+                            AND state IN ('starting','active') AND lease_until>now() RETURNING fence''',
+                          (LEASE_SECONDS,*self.key,self.channel,self.conversation,self.session_id,self.owner_id,fence))
+                        row=cur.fetchone()
+                        conn.commit()
+                        return bool(row and int(row['fence'])==fence)
+                    if operation == 'confirm_provider_open':
                         cur.execute('''UPDATE saas_operator_voice_lease SET state='active',
+                          provider_opened_at=COALESCE(provider_opened_at,now()),
                           lease_until=now()+(%s*interval '1 second'),updated_at=now()
                           WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid AND conversation_id=%s
                             AND session_id=%s::uuid AND owner_id=%s::uuid AND fence=%s
@@ -127,6 +131,13 @@ class VoiceSessionLease:
             raise TenantLinearError('Владение голосовым сеансом утрачено.',409)
         if not await asyncio.to_thread(self._transaction,'renew',fence):
             raise TenantLinearError('Владение голосовым сеансом утрачено.',409)
+        return True
+
+    async def confirm_provider_open(self, scope, fence):
+        if scope != self.scope or self.fence is None or fence != self.fence:
+            raise TenantLinearError('Владение голосовым сеансом утрачено.',409)
+        if not await asyncio.to_thread(self._transaction,'confirm_provider_open',fence):
+            raise TenantLinearError('Открытие голосового сеанса не подтверждено.',409)
         return True
 
     async def release(self, scope, fence):

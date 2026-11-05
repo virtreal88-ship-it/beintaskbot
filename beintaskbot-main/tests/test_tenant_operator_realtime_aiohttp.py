@@ -205,6 +205,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             held=False
             async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def confirm_provider_open(self,*_):assert self.held;return True
             async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
@@ -430,6 +431,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             held=False
             async def claim(self,_):self.held=True;return 1
             async def assert_current(self,*_):assert self.held
+            async def confirm_provider_open(self,*_):assert self.held;return True
             async def release(self,*_):self.held=False;return True
             async def release(self,*_):self.held=False;return True
         class Ledger:
