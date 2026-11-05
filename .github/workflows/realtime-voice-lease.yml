@@ -59,7 +59,10 @@ jobs:
             docker exec --user postgres realtime-voice-lease-pg pg_ctl -D /var/lib/postgresql/data stop -m fast >/dev/null 2>&1 || true
             docker exec realtime-voice-lease-pg rm -f /var/run/postgresql/.s.PGSQL.5432 /var/run/postgresql/.s.PGSQL.5432.lock >/dev/null 2>&1 || true
             docker rm --force realtime-voice-lease-pg >/dev/null 2>&1 || true
-            rm -rf "$SOCKET_DIR"
+            # The official Postgres entrypoint changes ownership of its socket
+            # directory to postgres inside the bind mount, so the runner needs
+            # sudo for this single run-specific /tmp directory.
+            sudo rm -rf -- "$SOCKET_DIR"
           }
           trap cleanup EXIT
           ready=0
