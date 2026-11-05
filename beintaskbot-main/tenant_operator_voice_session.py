@@ -221,6 +221,11 @@ class Session:
             await self.authority.check(self.scope, 'post_open')
             stage='post_open_lease'
             await self.lease.assert_current(self.scope, self.fence)
+            stage='provider_open_confirmation'
+            confirm_provider_open=getattr(self.lease,'confirm_provider_open',None)
+            if not callable(confirm_provider_open):raise Refused('provider_open_confirmation_unavailable')
+            if await confirm_provider_open(self.scope,self.fence) is not True:
+                raise Refused('provider_open_confirmation_failed')
             if self._stop_requested: raise Refused('session_stopped_during_start')
             self.closed = False
             self.started = self.activity = time.monotonic()

@@ -18,6 +18,9 @@ class Lease:
     async def claim(self,scope):return 1
     async def assert_current(self,scope,fence):
         if not self.current or fence!=1:raise PilotAdmissionError('lease_lost')
+    async def confirm_provider_open(self,scope,fence):
+        await self.assert_current(scope,fence)
+        return True
     async def release(self,scope,fence):return True
 
 

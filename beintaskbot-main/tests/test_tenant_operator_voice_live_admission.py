@@ -39,6 +39,10 @@ class Lease:
         if (scope, fence) not in self.current:
             raise PermissionError('lease not current')
 
+    async def confirm_provider_open(self, scope, fence):
+        await self.assert_current(scope, fence)
+        return True
+
     async def release(self, scope, fence):
         self.releases += 1
         self.current.discard((scope, fence))
