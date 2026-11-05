@@ -228,6 +228,54 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(client.events[-1]['type'],'ended')
             finally:await session.end('cleanup')
 
+    async def test_uncertain_provider_open_keeps_lease_after_start_timeout(self):
+        entered=asyncio.Event();cancel_seen=asyncio.Event();finish=asyncio.Event()
+        class Authority:
+            async def check(self,*_):return None
+        class Context:
+            async def read_authorized(self,_):
+                return {'existing_copilot_instructions':'Never send messages or perform external actions.',
+                        'lines':[],'extra_context':{}}
+            async def revalidate(self,_):return True
+        class Lease:
+            def __init__(self):self.held=False;self.releases=0
+            async def claim(self,_):self.held=True;return 1
+            async def assert_current(self,*_):
+                if not self.held:raise ValueError('lease_not_current')
+            async def release(self,*_):self.releases+=1;self.held=False;return True
+        class Provider:
+            mock_only=True
+            def bind_pilot_claim(self,*_):return None
+            async def open(self,*_,**__):
+                entered.set()
+                try:await finish.wait()
+                except asyncio.CancelledError:
+                    cancel_seen.set()
+                    # Model an open path that does not stop immediately on
+                    # cancellation. Session.start must retain its lease.
+                    await finish.wait()
+            async def close(self):return None
+        class Client:
+            async def send(self,*_):return None
+        authority=Authority();lease=Lease();scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic')
+        session_id=str(uuid.uuid4());policy=PilotAdmission(authority,lease,scope,session_id)
+        session=Session(scope,authority=authority,ledger=None,lease=lease,context=Context(),provider=Provider(),
+                        client=Client(),pilot_policy=policy,session_id=session_id)
+        with patch('tenant_operator_voice_session.PROVIDER_OPEN_DEADLINE',.01):
+            with self.assertRaisesRegex(Refused,'provider_open_timeout'):
+                await session.start()
+        await asyncio.wait_for(entered.wait(),.2)
+        await asyncio.wait_for(cancel_seen.wait(),.2)
+        self.assertFalse(session._open_task.done())
+        self.assertTrue(lease.held)
+        self.assertEqual(lease.releases,0)
+        finish.set()
+        done,_=await asyncio.wait({session._open_task},timeout=.2)
+        self.assertIn(session._open_task,done)
+        await asyncio.gather(session._open_task,return_exceptions=True)
+        self.assertTrue(lease.held)
+        self.assertEqual(lease.releases,0)
+
     async def test_owned_session_refuses_redirect_before_second_request(self):
         visited=[]
         async def destination(_request):

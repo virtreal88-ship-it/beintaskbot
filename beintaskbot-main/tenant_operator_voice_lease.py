@@ -63,7 +63,7 @@ class VoiceSessionLease:
                         # owner's renew then fails on fence and expiry. Expiry
                         # of an active row alone does not prove provider
                         # shutdown. Reclaim an active row only after its last
-                        # successful post-open heartbeat is older than the
+                        # successful lease update is older than the
                         # provider's documented maximum session lifetime plus
                         # a margin. The incremented fence makes stale owners
                         # unable to renew or release the new lease.

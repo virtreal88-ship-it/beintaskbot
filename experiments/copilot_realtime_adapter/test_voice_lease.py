@@ -37,8 +37,13 @@ class Cursor:
     def execute(self,sql,args=()):
         if 'pg_advisory_xact_lock' in sql:return
         if sql.lstrip().startswith('SELECT session_id::text'):
-            self.row=dict(self.store.rows[tuple(args)]) if tuple(args) in self.store.rows else None
-            if self.row:self.row['live']=self.row['live']
+            # Production now binds the active-session recovery threshold
+            # before the tenant/actor parameters. Key the fake store on the
+            # actual scope parameters at the end of the query.
+            key=tuple(args[-2:])
+            self.row=dict(self.store.rows[key]) if key in self.store.rows else None
+            if self.row:
+                self.row['provider_session_expired']=self.row.get('provider_session_expired',False)
         elif sql.lstrip().startswith('INSERT INTO saas_operator_voice_lease'):
             tenant,actor,channel,conversation,session,owner,fence,ttl=args
             key=(tenant,actor)
