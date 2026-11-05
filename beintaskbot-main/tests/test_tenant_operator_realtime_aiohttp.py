@@ -18,6 +18,7 @@ from tenant_operator_realtime_wire import (
 from tenant_operator_voice_session import Session
 from tenant_operator_voice_session import Refused
 from tenant_operator_voice_pilot import PilotAdmission
+from tenant_operator_voice_gateway import _provider_failure_fields
 
 
 class OneUseGuard:
@@ -28,6 +29,24 @@ class OneUseGuard:
 
 
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
+    def test_provider_failure_diagnostic_logs_only_code_stage_and_event_type(self):
+        event={'type':'conversation.item.input_audio_transcription.delta','delta':'synthetic-private-transcript',
+               'audio':'synthetic-private-audio'}
+        failure=Refused('unmatched_input_transcript_delta')
+        fields=_provider_failure_fields('provider_event',event,failure)
+        self.assertEqual(fields,('unmatched_input_transcript_delta','provider_event',
+                                 'conversation.item.input_audio_transcription.delta'))
+        self.assertNotIn('synthetic-private-transcript',repr(fields))
+        self.assertNotIn('synthetic-private-audio',repr(fields))
+        self.assertNotIn('synthetic-private-transcript',str(failure))
+
+    def test_provider_failure_diagnostic_redacts_arbitrary_values(self):
+        event={'type':'synthetic-private-value','text':'synthetic-private-text'}
+        failure=ValueError('synthetic-private-secret')
+        fields=_provider_failure_fields('unexpected-stage',event,failure)
+        self.assertEqual(fields,('provider_error','provider_error','unavailable'))
+        self.assertNotIn('synthetic-private',repr(fields))
+
     async def asyncSetUp(self):
         self.received=[]
         self.server_socket=None
