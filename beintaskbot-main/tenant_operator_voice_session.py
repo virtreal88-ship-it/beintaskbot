@@ -515,6 +515,15 @@ class Session:
                 if self.transcript is not None:self.transcript.register(item_id,'employee')
                 await self._accept_committed_input(turn)
             return
+        if kind == 'conversation.item.input_audio_transcription.delta':
+            item_id=event.get('item_id');content_index=event.get('content_index');delta=event.get('delta')
+            # Realtime streams partial transcription before the final receipt.
+            # Keep it private and accept it only for the committed input item;
+            # the completed event remains the sole transcript/usage authority.
+            if (item_id not in self.seen_input_item_ids or type(content_index) is not int or content_index!=0 or
+                not isinstance(delta,str) or len(delta)>1600 or item_id in self.input_transcription_events):
+                raise Refused('unmatched_input_transcript_delta')
+            return
         if kind == 'conversation.item.input_audio_transcription.completed':
             item_id=event.get('item_id');content_index=event.get('content_index');text=event.get('transcript')
             if (item_id not in self.seen_input_item_ids or type(content_index) is not int or content_index!=0 or

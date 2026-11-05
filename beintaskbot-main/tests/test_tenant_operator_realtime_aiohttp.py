@@ -461,6 +461,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+            await session.receive_provider({'type':'conversation.item.input_audio_transcription.delta','item_id':'input-1',
+                                            'content_index':0,'delta':'synthetic '})
             await session.receive_provider({'type':'conversation.item.input_audio_transcription.completed','item_id':'input-1',
                                             'content_index':0,'transcript':'synthetic input','usage':{'type':'duration','seconds':1}})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
