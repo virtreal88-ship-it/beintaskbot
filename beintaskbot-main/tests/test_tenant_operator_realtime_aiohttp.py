@@ -116,6 +116,20 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         owner=type('Owner',(),{'guard':None})()
         with self.assertRaises(TenantLinearError):await _open_openai_socket(Forbidden(),owner)
 
+    async def test_upgrade_completed_after_lease_loss_is_closed(self):
+        policy,lease=await self.admitted_policy()
+        owner=type('Owner',(),{'guard':policy,'_opening_session':None,'socket':None})()
+        async def delayed_upgrade(*_):
+            lease.held=False
+            return self.ws
+        with patch('tenant_operator_realtime_wire._new_owned_session',return_value=self.session),\
+             patch('tenant_operator_realtime_wire._connect_websocket',side_effect=delayed_upgrade):
+            with self.assertRaises(TenantLinearError):
+                await _open_openai_socket('synthetic-key',owner)
+        self.assertIsNotNone(owner.socket)
+        self.assertTrue(self.ws.closed)
+        self.assertTrue(self.session.closed)
+
     async def test_websocket_upgrade_diagnostic_keeps_status_but_redacts_body(self):
         class Owner:
             guard=object()

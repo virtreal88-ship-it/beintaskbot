@@ -139,6 +139,15 @@ async def _open_openai_socket(api_key,owner):
         raise
     socket=AiohttpRealtimeSocket(ws,owned_session=session)
     owner.socket=socket
+    # A timed-out or stalled network upgrade can complete after this worker
+    # has lost its distributed lease. Recheck after the upgrade, before the
+    # provider session is exposed to the rest of the startup path.
+    try:
+        await _require_live_admission(getattr(owner,'guard',None))
+    except BaseException:
+        try:await socket.close()
+        except BaseException:raise ValueError('provider_cleanup_unconfirmed') from None
+        raise
     return socket
 
 
