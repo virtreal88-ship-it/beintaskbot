@@ -12,6 +12,22 @@ class Refused(Exception):
     pass
 
 
+_SAFE_RESPONSE_REJECTION_CODES=frozenset({
+    'session_closed','output_authorization_rejected','voice_lease_rejected',
+    'response_not_inflight','response_id_mismatch',
+})
+
+
+class ProviderResponseRejected(Refused):
+    """Response-event rejection with metadata safe for diagnostic logs."""
+    def __init__(self,code,response_inflight,response_id_matches):
+        if not isinstance(code,str) or code not in _SAFE_RESPONSE_REJECTION_CODES:code='provider_error'
+        self.diagnostic_code=code
+        self.diagnostic_response_inflight=response_inflight is True
+        self.diagnostic_response_id_matches=response_id_matches is True
+        super().__init__(code)
+
+
 _LOG=logging.getLogger(__name__)
 
 # Provider startup includes credential retrieval, the WebSocket upgrade and the
@@ -444,11 +460,31 @@ class Session:
             raise
 
     async def _receive_provider(self, event):
+        response_transcript_delta=(isinstance(event,dict) and
+                                   event.get('type')=='response.output_audio_transcript.delta')
+        response_inflight=self.response_inflight is True
+        response_id_matches=(
+            isinstance(event,dict) and isinstance(event.get('response_id'),str) and
+            isinstance(self.provider_response_id,str) and
+            event.get('response_id')==self.provider_response_id
+        )
+
+        def response_rejection(code):
+            return ProviderResponseRejected(code,response_inflight,response_id_matches)
+
         if self.closed or not isinstance(event, dict):
+            if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')
-        await self.authority.check(self.scope, 'output')
-        await self.lease.assert_current(self.scope, self.fence)
+        try:await self.authority.check(self.scope, 'output')
+        except Exception:
+            if response_transcript_delta:raise response_rejection('output_authorization_rejected') from None
+            raise
+        try:await self.lease.assert_current(self.scope, self.fence)
+        except Exception:
+            if response_transcript_delta:raise response_rejection('voice_lease_rejected') from None
+            raise
         if self.closed:
+            if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')
         kind = event.get('type')
         if kind == 'input_audio_buffer.speech_started':
@@ -660,7 +696,11 @@ class Session:
                     self.transcript.assistant_transcript_completed(item_id,event['transcript'])
                 return
             raise Refused('unreserved_response')
-        if kind in ('response.content_part.added','response.content_part.done','response.output_audio_transcript.delta'):
+        if kind=='response.output_audio_transcript.delta':
+            if not response_inflight:raise response_rejection('response_not_inflight')
+            if not response_id_matches:raise response_rejection('response_id_mismatch')
+            return
+        if kind in ('response.content_part.added','response.content_part.done'):
             if self.response_inflight and event.get('response_id')==self.provider_response_id:return
             raise Refused('unreserved_response')
         # Unknown provider events and tool calls never reach the browser.

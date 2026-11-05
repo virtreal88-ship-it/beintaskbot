@@ -6,12 +6,10 @@ import asyncio
 import base64
 import json
 import logging
-import re
 import time
 from aiohttp import WSMsgType, web
 
 _LOG=logging.getLogger(__name__)
-_SAFE_EVENT_TYPE=re.compile(r'^(?:session|conversation|response|input_audio_buffer|output_audio_buffer|rate_limits|error)\.[a-z0-9_]+(?:\.[a-z0-9_]+){0,4}$')
 _SAFE_FAILURE_CODES=frozenset({
     'provider_configuration_changed','provider_session_changed','provider_conversation_invalid',
     'provider_event_invalid','provider_event_forbidden','provider_item_forbidden',
@@ -25,20 +23,26 @@ _SAFE_FAILURE_CODES=frozenset({
     'invalid_api_key','model_not_found','rate_limit_exceeded','server_error',
     'invalid_request_error','session_expired','input_audio_buffer_commit_empty',
     'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
+    'session_closed','output_authorization_rejected','voice_lease_rejected','response_not_inflight',
+    'response_id_mismatch',
 })
 
 
 def _provider_failure_fields(stage,event,exc):
-    """Return only fixed failure codes and protocol metadata for safe logs."""
+    """Return only an allowlisted code and boolean response correlation checks."""
     raw_code=getattr(exc,'diagnostic_code',None)
     if raw_code is None:
         raw_code=exc.args[0] if len(exc.args)==1 and isinstance(exc.args[0],str) else None
     code=raw_code if isinstance(raw_code,str) and raw_code in _SAFE_FAILURE_CODES else 'provider_error'
-    raw_type=event.get('type') if isinstance(event,dict) else None
-    if getattr(exc,'diagnostic_event_type',None)=='error':raw_type='error'
-    event_type=raw_type if raw_type=='error' or (isinstance(raw_type,str) and _SAFE_EVENT_TYPE.fullmatch(raw_type)) else 'unavailable'
-    safe_stage=stage if stage in ('provider_receive','provider_event') else 'provider_error'
-    return code,safe_stage,event_type
+    response_inflight=getattr(exc,'diagnostic_response_inflight',False) is True
+    response_id_matches=getattr(exc,'diagnostic_response_id_matches',False) is True
+    return code,response_inflight,response_id_matches
+
+
+def _log_provider_failure(stage,event,exc):
+    code,response_inflight,response_id_matches=_provider_failure_fields(stage,event,exc)
+    _LOG.warning('realtime_voice_provider_reader_failed code=%s response_inflight=%s response_id_matches=%s',
+                 code,response_inflight,response_id_matches)
 
 
 class SocketClient:
@@ -119,9 +123,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    code,safe_stage,event_type=_provider_failure_fields(stage,event,exc)
-                    _LOG.warning('realtime_voice_provider_reader_failed code=%s stage=%s event_type=%s',
-                                 code,safe_stage,event_type)
+                    _log_provider_failure(stage,event,exc)
                     await session.end('provider_disconnected')
                     await ws.close()
             if callable(getattr(session.provider,'receive',None)):
