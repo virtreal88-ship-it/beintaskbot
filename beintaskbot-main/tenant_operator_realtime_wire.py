@@ -21,11 +21,21 @@ CONNECT_DEADLINE=4
 CLOSE_DEADLINE=3
 _LOG=logging.getLogger(__name__)
 
+# Only stable provider machine codes that are useful to the operator may reach
+# logs. Unknown codes are deliberately collapsed to ``provider_error``.
+SAFE_PROVIDER_ERROR_CODES=frozenset({
+    'invalid_api_key','model_not_found','rate_limit_exceeded','server_error',
+    'invalid_request_error','session_expired','input_audio_buffer_commit_empty',
+    'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
+})
 
-def _safe_provider_error(value):
-    """Keep provider diagnostics to bounded machine codes; never log messages."""
-    if not isinstance(value,str):return 'unknown'
-    return value[:48] if re.fullmatch(r'[A-Za-z0-9_-]{1,48}',value) else 'unknown'
+
+class SafeRealtimeFailure(ValueError):
+    """Internal failure with a fixed, non-sensitive diagnostic category."""
+    def __init__(self, diagnostic_code, *, event_type=None):
+        self.diagnostic_code=diagnostic_code
+        self.diagnostic_event_type=event_type
+        super().__init__(diagnostic_code)
 
 
 class RedirectRefused(ValueError):
@@ -83,17 +93,21 @@ class AiohttpRealtimeSocket:
 
     async def receive_json(self):
         message=await self.ws.receive()
-        if message.type!=aiohttp.WSMsgType.TEXT:raise ValueError('wire_socket_closed_or_nontext')
-        if len(message.data.encode('utf-8'))>MAX_WIRE_MESSAGE:raise ValueError('wire_message_too_large')
+        if message.type in (aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.CLOSING):
+            raise SafeRealtimeFailure('websocket_closed')
+        if message.type==aiohttp.WSMsgType.ERROR:raise SafeRealtimeFailure('websocket_error')
+        if message.type!=aiohttp.WSMsgType.TEXT:raise SafeRealtimeFailure('websocket_nontext_frame')
+        if len(message.data.encode('utf-8'))>MAX_WIRE_MESSAGE:raise SafeRealtimeFailure('provider_message_too_large')
         try:
             data=json.loads(message.data,object_pairs_hook=_unique_object,
                             parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-        except (ValueError,TypeError,RecursionError):raise ValueError('wire_json_invalid') from None
-        if not isinstance(data,dict):raise ValueError('wire_event_invalid')
+        except (ValueError,TypeError,RecursionError):raise SafeRealtimeFailure('provider_json_invalid') from None
+        if not isinstance(data,dict):raise SafeRealtimeFailure('provider_event_invalid')
         if data.get('type')=='error':
             error=data.get('error')
             code=error.get('code') if isinstance(error,dict) else None
-            raise ValueError('provider_error_'+_safe_provider_error(code))
+            safe_code=code if isinstance(code,str) and code in SAFE_PROVIDER_ERROR_CODES else 'provider_error'
+            raise SafeRealtimeFailure(safe_code,event_type='error')
         return data
 
     async def close(self):

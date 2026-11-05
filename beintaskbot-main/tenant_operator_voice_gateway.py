@@ -20,15 +20,23 @@ _SAFE_FAILURE_CODES=frozenset({
     'unmatched_input_transcript','unmatched_input_transcript_failure','invalid_committed_input',
     'unmatched_committed_input','unreserved_response','unreserved_or_duplicate_response',
     'invalid_audio_completion','invalid_provider_audio','input_response_pending',
+    'websocket_closed','websocket_error','websocket_nontext_frame',
+    'provider_message_too_large','provider_json_invalid','provider_event_invalid',
+    'invalid_api_key','model_not_found','rate_limit_exceeded','server_error',
+    'invalid_request_error','session_expired','input_audio_buffer_commit_empty',
+    'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
 })
 
 
 def _provider_failure_fields(stage,event,exc):
     """Return only fixed failure codes and protocol metadata for safe logs."""
-    raw_code=exc.args[0] if len(exc.args)==1 and isinstance(exc.args[0],str) else None
-    code=raw_code if raw_code in _SAFE_FAILURE_CODES else 'provider_error'
+    raw_code=getattr(exc,'diagnostic_code',None)
+    if raw_code is None:
+        raw_code=exc.args[0] if len(exc.args)==1 and isinstance(exc.args[0],str) else None
+    code=raw_code if isinstance(raw_code,str) and raw_code in _SAFE_FAILURE_CODES else 'provider_error'
     raw_type=event.get('type') if isinstance(event,dict) else None
-    event_type=raw_type if isinstance(raw_type,str) and _SAFE_EVENT_TYPE.fullmatch(raw_type) else 'unavailable'
+    if getattr(exc,'diagnostic_event_type',None)=='error':raw_type='error'
+    event_type=raw_type if raw_type=='error' or (isinstance(raw_type,str) and _SAFE_EVENT_TYPE.fullmatch(raw_type)) else 'unavailable'
     safe_stage=stage if stage in ('provider_receive','provider_event') else 'provider_error'
     return code,safe_stage,event_type
 
