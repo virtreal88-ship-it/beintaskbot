@@ -43,6 +43,11 @@ _LOG=logging.getLogger(__name__)
 # Realtime session handshake.  Keep it bounded, but longer than the provider's
 # own network deadline so a healthy but slow upgrade is not cancelled early.
 PROVIDER_OPEN_DEADLINE=12
+# The periodic watchdog may wait for a database-backed authority/lease check.
+# A transient slow query must not kill an otherwise active conversation after
+# the default one-second poll interval; per-event authorization remains in
+# place and the watchdog still fails closed if the check does not finish.
+AUTHORITY_RECHECK_TIMEOUT=5
 
 
 def _require_live_session_admission(scope,session_id,authority,lease,provider,pilot_policy):
@@ -427,13 +432,13 @@ class Session:
                 if time.monotonic() - self.activity >= self.idle_seconds:
                     return await self.end('idle_limit')
                 try:
-                    await asyncio.wait_for(self.authority.check(self.scope, 'ongoing'), timeout=self.poll_seconds)
+                    await asyncio.wait_for(self.authority.check(self.scope, 'ongoing'), timeout=AUTHORITY_RECHECK_TIMEOUT)
                 except asyncio.TimeoutError:
                     return await self.end('authority_check_timeout')
                 except Exception:
                     return await self.end('authority_check_failed')
                 try:
-                    await asyncio.wait_for(self.lease.assert_current(self.scope, self.fence), timeout=self.poll_seconds)
+                    await asyncio.wait_for(self.lease.assert_current(self.scope, self.fence), timeout=AUTHORITY_RECHECK_TIMEOUT)
                 except asyncio.TimeoutError:
                     return await self.end('lease_check_timeout')
                 except Exception:

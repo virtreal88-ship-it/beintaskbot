@@ -104,11 +104,12 @@ class CopilotContext:
                     raise TenantLinearError('Назначение AI изменилось.',409)
         prompt=copilot.INSTRUCTIONS+assigned_guidance(
             company=agent.get('company_instructions'),agent=agent.get('instructions'),style=agent.get('style'))
-        prompt+=('\n\nVoice session: answer naturally by voice in Russian or Azerbaijani, matching the employee. '
+        prompt+=('\n\nVoice session policy (overrides any conflicting language or style preference above): '
+                 'have a natural, continuous spoken conversation with the employee; do not stop after a greeting. '
+                 'A brief opening such as “Слушаю” is optional. Speak only Russian or Azerbaijani, matching the employee; '
+                 'if the language is unclear, use Russian. Never use Turkish. '
                  'Use only this temporary voice session. No CRM tools, customer messaging, or external actions are available. '
-                 'Do not claim access to the customer conversation or prior text Copilot history. '
-                 'At the beginning of each voice session, greet the employee briefly in their language, '
-                 'for example “Слушаю” in Russian or “Dinləyirəm” in Azerbaijani, then wait for them to speak.')
+                 'Do not claim access to the customer conversation or prior text Copilot history.')
         snapshot={'existing_copilot_instructions':prompt,'lines':[],'extra_context':{}}
         identity={'tenant':s.tenant,'actor':s.actor,'channel_id':s.channel_id,'conversation_id':s.conversation_id,
                   'lead_id':s.lead_id,'agent_binding':s.agent_binding,'config_version':s.config_version}
