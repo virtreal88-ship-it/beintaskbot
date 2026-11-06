@@ -874,16 +874,16 @@
     }
     const voiceRoute={provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id};
     const voiceQuery=new URLSearchParams({...voiceRoute,expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
-    voiceSection=window.mountTenantCopilotVoice?.($('dialogHelperContent')||$('operatorCopilot'),{
+    voiceSection=window.mountTenantCopilotVoice?.(document.body,{
       language:i18n.language,socketPath:endpoint+'dialogs/copilot-voice/ws?'+voiceQuery,
       preflight:()=>dialogAiAssigned&&(route.provider||'connect')==='connect'?api('dialogs/copilot-voice/preflight','POST',voiceRoute):Promise.resolve({available:false}),
       onState:state=>{const button=$('operatorCopilotVoiceToggle');if(button)button.dataset.voiceState=state;},
-      isCurrent:()=>!!same()&&identity(member)===who&&!copilotPanel.hidden,
+      isCurrent:()=>!!same()&&identity(member)===who,
       onIdle:()=>{const deferred=copilotDeferredPage;if(deferred&&version===epoch&&identity(member)===who&&currentPage===deferred&&sameDialog(deferred.dialog,route)&&sameDialog(currentDialog,route)){copilotDeferredPage=null;renderDialog(deferred);}},
     });
     copilotAsk.onclick=()=>submitCopilot(copilotMode==='instruction'?'instruction':'chat');
     $('operatorAIReply').onclick=()=>{if(copilotBusy)return;submitCopilot('reply');};
-    $('operatorCopilotVoiceToggle').onclick=()=>{if(copilotBusy||!dialogAiAssigned)return;openCopilot();void voiceSection?.startVoice?.();};
+    $('operatorCopilotVoiceToggle').onclick=()=>{if(copilotBusy||!dialogAiAssigned)return;void voiceSection?.startVoice?.();};
     $('operatorCopilotClear').onclick=async()=>{if(copilotBusy)return;const button=$('operatorCopilotClear');button.disabled=true;try{await api('dialogs/copilot','POST',{provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id,mode:'clear'});if(!same())return;copilotAnswer='';copilotResult.hidden=true;copilotInsert.hidden=true;copilotInsert.dataset.contextSignature='';copilotStatus.textContent=copilotText('cleared');}catch(error){if(same())copilotStatus.textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
     let replyTarget=null,replyPending=false;const replyBox=$('operatorReplyQuote');
     function clearReply(){replyPending=false;replyTarget=null;replyBox.replaceChildren();replyBox.hidden=true;delete replyBox.dataset.quoteMessageId;delete replyBox.dataset.quoteChannelId;delete replyBox.dataset.quoteConversationId;delete replyBox.dataset.replyPending;}
