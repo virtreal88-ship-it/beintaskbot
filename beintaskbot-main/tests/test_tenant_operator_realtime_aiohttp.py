@@ -20,7 +20,7 @@ from tenant_operator_voice_session import Refused, ProviderResponseRejected
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_gateway import (
     _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
-    _expected_close_after_session_end,_safe_client_transport_kind,
+    _expected_close_after_session_end,_safe_client_transport_kind,_enqueue_client_message,
 )
 
 
@@ -116,6 +116,18 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('secret',repr(malformed))
         self.assertEqual(_safe_client_transport_kind(None),'none')
         self.assertEqual(_safe_client_transport_kind(TimeoutError()),'timeout')
+
+    async def test_full_bounded_client_queue_backpressures_without_dropping_audio(self):
+        incoming=asyncio.Queue(maxsize=1)
+        first={'type':'audio','pcm':b'first'}
+        second={'type':'audio','pcm':b'second'}
+        incoming.put_nowait(first)
+        queued=asyncio.create_task(_enqueue_client_message(incoming,second))
+        await asyncio.sleep(0)
+        self.assertFalse(queued.done(),'a full bounded queue pauses the reader instead of dropping the connection')
+        self.assertIs(incoming.get_nowait(),first)
+        await asyncio.wait_for(queued,1)
+        self.assertIs(incoming.get_nowait(),second)
 
     def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
         session=type('SessionState',(),{'closed':True})()
