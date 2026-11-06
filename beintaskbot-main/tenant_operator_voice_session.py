@@ -17,6 +17,12 @@ _SAFE_RESPONSE_REJECTION_CODES=frozenset({
     'response_not_inflight','response_id_mismatch',
 })
 _SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected'})
+_CANCELLED_RESPONSE_EVENT_TYPES=frozenset({
+    'response.done','response.output_item.added','response.output_item.done',
+    'response.content_part.added','response.content_part.done',
+    'response.output_audio.delta','response.output_audio.done',
+    'response.output_audio_transcript.delta','response.output_audio_transcript.done',
+})
 
 
 class ProviderResponseRejected(Refused):
@@ -145,6 +151,10 @@ class Session:
         self.seen_assistant_item_ids = set()
         self.assistant_response_ids = {}
         self.provider_response_id = None
+        # Server VAD can cancel a response, then the provider may still flush
+        # queued events for that exact response after response.done. Keep IDs
+        # scoped to this session so stale output can be discarded safely.
+        self.cancelled_response_ids = set()
         self.item = None
         self.produced = 0
         self.interrupt_pending = False
@@ -607,6 +617,15 @@ class Session:
             if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')
         kind = event.get('type')
+        response_id=event.get('response_id')
+        if kind=='response.done':
+            response=event.get('response')
+            response_id=response.get('id') if isinstance(response,dict) else None
+        if (kind in _CANCELLED_RESPONSE_EVENT_TYPES and isinstance(response_id,str) and
+                response_id in getattr(self,'cancelled_response_ids',())):
+            # Never expose late audio, transcripts or items from a response
+            # whose exact VAD cancellation has already been confirmed.
+            return
         if kind == 'input_audio_buffer.speech_started':
             async with self.lock:
                 if self.muted:
@@ -782,6 +801,10 @@ class Session:
                 if (not isinstance(output,list) or any(not isinstance(item,dict) or item.get('type')!='message' or
                     item.get('role')!='assistant' for item in output)):
                     raise Refused('provider_item_forbidden')
+                details=response.get('status_details')
+                if (self.cancel_requested and response.get('status')=='cancelled' and
+                    isinstance(details,dict) and details.get('reason')=='turn_detected'):
+                    self.cancelled_response_ids.add(response['id'])
                 # The speech model and committed-turn transcription are billed
                 # separately. Reconcile only after both exact receipts arrive.
                 from tenant_operator_realtime_usage import usage_cost_microusd

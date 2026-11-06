@@ -34,6 +34,52 @@ class OneUseGuard:
 
 
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_late_audio_from_confirmed_vad_cancel_does_not_close_session(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.response_inflight=True;session.response_pending=False;session.cancel_requested=True
+        session.provider_response_id='cancelled-response';session.cancelled_response_ids=set()
+        session.current_reservation={'request_id':'synthetic'};session.current_response_usage_microusd=None
+        session.current_input_item_id='input-1';session.current_response_kind='user'
+        session.lock=asyncio.Lock();session._send_client=AsyncMock()
+        session._settle_response_if_ready=AsyncMock();session._dispatch_pending=AsyncMock()
+
+        # A VAD-cancelled response.done is the authoritative signal that this
+        # provider response may still have queued output events in flight.
+        await session._receive_provider({'type':'response.done','response':{
+            'id':'cancelled-response','status':'cancelled',
+            'status_details':{'reason':'turn_detected'},'output':[]}})
+        self.assertIn('cancelled-response',session.cancelled_response_ids)
+        self.assertFalse(session.response_inflight)
+
+        # Its late audio must be discarded, while an unrelated/unreserved ID
+        # remains a protocol failure. Neither late PCM nor transcript is sent
+        # into the browser session.
+        await session._receive_provider({'type':'response.output_audio.delta',
+            'response_id':'cancelled-response','item_id':'stale-item','content_index':0,
+            'delta':base64.b64encode(bytes(9600)).decode('ascii')})
+        await session._receive_provider({'type':'response.output_audio_transcript.delta',
+            'response_id':'cancelled-response','item_id':'stale-item','content_index':0,
+            'delta':'stale transcript'})
+        self.assertFalse(session.closed)
+        session._send_client.assert_not_awaited()
+        with self.assertRaises(Refused):
+            await session._receive_provider({'type':'response.output_audio.delta',
+                'response_id':'unrelated-response','item_id':'unrelated-item','content_index':0,
+                'delta':base64.b64encode(bytes(9600)).decode('ascii')})
+        session.response_inflight=True;session.provider_response_id='active-response'
+        session.cancel_requested=False;session.item=None;session.produced=0
+        session.interrupt_pending=False;session.output_finished=False;session.greeting_pending=False
+        await session._receive_provider({'type':'response.output_audio.delta',
+            'response_id':'active-response','item_id':'active-item','content_index':0,
+            'delta':base64.b64encode(bytes(2048)).decode('ascii')})
+        session._send_client.assert_awaited_once()
+
     async def test_browser_playback_completion_is_not_rejected_by_server_wall_clock(self):
         class Authority:
             async def check(self,*_):return None
