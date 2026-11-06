@@ -176,7 +176,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(session.activity,1.0,'ongoing audio must prevent a false idle timeout')
         self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append')
 
-    async def test_audio_is_held_until_response_audio_starts_to_avoid_pre_audio_barge_in(self):
+    async def test_audio_reaches_provider_during_response_start_for_barge_in(self):
         class Authority:
             async def check(self,*_):return None
         class Lease:
@@ -192,12 +192,12 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.provider=Provider();session.activity=1.0;session.io_lock=asyncio.Lock()
         frame=b'\x01\x00'*1024
         await session._receive_client({'type':'audio','pcm':frame})
-        self.assertEqual(session.provider.events,[],'pre-audio input cannot cancel an unheard response')
-        self.assertEqual(session.input_bytes,0,'discarded frames are not counted or sent upstream')
+        self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append',
+                         'microphone input must remain live while the assistant response starts')
+        self.assertEqual(session.input_bytes,len(frame))
         session.item='first-output-item'
         await session._receive_client({'type':'audio','pcm':frame})
-        self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append',
-                         'barge-in resumes after assistant audio has actually started')
+        self.assertEqual(len(session.provider.events),2)
 
     async def test_watchdog_logs_authority_and_lease_failures_separately(self):
         class Authority:
@@ -500,20 +500,13 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             session=Session(scope,**deps)
             try:
                 await session.start()
-                self.assertTrue(session.greeting_pending)
-                await session.receive_client({'type':'audio','pcm':bytes(480)})
-                self.assertEqual(session.input_bytes,0,'greeting is heard before microphone audio reaches provider')
-                self.assertFalse(any(event.get('type')=='input_audio_buffer.append' for event in self.received))
-                await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
-                await session.receive_provider({'type':'response.output_audio.delta','response_id':'synthetic-response',
-                    'item_id':'greeting-item','content_index':0,'delta':base64.b64encode(bytes(480)).decode('ascii')})
-                await session.receive_provider({'type':'response.output_audio.done','response_id':'synthetic-response',
-                    'item_id':'greeting-item','content_index':0})
-                await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response','output':[]}})
-                await asyncio.sleep(.02)
-                await session.receive_client({'type':'played_all','item_id':'greeting-item'})
                 self.assertFalse(session.greeting_pending)
-                self.assertEqual(client.events[-1]['type'],'listening')
+                self.assertFalse(any(event.get('type')=='response.create' for event in self.received),
+                                 'voice waits for the employee instead of spending a greeting response')
+                await session.receive_client({'type':'audio','pcm':bytes(480)})
+                self.assertEqual(session.input_bytes,480,'microphone audio is accepted immediately after ready')
+                await asyncio.sleep(.01)
+                self.assertTrue(any(event.get('type')=='input_audio_buffer.append' for event in self.received))
                 # Realtime may report a created message item separately from
                 # the added/done notifications. Accept it only under the same
                 # strict message-role checks as the other item events.
