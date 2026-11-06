@@ -39,6 +39,11 @@ _SAFE_PROVIDER_EVENT_TYPES=frozenset({
     'response.output_audio_transcript.done','rate_limits.updated',
 })
 _SAFE_CLOSE_ERROR_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
+_VOICE_ACTIVITY_COUNTERS=(
+    'input_audio_frames','input_audio_bytes','vad_speech_started','vad_speech_stopped',
+    'input_transcriptions_completed','responses_created','output_audio_chunks',
+    'responses_completed','browser_playback_acks',
+)
 
 
 def _provider_failure_fields(stage,event,exc):
@@ -69,6 +74,27 @@ def _log_provider_failure(stage,event,exc):
     _LOG.warning('realtime_voice_provider_reader_failed code=%s stage=%s event_type=%s close_code=%s '
                  'transport_kind=%s response_inflight=%s response_id_matches=%s',
                  code,safe_stage,event_type,close_code,transport_kind,response_inflight,response_id_matches)
+
+
+def _safe_voice_activity_fields(ready,activity):
+    """Return bounded numeric activity only; never include audio or transcript data."""
+    values=[]
+    for key in _VOICE_ACTIVITY_COUNTERS:
+        value=activity.get(key,0) if isinstance(activity,dict) else 0
+        values.append(min(value,10**9) if type(value) is int and value>=0 else 0)
+    return (ready is True,*values)
+
+
+def _log_voice_activity(ready,activity):
+    fields=_safe_voice_activity_fields(ready,activity)
+    _LOG.info('realtime_voice_session_activity ready=%s input_audio_frames=%d input_audio_bytes=%d '
+              'vad_speech_started=%d vad_speech_stopped=%d input_transcriptions_completed=%d '
+              'responses_created=%d output_audio_chunks=%d responses_completed=%d browser_playback_acks=%d',*fields)
+
+
+def _expected_close_after_session_end(session,exc):
+    return (session is not None and session.closed is True and
+            getattr(exc,'diagnostic_code',None)=='websocket_closed')
 
 
 class SocketClient:
@@ -111,6 +137,8 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         reader=None
         provider_reader=None
         incoming=asyncio.Queue(maxsize=60)
+        activity={key:0 for key in _VOICE_ACTIVITY_COUNTERS}
+        session_ready=False
         try:
             session=build_session(scope, SocketClient(ws))
             async def read_frames():
@@ -144,22 +172,34 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         event=await session.next_provider_event()
                         stage='provider_event'
                         await session.receive_provider(event)
+                        if isinstance(event,dict):
+                            kind=event.get('type')
+                            if kind=='input_audio_buffer.speech_started':activity['vad_speech_started']+=1
+                            elif kind=='input_audio_buffer.speech_stopped':activity['vad_speech_stopped']+=1
+                            elif kind=='conversation.item.input_audio_transcription.completed':activity['input_transcriptions_completed']+=1
+                            elif kind=='response.created':activity['responses_created']+=1
+                            elif kind=='response.output_audio.delta':activity['output_audio_chunks']+=1
+                            elif kind=='response.done':activity['responses_completed']+=1
                         stage='provider_receive'
                         event=None
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    _log_provider_failure(stage,event,exc)
-                    await session.end('provider_disconnected')
+                    if not _expected_close_after_session_end(session,exc):
+                        _log_provider_failure(stage,event,exc)
+                    if not session.closed:await session.end('provider_disconnected')
                     await ws.close()
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
+            session_ready=True
             while True:
                 message=await incoming.get()
                 if message is None:
                     break
                 if message.type == WSMsgType.BINARY:
                     await session.receive_client({'type':'audio','pcm':bytes(message.data)})
+                    activity['input_audio_frames']+=1
+                    activity['input_audio_bytes']+=len(message.data)
                 elif message.type == WSMsgType.TEXT:
                     if len(message.data)>512:
                         break
@@ -168,6 +208,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     if not isinstance(event,dict) or event.get('type') not in ('end','mute','played','played_all'):
                         break
                     await session.receive_client(event)
+                    if event.get('type')=='played_all':activity['browser_playback_acks']+=1
                     if event.get('type')=='end': break
                 else:
                     break
@@ -191,5 +232,6 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     # unless its receive lock and socket were drained.
                     done,pending=await asyncio.wait({provider_reader},timeout=.5)
                     for task in pending:task.add_done_callback(session._consume_task)
+            _log_voice_activity(session_ready,activity)
         return ws
     return handler

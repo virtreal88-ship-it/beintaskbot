@@ -18,7 +18,10 @@ from tenant_operator_realtime_wire import (
 from tenant_operator_voice_session import Session
 from tenant_operator_voice_session import Refused, ProviderResponseRejected
 from tenant_operator_voice_pilot import PilotAdmission
-from tenant_operator_voice_gateway import _provider_failure_fields, _log_provider_failure
+from tenant_operator_voice_gateway import (
+    _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
+    _expected_close_after_session_end,
+)
 
 
 class OneUseGuard:
@@ -87,6 +90,24 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         invalid=SafeRealtimeFailure('websocket_closed',close_code=1006,transport_kind='none')
         self.assertEqual(_provider_failure_fields('provider_receive',None,invalid),
                          ('websocket_closed','provider_receive','unavailable','none','none',False,False))
+
+    def test_voice_activity_diagnostics_are_bounded_counts_only(self):
+        activity={'input_audio_frames':12,'input_audio_bytes':28800,'vad_speech_started':1,
+                  'vad_speech_stopped':1,'input_transcriptions_completed':1,'responses_created':1,
+                  'output_audio_chunks':4,'responses_completed':1,'browser_playback_acks':1,
+                  'transcript':'private phrase','audio':'private audio'}
+        fields=_safe_voice_activity_fields(True,activity)
+        self.assertEqual(fields,(True,12,28800,1,1,1,1,4,1,1))
+        self.assertNotIn('private',repr(fields))
+        self.assertEqual(_safe_voice_activity_fields(False,{'input_audio_frames':-1,'input_audio_bytes':'secret'}),
+                         (False,0,0,0,0,0,0,0,0,0))
+
+    def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
+        session=type('SessionState',(),{'closed':True})()
+        self.assertTrue(_expected_close_after_session_end(session,SafeRealtimeFailure('websocket_closed')))
+        self.assertFalse(_expected_close_after_session_end(session,SafeRealtimeFailure('websocket_error')))
+        session.closed=False
+        self.assertFalse(_expected_close_after_session_end(session,SafeRealtimeFailure('websocket_closed')))
 
     async def test_output_transcript_delta_accepts_matching_live_response(self):
         class Authority:
