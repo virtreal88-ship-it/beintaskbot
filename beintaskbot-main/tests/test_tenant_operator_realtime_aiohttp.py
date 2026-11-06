@@ -129,6 +129,25 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(queued,1)
         self.assertIs(incoming.get_nowait(),second)
 
+    async def test_valid_audio_refreshes_idle_activity_after_provider_accepts_it(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        class Provider:
+            def __init__(self):self.events=[]
+            async def send(self,event):self.events.append(event)
+        session=object.__new__(Session)
+        session.closed=False;session.authority=Authority();session.lease=Lease()
+        session.scope=('tenant','actor','channel','conversation');session.fence=3
+        session.muted=False;session.input_bytes=0;session.max_input_bytes=192000
+        session.io_lock=asyncio.Lock();session.started=0;session.max_seconds=120
+        session.provider=Provider();session.activity=1.0
+        await session._receive_client({'type':'audio','pcm':b'\x01\x00'*1024})
+        self.assertEqual(session.input_bytes,2048)
+        self.assertGreater(session.activity,1.0,'ongoing audio must prevent a false idle timeout')
+        self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append')
+
     def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
         session=type('SessionState',(),{'closed':True})()
         self.assertTrue(_expected_close_after_session_end(session,SafeRealtimeFailure('websocket_closed')))

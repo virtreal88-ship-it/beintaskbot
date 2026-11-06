@@ -7,7 +7,17 @@
   const Ctx=deps.AudioContext||deps.webkitAudioContext;
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
   let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,segments=[],waiters=[];
+  let captureParts=[],captureBytes=0;
+  const MAX_PCM_CHUNK_BYTES=8192; // 4 x 1024-sample callbacks, about 171 ms at 24 kHz.
   const stoppedTracks=new Set();
+  const flush=()=>{
+    if(!captureBytes)return;
+    const pcm=new Uint8Array(captureBytes);let offset=0;
+    for(const part of captureParts){pcm.set(part,offset);offset+=part.byteLength;}
+    captureParts=[];captureBytes=0;
+    for(let start=0;start<pcm.byteLength;start+=MAX_PCM_CHUNK_BYTES)
+      onPcm(pcm.subarray(start,Math.min(pcm.byteLength,start+MAX_PCM_CHUNK_BYTES)));
+  };
   const stopTracks=()=>{
     let unconfirmed=false;
     let tracks=[];
@@ -30,7 +40,9 @@
       if(closed)return;
       const floats=event.inputBuffer.getChannelData(0),out=new Int16Array(floats.length);
       for(let i=0;i<floats.length;i++){const v=Math.max(-1,Math.min(1,floats[i]));out[i]=v<0?v*32768:v*32767;}
-      onPcm(new Uint8Array(out.buffer));
+      const pcm=new Uint8Array(out.buffer);
+      captureParts.push(pcm);captureBytes+=pcm.byteLength;
+      if(captureBytes>=MAX_PCM_CHUNK_BYTES)flush();
     };
     source.connect(processor);processor.connect(silence);silence.connect(ctx.destination);
   } catch(error) {
@@ -47,6 +59,7 @@
   const stopNow=()=>{
     if(!closed){
       closed=true;finishWaiters(false);
+      captureParts=[];captureBytes=0;
       for(const node of segments){try{node.stop();}catch(_){}}
       segments=[];
       try{processor.onaudioprocess=null;}catch(_){}
@@ -57,6 +70,7 @@
     stopTracks();
   };
   return {
+    flush,
     mute(value){for(const track of stream.getAudioTracks())track.enabled=!value;},
     play(item,pcm){
       if(closed || !(pcm instanceof Uint8Array) || !pcm.byteLength || pcm.byteLength%2)throw new Error('invalid_audio');

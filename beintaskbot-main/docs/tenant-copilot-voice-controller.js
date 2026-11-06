@@ -126,7 +126,7 @@
     if(endSent)return endPromise||Promise.resolve(false);
     if(!endPromise)endPromise=new Promise(resolve=>{resolveEnd=resolve;});
     endSent=true;
-    try{audio?.stopNow?.();}catch(_){}
+    try{audio?.flush?.();audio?.stopNow?.();}catch(_){}
     muted=true;ending=true;end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
     send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
