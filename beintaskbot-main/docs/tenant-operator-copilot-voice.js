@@ -12,7 +12,7 @@
   button.onclick=()=>{status.textContent='Голосовой режим пока недоступен.';};
   section.append(button,status);parent.append(section);
   const win=document.defaultView||globalThis;
-  let controller=null,disposed=false,checking=false;
+  let controller=null,disposed=false,activationPromise=null;
   const abort=()=>{void section.disposeVoice().catch(()=>{});};
   const pagehide=()=>{
     // Mobile browsers may dispatch pagehide while the app is being
@@ -35,24 +35,28 @@
       await controller.destroy();
     }
   };
-  section.activateVoice=async()=>{
-    if(disposed||checking||controller||typeof options.preflight!=='function')return;
-    checking=true;
-    try{
+  section.activateVoice=()=>{
+    if(disposed||typeof options.preflight!=='function')return Promise.resolve(null);
+    if(controller)return Promise.resolve(controller);
+    if(activationPromise)return activationPromise;
+    activationPromise=(async()=>{
       const permitted=await options.preflight();
-      if(disposed||permitted?.available!==true||!section.isConnected||!options.isCurrent?.())return;
+      if(disposed||permitted?.available!==true||!section.isConnected||!options.isCurrent?.())return null;
       if(typeof win.mountExperimentalCopilotVoice!=='function'||typeof win.openExperimentalCopilotAudio!=='function'||
-         typeof win.connectExperimentalCopilotVoice!=='function'||typeof win.acquireTenantMicrophone!=='function')return;
+         typeof win.connectExperimentalCopilotVoice!=='function'||typeof win.acquireTenantMicrophone!=='function')return null;
       section.replaceChildren();
       controller=win.mountExperimentalCopilotVoice(section,{
         acquireMicrophone:()=>win.acquireTenantMicrophone(),openAudio:callback=>win.openExperimentalCopilotAudio(callback),
         connect:callback=>win.connectExperimentalCopilotVoice(options.socketPath,callback),
-        lifecycle:document,language:options.language,onIdle:()=>{if(!disposed)options.onIdle?.();},
+        lifecycle:document,language:options.language,onState:options.onState,
+        onIdle:()=>{options.onState?.('idle');if(!disposed)options.onIdle?.();},
       });
       section.hidden=false;
-    }catch(_){/* Denied, stale, or unreachable: leave voice hidden. */}
-    finally{checking=false;}
+      return controller;
+    })().catch(()=>null).finally(()=>{activationPromise=null;});
+    return activationPromise;
   };
+  section.startVoice=async()=>{const voice=await section.activateVoice();if(!voice)return false;voice.start?.();return true;};
   win.addEventListener?.('pagehide',pagehide);
   document.addEventListener?.('tenant-auth-invalid',abort);
   document.addEventListener?.('tenant-chat-close',abort);
