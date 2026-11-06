@@ -2,9 +2,10 @@
 import asyncio
 import base64
 import json
+import time
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
 from aiohttp import web
@@ -147,6 +148,25 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.input_bytes,2048)
         self.assertGreater(session.activity,1.0,'ongoing audio must prevent a false idle timeout')
         self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append')
+
+    async def test_watchdog_logs_authority_and_lease_failures_separately(self):
+        class Authority:
+            def __init__(self,fail):self.fail=fail
+            async def check(self,*_):
+                if self.fail:raise RuntimeError('private details must not be logged')
+        class Lease:
+            def __init__(self,fail):self.fail=fail
+            async def assert_current(self,*_):
+                if self.fail:raise RuntimeError('private details must not be logged')
+        for expected,authority_fails,lease_fails in (
+            ('authority_check_failed',True,False),('lease_check_failed',False,True)):
+            session=object.__new__(Session)
+            session.closed=False;session.started=time.monotonic();session.activity=session.started
+            session.max_seconds=120;session.idle_seconds=30;session.poll_seconds=.001
+            session.scope=('tenant','actor','channel','conversation');session.fence=4
+            session.authority=Authority(authority_fails);session.lease=Lease(lease_fails);session.end=AsyncMock()
+            await session._watch()
+            session.end.assert_awaited_once_with(expected)
 
     def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
         session=type('SessionState',(),{'closed':True})()
