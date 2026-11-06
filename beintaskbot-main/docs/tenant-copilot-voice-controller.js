@@ -14,7 +14,7 @@
   const mute = document.createElement('button'); mute.type='button';mute.textContent=labels.mute;mute.hidden=true;
   const end = document.createElement('button'); end.type='button';end.textContent=labels.end;end.hidden=true;
   root.append(status,start,mute,end);
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false;
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, inputEnabled=false, greetingPending=false;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false;
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
@@ -35,7 +35,7 @@
     hideAfterConnect=false;
     const stopVersion=++generation;
     settleEnd(confirmed);
-    running=false; ending=false; cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
+    running=false; ending=false; inputEnabled=false;greetingPending=false;cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -77,7 +77,7 @@
       if(version!==generation){if(held)held();return;}
       if(typeof held!=='function')throw new Error('microphone_busy');
       release=held;
-      const currentOpening=opening=Promise.resolve(openAudio(bytes=>{if(channel && !muted)send({type:'audio',pcm:bytes});}));
+      const currentOpening=opening=Promise.resolve(openAudio(bytes=>{if(channel && inputEnabled && !muted)send({type:'audio',pcm:bytes});}));
       const engine=await currentOpening;
       if(opening===currentOpening)opening=null;
       if(version!==generation){await engine.close();return;}
@@ -87,7 +87,7 @@
         if(version!==generation)return;
         if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
-          if(event.type==='audio'){audio.play(event.item_id,event.pcm);status.textContent=labels.responding;}
+          if(event.type==='audio'){audio.play(event.item_id,event.pcm);if(!greetingPending)inputEnabled=true;status.textContent=labels.responding;}
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});
@@ -97,13 +97,21 @@
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});
             status.textContent=labels.listening;
-          } else if(event.type==='ready')status.textContent=labels.listening;
+          } else if(event.type==='ready'){
+            greetingPending=event.greeting_pending===true;
+            inputEnabled=!greetingPending;
+            status.textContent=inputEnabled?labels.listening:labels.responding;
+          } else if(event.type==='thinking'){
+            inputEnabled=false;status.textContent=labels.responding;
+          } else if(event.type==='listening'){
+            greetingPending=false;inputEnabled=true;status.textContent=labels.listening;
+          }
           else if(event.type==='ended')await stop(labels.connectionEnded,true);
           else if(event.type==='end_unconfirmed')await stop(uncertain);
         } catch (_) { await stop(playbackFailure); }
       });
       if(version!==generation){await socket.close();return;}
-      channel=socket;mute.hidden=false;status.textContent=labels.listening;
+      channel=socket;mute.hidden=false;status.textContent=greetingPending?labels.responding:labels.listening;
       if(hideAfterConnect||lifecycle?.visibilityState==='hidden'){
         hideAfterConnect=false;
         finish();

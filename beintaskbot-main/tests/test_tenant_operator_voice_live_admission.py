@@ -68,12 +68,16 @@ class MockProvider:
     def __init__(self):
         self.opens = 0
         self.closed = False
+        self.sent = []
 
     async def bind_pilot_claim(self, *_):
         return None
 
     async def open(self, *_args, **_kwargs):
         self.opens += 1
+
+    async def send(self, event):
+        self.sent.append(dict(event))
 
     async def close(self):
         self.closed = True

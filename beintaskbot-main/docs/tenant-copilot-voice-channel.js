@@ -26,13 +26,13 @@
       const msg=JSON.parse(event.data);
       if(!ready){
         if(!opened || msg.type!=='ready')throw new Error('voice_not_ready');
-        ready=true;settled=true;env.clearTimeout(timer);resolveReady();onEvent({type:'ready'});return;
+        ready=true;settled=true;env.clearTimeout(timer);resolveReady();onEvent({type:'ready',greeting_pending:msg.greeting_pending===true});return;
       }
       if(msg.type==='audio'){
         if(typeof msg.pcm_base64!=='string'||msg.pcm_base64.length>12800)throw new Error('invalid_audio');
         const raw=env.atob(msg.pcm_base64),pcm=Uint8Array.from(raw,ch=>ch.charCodeAt(0));
         onEvent({type:'audio',item_id:msg.item_id,pcm});
-      }else if(['ready','interrupt','audio_done','ended','end_unconfirmed'].includes(msg.type)){
+      }else if(['ready','thinking','listening','interrupt','audio_done','ended','end_unconfirmed'].includes(msg.type)){
         if(['ended','end_unconfirmed'].includes(msg.type))terminal=true;
         onEvent(msg);
       } else if(msg.type==='error'){terminal=true;onEvent({type:'end_unconfirmed'});}

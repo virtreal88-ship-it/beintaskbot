@@ -125,6 +125,7 @@ class Session:
         self.current_reservation = None
         self.current_input_item_id = None
         self.current_response_usage_microusd = None
+        self.current_response_kind = None
         self.input_transcription_costs = {}
         self.input_transcription_events = {}
         self.seen_assistant_item_ids = set()
@@ -136,6 +137,8 @@ class Session:
         self.truncate_pending = None
         self.output_finished = False
         self.output_started_at = None
+        self.greeting_pending = False
+        self.greeting_item_id = None
         self.lock = asyncio.Lock()
         self.io_lock = asyncio.Lock()
         self.receive_lock = asyncio.Lock()
@@ -255,8 +258,11 @@ class Session:
             self.closed = False
             self.started = self.activity = time.monotonic()
             self.watchdog = asyncio.create_task(self._watch())
+            if self.pilot_policy is not None:
+                stage='initial_greeting'
+                await self._dispatch_initial_greeting()
             stage='client_ready'
-            await self._send_client({'type': 'ready'})
+            await self._send_client({'type': 'ready','greeting_pending':self.greeting_pending})
             if self._stop_requested: raise Refused('session_stopped_during_start')
         except BaseException as error:
             if not isinstance(error,asyncio.CancelledError):
@@ -337,6 +343,7 @@ class Session:
             self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
         self.current_input_item_id=input_item_id
+        self.current_response_kind='user'
         self.current_response_usage_microusd=None
         self.response_pending = False
         self.pending_input_item_id = None
@@ -361,6 +368,43 @@ class Session:
             marked=await self.ledger.mark_unknown(reservation) if self.pilot_policy is None else {'state':'unknown'}
             if isinstance(marked,dict) and marked.get('state')=='unknown':
                 self.current_reservation=None
+            raise
+
+    async def _dispatch_initial_greeting(self):
+        """Use the owner pilot's normal one-use dispatch gate for a brief greeting."""
+        if (self.pilot_policy is None or self.closed or self.response_inflight or
+            self.current_reservation is not None or self.response_number!=0):
+            raise Refused('initial_greeting_not_available')
+        await self.context.revalidate(self.scope)
+        tenant,actor,channel,conversation=self.scope
+        request_id=str(uuid.uuid4())
+        reservation={'request_id':request_id,'tenant_id':str(tenant),'session_id':self.session_id,
+                     'actor_id':actor,'channel_id':str(channel),'conversation_id':str(conversation),
+                     'response_number':1,'executor':self.executor}
+        await self.authority.check(self.scope,'greeting_dispatch')
+        await self.lease.assert_current(self.scope,self.fence)
+        await self.context.revalidate(self.scope)
+        claim=await self.pilot_policy.issue(self.scope,request_id)
+        self.current_reservation=reservation
+        self.current_input_item_id=None
+        self.current_response_kind='greeting'
+        self.response_number=1
+        self.response_inflight=True
+        self.response_pending=False
+        self.pending_input_item_id=None
+        self.greeting_pending=True
+        self.greeting_item_id=None
+        try:
+            await self.authority.check(self.scope,'greeting_dispatch')
+            await self.lease.assert_current(self.scope,self.fence)
+            await self.context.revalidate(self.scope)
+            if self.closed:raise Refused('session_closed_before_greeting')
+            await self.provider.bind_pilot_claim(reservation,claim)
+            if self.closed:raise Refused('session_closed_before_greeting')
+            await self._send_provider({'type':'response.create'})
+        except BaseException:
+            # A one-use permit may already have been consumed when provider I/O
+            # becomes uncertain; the session is closed by start() and never retries it.
             raise
 
     async def _accept_committed_input(self, turn):
@@ -434,6 +478,15 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
+                if self.greeting_pending:
+                    # Ignore early frames until the greeting has actually
+                    # finished playing; the browser also gates microphone uplink.
+                    return
+                if self.response_inflight and self.item is None:
+                    # Do not let a new VAD turn race response startup. Input
+                    # and barge-in resume as soon as the first output item is
+                    # available, so an unheard response is never cancelled.
+                    return
                 if self.input_bytes + len(data) > self.max_input_bytes:
                     raise Refused('session_input_limit')
                 self.input_bytes += len(data)
@@ -462,8 +515,13 @@ class Session:
                 # This is an app-level playback signal, not proof that a person
                 # heard the answer. The text history marks it unverified.
                 if self.transcript is not None:self.transcript.device_playback_complete(self.item)
+                completed_item=self.item
                 self.item,self.produced=None,0
                 self.output_finished,self.output_started_at=False,None
+                if self.greeting_pending and completed_item==self.greeting_item_id:
+                    self.greeting_pending=False
+                    self.greeting_item_id=None
+                    await self._send_client({'type':'listening'})
                 await self._dispatch_pending()
             return
         raise Refused('client_event_not_allowed')
@@ -636,6 +694,7 @@ class Session:
                     raise Refused('overlapping_output_items')
                 if self.item is None:
                     self.output_started_at = time.monotonic()
+                    if self.greeting_pending:self.greeting_item_id=item
                 self.item = item
                 if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
                     raise Refused('provider_audio_output_limit')
@@ -680,6 +739,7 @@ class Session:
             if not self.response_inflight or self.provider_response_id or not isinstance(rid,str) or not rid or len(rid)>128:
                 raise Refused('unreserved_or_duplicate_response')
             self.provider_response_id=rid
+            await self._send_client({'type':'thinking'})
             return
         if kind == 'response.output_audio.done':
             async with self.lock:
@@ -735,11 +795,18 @@ class Session:
     async def _settle_response_if_ready(self):
         reservation=self.current_reservation
         item_id=self.current_input_item_id
-        if reservation is None or item_id is None or self.response_inflight:
+        if reservation is None or self.response_inflight:
             return False
         if self.pilot_policy is not None:
+            if self.current_response_kind=='greeting':
+                self.current_reservation=None;self.current_input_item_id=None;self.current_response_usage_microusd=None
+                self.current_response_kind=None
+                return True
+            if item_id is None:return False
             self.current_reservation=None;self.current_input_item_id=None;self.current_response_usage_microusd=None
+            self.current_response_kind=None
             return True
+        if item_id is None:return False
         if self.current_response_usage_microusd is None:
             receipt=await self.ledger.mark_unknown(reservation)
             if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
