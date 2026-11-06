@@ -214,7 +214,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
+        if (tools!=[] or create_response is not False or interrupt_response is not True or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -232,7 +232,7 @@ class _RealtimeWire:
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
-                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
+                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True,'idle_timeout_ms':None}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -281,7 +281,7 @@ class _RealtimeWire:
               'audio.input.transcription':incoming.get('transcription') is None,
               'audio.input.turn_detection.type':vad.get('type')=='server_vad',
               'audio.input.turn_detection.create_response':vad.get('create_response') is False,
-              'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is False,
+              'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is True,
               'audio.input.turn_detection.idle_timeout_ms':vad.get('idle_timeout_ms') is None,
               'audio.input.turn_detection.fields':set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'},
               'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
