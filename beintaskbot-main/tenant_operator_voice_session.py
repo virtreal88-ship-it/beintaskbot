@@ -598,15 +598,18 @@ class Session:
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
                 raise Refused('unreserved_response')
             encoded=event.get('delta')
-            if not isinstance(encoded,str) or len(encoded)>4*((self.MAX_FRAME+2)//3):
-                raise Refused('invalid_provider_audio')
+            max_encoded=4*((self.MAX_OUTPUT_BYTES+2)//3)
+            if not isinstance(encoded,str) or not encoded:
+                raise Refused('provider_audio_delta_invalid')
+            if len(encoded)>max_encoded:
+                raise Refused('provider_audio_delta_too_large')
             try:
                 data = base64.b64decode(encoded, validate=True)
             except (binascii.Error, ValueError, TypeError):
-                raise Refused('invalid_provider_audio')
+                raise Refused('provider_audio_base64_invalid')
             item = event.get('item_id')
-            if not isinstance(item, str) or not item or len(item) > 128 or event.get('content_index') != 0 or not data or len(data) > self.MAX_FRAME or len(data) % 2:
-                raise Refused('invalid_provider_audio')
+            if not isinstance(item, str) or not item or len(item) > 128 or event.get('content_index') != 0 or not data or len(data) % 2:
+                raise Refused('provider_audio_chunk_invalid')
             async with self.lock:
                 if self.interrupt_pending:
                     return  # queued unplayed audio must not reach playback
@@ -617,10 +620,16 @@ class Session:
                 if self.item is None:
                     self.output_started_at = time.monotonic()
                 self.item = item
+                if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
+                    raise Refused('provider_audio_output_limit')
                 self.produced += len(data)
-                if self.produced > self.MAX_OUTPUT_BYTES:
-                    raise Refused('output_limit')
-                await self._send_client({'type': 'audio', 'item_id': item, 'pcm': data})
+                # Realtime output deltas vary in size. Keep the browser's
+                # bounded frame contract by splitting a valid provider delta
+                # into ordered PCM chunks rather than rejecting anything
+                # larger than one client frame.
+                for offset in range(0,len(data),self.MAX_FRAME):
+                    await self._send_client({'type': 'audio', 'item_id': item,
+                                             'pcm': data[offset:offset+self.MAX_FRAME]})
             return
         if kind == 'conversation.item.truncated':
             async with self.lock:
