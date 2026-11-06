@@ -34,7 +34,12 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  await page.locator('#operatorCopilotVoiceToggle').click();
  const voice=page.locator('[data-copilot-voice]');await voice.waitFor({state:'visible'});
+ assert.equal(await voice.getAttribute('role'),'dialog','voice mode opens as an accessible full-screen conversation');
+ const voiceScreen=await voice.boundingBox();assert.ok(voiceScreen.width>=390&&voiceScreen.height>=800,'voice screen fills the mobile viewport');
+ assert.ok(await voice.locator('[data-voice-orb]').isVisible(),'animated assistant orb is visible');
  await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Слушаю');
+ assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'listening');
+ assert.equal(await voice.locator('[data-voice-orb]').evaluate(node=>getComputedStyle(node).animationName),'tenantVoiceListenPulse');
  assert.equal(await page.locator('#operatorCopilotVoiceToggle').getAttribute('data-voice-state'),'listening','composer voice icon indicates that the user can speak');
  assert.equal(await page.locator('#operatorCopilotVoiceToggle .operator-voice-wave i').first().evaluate(node=>getComputedStyle(node).animationName),'operatorVoiceListen','listening state animates distinctly');
  assert.match(await page.evaluate(()=>window.sockets[0].url),/^wss:\/\/test\.local\/api\/platform\/ai\/dialogs\/copilot-voice\/ws\?/);
@@ -44,6 +49,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await voice.isVisible(),true);
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>document.querySelector('#operatorCopilotVoiceToggle')?.dataset.voiceState==='responding');
+ assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'responding');
+ assert.equal(await voice.locator('[data-voice-orb]').evaluate(node=>getComputedStyle(node).animationName),'tenantVoiceSpeakPulse');
  assert.equal(await page.locator('#operatorCopilotVoiceToggle .operator-voice-wave i').first().evaluate(node=>getComputedStyle(node).animationName),'operatorVoiceSpeak','assistant response animates distinctly');
  await page.evaluate(()=>window.sockets[0].emit({type:'interrupt',item_id:'assistant-1'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played'));
@@ -52,6 +59,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await voice.getByRole('button',{name:'Выключить микрофон'}).click();assert.equal(await page.evaluate(()=>window.muted),true);
  await voice.getByRole('button',{name:'Завершить разговор'}).click();
  await page.waitForFunction(()=>window.releaseCount===1 && window.audioClosed===1);
+ await voice.waitFor({state:'hidden'});
  assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='end')),true);
  assert.equal(await page.evaluate(()=>window.requests.some(x=>/\/crm\/chat\/send/.test(x.url))),false);
  await page.close();
@@ -67,12 +75,12 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   window.openExperimentalCopilotAudio=async()=>({mute(){},play(){},interrupt(){return 0;},finished:async()=>true,stopNow(){},close:async()=>{}});
  });
  await wrapperPage.evaluate(()=>{window.voiceSection=window.mountTenantCopilotVoice(document.getElementById('root'),{preflight:async()=>({available:true}),isCurrent:()=>true,socketPath:'/api/voice',language:'ru'});window.voiceSection.activateVoice();});
- await wrapperPage.getByRole('button',{name:'Начать голосовой разговор'}).click();
+ await wrapperPage.evaluate(()=>window.voiceSection.startVoice());
  await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Слушаю');
  await wrapperPage.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
  await wrapperPage.waitForFunction(()=>window.released===1&&window.closedSockets===1);
  assert.equal(await wrapperPage.evaluate(()=>window.voiceEvents.filter(x=>x.type==='end').length),1,'pagehide sends end and waits for server acknowledgement before closing');
- await wrapperPage.getByRole('button',{name:'Начать голосовой разговор'}).click();
+ await wrapperPage.evaluate(()=>window.voiceSection.startVoice());
  await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Слушаю');
  await wrapperPage.evaluate(()=>document.dispatchEvent(new Event('tenant-chat-close')));
  await wrapperPage.waitForFunction(()=>window.released===2&&window.closedSockets===2);

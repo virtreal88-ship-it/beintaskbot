@@ -9,11 +9,16 @@
     az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',mute:'Mikrofonu söndür',unmute:'Mikrofonu aç',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Mikrofon söndürülür…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Dinləyirəm',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikрофон icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
   const document = root.ownerDocument;
-  const status = document.createElement('p'); status.setAttribute('role','status'); status.textContent=labels.off;
-  const start = document.createElement('button'); start.type='button';start.textContent=labels.start;
-  const mute = document.createElement('button'); mute.type='button';mute.textContent=labels.mute;mute.hidden=true;
-  const end = document.createElement('button'); end.type='button';end.textContent=labels.end;end.hidden=true;
-  root.append(status,start,mute,end);
+  const micIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>';
+  const muteIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-.7 2.8l1.5 1.5A8 8 0 0 0 20 11h-2Zm-2 4.6A6 6 0 0 1 6 11H4a8 8 0 0 0 7 7.93V22h2v-3.07a8 8 0 0 0 2.6-.85l1.5 1.5 1.4-1.42L5.4 6.47 4 7.9l3.3 3.3A4.7 4.7 0 0 0 12 16a4.6 4.6 0 0 0 2.6-.8l1.4 1.4Z"/></svg>';
+  const endIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18.3 5.7-1.4-1.4L12 9.2 7.1 4.3 5.7 5.7 10.6 10.6l-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9 4.9-4.9Z"/></svg>';
+  const status = document.createElement('p'); status.className='voice-session-status';status.setAttribute('role','status'); status.textContent=labels.off;
+  const buttons=document.createElement('div');buttons.className='tenant-voice-buttons';
+  const start = document.createElement('button'); start.type='button';start.className='voice-session-start';start.setAttribute('aria-label',labels.start);start.title=labels.start;start.innerHTML=micIcon;
+  const mute = document.createElement('button'); mute.type='button';mute.className='voice-session-mute';mute.setAttribute('aria-label',labels.mute);mute.title=labels.mute;mute.innerHTML=muteIcon;mute.hidden=true;
+  const end = document.createElement('button'); end.type='button';end.className='voice-session-end';end.setAttribute('aria-label',labels.end);end.title=labels.end;end.innerHTML=endIcon;end.hidden=true;
+  buttons.append(start,mute,end);
+  root.append(status,buttons);
   let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, inputEnabled=false, greetingPending=false;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false;
   const uncertain=labels.uncertain;
@@ -37,7 +42,7 @@
     hideAfterConnect=false;
     const stopVersion=++generation;
     settleEnd(confirmed);
-    running=false; ending=false; inputEnabled=false;greetingPending=false;cleanupPending++;start.disabled=true; mute.hidden=true; end.hidden=true;
+    running=false; ending=false; inputEnabled=false;greetingPending=false;cleanupPending++;start.hidden=false;start.disabled=true; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -66,13 +71,13 @@
       if(!destroyed)status.textContent=microphoneUncertain;
       idle();
     });
-    muted=false;endSent=false;mute.textContent=labels.mute;
+    muted=false;endSent=false;mute.setAttribute('aria-pressed','false');mute.setAttribute('aria-label',labels.mute);mute.title=labels.mute;mute.innerHTML=muteIcon;
     if(!destroyed) status.textContent=voiceBlocked?reason:labels.disconnecting;
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
   async function begin() {
     if(running || destroyed || voiceBlocked || cleanupPending>0)return;
-    running=true;setVoiceState('connecting');start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
+    running=true;setVoiceState('connecting');start.hidden=true;start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
     const version=++generation;
     try {
       const held=await acquireMicrophone();
@@ -151,7 +156,7 @@
     if(!audio||!channel)return;
     muted=!muted;audio.mute(muted);send({type:'mute',muted});
     setVoiceState(muted?'muted':(status.textContent===labels.responding?'responding':'listening'));
-    mute.textContent=muted?labels.unmute:labels.mute;
+    mute.setAttribute('aria-pressed',String(muted));mute.setAttribute('aria-label',muted?labels.unmute:labels.mute);mute.title=muted?labels.unmute:labels.mute;mute.innerHTML=muted?micIcon:muteIcon;
     status.textContent=muted?labels.muted:labels.listening;
   });
   const hide=()=>{
