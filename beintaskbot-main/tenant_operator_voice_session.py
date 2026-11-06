@@ -375,9 +375,16 @@ class Session:
                     return await self.end('idle_limit')
                 try:
                     await asyncio.wait_for(self.authority.check(self.scope, 'ongoing'), timeout=self.poll_seconds)
-                    await asyncio.wait_for(self.lease.assert_current(self.scope, self.fence), timeout=self.poll_seconds)
+                except asyncio.TimeoutError:
+                    return await self.end('authority_check_timeout')
                 except Exception:
-                    return await self.end('access_or_lease_lost')
+                    return await self.end('authority_check_failed')
+                try:
+                    await asyncio.wait_for(self.lease.assert_current(self.scope, self.fence), timeout=self.poll_seconds)
+                except asyncio.TimeoutError:
+                    return await self.end('lease_check_timeout')
+                except Exception:
+                    return await self.end('lease_check_failed')
         except asyncio.CancelledError:
             pass
 
