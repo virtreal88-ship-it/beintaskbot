@@ -26,23 +26,49 @@ _SAFE_FAILURE_CODES=frozenset({
     'session_closed','output_authorization_rejected','voice_lease_rejected','response_not_inflight',
     'response_id_mismatch',
 })
+_SAFE_FAILURE_STAGES=frozenset({'provider_receive','provider_event'})
+_SAFE_PROVIDER_EVENT_TYPES=frozenset({
+    'error','session.created','session.updated','conversation.created',
+    'conversation.item.created','conversation.item.input_audio_transcription.delta',
+    'conversation.item.input_audio_transcription.completed',
+    'conversation.item.input_audio_transcription.failed','input_audio_buffer.speech_started',
+    'input_audio_buffer.speech_stopped','input_audio_buffer.committed',
+    'response.created','response.done','response.output_item.added','response.output_item.done',
+    'response.content_part.added','response.content_part.done','response.output_audio.delta',
+    'response.output_audio.done','response.output_audio_transcript.delta',
+    'response.output_audio_transcript.done','rate_limits.updated',
+})
+_SAFE_CLOSE_ERROR_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
 
 
 def _provider_failure_fields(stage,event,exc):
-    """Return only an allowlisted code and boolean response correlation checks."""
+    """Return allowlisted protocol diagnostics, never provider/user payloads."""
     raw_code=getattr(exc,'diagnostic_code',None)
     if raw_code is None:
         raw_code=exc.args[0] if len(exc.args)==1 and isinstance(exc.args[0],str) else None
     code=raw_code if isinstance(raw_code,str) and raw_code in _SAFE_FAILURE_CODES else 'provider_error'
+    safe_stage=stage if stage in _SAFE_FAILURE_STAGES else 'provider_error'
+    raw_type=event.get('type') if isinstance(event,dict) else None
+    if getattr(exc,'diagnostic_event_type',None)=='error':raw_type='error'
+    event_type=raw_type if isinstance(raw_type,str) and raw_type in _SAFE_PROVIDER_EVENT_TYPES else 'unavailable'
+    raw_close_code=getattr(exc,'diagnostic_close_code',None)
+    close_code=(raw_close_code if type(raw_close_code) is int and
+                ((1000<=raw_close_code<=1014 and raw_close_code not in (1004,1005,1006)) or
+                 3000<=raw_close_code<=4999) else 'none')
+    raw_transport_kind=getattr(exc,'diagnostic_transport_kind','none')
+    transport_kind=(raw_transport_kind if isinstance(raw_transport_kind,str) and
+                    raw_transport_kind in _SAFE_CLOSE_ERROR_KINDS else 'unknown')
     response_inflight=getattr(exc,'diagnostic_response_inflight',False) is True
     response_id_matches=getattr(exc,'diagnostic_response_id_matches',False) is True
-    return code,response_inflight,response_id_matches
+    return code,safe_stage,event_type,close_code,transport_kind,response_inflight,response_id_matches
 
 
 def _log_provider_failure(stage,event,exc):
-    code,response_inflight,response_id_matches=_provider_failure_fields(stage,event,exc)
-    _LOG.warning('realtime_voice_provider_reader_failed code=%s response_inflight=%s response_id_matches=%s',
-                 code,response_inflight,response_id_matches)
+    (code,safe_stage,event_type,close_code,transport_kind,response_inflight,response_id_matches)=\
+        _provider_failure_fields(stage,event,exc)
+    _LOG.warning('realtime_voice_provider_reader_failed code=%s stage=%s event_type=%s close_code=%s '
+                 'transport_kind=%s response_inflight=%s response_id_matches=%s',
+                 code,safe_stage,event_type,close_code,transport_kind,response_inflight,response_id_matches)
 
 
 class SocketClient:

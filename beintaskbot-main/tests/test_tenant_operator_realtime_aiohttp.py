@@ -34,7 +34,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                'audio':'synthetic-private-audio'}
         failure=Refused('unmatched_input_transcript_delta')
         fields=_provider_failure_fields('provider_event',event,failure)
-        self.assertEqual(fields,('unmatched_input_transcript_delta',False,False))
+        self.assertEqual(fields,('unmatched_input_transcript_delta','provider_event',
+                                 'conversation.item.input_audio_transcription.delta','none','none',False,False))
         self.assertNotIn('synthetic-private-transcript',repr(fields))
         self.assertNotIn('synthetic-private-audio',repr(fields))
         self.assertNotIn('synthetic-private-transcript',str(failure))
@@ -43,7 +44,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         event={'type':'synthetic-private-value','text':'synthetic-private-text'}
         failure=ValueError('synthetic-private-secret')
         fields=_provider_failure_fields('unexpected-stage',event,failure)
-        self.assertEqual(fields,('provider_error',False,False))
+        self.assertEqual(fields,('provider_error','provider_error','unavailable','none','none',False,False))
         self.assertNotIn('synthetic-private',repr(fields))
 
     def test_provider_failure_log_contains_only_safe_code_and_boolean_flags(self):
@@ -54,25 +55,38 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             _log_provider_failure('provider_event',event,failure)
         line=captured.output[0]
         self.assertEqual(line,'WARNING:tenant_operator_voice_gateway:realtime_voice_provider_reader_failed '
-                         'code=response_id_mismatch response_inflight=True response_id_matches=False')
-        for forbidden in ('private-response-id','transcript','audio','response.output_audio_transcript.delta','provider_event'):
+                         'code=response_id_mismatch stage=provider_event event_type=response.output_audio_transcript.delta '
+                         'close_code=none transport_kind=none response_inflight=True response_id_matches=False')
+        for forbidden in ('private-response-id','private transcript','private transcript and audio',
+                          'response_id_mismatch transcript payload'):
             self.assertNotIn(forbidden,line)
 
     def test_provider_failure_diagnostic_classifies_safe_provider_codes_and_event(self):
         failure=SafeRealtimeFailure('model_not_found',event_type='error')
         self.assertEqual(_provider_failure_fields('provider_receive',None,failure),
-                         ('model_not_found',False,False))
+                         ('model_not_found','provider_receive','error','none','none',False,False))
         unknown=SafeRealtimeFailure('synthetic-secret-code',event_type='error')
         self.assertEqual(_provider_failure_fields('provider_receive',None,unknown),
-                         ('provider_error',False,False))
+                         ('provider_error','provider_receive','error','none','none',False,False))
 
     def test_provider_failure_diagnostic_distinguishes_socket_and_parse_failures(self):
         self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('websocket_closed')),
-                         ('websocket_closed',False,False))
+                         ('websocket_closed','provider_receive','unavailable','none','none',False,False))
         self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('websocket_error')),
-                         ('websocket_error',False,False))
+                         ('websocket_error','provider_receive','unavailable','none','none',False,False))
         self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('provider_json_invalid')),
-                         ('provider_json_invalid',False,False))
+                         ('provider_json_invalid','provider_receive','unavailable','none','none',False,False))
+
+    def test_provider_failure_diagnostic_records_only_valid_close_metadata(self):
+        exc=SafeRealtimeFailure('websocket_closed',close_code=1000,transport_kind='socket_error')
+        self.assertEqual(_provider_failure_fields('provider_receive',None,exc),
+                         ('websocket_closed','provider_receive','unavailable',1000,'socket_error',False,False))
+        malformed=SafeRealtimeFailure('websocket_closed',close_code=4444,transport_kind='synthetic-private-detail')
+        self.assertEqual(_provider_failure_fields('provider_receive',None,malformed),
+                         ('websocket_closed','provider_receive','unavailable',4444,'unknown',False,False))
+        invalid=SafeRealtimeFailure('websocket_closed',close_code=1006,transport_kind='none')
+        self.assertEqual(_provider_failure_fields('provider_receive',None,invalid),
+                         ('websocket_closed','provider_receive','unavailable','none','none',False,False))
 
     async def test_output_transcript_delta_accepts_matching_live_response(self):
         class Authority:
@@ -100,9 +114,10 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProviderResponseRejected) as caught:
             await session._receive_provider(event)
         fields=_provider_failure_fields('provider_event',event,caught.exception)
-        self.assertEqual(fields,('response_id_mismatch',True,False))
+        self.assertEqual(fields,('response_id_mismatch','provider_event',
+                                 'response.output_audio_transcript.delta','none','none',True,False))
         self.assertNotIn('private-id',repr(fields))
-        self.assertNotIn('transcript',repr(fields))
+        self.assertNotIn('synthetic private transcript',repr(fields))
 
     async def test_output_transcript_delta_distinguishes_authority_and_lease_rejection(self):
         class AuthorityDenied:
@@ -122,7 +137,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderResponseRejected) as caught:
                 await session._receive_provider(event)
             fields=_provider_failure_fields('provider_event',event,caught.exception)
-            self.assertEqual(fields,(expected,True,True))
+            self.assertEqual(fields,(expected,'provider_event','response.output_audio_transcript.delta',
+                                     'none','none',True,True))
 
     async def asyncSetUp(self):
         self.received=[]
@@ -431,10 +447,15 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_peer_disconnect_fails_closed(self):
         await self.socket.receive_json()
-        await self.server_socket.close()
+        await self.server_socket.close(code=4001,message=b'synthetic-private-close-reason')
         with self.assertRaises(SafeRealtimeFailure) as caught:
             await asyncio.wait_for(self.socket.receive_json(),1)
         self.assertEqual(caught.exception.diagnostic_code,'websocket_closed')
+        fields=_provider_failure_fields('provider_receive',None,caught.exception)
+        self.assertEqual(fields[0:3],('websocket_closed','provider_receive','unavailable'))
+        self.assertEqual(fields[3],4001)
+        self.assertIn(fields[4],('none','timeout','aiohttp_client_error','socket_error','unknown'))
+        self.assertNotIn('synthetic-private-close-reason',repr(fields))
 
     async def test_unexpected_binary_provider_frame_is_not_misreported_as_close(self):
         await self.socket.receive_json()
@@ -450,7 +471,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SafeRealtimeFailure) as caught:
             await self.socket.receive_json()
         fields=_provider_failure_fields('provider_receive',None,caught.exception)
-        self.assertEqual(fields,('model_not_found',False,False))
+        self.assertEqual(fields,('model_not_found','provider_receive','error','none','none',False,False))
         self.assertNotIn('synthetic secret',repr(fields))
 
     async def test_malformed_provider_json_has_distinct_safe_category(self):
