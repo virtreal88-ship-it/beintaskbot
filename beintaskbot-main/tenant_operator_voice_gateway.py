@@ -54,7 +54,9 @@ _SAFE_CLIENT_EVENT_TYPES=frozenset({'audio','played','played_all','mute','end','
 _VOICE_ACTIVITY_COUNTERS=(
     'input_audio_frames','input_audio_bytes','vad_speech_started','vad_speech_stopped',
     'input_transcriptions_completed','responses_created','output_audio_chunks',
-    'responses_completed','browser_playback_acks',
+    'responses_completed','browser_playback_acks','vad_interrupt_candidates',
+    'interrupt_notices_sent','vad_cancelled_responses','playback_interrupt_acks',
+    'playback_completion_acks',
 )
 
 
@@ -131,7 +133,9 @@ def _log_voice_activity(ready,activity):
     _LOG.info('realtime_voice_session_activity ready=%s client_reader_exit=%s client_close_code=%s '
               'client_transport_kind=%s client_end_received=%s input_audio_frames=%d input_audio_bytes=%d '
               'vad_speech_started=%d vad_speech_stopped=%d input_transcriptions_completed=%d '
-              'responses_created=%d output_audio_chunks=%d responses_completed=%d browser_playback_acks=%d',*fields)
+              'responses_created=%d output_audio_chunks=%d responses_completed=%d browser_playback_acks=%d '
+              'vad_interrupt_candidates=%d interrupt_notices_sent=%d vad_cancelled_responses=%d '
+              'playback_interrupt_acks=%d playback_completion_acks=%d',*fields)
 
 
 def _safe_client_transport_kind(error):
@@ -246,15 +250,28 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     while not session.closed:
                         event=await session.next_provider_event()
                         stage='provider_event'
+                        response_inflight_before=session.response_inflight
+                        output_playing_before=bool(session.item)
                         await session.receive_provider(event)
                         if isinstance(event,dict):
                             kind=event.get('type')
-                            if kind=='input_audio_buffer.speech_started':activity['vad_speech_started']+=1
+                            if kind=='input_audio_buffer.speech_started':
+                                activity['vad_speech_started']+=1
+                                if response_inflight_before or output_playing_before:
+                                    activity['vad_interrupt_candidates']+=1
+                                if session.interrupt_pending:
+                                    activity['interrupt_notices_sent']+=1
                             elif kind=='input_audio_buffer.speech_stopped':activity['vad_speech_stopped']+=1
                             elif kind=='conversation.item.input_audio_transcription.completed':activity['input_transcriptions_completed']+=1
                             elif kind=='response.created':activity['responses_created']+=1
                             elif kind=='response.output_audio.delta':activity['output_audio_chunks']+=1
-                            elif kind=='response.done':activity['responses_completed']+=1
+                            elif kind=='response.done':
+                                activity['responses_completed']+=1
+                                response=event.get('response')
+                                details=response.get('status_details') if isinstance(response,dict) else None
+                                if (isinstance(response,dict) and response.get('status')=='cancelled' and
+                                    isinstance(details,dict) and details.get('reason')=='turn_detected'):
+                                    activity['vad_cancelled_responses']+=1
                         stage='provider_receive'
                         event=None
                 except asyncio.CancelledError:
@@ -293,7 +310,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
-                    if event.get('type') in ('played','played_all'):activity['browser_playback_acks']+=1
+                    if event.get('type') in ('played','played_all'):
+                        activity['browser_playback_acks']+=1
+                        if event['type']=='played':activity['playback_interrupt_acks']+=1
+                        else:activity['playback_completion_acks']+=1
                     if event.get('type')=='end':
                         activity['client_end_received']=True
                         break

@@ -10,7 +10,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));document.getElementById('view-dialogs').classList.add('active');
   window.testRoute={provider:'connect',lead_id:41,channel_id:'00000000-0000-4000-8000-000000000002',conversation_id:'client',state:'human',agent_id:'00000000-0000-4000-8000-000000000003',can_send:true,controls_allowed:true,available_actions:[]};
   window.tenantProfileSnapshot={member:{tenant_id:'00000000-0000-4000-8000-000000000001',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
-  window.requests=[];window.voiceEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;
+  window.requests=[];window.voiceEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;window.interruptCalls=0;
   window.fetch=async(url,options={})=>{url=String(url);window.requests.push({url,method:options.method||'GET'});let result={};
    if(url.includes('/dialogs/copilot-voice/preflight'))result={available:true};
    else if(url.includes('/dialogs/history'))result={dialog:window.testRoute,messages:[{id:'one',external_id:'one',direction:'incoming',message_type:'text',body:'synthetic'}]};
@@ -29,7 +29,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-copilot-voice-audio.js','docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>{
   window.acquireTenantMicrophone=async()=>()=>window.releaseCount++;
-  window.openExperimentalCopilotAudio=async()=>({mute:value=>{window.muted=value;},play:()=>{window.played=true;},interrupt:()=>0,finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}});
+  window.openExperimentalCopilotAudio=async()=>({mute:value=>{window.muted=value;},play:()=>{window.played=true;},interrupt:()=>{window.interruptCalls++;return 0;},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}});
  });
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  await page.locator('#operatorCopilotToggle').click();
@@ -44,6 +44,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  await page.evaluate(()=>window.sockets[0].emit({type:'interrupt',item_id:'assistant-1'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played'));
+ assert.equal(await page.evaluate(()=>window.interruptCalls),1,'provider VAD interruption stops the current browser audio item');
  assert.deepEqual(await page.evaluate(()=>window.voiceEvents.find(x=>x.type==='played')),{type:'played',item_id:'assistant-1',played_ms:0});
  await voice.getByRole('button',{name:'Выключить микрофон'}).click();assert.equal(await page.evaluate(()=>window.muted),true);
  await voice.getByRole('button',{name:'Завершить разговор'}).click();
