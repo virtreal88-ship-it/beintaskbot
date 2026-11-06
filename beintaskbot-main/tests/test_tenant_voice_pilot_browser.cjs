@@ -35,7 +35,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.locator('#operatorCopilotVoiceToggle').click();
  const voice=page.locator('[data-copilot-voice]');await voice.waitFor({state:'visible'});
  assert.equal(await page.locator('#operatorCopilot').isVisible(),false,'voice starts directly without opening the Copilot helper panel');
- assert.equal(await voice.evaluate(node=>node.parentElement===document.body),true,'voice screen is mounted independently of the helper panel');
+ assert.equal(await voice.evaluate(node=>node.parentElement?.id==='operatorConversationContent'),true,'voice screen is mounted independently of the helper panel');
  assert.equal(await voice.getAttribute('role'),'dialog','voice mode opens as an accessible full-screen conversation');
  const voiceScreen=await voice.boundingBox();assert.ok(voiceScreen.width>=390&&voiceScreen.height>=800,'voice screen fills the mobile viewport');
  assert.ok(await voice.locator('[data-voice-orb]').isVisible(),'animated assistant orb is visible');

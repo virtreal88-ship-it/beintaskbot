@@ -799,7 +799,7 @@
   function renderDialog(page){
     const route=page.dialog,host=$('operatorConversationContent');if(!host)return;const existingShell=host.querySelector('[data-operator-dialog]');
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingShell.dataset.copilotBusy==='true'){copilotDeferredPage=page;return;}
-    const existingVoice=existingShell?.querySelector('[data-copilot-voice]');
+    const existingVoice=host.querySelector('[data-copilot-voice]');
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingVoice?.isVoiceActive?.()){copilotDeferredPage=page;return;}
     if(existingVoice?.disposeVoice)void existingVoice.disposeVoice().catch(()=>{});
     if(copilotDeferredPage&&dialogKey(copilotDeferredPage.dialog)!==dialogKey(route))copilotDeferredPage=null;
@@ -874,7 +874,7 @@
     }
     const voiceRoute={provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id};
     const voiceQuery=new URLSearchParams({...voiceRoute,expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
-    voiceSection=window.mountTenantCopilotVoice?.(document.body,{
+    voiceSection=window.mountTenantCopilotVoice?.(host,{
       language:i18n.language,socketPath:endpoint+'dialogs/copilot-voice/ws?'+voiceQuery,
       preflight:()=>dialogAiAssigned&&(route.provider||'connect')==='connect'?api('dialogs/copilot-voice/preflight','POST',voiceRoute):Promise.resolve({available:false}),
       onState:state=>{const button=$('operatorCopilotVoiceToggle');if(button)button.dataset.voiceState=state;},
