@@ -39,6 +39,8 @@ _SAFE_PROVIDER_EVENT_TYPES=frozenset({
     'response.output_audio_transcript.done','rate_limits.updated',
 })
 _SAFE_CLOSE_ERROR_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
+_SAFE_CLIENT_READER_EXITS=frozenset({'unavailable','peer_close','peer_error','frame_rate_limit','queue_full','session_closed','stream_ended'})
+_SAFE_CLIENT_TRANSPORT_KINDS=frozenset({'none','timeout','socket_error','transport_error'})
 _VOICE_ACTIVITY_COUNTERS=(
     'input_audio_frames','input_audio_bytes','vad_speech_started','vad_speech_stopped',
     'input_transcriptions_completed','responses_created','output_audio_chunks',
@@ -78,18 +80,36 @@ def _log_provider_failure(stage,event,exc):
 
 def _safe_voice_activity_fields(ready,activity):
     """Return bounded numeric activity only; never include audio or transcript data."""
+    raw_exit=activity.get('client_reader_exit') if isinstance(activity,dict) else None
+    reader_exit=raw_exit if isinstance(raw_exit,str) and raw_exit in _SAFE_CLIENT_READER_EXITS else 'unavailable'
+    raw_close=activity.get('client_close_code') if isinstance(activity,dict) else None
+    close_code=(raw_close if type(raw_close) is int and
+                ((1000<=raw_close<=1014 and raw_close not in (1004,1005,1006)) or 3000<=raw_close<=4999)
+                else 'none')
+    raw_transport=activity.get('client_transport_kind','none') if isinstance(activity,dict) else 'none'
+    transport=(raw_transport if isinstance(raw_transport,str) and raw_transport in _SAFE_CLIENT_TRANSPORT_KINDS
+               else 'transport_error')
+    end_received=(activity.get('client_end_received') is True) if isinstance(activity,dict) else False
     values=[]
     for key in _VOICE_ACTIVITY_COUNTERS:
         value=activity.get(key,0) if isinstance(activity,dict) else 0
         values.append(min(value,10**9) if type(value) is int and value>=0 else 0)
-    return (ready is True,*values)
+    return (ready is True,reader_exit,close_code,transport,end_received,*values)
 
 
 def _log_voice_activity(ready,activity):
     fields=_safe_voice_activity_fields(ready,activity)
-    _LOG.info('realtime_voice_session_activity ready=%s input_audio_frames=%d input_audio_bytes=%d '
+    _LOG.info('realtime_voice_session_activity ready=%s client_reader_exit=%s client_close_code=%s '
+              'client_transport_kind=%s client_end_received=%s input_audio_frames=%d input_audio_bytes=%d '
               'vad_speech_started=%d vad_speech_stopped=%d input_transcriptions_completed=%d '
               'responses_created=%d output_audio_chunks=%d responses_completed=%d browser_playback_acks=%d',*fields)
+
+
+def _safe_client_transport_kind(error):
+    if error is None:return 'none'
+    if isinstance(error,asyncio.TimeoutError):return 'timeout'
+    if isinstance(error,OSError):return 'socket_error'
+    return 'transport_error'
 
 
 def _expected_close_after_session_end(session,exc):
@@ -138,6 +158,8 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         provider_reader=None
         incoming=asyncio.Queue(maxsize=60)
         activity={key:0 for key in _VOICE_ACTIVITY_COUNTERS}
+        activity.update(client_reader_exit='unavailable',client_close_code=None,
+                        client_transport_kind='none',client_end_received=False)
         session_ready=False
         try:
             session=build_session(scope, SocketClient(ws))
@@ -148,14 +170,31 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         now=time.monotonic()
                         if now-window>=1:count=0;window=now
                         count+=1
+                        if message.type in (WSMsgType.CLOSE,WSMsgType.CLOSED,WSMsgType.CLOSING):
+                            activity['client_reader_exit']='peer_close'
+                            break
+                        if message.type==WSMsgType.ERROR:
+                            activity['client_reader_exit']='peer_error'
+                            break
                         # A fully authorised provider is marked open just
                         # before ready is sent. A frame immediately following
                         # observable ready may arrive before that send returns;
                         # queue it rather than falsely treating it as pre-open.
-                        if count>60 or session.closed or incoming.full():
+                        if count>60:
+                            activity['client_reader_exit']='frame_rate_limit'
+                            break
+                        if session.closed:
+                            activity['client_reader_exit']='session_closed'
+                            break
+                        if incoming.full():
+                            activity['client_reader_exit']='queue_full'
                             break
                         incoming.put_nowait(message)
                 finally:
+                    close_code=ws.close_code
+                    activity['client_close_code']=(close_code if type(close_code) is int else None)
+                    activity['client_transport_kind']=_safe_client_transport_kind(ws.exception())
+                    if activity['client_reader_exit']=='unavailable':activity['client_reader_exit']='stream_ended'
                     await session.end('disconnected')
                     await ws.close()
                     while incoming.full(): incoming.get_nowait()
@@ -196,6 +235,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 message=await incoming.get()
                 if message is None:
                     break
+                if session.closed:
+                    activity['client_reader_exit']='session_closed'
+                    break
                 if message.type == WSMsgType.BINARY:
                     await session.receive_client({'type':'audio','pcm':bytes(message.data)})
                     activity['input_audio_frames']+=1
@@ -209,7 +251,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         break
                     await session.receive_client(event)
                     if event.get('type')=='played_all':activity['browser_playback_acks']+=1
-                    if event.get('type')=='end': break
+                    if event.get('type')=='end':
+                        activity['client_end_received']=True
+                        break
                 else:
                     break
         except Exception:
