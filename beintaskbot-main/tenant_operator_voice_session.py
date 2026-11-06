@@ -16,6 +16,7 @@ _SAFE_RESPONSE_REJECTION_CODES=frozenset({
     'session_closed','output_authorization_rejected','voice_lease_rejected',
     'response_not_inflight','response_id_mismatch',
 })
+_SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected'})
 
 
 class ProviderResponseRejected(Refused):
@@ -25,6 +26,14 @@ class ProviderResponseRejected(Refused):
         self.diagnostic_code=code
         self.diagnostic_response_inflight=response_inflight is True
         self.diagnostic_response_id_matches=response_id_matches is True
+        super().__init__(code)
+
+
+class ProviderEventGuardRejected(Refused):
+    """Allowlisted authorization/lease failure while handling a provider event."""
+    def __init__(self,code):
+        if not isinstance(code,str) or code not in _SAFE_PROVIDER_EVENT_GUARD_CODES:code='provider_error'
+        self.diagnostic_code=code
         super().__init__(code)
 
 
@@ -486,11 +495,11 @@ class Session:
         try:await self.authority.check(self.scope, 'output')
         except Exception:
             if response_transcript_delta:raise response_rejection('output_authorization_rejected') from None
-            raise
+            raise ProviderEventGuardRejected('provider_authority_rejected') from None
         try:await self.lease.assert_current(self.scope, self.fence)
         except Exception:
             if response_transcript_delta:raise response_rejection('voice_lease_rejected') from None
-            raise
+            raise ProviderEventGuardRejected('provider_lease_rejected') from None
         if self.closed:
             if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')

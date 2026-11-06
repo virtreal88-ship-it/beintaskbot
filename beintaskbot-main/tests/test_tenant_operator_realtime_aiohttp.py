@@ -17,7 +17,7 @@ from tenant_operator_realtime_wire import (
     MAX_WIRE_MESSAGE, MINIMUM_HOLD, MODEL, QUOTE,
 )
 from tenant_operator_voice_session import Session
-from tenant_operator_voice_session import Refused, ProviderResponseRejected
+from tenant_operator_voice_session import Refused, ProviderResponseRejected, ProviderEventGuardRejected
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_gateway import (
     _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
@@ -72,6 +72,27 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         unknown=SafeRealtimeFailure('synthetic-secret-code',event_type='error')
         self.assertEqual(_provider_failure_fields('provider_receive',None,unknown),
                          ('provider_error','provider_receive','error','none','none',False,False))
+
+    async def test_provider_event_access_and_lease_failures_have_safe_distinct_codes(self):
+        class Authority:
+            def __init__(self,fail):self.fail=fail
+            async def check(self,*_):
+                if self.fail:raise ValueError('private authorization details')
+        class Lease:
+            async def assert_current(self,*_):raise ValueError('private lease details')
+        for authority,lease,expected in (
+            (Authority(True),object(),'provider_authority_rejected'),
+            (Authority(False),Lease(),'provider_lease_rejected')):
+            session=object.__new__(Session)
+            session.closed=False;session.authority=authority;session.lease=lease
+            session.scope=('tenant','actor','channel','conversation');session.fence=5
+            session.response_inflight=False;session.provider_response_id=None
+            with self.assertRaises(ProviderEventGuardRejected) as caught:
+                await session._receive_provider({'type':'input_audio_buffer.speech_started'})
+            fields=_provider_failure_fields('provider_event',{'type':'input_audio_buffer.speech_started'},caught.exception)
+            self.assertEqual(fields,(expected,'provider_event','input_audio_buffer.speech_started',
+                                     'none','none',False,False))
+            self.assertNotIn('private',str(caught.exception))
 
     def test_provider_failure_diagnostic_distinguishes_socket_and_parse_failures(self):
         self.assertEqual(_provider_failure_fields('provider_receive',None,SafeRealtimeFailure('websocket_closed')),

@@ -24,7 +24,7 @@ _SAFE_FAILURE_CODES=frozenset({
     'invalid_request_error','session_expired','input_audio_buffer_commit_empty',
     'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
     'session_closed','output_authorization_rejected','voice_lease_rejected','response_not_inflight',
-    'response_id_mismatch',
+    'response_id_mismatch','provider_authority_rejected','provider_lease_rejected',
     'provider_audio_delta_invalid','provider_audio_delta_too_large',
     'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
 })
