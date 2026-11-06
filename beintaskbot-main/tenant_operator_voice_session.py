@@ -422,6 +422,7 @@ class Session:
                     raise Refused('session_input_limit')
                 self.input_bytes += len(data)
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
+                self.activity=time.monotonic()
             return
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:
             async with self.lock:

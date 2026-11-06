@@ -7,6 +7,9 @@ on:
       - 'beintaskbot-main/tenant_operator_realtime_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
+      - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
+      - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
+      - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/migrations/voice_lease_provider_open.sql'
       - 'experiments/copilot_realtime_adapter/**'
@@ -39,6 +42,9 @@ jobs:
           tests/test_tenant_operator_voice_live_admission.py
           tests/test_tenant_operator_realtime_wire.py
           tests/test_tenant_operator_realtime_aiohttp.py
+      - name: Test bounded browser microphone batching
+        working-directory: beintaskbot-main
+        run: node --test tests/test_tenant_operator_copilot_audio.cjs
       - name: Run lease and PostgreSQL integration tests
         working-directory: experiments/copilot_realtime_adapter
         env:
