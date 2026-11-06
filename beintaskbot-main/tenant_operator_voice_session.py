@@ -63,6 +63,7 @@ class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
     MAX_OUTPUT_BYTES = 4_800_000
+    MAX_QUEUED_INPUT_TURNS = 4
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
@@ -91,7 +92,10 @@ class Session:
         self.history = history
         self.history_clear_revision = None
         self.context, self.provider, self.client = context, provider, client
-        self.max_seconds, self.idle_seconds, self.poll_seconds = max_seconds, idle_seconds, poll_seconds
+        self.max_seconds, self.poll_seconds = max_seconds, poll_seconds
+        # Keep accepting idle_seconds for compatibility with older callers;
+        # user silence no longer closes an otherwise healthy conversation.
+        self.idle_seconds = idle_seconds
         # Wall-clock expiry alone does not bound audio uploaded faster than
         # real time. Count all attempted PCM input before provider I/O, since
         # a failed write can still have reached the provider.
@@ -125,7 +129,9 @@ class Session:
         self.response_pending = False
         self.input_sequence = 0
         self.input_turn = None
+        self.stopped_input_turns = []
         self.pending_input_item_id = None
+        self.queued_input_item_ids = []
         self.seen_input_item_ids = set()
         self.current_reservation = None
         self.current_input_item_id = None
@@ -263,9 +269,6 @@ class Session:
             self.closed = False
             self.started = self.activity = time.monotonic()
             self.watchdog = asyncio.create_task(self._watch())
-            if self.pilot_policy is not None:
-                stage='initial_greeting'
-                await self._dispatch_initial_greeting()
             stage='client_ready'
             await self._send_client({'type': 'ready','greeting_pending':self.greeting_pending})
             if self._stop_requested: raise Refused('session_stopped_during_start')
@@ -324,6 +327,16 @@ class Session:
         # Caller holds lock. VAD detects turns only; it must never launch an
         # response until the exact committed input item has been acknowledged.
         # The reservation authority is shared externally.
+        # A speaker may pause mid-sentence long enough for VAD to split their
+        # turn while the previous interrupted assistant item is still being
+        # truncated. Keep those committed turns in order instead of treating
+        # a legitimate second speech_started event as a fatal protocol error.
+        if (self.pending_input_item_id is None and self.queued_input_item_ids and
+            not self.response_pending and not self.response_inflight and
+            self.current_reservation is None and self.item is None and
+            not self.interrupt_pending and not self.truncate_pending and not self.closed):
+            self.pending_input_item_id=self.queued_input_item_ids.pop(0)
+            self.response_pending=True
         if (not self.response_pending or not self.pending_input_item_id or self.interrupt_pending or
             self.truncate_pending or self.response_inflight or self.current_reservation is not None or
             self.item is not None or self.closed):
@@ -414,13 +427,17 @@ class Session:
 
     async def _accept_committed_input(self, turn):
         """Dispatch only after VAD stop and provider commit identify one item."""
-        if self.input_turn is not turn or not turn['stopped'] or not turn['item_id']:
+        if not turn['stopped'] or not turn['item_id']:
             return
-        if self.pending_input_item_id is not None or self.response_pending:
-            raise Refused('input_response_pending')
-        self.input_turn=None
-        self.pending_input_item_id=turn['item_id']
-        self.response_pending=True
+        if self.pending_input_item_id is None and not self.response_pending:
+            self.pending_input_item_id=turn['item_id']
+            self.response_pending=True
+        else:
+            pending_count=(len(self.stopped_input_turns)+len(self.queued_input_item_ids)+
+                           int(self.pending_input_item_id is not None))
+            if pending_count>=self.MAX_QUEUED_INPUT_TURNS:
+                raise Refused('input_turn_queue_full')
+            self.queued_input_item_ids.append(turn['item_id'])
         await self._dispatch_pending()
 
     async def _watch(self):
@@ -429,8 +446,9 @@ class Session:
                 await asyncio.sleep(self.poll_seconds)
                 if time.monotonic() - self.started >= self.max_seconds:
                     return await self.end('duration_limit')
-                if time.monotonic() - self.activity >= self.idle_seconds:
-                    return await self.end('idle_limit')
+                # Silence is not an end-of-conversation signal. Keep the
+                # assistant available until the user presses Stop; the hard
+                # session duration below remains the bounded-cost failsafe.
                 try:
                     await asyncio.wait_for(self.authority.check(self.scope, 'ongoing'), timeout=AUTHORITY_RECHECK_TIMEOUT)
                 except asyncio.TimeoutError:
@@ -476,6 +494,7 @@ class Session:
                 if self.muted:
                     # Do not turn a late VAD stop into a response after mute.
                     self.input_turn=None
+                    self.stopped_input_turns.clear()
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
         if kind == 'audio' and set(event) == {'type', 'pcm'} and isinstance(event['pcm'], bytes):
@@ -486,11 +505,6 @@ class Session:
                 if self.greeting_pending:
                     # Ignore early frames until the greeting has actually
                     # finished playing; the browser also gates microphone uplink.
-                    return
-                if self.response_inflight and self.item is None:
-                    # Do not let a new VAD turn race response startup. Input
-                    # and barge-in resume as soon as the first output item is
-                    # available, so an unheard response is never cancelled.
                     return
                 if self.input_bytes + len(data) > self.max_input_bytes:
                     raise Refused('session_input_limit')
@@ -526,8 +540,10 @@ class Session:
                 if self.greeting_pending and completed_item==self.greeting_item_id:
                     self.greeting_pending=False
                     self.greeting_item_id=None
-                    await self._send_client({'type':'listening'})
                 await self._dispatch_pending()
+                if (not self.greeting_pending and not self.response_inflight and not self.response_pending and
+                    self.pending_input_item_id is None):
+                    await self._send_client({'type':'listening'})
             return
         raise Refused('client_event_not_allowed')
 
@@ -572,25 +588,20 @@ class Session:
                 if self.muted:
                     return
                 # Duplicate VAD starts for the same live buffer are harmless.
-                # A new buffer cannot replace a stopped or already committed
-                # turn that is still waiting to dispatch.
                 if self.input_turn is not None:
                     if not self.input_turn['stopped']:
                         return
                     raise Refused('input_turn_commit_pending')
-                if self.pending_input_item_id is not None or self.response_pending:
-                    raise Refused('input_response_pending')
                 self.activity = time.monotonic()
                 if self.response_inflight and not self.cancel_requested:
                     event={'type':'response.cancel'}
                     if self.provider_response_id:event['response_id']=self.provider_response_id
                     await self._send_provider(event)
                     self.cancel_requested=True
-                    if self.item is None:
-                        # No stable item exists to truncate. A generated but
-                        # unheard transcript could otherwise leak into the
-                        # next turn; terminate rather than invent an alignment.
-                        raise Refused('interrupted_before_audio')
+                    # If no audio item has reached the browser yet, there is
+                    # nothing to truncate. Keep the session alive, keep
+                    # forwarding microphone frames, and wait for response.done
+                    # before dispatching the interrupted user turn.
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
                     if self.transcript is not None:self.transcript.interrupted(self.item)
@@ -608,7 +619,15 @@ class Session:
                     return
                 turn['stopped']=True
                 self.activity = time.monotonic()
-                await self._accept_committed_input(turn)
+                self.input_turn=None
+                if turn['item_id']:
+                    await self._accept_committed_input(turn)
+                else:
+                    pending_count=(len(self.stopped_input_turns)+len(self.queued_input_item_ids)+
+                                   int(self.pending_input_item_id is not None))
+                    if pending_count>=self.MAX_QUEUED_INPUT_TURNS:
+                        raise Refused('input_turn_queue_full')
+                    self.stopped_input_turns.append(turn)
             return
         if kind == 'input_audio_buffer.committed':
             item_id=event.get('item_id')
@@ -621,7 +640,11 @@ class Session:
                     # A commit racing with mute is deliberately discarded.
                     self.seen_input_item_ids.add(item_id)
                     return
-                turn=self.input_turn
+                if self.stopped_input_turns:
+                    turn=self.stopped_input_turns.pop(0)
+                    turn['item_id']=item_id
+                else:
+                    turn=self.input_turn
                 if turn is None or not turn['sequence']:
                     raise Refused('unmatched_committed_input')
                 if turn['item_id'] not in (None,item_id):
@@ -629,7 +652,8 @@ class Session:
                 turn['item_id']=item_id
                 self.seen_input_item_ids.add(item_id)
                 if self.transcript is not None:self.transcript.register(item_id,'employee')
-                await self._accept_committed_input(turn)
+                if turn['stopped']:
+                    await self._accept_committed_input(turn)
             return
         if kind == 'conversation.item.input_audio_transcription.delta':
             item_id=event.get('item_id');content_index=event.get('content_index');delta=event.get('delta')
@@ -677,6 +701,11 @@ class Session:
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
                 raise Refused('unreserved_response')
+            if self.cancel_requested and self.item is None:
+                # VAD cancelled the response before any audio reached the
+                # browser. Discard late deltas: there is nothing audible to
+                # truncate and stale speech must not race the user's turn.
+                return
             encoded=event.get('delta')
             max_encoded=4*((self.MAX_OUTPUT_BYTES+2)//3)
             if not isinstance(encoded,str) or not encoded:
@@ -736,6 +765,7 @@ class Session:
                 self.current_response_usage_microusd=usage_cost_microusd(response.get('usage'))
                 self.response_inflight = False
                 self.provider_response_id = None
+                self.cancel_requested = False
                 await self._settle_response_if_ready()
                 await self._dispatch_pending()
             return
@@ -748,6 +778,10 @@ class Session:
             return
         if kind == 'response.output_audio.done':
             async with self.lock:
+                if self.cancel_requested and self.item is None:
+                    # A cancelled response can still flush a terminal audio
+                    # event after its first delta was discarded.
+                    return
                 if (not self.response_inflight or event.get('response_id')!=self.provider_response_id or
                     event.get('item_id')!=self.item or not self.item or event.get('content_index')!=0):
                     raise Refused('invalid_audio_completion')
@@ -780,6 +814,8 @@ class Session:
         if kind=='response.output_audio_transcript.done':
             response_id=event.get('response_id')
             item_id=event.get('item_id')
+            if self.cancel_requested and self.item is None:
+                return
             if (isinstance(item_id,str) and self.assistant_response_ids.get(item_id)==response_id and
                 type(event.get('content_index')) is int and event['content_index']==0 and
                 isinstance(event.get('transcript'),str) and len(event['transcript'])<=6000):

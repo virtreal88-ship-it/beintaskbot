@@ -105,9 +105,10 @@ class CopilotContext:
         prompt=copilot.INSTRUCTIONS+assigned_guidance(
             company=agent.get('company_instructions'),agent=agent.get('instructions'),style=agent.get('style'))
         prompt+=('\n\nVoice session policy (overrides any conflicting language or style preference above): '
-                 'have a natural, continuous spoken conversation with the employee; do not stop after a greeting. '
-                 'A brief opening such as “Слушаю” is optional. Speak only Russian or Azerbaijani, matching the employee; '
-                 'if the language is unclear, use Russian. Never use Turkish. '
+                 'have a natural, continuous spoken conversation with the employee; do not stop after one reply. '
+                 'Do not speak first or give a greeting; listen for the employee and answer what they say. '
+                 'Speak Russian by default. Switch to Azerbaijani only when the employee clearly speaks Azerbaijani. '
+                 'Never speak Turkish; if uncertain between Russian, Azerbaijani, or Turkish, use Russian. '
                  'Use only this temporary voice session. No CRM tools, customer messaging, or external actions are available. '
                  'Do not claim access to the customer conversation or prior text Copilot history.')
         snapshot={'existing_copilot_instructions':prompt,'lines':[],'extra_context':{}}

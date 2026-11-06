@@ -22,7 +22,7 @@ test('audio channel waits for server admission after websocket open',async()=>{
   const socket=f.sockets[0];socket.open();await Promise.resolve();
   assert.equal(resolved,false);assert.deepEqual(socket.sent,[]);
   socket.message({type:'ready'});const channel=await pending;
-  assert.deepEqual(events,[{type:'ready'}]);
+  assert.deepEqual(events,[{type:'ready',greeting_pending:false}]);
   channel.send({type:'audio',pcm:new Uint8Array([1,2])});
   assert.deepEqual([...new Uint8Array(socket.sent[0])],[1,2]);
   await channel.close();
@@ -42,5 +42,5 @@ test('socket errors after admission report unconfirmed end once',async()=>{
   const f=fixture(),events=[];const pending=connect('/voice',event=>events.push(event),f.env);
   const socket=f.sockets[0];socket.open();socket.message({type:'ready'});await pending;
   socket.onerror();socket.onerror();
-  assert.deepEqual(events,[{type:'ready'},{type:'end_unconfirmed'}]);
+  assert.deepEqual(events,[{type:'ready',greeting_pending:false},{type:'end_unconfirmed'}]);
 });
