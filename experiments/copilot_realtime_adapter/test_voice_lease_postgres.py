@@ -18,7 +18,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from session import Refused, Session  # Adds the application module path.
 from tenant_operator_voice_pilot import PilotAdmission
-from test_pilot_admission import MockPilotProvider, complete_initial_greeting
+from test_pilot_admission import MockPilotProvider
 from test_session import Context, Client
 sys.modules.setdefault('tenant_platform',types.SimpleNamespace(_connect=lambda:None))
 import tenant_operator_voice_lease as lease_module
@@ -311,13 +311,13 @@ asyncio.run(run())
         session=Session(authority.session_scope,authority=authority,ledger=None,lease=lease,context=Context(),
                         provider=provider,client=Client(),session_id=sid,pilot_policy=policy,max_seconds=5,idle_seconds=4)
         await session.start()
-        await complete_initial_greeting(session)
+        self.assertEqual(sum(event['type']=='response.create' for event in provider.events),0)
         other=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
         self.assertIsNone(await other.claim(authority.session_scope))
         await session.receive_provider({'type':'input_audio_buffer.speech_started'})
         await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
         await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'synthetic-input'})
-        self.assertEqual(sum(event['type']=='response.create' for event in provider.events),2)
+        self.assertEqual(sum(event['type']=='response.create' for event in provider.events),1)
         self.assertTrue(await session.end('test'))
         self.assertTrue(provider.closed)
         self.assertEqual(await other.claim(authority.session_scope),2)
