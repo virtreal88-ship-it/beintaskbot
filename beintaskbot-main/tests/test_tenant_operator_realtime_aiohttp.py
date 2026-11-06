@@ -22,6 +22,7 @@ from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_gateway import (
     _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
     _expected_close_after_session_end,_safe_client_transport_kind,_enqueue_client_message,
+    _safe_client_failure_fields,
 )
 
 
@@ -33,6 +34,16 @@ class OneUseGuard:
 
 
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
+    def test_client_failure_diagnostic_is_allowlisted_and_redacts_payloads(self):
+        event={'type':'played_all','item_id':'private-item-id','transcript':'private transcript'}
+        fields=_safe_client_failure_fields(event,Refused('invalid_playback_completion'))
+        self.assertEqual(fields,('invalid_playback_completion','playback_ack','played_all'))
+        self.assertNotIn('private',repr(fields))
+        unknown=_safe_client_failure_fields({'type':'audio','pcm':b'private bytes'},
+                                             RuntimeError('secret db connection details'))
+        self.assertEqual(unknown,('client_event_rejected','audio_input','audio'))
+        self.assertNotIn('secret',repr(unknown))
+
     def test_provider_failure_diagnostic_logs_only_code_stage_and_event_type(self):
         event={'type':'conversation.item.input_audio_transcription.delta','delta':'synthetic-private-transcript',
                'audio':'synthetic-private-audio'}

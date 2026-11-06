@@ -44,6 +44,12 @@ _SAFE_PROVIDER_EVENT_TYPES=frozenset({
 _SAFE_CLOSE_ERROR_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
 _SAFE_CLIENT_READER_EXITS=frozenset({'unavailable','peer_close','peer_error','frame_rate_limit','queue_full','session_closed','stream_ended'})
 _SAFE_CLIENT_TRANSPORT_KINDS=frozenset({'none','timeout','socket_error','transport_error'})
+_SAFE_CLIENT_FAILURE_CODES=frozenset({
+    'client_authority_rejected','client_lease_rejected','client_event_not_allowed',
+    'session_closed','invalid_pcm_frame','session_input_limit','input_turn_commit_pending',
+    'input_turn_queue_full','invalid_playback_ack','invalid_playback_completion',
+})
+_SAFE_CLIENT_EVENT_TYPES=frozenset({'audio','played','played_all','mute','end','unavailable'})
 _VOICE_ACTIVITY_COUNTERS=(
     'input_audio_frames','input_audio_bytes','vad_speech_started','vad_speech_stopped',
     'input_transcriptions_completed','responses_created','output_audio_chunks',
@@ -79,6 +85,25 @@ def _log_provider_failure(stage,event,exc):
     _LOG.warning('realtime_voice_provider_reader_failed code=%s stage=%s event_type=%s close_code=%s '
                  'transport_kind=%s response_inflight=%s response_id_matches=%s',
                  code,safe_stage,event_type,close_code,transport_kind,response_inflight,response_id_matches)
+
+
+def _safe_client_failure_fields(event,exc):
+    """Expose only bounded client protocol diagnostics, never payloads."""
+    raw_kind=event.get('type') if isinstance(event,dict) else None
+    event_type=raw_kind if isinstance(raw_kind,str) and raw_kind in _SAFE_CLIENT_EVENT_TYPES else 'unavailable'
+    raw_code=getattr(exc,'diagnostic_code',None)
+    if raw_code is None and len(getattr(exc,'args',()))==1 and isinstance(exc.args[0],str):
+        raw_code=exc.args[0]
+    code=raw_code if isinstance(raw_code,str) and raw_code in _SAFE_CLIENT_FAILURE_CODES else 'client_event_rejected'
+    stage=('audio_input' if event_type=='audio' else
+           'playback_ack' if event_type in ('played','played_all') else
+           'mute' if event_type=='mute' else 'client_event')
+    return code,stage,event_type
+
+
+def _log_client_failure(event,exc):
+    code,stage,event_type=_safe_client_failure_fields(event,exc)
+    _LOG.warning('realtime_voice_client_event_failed code=%s stage=%s event_type=%s',code,stage,event_type)
 
 
 def _safe_voice_activity_fields(ready,activity):
@@ -249,7 +274,11 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     activity['client_reader_exit']='session_closed'
                     break
                 if message.type == WSMsgType.BINARY:
-                    await session.receive_client({'type':'audio','pcm':bytes(message.data)})
+                    event={'type':'audio','pcm':bytes(message.data)}
+                    try:await session.receive_client(event)
+                    except Exception as exc:
+                        _log_client_failure(event,exc)
+                        raise
                     activity['input_audio_frames']+=1
                     activity['input_audio_bytes']+=len(message.data)
                 elif message.type == WSMsgType.TEXT:
@@ -259,8 +288,11 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     except (ValueError,TypeError): break
                     if not isinstance(event,dict) or event.get('type') not in ('end','mute','played','played_all'):
                         break
-                    await session.receive_client(event)
-                    if event.get('type')=='played_all':activity['browser_playback_acks']+=1
+                    try:await session.receive_client(event)
+                    except Exception as exc:
+                        _log_client_failure(event,exc)
+                        raise
+                    if event.get('type') in ('played','played_all'):activity['browser_playback_acks']+=1
                     if event.get('type')=='end':
                         activity['client_end_received']=True
                         break
