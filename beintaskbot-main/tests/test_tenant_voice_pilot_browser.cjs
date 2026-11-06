@@ -29,7 +29,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-copilot-voice-audio.js','docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>{
   window.acquireTenantMicrophone=async()=>()=>window.releaseCount++;
-  window.openExperimentalCopilotAudio=async()=>({mute:value=>{window.muted=value;},play:()=>{window.played=true;},interrupt:()=>{window.interruptCalls++;return 0;},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}});
+  window.openExperimentalCopilotAudio=async()=>({mute:value=>{window.muted=value;},play:()=>{window.played=true;},contextState:()=> 'running',interrupt:()=>{window.interruptCalls++;return 0;},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}});
  });
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  await page.locator('#operatorCopilotVoiceToggle').click();
@@ -48,14 +48,17 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.releaseCount),0);
  assert.equal(await voice.isVisible(),true);
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>document.querySelector('#operatorCopilotVoiceToggle')?.dataset.voiceState==='responding');
  assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'responding');
  assert.equal(await voice.locator('[data-voice-orb]').evaluate(node=>getComputedStyle(node).animationName),'tenantVoiceSpeakPulse');
  assert.equal(await page.locator('#operatorCopilotVoiceToggle .operator-voice-wave i').first().evaluate(node=>getComputedStyle(node).animationName),'operatorVoiceSpeak','assistant response animates distinctly');
+ await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='playback_scheduled'));
  await page.evaluate(()=>window.sockets[0].emit({type:'interrupt',item_id:'assistant-1'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played'));
  assert.equal(await page.evaluate(()=>window.interruptCalls),1,'provider VAD interruption stops the current browser audio item');
  assert.deepEqual(await page.evaluate(()=>window.voiceEvents.find(x=>x.type==='played')),{type:'played',item_id:'assistant-1',played_ms:0});
+ assert.deepEqual(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='playback_scheduled')),[{type:'playback_scheduled',item_id:'assistant-1',context_state:'running'}]);
  await voice.getByRole('button',{name:'Выключить микрофон'}).click();assert.equal(await page.evaluate(()=>window.muted),true);
  await voice.getByRole('button',{name:'Завершить разговор'}).click();
  await page.waitForFunction(()=>window.releaseCount===1 && window.audioClosed===1);

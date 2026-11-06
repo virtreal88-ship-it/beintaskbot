@@ -21,7 +21,7 @@ from tenant_operator_voice_session import Refused, ProviderResponseRejected, Pro
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_gateway import (
     _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
-    _expected_close_after_session_end,_safe_client_transport_kind,_enqueue_client_message,
+    _expected_close_after_session_end,_safe_client_transport_kind,_enqueue_client_message,SocketClient,
     _safe_client_failure_fields,
 )
 
@@ -56,6 +56,43 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session.item)
         self.assertEqual(session.produced,0)
         session._send_client.assert_awaited_once_with({'type':'listening'})
+
+    async def test_stale_playback_completion_during_interrupt_does_not_end_session(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.client_event_lock=asyncio.Lock();session.lock=asyncio.Lock()
+        session.muted=False;session.interrupt_pending=True;session.item='interrupted-item'
+        session.output_finished=True;session.produced=24000;session.transcript=None
+        session._dispatch_pending=AsyncMock();session._send_client=AsyncMock()
+
+        # Browser onended can race the provider's speech_started event. The
+        # stale completion must not close the session or clear the item before
+        # the authoritative interrupt/truncate flow arrives.
+        await session.receive_client({'type':'played_all','item_id':'interrupted-item'})
+        self.assertFalse(session.closed)
+        self.assertEqual(session.item,'interrupted-item')
+        self.assertEqual(session.produced,24000)
+
+    async def test_playback_completion_for_old_item_is_ignored(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.client_event_lock=asyncio.Lock();session.lock=asyncio.Lock()
+        session.muted=False;session.interrupt_pending=False;session.item='new-item'
+        session.output_finished=True;session.produced=24000;session.transcript=None
+        session._dispatch_pending=AsyncMock();session._send_client=AsyncMock()
+        await session.receive_client({'type':'played_all','item_id':'old-item'})
+        self.assertFalse(session.closed)
+        self.assertEqual(session.item,'new-item')
 
     async def test_short_vad_burst_fits_bounded_queue(self):
         session=object.__new__(Session)
@@ -180,24 +217,56 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                   'output_audio_chunks':4,'responses_completed':1,'browser_playback_acks':1,
                   'vad_interrupt_candidates':1,'interrupt_notices_sent':1,'vad_cancelled_responses':1,
                   'playback_interrupt_acks':1,'playback_completion_acks':0,
+                  'audio_frames_ws_sent':2,'browser_playback_scheduled':1,'browser_playback_failed':0,
+                  'playback_context_running':1,'playback_context_suspended':0,
                   'transcript':'private phrase','audio':'private audio'}
         fields=_safe_voice_activity_fields(True,activity)
-        self.assertEqual(fields,(True,'unavailable','none','none',False,12,28800,1,1,1,1,4,1,1,1,1,1,1,0))
+        self.assertEqual(fields,(True,'unavailable','none','none',False,12,28800,1,1,1,1,4,1,1,1,1,1,1,0,2,1,0,1,0))
         self.assertNotIn('private',repr(fields))
         self.assertEqual(_safe_voice_activity_fields(False,{'input_audio_frames':-1,'input_audio_bytes':'secret'}),
-                         (False,'unavailable','none','none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+                         (False,'unavailable','none','none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+
+    async def test_socket_client_counts_only_audio_frames_written_to_browser_socket(self):
+        class WS:
+            closed=False
+            def __init__(self):self.events=[]
+            async def send_json(self,event):self.events.append(event)
+        activity={'audio_frames_ws_sent':0,'interrupt_notices_sent':0}
+        ws=WS();client=SocketClient(ws,activity)
+        await client.send({'type':'audio','item_id':'synthetic-item','pcm':bytes(2)})
+        await client.send({'type':'interrupt','item_id':'synthetic-item'})
+        self.assertEqual(activity,{'audio_frames_ws_sent':1,'interrupt_notices_sent':1})
+        self.assertEqual(ws.events[0]['type'],'audio')
+
+    async def test_browser_playback_ack_requires_current_item_and_safe_context_state(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.client_event_lock=asyncio.Lock();session.item='synthetic-item'
+        await session._receive_client({'type':'playback_scheduled','item_id':'synthetic-item','context_state':'running'})
+        await session._receive_client({'type':'playback_failed','item_id':'synthetic-item'})
+        with self.assertRaises(Refused) as caught:
+            await session._receive_client({'type':'playback_scheduled','item_id':'synthetic-item','context_state':'closed'})
+        self.assertEqual(str(caught.exception),'invalid_playback_start_ack')
+        with self.assertRaises(Refused) as caught:
+            await session._receive_client({'type':'playback_scheduled','item_id':'other-item','context_state':'running'})
+        self.assertEqual(str(caught.exception),'invalid_playback_start_ack')
 
     def test_client_close_diagnostic_is_allowlisted_and_redacted(self):
         fields=_safe_voice_activity_fields(True,{
             'client_reader_exit':'peer_close','client_close_code':1000,
             'client_transport_kind':'none','client_end_received':False,
         })
-        self.assertEqual(fields,(True,'peer_close',1000,'none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+        self.assertEqual(fields,(True,'peer_close',1000,'none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
         malformed=_safe_voice_activity_fields(True,{
             'client_reader_exit':'secret reason','client_close_code':1006,
             'client_transport_kind':'private exception text','client_end_received':True,
         })
-        self.assertEqual(malformed,(True,'unavailable','none','transport_error',True,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+        self.assertEqual(malformed,(True,'unavailable','none','transport_error',True,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
         self.assertNotIn('secret',repr(malformed))
         self.assertEqual(_safe_client_transport_kind(None),'none')
         self.assertEqual(_safe_client_transport_kind(TimeoutError()),'timeout')

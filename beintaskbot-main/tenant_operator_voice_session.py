@@ -541,7 +541,12 @@ class Session:
         if kind == 'played_all' and set(event) == {'type','item_id'}:
             async with self.lock:
                 if (self.interrupt_pending or not self.item or event['item_id'] != self.item or not self.output_finished):
-                    raise Refused('invalid_playback_completion')
+                    # Playback completion is advisory browser telemetry. A
+                    # completion callback can race a server-VAD interruption
+                    # (or arrive after a newer item has started). Ignore that
+                    # stale acknowledgement; tearing down the whole session
+                    # here makes a normal barge-in look like a provider error.
+                    return
                 # This is an app-level playback signal, not proof that a person
                 # heard the answer. The text history marks it unverified.
                 if self.transcript is not None:self.transcript.device_playback_complete(self.item)
@@ -555,6 +560,14 @@ class Session:
                 if (not self.greeting_pending and not self.response_inflight and not self.response_pending and
                     self.pending_input_item_id is None):
                     await self._send_client({'type':'listening'})
+            return
+        if kind == 'playback_scheduled' and set(event)=={'type','item_id','context_state'}:
+            if (event['item_id']!=self.item or event['context_state'] not in {'running','suspended'}):
+                raise Refused('invalid_playback_start_ack')
+            return
+        if kind == 'playback_failed' and set(event)=={'type','item_id'}:
+            if event['item_id']!=self.item:
+                raise Refused('invalid_playback_failure_ack')
             return
         raise Refused('client_event_not_allowed')
 
