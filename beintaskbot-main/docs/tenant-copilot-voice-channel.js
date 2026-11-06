@@ -47,7 +47,7 @@
       if(event.type==='audio' && event.pcm instanceof Uint8Array && event.pcm.byteLength<=9600){
         socket.send(event.pcm.buffer.slice(event.pcm.byteOffset,event.pcm.byteOffset+event.pcm.byteLength));return;
       }
-      if(['mute','played','played_all','end'].includes(event.type)){socket.send(JSON.stringify(event));return;}
+      if(['mute','played','played_all','playback_scheduled','playback_failed','end'].includes(event.type)){socket.send(JSON.stringify(event));return;}
       throw new Error('voice_event_invalid');
     },
     async close(){socket.onclose=null;socket.close();},

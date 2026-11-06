@@ -20,7 +20,7 @@
   buttons.append(start,mute,end);
   root.append(status,buttons);
   let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, inputEnabled=false, greetingPending=false;
-  let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false;
+  let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false, playbackStartedItems=new Set();
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
   const microphoneUncertain=labels.microphone;
@@ -79,6 +79,7 @@
     if(running || destroyed || voiceBlocked || cleanupPending>0)return;
     running=true;setVoiceState('connecting');start.hidden=true;start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
     const version=++generation;
+    playbackStartedItems=new Set();
     try {
       const held=await acquireMicrophone();
       if(version!==generation){if(held)held();return;}
@@ -94,7 +95,20 @@
         if(version!==generation)return;
         if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
-          if(event.type==='audio'){audio.play(event.item_id,event.pcm);if(!greetingPending)inputEnabled=true;setVoiceState('responding');status.textContent=labels.responding;}
+          if(event.type==='audio'){
+            try{
+              audio.play(event.item_id,event.pcm);
+              if(!playbackStartedItems.has(event.item_id)){
+                playbackStartedItems.add(event.item_id);
+                const contextState=typeof audio.contextState==='function'?audio.contextState():'unavailable';
+                if(['running','suspended'].includes(contextState))send({type:'playback_scheduled',item_id:event.item_id,context_state:contextState});
+              }
+              if(!greetingPending)inputEnabled=true;setVoiceState('responding');status.textContent=labels.responding;
+            }catch(error){
+              try{channel?.send({type:'playback_failed',item_id:event.item_id});}catch(_){}
+              throw error;
+            }
+          }
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});

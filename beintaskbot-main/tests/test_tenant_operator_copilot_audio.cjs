@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const openAudio = require('../docs/tenant-copilot-voice-audio.js');
 
-test('batches microphone PCM into bounded live chunks and flushes the final partial chunk', async () => {
+test('sends microphone PCM in low-latency bounded chunks and flushes the final partial chunk', async () => {
   let stream, processor;
   const stopped = [];
   class FakeAudioContext {
@@ -26,21 +26,22 @@ test('batches microphone PCM into bounded live chunks and flushes the final part
   };
   const frames = [];
   const audio = await openAudio(frame => frames.push(frame), deps);
-  const pushSamples = value => processor.onaudioprocess({
-    inputBuffer: { getChannelData: () => new Float32Array(1024).fill(value) },
+  const pushSamples = (value,count=1024) => processor.onaudioprocess({
+    inputBuffer: { getChannelData: () => new Float32Array(count).fill(value) },
   });
 
-  for (let i = 0; i < 3; i++) pushSamples(0.25);
-  assert.equal(frames.length, 0, 'small callbacks are grouped to reduce server round trips');
   pushSamples(0.25);
   assert.equal(frames.length, 1);
-  assert.equal(frames[0].byteLength, 8192, 'four callbacks form a 171 ms chunk within the server frame limit');
+  assert.equal(frames[0].byteLength, 2048, 'each callback is sent promptly as a 43 ms chunk within the server frame limit');
 
-  for (let i = 0; i < 3; i++) pushSamples(-0.25);
-  assert.equal(frames.length, 1);
-  audio.flush();
+  pushSamples(-0.25);
   assert.equal(frames.length, 2);
-  assert.equal(frames[1].byteLength, 6144, 'ending flushes the remaining microphone audio');
+  assert.equal(frames[1].byteLength, 2048);
+  pushSamples(-0.25,512);
+  assert.equal(frames.length, 2);
+  audio.flush();
+  assert.equal(frames.length, 3);
+  assert.equal(frames[2].byteLength, 1024, 'ending flushes the remaining microphone audio');
   await audio.close();
   assert.equal(stopped.length, 1, 'microphone tracks are released');
 });

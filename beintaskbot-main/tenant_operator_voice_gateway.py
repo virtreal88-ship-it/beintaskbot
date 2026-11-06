@@ -49,14 +49,16 @@ _SAFE_CLIENT_FAILURE_CODES=frozenset({
     'client_authority_rejected','client_lease_rejected','client_event_not_allowed',
     'session_closed','invalid_pcm_frame','session_input_limit','input_turn_commit_pending',
     'input_turn_queue_full','invalid_playback_ack','invalid_playback_completion',
+    'invalid_playback_start_ack','invalid_playback_failure_ack',
 })
-_SAFE_CLIENT_EVENT_TYPES=frozenset({'audio','played','played_all','mute','end','unavailable'})
+_SAFE_CLIENT_EVENT_TYPES=frozenset({'audio','played','played_all','playback_scheduled','playback_failed','mute','end','unavailable'})
 _VOICE_ACTIVITY_COUNTERS=(
     'input_audio_frames','input_audio_bytes','vad_speech_started','vad_speech_stopped',
     'input_transcriptions_completed','responses_created','output_audio_chunks',
     'responses_completed','browser_playback_acks','vad_interrupt_candidates',
     'interrupt_notices_sent','vad_cancelled_responses','playback_interrupt_acks',
-    'playback_completion_acks',
+    'playback_completion_acks','audio_frames_ws_sent','browser_playback_scheduled',
+    'browser_playback_failed','playback_context_running','playback_context_suspended',
 )
 
 
@@ -135,7 +137,9 @@ def _log_voice_activity(ready,activity):
               'vad_speech_started=%d vad_speech_stopped=%d input_transcriptions_completed=%d '
               'responses_created=%d output_audio_chunks=%d responses_completed=%d browser_playback_acks=%d '
               'vad_interrupt_candidates=%d interrupt_notices_sent=%d vad_cancelled_responses=%d '
-              'playback_interrupt_acks=%d playback_completion_acks=%d',*fields)
+              'playback_interrupt_acks=%d playback_completion_acks=%d audio_frames_ws_sent=%d '
+              'browser_playback_scheduled=%d browser_playback_failed=%d playback_context_running=%d '
+              'playback_context_suspended=%d',*fields)
 
 
 def _safe_client_transport_kind(error):
@@ -156,7 +160,7 @@ def _expected_close_after_session_end(session,exc):
 
 
 class SocketClient:
-    def __init__(self, ws): self.ws=ws
+    def __init__(self, ws, activity=None): self.ws=ws; self.activity=activity
     async def send(self, event):
         if event.get('type') == 'audio':
             event={'type':'audio','item_id':event['item_id'],
@@ -166,6 +170,9 @@ class SocketClient:
                 return  # already disconnected; no client notification possible
             raise ConnectionError('voice_socket_closed')
         await self.ws.send_json(event)
+        if isinstance(self.activity,dict):
+            if event.get('type')=='audio':self.activity['audio_frames_ws_sent']+=1
+            elif event.get('type')=='interrupt':self.activity['interrupt_notices_sent']+=1
         if event.get('type') in ('ended','end_unconfirmed'):
             await self.ws.close()
 
@@ -200,7 +207,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         client_transport_kind='none',client_end_received=False)
         session_ready=False
         try:
-            session=build_session(scope, SocketClient(ws))
+            session=build_session(scope, SocketClient(ws,activity))
             async def read_frames():
                 count=0;window=time.monotonic()
                 try:
@@ -259,8 +266,6 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                                 activity['vad_speech_started']+=1
                                 if response_inflight_before or output_playing_before:
                                     activity['vad_interrupt_candidates']+=1
-                                if session.interrupt_pending:
-                                    activity['interrupt_notices_sent']+=1
                             elif kind=='input_audio_buffer.speech_stopped':activity['vad_speech_stopped']+=1
                             elif kind=='conversation.item.input_audio_transcription.completed':activity['input_transcriptions_completed']+=1
                             elif kind=='response.created':activity['responses_created']+=1
@@ -304,7 +309,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         break
                     try: event=json.loads(message.data)
                     except (ValueError,TypeError): break
-                    if not isinstance(event,dict) or event.get('type') not in ('end','mute','played','played_all'):
+                    if not isinstance(event,dict) or event.get('type') not in ('end','mute','played','played_all','playback_scheduled','playback_failed'):
                         break
                     try:await session.receive_client(event)
                     except Exception as exc:
@@ -314,6 +319,11 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         activity['browser_playback_acks']+=1
                         if event['type']=='played':activity['playback_interrupt_acks']+=1
                         else:activity['playback_completion_acks']+=1
+                    elif event.get('type')=='playback_scheduled':
+                        activity['browser_playback_scheduled']+=1
+                        if event.get('context_state')=='running':activity['playback_context_running']+=1
+                        elif event.get('context_state')=='suspended':activity['playback_context_suspended']+=1
+                    elif event.get('type')=='playback_failed':activity['browser_playback_failed']+=1
                     if event.get('type')=='end':
                         activity['client_end_received']=True
                         break

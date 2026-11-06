@@ -8,7 +8,7 @@
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
   let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,segments=[],waiters=[];
   let captureParts=[],captureBytes=0;
-  const MAX_PCM_CHUNK_BYTES=8192; // 4 x 1024-sample callbacks, about 171 ms at 24 kHz.
+  const MAX_PCM_CHUNK_BYTES=2048; // 1 x 1024-sample callback, about 43 ms at 24 kHz, for quicker server-VAD interruption.
   const stoppedTracks=new Set();
   const flush=()=>{
     if(!captureBytes)return;
@@ -71,6 +71,7 @@
   };
   return {
     flush,
+    contextState(){return ctx?.state||'unavailable';},
     mute(value){for(const track of stream.getAudioTracks())track.enabled=!value;},
     play(item,pcm){
       if(closed || !(pcm instanceof Uint8Array) || !pcm.byteLength || pcm.byteLength%2)throw new Error('invalid_audio');
