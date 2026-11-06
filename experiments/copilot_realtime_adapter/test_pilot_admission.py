@@ -77,6 +77,20 @@ class MockPilotProvider:
     async def close(self):self.closed=True
 
 
+async def complete_initial_greeting(session):
+    """Model the provider audio and browser playback ack required before input."""
+    import base64
+    await session.receive_provider({'type':'response.created','response':{'id':'greeting-response'}})
+    await session.receive_provider({'type':'response.output_audio.delta','response_id':'greeting-response',
+                                    'item_id':'greeting-audio','content_index':0,
+                                    'delta':base64.b64encode(bytes(3200)).decode()})
+    await session.receive_provider({'type':'response.output_audio.done','response_id':'greeting-response',
+                                    'item_id':'greeting-audio','content_index':0})
+    await session.receive_provider({'type':'response.done','response':{'id':'greeting-response','output':[]}})
+    await asyncio.sleep(.11)  # playback ack must follow the modeled audio duration
+    await session.receive_client({'type':'played_all','item_id':'greeting-audio'})
+
+
 class PilotSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_three_turns_with_no_financial_ledger(self):
         scope=('tenant',42,'channel','conversation');authority=SessionAuthority();lease=SessionLease()
@@ -84,12 +98,13 @@ class PilotSessionTests(unittest.IsolatedAsyncioTestCase):
         session=Session(scope,authority=authority,ledger=None,lease=lease,context=Context(),provider=provider,
                         client=Client(),session_id=sid,pilot_policy=policy,max_seconds=5,idle_seconds=4)
         await session.start()
+        await complete_initial_greeting(session)
         for n in range(3):
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
             await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
             await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})
-        self.assertEqual(sum(event['type']=='response.create' for event in provider.events),3)
+        self.assertEqual(sum(event['type']=='response.create' for event in provider.events),4)
         self.assertTrue(await session.end('test'))
         self.assertTrue(provider.closed);self.assertFalse(lease.held)
