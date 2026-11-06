@@ -32,10 +32,20 @@ SAFE_PROVIDER_ERROR_CODES=frozenset({
 
 class SafeRealtimeFailure(ValueError):
     """Internal failure with a fixed, non-sensitive diagnostic category."""
-    def __init__(self, diagnostic_code, *, event_type=None):
+    def __init__(self, diagnostic_code, *, event_type=None, close_code=None, transport_kind='none'):
         self.diagnostic_code=diagnostic_code
         self.diagnostic_event_type=event_type
+        self.diagnostic_close_code=close_code
+        self.diagnostic_transport_kind=transport_kind
         super().__init__(diagnostic_code)
+
+
+def _safe_transport_kind(error):
+    if error is None:return 'none'
+    if isinstance(error,asyncio.TimeoutError):return 'timeout'
+    if isinstance(error,aiohttp.ClientError):return 'aiohttp_client_error'
+    if isinstance(error,OSError):return 'socket_error'
+    return 'unknown'
 
 
 class RedirectRefused(ValueError):
@@ -94,8 +104,11 @@ class AiohttpRealtimeSocket:
     async def receive_json(self):
         message=await self.ws.receive()
         if message.type in (aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.CLOSING):
-            raise SafeRealtimeFailure('websocket_closed')
-        if message.type==aiohttp.WSMsgType.ERROR:raise SafeRealtimeFailure('websocket_error')
+            raise SafeRealtimeFailure('websocket_closed',close_code=self.ws.close_code,
+                                      transport_kind=_safe_transport_kind(self.ws.exception()))
+        if message.type==aiohttp.WSMsgType.ERROR:
+            raise SafeRealtimeFailure('websocket_error',close_code=self.ws.close_code,
+                                      transport_kind=_safe_transport_kind(self.ws.exception()))
         if message.type!=aiohttp.WSMsgType.TEXT:raise SafeRealtimeFailure('websocket_nontext_frame')
         if len(message.data.encode('utf-8'))>MAX_WIRE_MESSAGE:raise SafeRealtimeFailure('provider_message_too_large')
         try:
