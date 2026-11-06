@@ -34,6 +34,29 @@ class OneUseGuard:
 
 
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_playback_completion_is_not_rejected_by_server_wall_clock(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.client_event_lock=asyncio.Lock();session.lock=asyncio.Lock()
+        session.muted=False;session.interrupt_pending=False;session.item='synthetic-audio-item'
+        session.produced=24000*2*8;session.output_finished=True
+        session.transcript=None;session.greeting_pending=False
+        session.response_inflight=False;session.response_pending=False;session.pending_input_item_id=None
+        session._dispatch_pending=AsyncMock();session._send_client=AsyncMock()
+
+        # The browser's AudioContext completion event is authoritative for
+        # playback queue completion. Server receipt time cannot reliably
+        # reconstruct how long audio played on another device or clock.
+        await session.receive_client({'type':'played_all','item_id':'synthetic-audio-item'})
+        self.assertIsNone(session.item)
+        self.assertEqual(session.produced,0)
+        session._send_client.assert_awaited_once_with({'type':'listening'})
+
     async def test_short_vad_burst_fits_bounded_queue(self):
         session=object.__new__(Session)
         session.pending_input_item_id='active-input'
