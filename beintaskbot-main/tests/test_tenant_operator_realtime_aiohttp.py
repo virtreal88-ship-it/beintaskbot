@@ -73,6 +73,11 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_provider_failure_fields('provider_receive',None,unknown),
                          ('provider_error','provider_receive','error','none','none',False,False))
 
+    def test_provider_failure_diagnostic_identifies_pre_audio_interrupt_race(self):
+        for reason in ('interrupted_before_audio','input_turn_commit_pending'):
+            fields=_provider_failure_fields('provider_event',{'type':'input_audio_buffer.speech_started'},Refused(reason))
+            self.assertEqual(fields,(reason,'provider_event','input_audio_buffer.speech_started','none','none',False,False))
+
     async def test_provider_event_access_and_lease_failures_have_safe_distinct_codes(self):
         class Authority:
             def __init__(self,fail):self.fail=fail
@@ -162,13 +167,37 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session=object.__new__(Session)
         session.closed=False;session.authority=Authority();session.lease=Lease()
         session.scope=('tenant','actor','channel','conversation');session.fence=3
-        session.muted=False;session.input_bytes=0;session.max_input_bytes=192000
+        session.muted=False;session.greeting_pending=False;session.response_inflight=False;session.item=None
+        session.input_bytes=0;session.max_input_bytes=192000
         session.io_lock=asyncio.Lock();session.started=0;session.max_seconds=120
         session.provider=Provider();session.activity=1.0
         await session._receive_client({'type':'audio','pcm':b'\x01\x00'*1024})
         self.assertEqual(session.input_bytes,2048)
         self.assertGreater(session.activity,1.0,'ongoing audio must prevent a false idle timeout')
         self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append')
+
+    async def test_audio_is_held_until_response_audio_starts_to_avoid_pre_audio_barge_in(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        class Provider:
+            def __init__(self):self.events=[]
+            async def send(self,event):self.events.append(event)
+        session=object.__new__(Session)
+        session.closed=False;session.authority=Authority();session.lease=Lease()
+        session.scope=('tenant','actor','channel','conversation');session.fence=4
+        session.muted=False;session.greeting_pending=False;session.response_inflight=True;session.item=None
+        session.input_bytes=0;session.max_input_bytes=192000;session.max_seconds=120;session.started=0
+        session.provider=Provider();session.activity=1.0;session.io_lock=asyncio.Lock()
+        frame=b'\x01\x00'*1024
+        await session._receive_client({'type':'audio','pcm':frame})
+        self.assertEqual(session.provider.events,[],'pre-audio input cannot cancel an unheard response')
+        self.assertEqual(session.input_bytes,0,'discarded frames are not counted or sent upstream')
+        session.item='first-output-item'
+        await session._receive_client({'type':'audio','pcm':frame})
+        self.assertEqual(session.provider.events[0]['type'],'input_audio_buffer.append',
+                         'barge-in resumes after assistant audio has actually started')
 
     async def test_watchdog_logs_authority_and_lease_failures_separately(self):
         class Authority:
@@ -453,6 +482,20 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             session=Session(scope,**deps)
             try:
                 await session.start()
+                self.assertTrue(session.greeting_pending)
+                await session.receive_client({'type':'audio','pcm':bytes(480)})
+                self.assertEqual(session.input_bytes,0,'greeting is heard before microphone audio reaches provider')
+                self.assertFalse(any(event.get('type')=='input_audio_buffer.append' for event in self.received))
+                await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
+                await session.receive_provider({'type':'response.output_audio.delta','response_id':'synthetic-response',
+                    'item_id':'greeting-item','content_index':0,'delta':base64.b64encode(bytes(480)).decode('ascii')})
+                await session.receive_provider({'type':'response.output_audio.done','response_id':'synthetic-response',
+                    'item_id':'greeting-item','content_index':0})
+                await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response','output':[]}})
+                await asyncio.sleep(.02)
+                await session.receive_client({'type':'played_all','item_id':'greeting-item'})
+                self.assertFalse(session.greeting_pending)
+                self.assertEqual(client.events[-1]['type'],'listening')
                 # Realtime may report a created message item separately from
                 # the added/done notifications. Accept it only under the same
                 # strict message-role checks as the other item events.

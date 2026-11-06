@@ -118,13 +118,24 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         session=Session(scope,authority=authority,ledger=None,lease=lease,context=Context(),provider=wire,
                         client=Client(),session_id=sid,pilot_policy=policy,max_seconds=5,idle_seconds=4)
         await session.start()
+        self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),1)
+        await session.receive_provider({'type':'response.created','response':{'id':'greeting'}})
+        await session.receive_provider({'type':'response.output_audio.delta','response_id':'greeting',
+                                        'item_id':'greeting-item','content_index':0,
+                                        'delta':__import__('base64').b64encode(bytes(480)).decode('ascii')})
+        await session.receive_provider({'type':'response.output_audio.done','response_id':'greeting',
+                                        'item_id':'greeting-item','content_index':0})
+        await session.receive_provider({'type':'response.done','response':{'id':'greeting','output':[]}})
+        await asyncio.sleep(.02)
+        await session.receive_client({'type':'played_all','item_id':'greeting-item'})
+        self.assertFalse(session.greeting_pending)
         for n in range(3):
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
             await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
             await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})
-        self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),3)
+        self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),4)
         self.assertTrue(await session.end('test'))
         self.assertFalse(lease.held);self.assertTrue(wire.socket.closed)
 
