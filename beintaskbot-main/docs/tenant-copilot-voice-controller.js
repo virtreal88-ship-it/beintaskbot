@@ -2,7 +2,7 @@
 (function(root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountExperimentalCopilotVoice = factory;
-})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}}) {
+})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
   const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',mute:'Выключить микрофон',unmute:'Включить микрофон',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Отключаем микрофон…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Слушаю',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
@@ -19,6 +19,7 @@
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
   const microphoneUncertain=labels.microphone;
+  const setVoiceState=state=>{try{onState(state);}catch(_){}};
   function settleEnd(confirmed){if(resolveEnd){const resolve=resolveEnd;resolveEnd=null;endPromise=null;resolve(confirmed);}}
   function idle(){if(!running && !ending && cleanupPending===0){try{onIdle();}catch(_){}}}
   function send(event){
@@ -29,6 +30,7 @@
   }
 
   async function stop(reason='ended',confirmed=false,retainMicrophone=false) {
+    setVoiceState('stopping');
     if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
     if(reason===uncertain || reason===playbackFailure || reason===microphoneUncertain)voiceBlocked=true;
     serverInitiated=false;
@@ -70,7 +72,7 @@
   }
   async function begin() {
     if(running || destroyed || voiceBlocked || cleanupPending>0)return;
-    running=true;start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
+    running=true;setVoiceState('connecting');start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
     const version=++generation;
     try {
       const held=await acquireMicrophone();
@@ -87,7 +89,7 @@
         if(version!==generation)return;
         if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
-          if(event.type==='audio'){audio.play(event.item_id,event.pcm);if(!greetingPending)inputEnabled=true;status.textContent=labels.responding;}
+          if(event.type==='audio'){audio.play(event.item_id,event.pcm);if(!greetingPending)inputEnabled=true;setVoiceState('responding');status.textContent=labels.responding;}
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
               if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});
@@ -96,18 +98,19 @@
           else if(event.type==='interrupt'){
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});
-            status.textContent=labels.listening;
+            setVoiceState('listening');status.textContent=labels.listening;
           } else if(event.type==='ready'){
             greetingPending=event.greeting_pending===true;
             inputEnabled=!greetingPending;
+            setVoiceState(greetingPending?'responding':'listening');
             status.textContent=inputEnabled?labels.listening:labels.responding;
           } else if(event.type==='thinking'){
             // Keep microphone uplink active while the model is preparing its
             // response. Realtime VAD needs the user's speech to interrupt a
             // slow answer before its first audio chunk arrives.
-            inputEnabled=!muted && !ending;status.textContent=labels.responding;
+            inputEnabled=!muted && !ending;setVoiceState(muted?'muted':'responding');status.textContent=labels.responding;
           } else if(event.type==='listening'){
-            greetingPending=false;inputEnabled=true;status.textContent=labels.listening;
+            greetingPending=false;inputEnabled=true;setVoiceState('listening');status.textContent=labels.listening;
           }
           else if(event.type==='ended')await stop(labels.connectionEnded,true);
           else if(event.type==='end_unconfirmed')await stop(uncertain);
@@ -138,7 +141,7 @@
     if(!endPromise)endPromise=new Promise(resolve=>{resolveEnd=resolve;});
     endSent=true;
     try{audio?.flush?.();audio?.stopNow?.();}catch(_){}
-    muted=true;ending=true;end.disabled=true;status.textContent=labels.ending;
+    muted=true;ending=true;setVoiceState('stopping');end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
     send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
     return endPromise;
@@ -147,6 +150,7 @@
   mute.addEventListener('click',()=>{
     if(!audio||!channel)return;
     muted=!muted;audio.mute(muted);send({type:'mute',muted});
+    setVoiceState(muted?'muted':(status.textContent===labels.responding?'responding':'listening'));
     mute.textContent=muted?labels.unmute:labels.mute;
     status.textContent=muted?labels.muted:labels.listening;
   });

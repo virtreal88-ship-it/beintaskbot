@@ -17,10 +17,12 @@ const until=async(predicate,label)=>{const deadline=Date.now()+5000;while(!predi
  w.fetch=async(url,options={})=>{const parsed=new URL(url,w.location),body=options.body?JSON.parse(options.body):null;calls.push({path:parsed.pathname,body});let result={};
   if(parsed.pathname.endsWith('/dialogs/history'))result={dialog:route,messages,next_before:null};
   else if(parsed.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:0};
-  else if(parsed.pathname.endsWith('/dialogs/copilot')&&body.mode==='chat')result={text:'Zəhmət olmasa AnyDesk kodunu göndərin.',mode:'chat',knowledge_sources:[],history_status:'cleared'};
+  else if(parsed.pathname.endsWith('/dialogs/copilot')&&body.mode==='chat')result={text:'Zəhmət olmasa AnyDesk kodunu göndərin.',mode:'chat',knowledge_sources:[{title:'Support guide'}],history_status:'cleared'};
   else if(parsed.pathname.endsWith('/dialogs/copilot'))result={text:'Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.',mode:'reply',context_usage:{messages:3,voice_transcriptions:1,images:1,documents:0,skipped:[{kind:'video',reason:'video_not_analyzed'}]},knowledge_sources:[],history_status:'cleared'};
   return{ok:true,status:200,json:async()=>({success:true,result})};};
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();await w.tenantOperator.openDialog(route);await settle();
+ for(const [id,label] of [['operatorAIReply','AI ответ'],['operatorCopilotToggle','AI-помощник'],['operatorCopilotVoiceToggle','Голосовой разговор с AI']]){const button=d.querySelector('#'+id);assert.ok(button,`${id} exists`);assert.ok(button.querySelector('svg,.operator-voice-wave'),`${id} is icon-only`);assert.equal(button.textContent.trim(),'');assert.equal(button.getAttribute('aria-label'),label);assert.equal(button.title,label);}
+ const voiceMotion=d.querySelector('#operatorCopilotVoiceToggle');assert.equal(voiceMotion.dataset.voiceState,'idle');
  d.querySelector('#operatorAIReply').click();await settle();assert.equal(calls.some(call=>call.path.endsWith('/dialogs/copilot')),false,'declining media consent sends no AI request');assert.equal(digestStarted,false,'declining consent does not prepare a request identity');allowMedia=true;d.querySelector('#operatorAIReply').click();await until(()=>digestStarted,'request identity preparation');
  assert.equal(calls.some(call=>call.path.endsWith('/dialogs/copilot')),false,'pending WebCrypto cannot dispatch early');assert.equal(d.querySelector('#operatorAIReply').disabled,true,'reply stays busy while identity hashing is pending');d.querySelector('#operatorAIReply').click();releaseDigest();
  await until(()=>d.querySelector('#chatText').value==='Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.','AI reply completion');
@@ -34,6 +36,7 @@ const until=async(predicate,label)=>{const deadline=Date.now()+5000;while(!predi
  d.querySelector('#operatorCopilotToggle').click();d.querySelector('#operatorCopilotPrompt').value='Попроси AnyDesk';d.querySelector('#operatorCopilotAsk').click();d.querySelector('#operatorCopilotAsk').click();await until(()=>d.querySelector('#operatorCopilotResult').textContent==='Zəhmət olmasa AnyDesk kodunu göndərin.','private helper completion');
  assert.equal(calls.filter(call=>call.path.endsWith('/dialogs/copilot')&&call.body.mode==='chat').length,1,'rapid clicks generate once');
  assert.equal(d.querySelector('#operatorCopilotResult').textContent,'Zəhmət olmasa AnyDesk kodunu göndərin.');
+ assert.doesNotMatch(d.querySelector('#operatorCopilotStatus').textContent,/Проверенные источники/,'knowledge caption is icon-only');assert.match(d.querySelector('#operatorCopilotStatus').textContent,/▤ Support guide/);assert.match(d.querySelector('#operatorCopilotStatus').getAttribute('aria-label'),/Проверенные источники/,'knowledge label remains accessible');
  if(!legacyUi)assert.match(d.querySelector('#operatorCopilotStatus').textContent,/не сохранён в истории AI/);
  else assert.doesNotMatch(d.querySelector('#operatorCopilotStatus').textContent,/не сохранён в истории AI/);
  assert.equal(d.querySelector('#chatText').value,'Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.','private command does not replace customer draft');
