@@ -665,9 +665,14 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                                             'item_id':'audio-1','response_id':'synthetic-response',
                                             'transcript':'synthetic unverified text'})
             self.assertEqual(client.events,prior)
+            # Provider deltas may be larger than one browser frame; the
+            # gateway must split them without losing audio or exceeding the
+            # browser's per-message contract.
             await self.server_socket.send_json({'type':'response.output_audio.delta','response_id':'synthetic-response',
-                                               'item_id':'audio-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
+                                               'item_id':'audio-1','content_index':0,
+                                               'delta':base64.b64encode(bytes(19200)).decode()})
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
+            self.assertEqual([len(e['pcm']) for e in client.events[-2:]],[9600,9600])
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             self.assertEqual(client.events[-1],{'type':'interrupt','item_id':'audio-1'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})

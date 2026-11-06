@@ -25,6 +25,8 @@ _SAFE_FAILURE_CODES=frozenset({
     'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
     'session_closed','output_authorization_rejected','voice_lease_rejected','response_not_inflight',
     'response_id_mismatch',
+    'provider_audio_delta_invalid','provider_audio_delta_too_large',
+    'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
 })
 _SAFE_FAILURE_STAGES=frozenset({'provider_receive','provider_event'})
 _SAFE_PROVIDER_EVENT_TYPES=frozenset({
