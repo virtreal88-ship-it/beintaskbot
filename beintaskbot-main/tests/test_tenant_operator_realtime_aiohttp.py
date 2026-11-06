@@ -34,6 +34,28 @@ class OneUseGuard:
 
 
 class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_short_vad_burst_fits_bounded_queue(self):
+        session=object.__new__(Session)
+        session.pending_input_item_id='active-input'
+        session.response_pending=False;session.response_inflight=True;session.closed=False
+        session.stopped_input_turns=[];session.queued_input_item_ids=[]
+        session.interrupt_pending=False;session.truncate_pending=None
+        session.current_reservation={'request_id':'synthetic'};session.item='active-output'
+        session._dispatch_pending=AsyncMock()
+        for index in range(7):
+            await session._accept_committed_input({'item_id':f'input-{index}','stopped':True})
+        self.assertEqual(session.queued_input_item_ids,[f'input-{index}' for index in range(7)])
+        self.assertFalse(session.closed)
+        with self.assertRaises(Refused) as caught:
+            await session._accept_committed_input({'item_id':'input-overflow','stopped':True})
+        self.assertEqual(str(caught.exception),'input_turn_queue_full')
+
+    def test_provider_queue_overflow_has_safe_diagnostic_code(self):
+        fields=_provider_failure_fields('provider_event',{'type':'input_audio_buffer.speech_stopped'},
+                                        Refused('input_turn_queue_full'))
+        self.assertEqual(fields,('input_turn_queue_full','provider_event',
+                                 'input_audio_buffer.speech_stopped','none','none',False,False))
+
     def test_client_failure_diagnostic_is_allowlisted_and_redacts_payloads(self):
         event={'type':'played_all','item_id':'private-item-id','transcript':'private transcript'}
         fields=_safe_client_failure_fields(event,Refused('invalid_playback_completion'))

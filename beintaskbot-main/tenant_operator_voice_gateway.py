@@ -28,6 +28,7 @@ _SAFE_FAILURE_CODES=frozenset({
     'interrupted_before_audio','input_turn_commit_pending',
     'provider_audio_delta_invalid','provider_audio_delta_too_large',
     'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
+    'input_turn_queue_full','multiple_commits_for_input_turn','assistant_item_response_conflict',
 })
 _SAFE_FAILURE_STAGES=frozenset({'provider_receive','provider_event'})
 _SAFE_PROVIDER_EVENT_TYPES=frozenset({

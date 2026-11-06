@@ -63,7 +63,10 @@ class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
     MAX_OUTPUT_BYTES = 4_800_000
-    MAX_QUEUED_INPUT_TURNS = 4
+    # VAD may split a natural utterance into several pauses while the model
+    # is speaking. Keep a bounded backlog large enough for a short interruption
+    # burst without ending the whole conversation.
+    MAX_QUEUED_INPUT_TURNS = 8
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
