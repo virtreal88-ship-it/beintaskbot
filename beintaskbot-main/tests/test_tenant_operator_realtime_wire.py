@@ -34,7 +34,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.socket=Socket();self.guard=Guard();self.wire=SyntheticRealtimeWire(self.socket,self.guard)
         self.snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.',
                        'lines':[],'extra_context':{}}
-        self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':None,'reconnect':False}
+        self.options={'tools':[],'create_response':False,'interrupt_response':True,'transcription':None,'reconnect':False}
 
     async def open(self):await self.wire.open(self.snapshot,**self.options)
 
@@ -52,7 +52,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_mismatched_policy_closes_admission(self):
         changes=[lambda s:s['audio']['input']['turn_detection'].__setitem__('create_response',True),
-                 lambda s:s['audio']['input']['turn_detection'].__setitem__('interrupt_response',True),
+                 lambda s:s['audio']['input']['turn_detection'].__setitem__('interrupt_response',False),
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',1000),
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('future_trigger',True),
                  lambda s:s['audio']['input'].__setitem__('transcription',{'model':'unapproved'}),

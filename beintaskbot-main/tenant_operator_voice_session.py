@@ -251,7 +251,7 @@ class Session:
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
             stage='provider_open'
-            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
+            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=True,
                                                                     transcription=None, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
@@ -606,15 +606,15 @@ class Session:
                         return
                     raise Refused('input_turn_commit_pending')
                 self.activity = time.monotonic()
-                if self.response_inflight and not self.cancel_requested:
-                    event={'type':'response.cancel'}
-                    if self.provider_response_id:event['response_id']=self.provider_response_id
-                    await self._send_provider(event)
+                if self.response_inflight:
+                    # server_vad interrupt_response owns cancellation. Sending
+                    # response.cancel here races the provider's own turn-detected
+                    # cancellation: if response.done is already queued, that
+                    # duplicate cancel is rejected as a provider error and used
+                    # to tear down the entire conversation. Mark the response
+                    # interrupted locally, stop browser playback below, and let
+                    # the provider emit the single authoritative response.done.
                     self.cancel_requested=True
-                    # If no audio item has reached the browser yet, there is
-                    # nothing to truncate. Keep the session alive, keep
-                    # forwarding microphone frames, and wait for response.done
-                    # before dispatching the interrupted user turn.
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
                     if self.transcript is not None:self.transcript.interrupted(self.item)

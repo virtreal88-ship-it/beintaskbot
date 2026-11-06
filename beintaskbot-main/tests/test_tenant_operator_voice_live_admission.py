@@ -118,7 +118,7 @@ class LiveAdmission(unittest.IsolatedAsyncioTestCase):
 
         provider = self.make_real_provider(credential)
         with self.assertRaises(TenantLinearError):
-            await provider.open({}, tools=[], create_response=False, interrupt_response=False,
+            await provider.open({}, tools=[], create_response=False, interrupt_response=True,
                                 transcription='gpt-transcribe', reconnect=False)
         self.assertEqual(calls, [])
         with self.assertRaises(TenantLinearError):
@@ -137,12 +137,12 @@ class LiveAdmission(unittest.IsolatedAsyncioTestCase):
         await self.policy.admit(self.scope, self.session_id, 1)
         self.authority.allowed = False
         with self.assertRaises(TenantLinearError):
-            await provider.open({}, tools=[], create_response=False, interrupt_response=False,
+            await provider.open({}, tools=[], create_response=False, interrupt_response=True,
                                 transcription='gpt-transcribe', reconnect=False)
         self.authority.allowed = True
         self.lease.current.clear()
         with self.assertRaises(TenantLinearError):
-            await provider.open({}, tools=[], create_response=False, interrupt_response=False,
+            await provider.open({}, tools=[], create_response=False, interrupt_response=True,
                                 transcription='gpt-transcribe', reconnect=False)
         self.assertEqual(calls, [])
 
