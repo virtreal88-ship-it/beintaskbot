@@ -45,3 +45,28 @@ test('sends microphone PCM in low-latency bounded chunks and flushes the final p
   await audio.close();
   assert.equal(stopped.length, 1, 'microphone tracks are released');
 });
+
+test('stale interrupt item stops current audio without throwing or ending the session', async () => {
+  let processor, stops=0, trackStops=0;
+  class FakeAudioContext {
+    constructor(options){this.sampleRate=options.sampleRate;this.state='running';this.destination={};this.currentTime=1;}
+    async resume(){}
+    createMediaStreamSource(){return{connect(){},disconnect(){}};}
+    createScriptProcessor(){processor={connect(){},disconnect(){},onaudioprocess:null};return processor;}
+    createGain(){return{gain:{value:1},connect(){},disconnect(){}};}
+    createBuffer(_channels,length){return{getChannelData:()=>new Float32Array(length)};}
+    createBufferSource(){return{buffer:null,connect(){},start(){},stop(){stops++;},disconnect(){}};}
+    async close(){this.state='closed';}
+  }
+  const deps={AudioContext:FakeAudioContext,navigator:{mediaDevices:{getUserMedia:async()=>({
+    getTracks:()=>[{stop(){trackStops++;}}],getAudioTracks:()=>[],
+  })}}};
+  const audio=await openAudio(()=>{},deps);
+  audio.play('current-item',new Uint8Array([0,0]));
+  const finished=audio.finished('current-item');
+  assert.equal(audio.interrupt('stale-server-item'),0);
+  assert.equal(await finished,false,'interruption resolves pending playback as stopped');
+  assert.equal(stops,1,'all scheduled local output is stopped even when item IDs raced');
+  await audio.close();
+  assert.equal(trackStops,1,'interrupt recovery does not leak the microphone');
+});

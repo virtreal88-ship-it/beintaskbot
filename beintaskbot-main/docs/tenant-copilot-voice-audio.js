@@ -93,7 +93,10 @@
       return new Promise(resolve=>waiters.push(resolve));
     },
     interrupt(item){
-      if(currentItem!==item)throw new Error('unexpected_output_item');
+      // The server can deliver an interrupt after the browser has already
+      // advanced or cleared its local item (for example, when onended races
+      // speech_started). Treat the command as "stop all current output";
+      // throwing here makes the controller close the whole voice session.
       finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
       segments=[];currentItem=null;nextTime=ctx.currentTime;
       // Browser APIs do not prove what reached the listener, particularly with
