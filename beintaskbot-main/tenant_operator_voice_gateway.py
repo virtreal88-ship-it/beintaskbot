@@ -112,6 +112,11 @@ def _safe_client_transport_kind(error):
     return 'transport_error'
 
 
+async def _enqueue_client_message(incoming, message):
+    """Apply bounded backpressure instead of dropping a live audio stream."""
+    await incoming.put(message)
+
+
 def _expected_close_after_session_end(session,exc):
     return (session is not None and session.closed is True and
             getattr(exc,'diagnostic_code',None)=='websocket_closed')
@@ -186,10 +191,12 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         if session.closed:
                             activity['client_reader_exit']='session_closed'
                             break
-                        if incoming.full():
-                            activity['client_reader_exit']='queue_full'
-                            break
-                        incoming.put_nowait(message)
+                        # The audio consumer performs live authorization and
+                        # lease checks before forwarding each frame. If it is
+                        # briefly slower than the browser, pause this reader
+                        # and let TCP flow control catch up instead of closing
+                        # a healthy session and discarding queued speech.
+                        await _enqueue_client_message(incoming,message)
                 finally:
                     close_code=ws.close_code
                     activity['client_close_code']=(close_code if type(close_code) is int else None)
