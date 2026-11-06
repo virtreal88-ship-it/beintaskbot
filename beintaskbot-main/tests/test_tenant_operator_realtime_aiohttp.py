@@ -218,6 +218,24 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             await session._watch()
             session.end.assert_awaited_once_with(expected)
 
+    async def test_watchdog_tolerates_slow_successful_authority_recheck(self):
+        class SlowAuthority:
+            def __init__(self):self.calls=0
+            async def check(inner,*_):
+                inner.calls+=1
+                await asyncio.sleep(1.1)
+                session.closed=True
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.started=time.monotonic();session.activity=session.started
+        session.max_seconds=120;session.idle_seconds=30;session.poll_seconds=.001
+        session.scope=('tenant','actor','channel','conversation');session.fence=4
+        session.authority=SlowAuthority();session.lease=Lease();session.end=AsyncMock()
+        await session._watch()
+        self.assertEqual(session.authority.calls,1)
+        session.end.assert_not_awaited()
+
     def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
         session=type('SessionState',(),{'closed':True})()
         self.assertTrue(_expected_close_after_session_end(session,SafeRealtimeFailure('websocket_closed')))
