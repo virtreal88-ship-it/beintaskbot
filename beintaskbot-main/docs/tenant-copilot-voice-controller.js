@@ -102,7 +102,10 @@
             inputEnabled=!greetingPending;
             status.textContent=inputEnabled?labels.listening:labels.responding;
           } else if(event.type==='thinking'){
-            inputEnabled=false;status.textContent=labels.responding;
+            // Keep microphone uplink active while the model is preparing its
+            // response. Realtime VAD needs the user's speech to interrupt a
+            // slow answer before its first audio chunk arrives.
+            inputEnabled=!muted && !ending;status.textContent=labels.responding;
           } else if(event.type==='listening'){
             greetingPending=false;inputEnabled=true;status.textContent=labels.listening;
           }

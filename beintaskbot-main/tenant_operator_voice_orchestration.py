@@ -104,13 +104,19 @@ class CopilotContext:
                     raise TenantLinearError('Назначение AI изменилось.',409)
         prompt=copilot.INSTRUCTIONS+assigned_guidance(
             company=agent.get('company_instructions'),agent=agent.get('instructions'),style=agent.get('style'))
-        prompt+=('\n\nVoice session policy (overrides any conflicting language or style preference above): '
-                 'have a natural, continuous spoken conversation with the employee; do not stop after one reply. '
-                 'Do not speak first or give a greeting; listen for the employee and answer what they say. '
-                 'Speak Russian by default. Switch to Azerbaijani only when the employee clearly speaks Azerbaijani. '
-                 'Never speak Turkish; if uncertain between Russian, Azerbaijani, or Turkish, use Russian. '
-                 'Use only this temporary voice session. No CRM tools, customer messaging, or external actions are available. '
-                 'Do not claim access to the customer conversation or prior text Copilot history.')
+        prompt+=('\n\n# Voice conversation\n'
+                 'Have a natural, continuous spoken conversation with the employee. Listen and answer each turn; '
+                 'continue until the employee presses Stop or the server-enforced session limit is reached. '
+                 'Do not speak first or give a greeting.\n\n'
+                 '# Language\n'
+                 'The supported conversation languages are Russian and Azerbaijani. Reply in the language of the '
+                 'employee’s complete, substantive utterance. Russian is the default. Switch to Azerbaijani only '
+                 'after a complete Azerbaijani request, question, or correction, or when the employee explicitly asks. '
+                 'Do not infer language from accent, pronunciation, filler, or a short word. If language is uncertain, '
+                 'stay in Russian. Do not speak Turkish. If speech is unclear, ask in Russian for repetition.\n\n'
+                 '# Scope\n'
+                 'Use only this temporary voice session. No CRM tools, customer messaging, or external actions are '
+                 'available. Do not claim access to the customer conversation or prior text Copilot history.')
         snapshot={'existing_copilot_instructions':prompt,'lines':[],'extra_context':{}}
         identity={'tenant':s.tenant,'actor':s.actor,'channel_id':s.channel_id,'conversation_id':s.conversation_id,
                   'lead_id':s.lead_id,'agent_binding':s.agent_binding,'config_version':s.config_version}

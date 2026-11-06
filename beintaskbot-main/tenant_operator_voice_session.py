@@ -484,8 +484,18 @@ class Session:
         if kind == 'end':
             await self.end('user_end')
             return
-        await self.authority.check(self.scope, 'input')
-        await self.lease.assert_current(self.scope, self.fence)
+        try:
+            await self.authority.check(self.scope, 'input')
+        except Refused:
+            raise
+        except Exception:
+            raise Refused('client_authority_rejected') from None
+        try:
+            await self.lease.assert_current(self.scope, self.fence)
+        except Refused:
+            raise
+        except Exception:
+            raise Refused('client_lease_rejected') from None
         if self.closed:
             raise Refused('session_closed')
         if kind == 'mute' and set(event) == {'type', 'muted'} and type(event['muted']) is bool:
