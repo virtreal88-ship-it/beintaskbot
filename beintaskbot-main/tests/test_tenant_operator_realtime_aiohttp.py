@@ -178,24 +178,26 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         activity={'input_audio_frames':12,'input_audio_bytes':28800,'vad_speech_started':1,
                   'vad_speech_stopped':1,'input_transcriptions_completed':1,'responses_created':1,
                   'output_audio_chunks':4,'responses_completed':1,'browser_playback_acks':1,
+                  'vad_interrupt_candidates':1,'interrupt_notices_sent':1,'vad_cancelled_responses':1,
+                  'playback_interrupt_acks':1,'playback_completion_acks':0,
                   'transcript':'private phrase','audio':'private audio'}
         fields=_safe_voice_activity_fields(True,activity)
-        self.assertEqual(fields,(True,'unavailable','none','none',False,12,28800,1,1,1,1,4,1,1))
+        self.assertEqual(fields,(True,'unavailable','none','none',False,12,28800,1,1,1,1,4,1,1,1,1,1,1,0))
         self.assertNotIn('private',repr(fields))
         self.assertEqual(_safe_voice_activity_fields(False,{'input_audio_frames':-1,'input_audio_bytes':'secret'}),
-                         (False,'unavailable','none','none',False,0,0,0,0,0,0,0,0,0))
+                         (False,'unavailable','none','none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
 
     def test_client_close_diagnostic_is_allowlisted_and_redacted(self):
         fields=_safe_voice_activity_fields(True,{
             'client_reader_exit':'peer_close','client_close_code':1000,
             'client_transport_kind':'none','client_end_received':False,
         })
-        self.assertEqual(fields,(True,'peer_close',1000,'none',False,0,0,0,0,0,0,0,0,0))
+        self.assertEqual(fields,(True,'peer_close',1000,'none',False,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
         malformed=_safe_voice_activity_fields(True,{
             'client_reader_exit':'secret reason','client_close_code':1006,
             'client_transport_kind':'private exception text','client_end_received':True,
         })
-        self.assertEqual(malformed,(True,'unavailable','none','transport_error',True,0,0,0,0,0,0,0,0,0))
+        self.assertEqual(malformed,(True,'unavailable','none','transport_error',True,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
         self.assertNotIn('secret',repr(malformed))
         self.assertEqual(_safe_client_transport_kind(None),'none')
         self.assertEqual(_safe_client_transport_kind(TimeoutError()),'timeout')

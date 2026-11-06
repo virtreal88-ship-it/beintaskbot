@@ -10,6 +10,7 @@ on:
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
       - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
+      - 'beintaskbot-main/tests/test_tenant_voice_pilot_browser.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/migrations/voice_lease_provider_open.sql'
       - 'experiments/copilot_realtime_adapter/**'
@@ -31,7 +32,12 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         working-directory: beintaskbot-main
-        run: python -m pip install -r requirements.txt pytest
+        run: |
+          python -m pip install -r requirements.txt pytest
+          npm install --prefix .support-test-deps --no-save playwright@1.62.1
+      - name: Install Chromium for voice interruption browser test
+        working-directory: beintaskbot-main
+        run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Run voice admission, wire, and lifecycle tests
         working-directory: beintaskbot-main
         env:
@@ -45,6 +51,11 @@ jobs:
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
         run: node --test tests/test_tenant_operator_copilot_audio.cjs
+      - name: Test live voice interruption reaches browser audio player
+        working-directory: beintaskbot-main
+        env:
+          PLAYWRIGHT_MODULE: ${{ github.workspace }}/beintaskbot-main/.support-test-deps/node_modules/playwright
+        run: node tests/test_tenant_voice_pilot_browser.cjs
       - name: Run lease and PostgreSQL integration tests
         working-directory: experiments/copilot_realtime_adapter
         env:
