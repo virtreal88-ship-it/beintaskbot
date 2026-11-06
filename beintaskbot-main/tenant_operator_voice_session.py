@@ -150,7 +150,6 @@ class Session:
         self.interrupt_pending = False
         self.truncate_pending = None
         self.output_finished = False
-        self.output_started_at = None
         self.greeting_pending = False
         self.greeting_item_id = None
         self.lock = asyncio.Lock()
@@ -536,20 +535,19 @@ class Session:
                                           'content_index': 0, 'audio_end_ms': ms})
                 self.interrupt_pending = False
                 self.item, self.produced = None, 0
-                self.output_finished, self.output_started_at = False, None
+                self.output_finished = False
                 await self._dispatch_pending()
             return
         if kind == 'played_all' and set(event) == {'type','item_id'}:
             async with self.lock:
-                if (self.interrupt_pending or not self.item or event['item_id'] != self.item or not self.output_finished or
-                    self.output_started_at is None or time.monotonic()-self.output_started_at < self.produced/(self.SAMPLE_RATE*2)):
+                if (self.interrupt_pending or not self.item or event['item_id'] != self.item or not self.output_finished):
                     raise Refused('invalid_playback_completion')
                 # This is an app-level playback signal, not proof that a person
                 # heard the answer. The text history marks it unverified.
                 if self.transcript is not None:self.transcript.device_playback_complete(self.item)
                 completed_item=self.item
                 self.item,self.produced=None,0
-                self.output_finished,self.output_started_at=False,None
+                self.output_finished=False
                 if self.greeting_pending and completed_item==self.greeting_item_id:
                     self.greeting_pending=False
                     self.greeting_item_id=None
@@ -740,7 +738,6 @@ class Session:
                 if self.item not in (None, item):
                     raise Refused('overlapping_output_items')
                 if self.item is None:
-                    self.output_started_at = time.monotonic()
                     if self.greeting_pending:self.greeting_item_id=item
                 self.item = item
                 if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
