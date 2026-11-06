@@ -20,7 +20,7 @@ from tenant_operator_voice_session import Refused, ProviderResponseRejected
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_gateway import (
     _provider_failure_fields,_log_provider_failure,_safe_voice_activity_fields,
-    _expected_close_after_session_end,
+    _expected_close_after_session_end,_safe_client_transport_kind,
 )
 
 
@@ -97,10 +97,25 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                   'output_audio_chunks':4,'responses_completed':1,'browser_playback_acks':1,
                   'transcript':'private phrase','audio':'private audio'}
         fields=_safe_voice_activity_fields(True,activity)
-        self.assertEqual(fields,(True,12,28800,1,1,1,1,4,1,1))
+        self.assertEqual(fields,(True,'unavailable','none','none',False,12,28800,1,1,1,1,4,1,1))
         self.assertNotIn('private',repr(fields))
         self.assertEqual(_safe_voice_activity_fields(False,{'input_audio_frames':-1,'input_audio_bytes':'secret'}),
-                         (False,0,0,0,0,0,0,0,0,0))
+                         (False,'unavailable','none','none',False,0,0,0,0,0,0,0,0,0))
+
+    def test_client_close_diagnostic_is_allowlisted_and_redacted(self):
+        fields=_safe_voice_activity_fields(True,{
+            'client_reader_exit':'peer_close','client_close_code':1000,
+            'client_transport_kind':'none','client_end_received':False,
+        })
+        self.assertEqual(fields,(True,'peer_close',1000,'none',False,0,0,0,0,0,0,0,0,0))
+        malformed=_safe_voice_activity_fields(True,{
+            'client_reader_exit':'secret reason','client_close_code':1006,
+            'client_transport_kind':'private exception text','client_end_received':True,
+        })
+        self.assertEqual(malformed,(True,'unavailable','none','transport_error',True,0,0,0,0,0,0,0,0,0))
+        self.assertNotIn('secret',repr(malformed))
+        self.assertEqual(_safe_client_transport_kind(None),'none')
+        self.assertEqual(_safe_client_transport_kind(TimeoutError()),'timeout')
 
     def test_closed_provider_socket_after_terminal_session_is_expected_cleanup(self):
         session=type('SessionState',(),{'closed':True})()
