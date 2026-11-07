@@ -1239,6 +1239,14 @@ def quoted_once_scope(tenant,channel):
 
 
 def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None) -> str:
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(route.get('conversation_id')):
+        # Group sends must use Connect's synchronous at-most-once path. The
+        # generic /messages endpoint is backed by a retrying outbox; retrying
+        # Evolution sendText after a lost response can post the same group
+        # message twice because Evolution has no idempotency key.
+        result=send_group_with_receipt(route,text,client_message_id,quoted_message_id=quoted_message_id)
+        return result['message_id']
     body = {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id}
     if quoted_message_id: body['quotedExternalMessageId']=quoted_message_id
     endpoint='/quoted-once' if quoted_message_id and quoted_once_scope(route.get('tenant_id'),route['channel_id']) else '/messages'
@@ -1278,7 +1286,8 @@ def send_ai_reply_with_receipt(route: dict, text: str, request_id: str) -> str:
     return str(result['id'])
 
 
-def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: dict | None = None) -> dict:
+def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: dict | None = None,
+                            quoted_message_id: str | None = None) -> dict:
     """One confirmed group delivery; expose provider reference only when valid.
 
     Callers must durably reserve the UUID before calling and quarantine unknown
@@ -1290,6 +1299,10 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     if not group_jid(route.get('conversation_id')): raise TenantPlatformError('Group route required.')
     payload={'conversationId':route['conversation_id'],'type':str(media['type']) if media else 'text',
       'text':text,'clientMessageId':key}
+    if quoted_message_id is not None:
+        if not isinstance(quoted_message_id,str) or re.fullmatch(r'[A-Za-z0-9_-]{5,200}',quoted_message_id) is None:
+            raise TenantPlatformError('Invalid group quote reference.')
+        payload['quotedExternalMessageId']=quoted_message_id
     if media:
         payload['media']={k:media[k] for k in ('base64','mimeType','fileName') if k in media}
     result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/group-messages',payload)
