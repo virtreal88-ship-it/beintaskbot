@@ -200,6 +200,18 @@
     if(bell)bell.hidden=!canReadNotifications();
   }
   const style=el('style');style.textContent='#dialogConsultationBell{position:relative;overflow:visible}.notification-unread-badge{position:absolute;top:-6px;left:20px;min-width:17px;height:17px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:#c62828;color:#fff;font:700 10px/17px system-ui,sans-serif;text-align:center;white-space:nowrap;pointer-events:none}.dialog-consultation-overlay{position:fixed;inset:0;background:#0008;z-index:1500;display:flex;align-items:center;justify-content:center;padding:12px}#dialogDeveloperAsk{min-height:36px;max-width:100%;white-space:normal;overflow-wrap:anywhere}#dialogDeveloperAsk[hidden]{display:none!important}#dialogHelperContent[hidden],#dialogConsultationStart[hidden]{display:none!important}#dialogHelperControls{position:sticky;top:0;z-index:2;background:var(--card,#fff);padding-bottom:8px}#dialogHelperTypeControl{display:grid;gap:4px}#dialogHelperType{max-width:100%;width:100%}#dialogDeveloperBadge{margin-inline:8px;font-size:12px}.dialog-consultation-form{box-sizing:border-box;overflow-wrap:anywhere;background:var(--card,#fff);color:var(--ink,#111);max-width:650px;width:100%;max-height:90dvh;overflow:auto;padding:20px;border-radius:12px}.dialog-consultation-form label{display:block;margin:10px 0}.dialog-consultation-form select,.dialog-consultation-form textarea{display:block;width:100%;max-width:100%}.dialog-consultation-card{display:grid;gap:6px;padding:12px;border-bottom:1px solid #9995;overflow-wrap:anywhere}.dialog-consultation-card p{white-space:pre-wrap}.dialog-consultation-menu{position:fixed;right:16px;top:60px;z-index:1400;width:min(420px,calc(100vw - 24px));max-height:75dvh;overflow:auto;background:var(--card,#fff);color:var(--ink,#111);box-shadow:0 4px 30px #0004}.dialog-consultation-menu[hidden]{display:none}@media(max-width:900px){.dialog-consultation-menu{top:12px}.notification-unread-badge{left:6px}}';document.head.append(style);
+  // The direct action is wider than the old floating menu. Give it a real row
+  // so task/consultation controls cannot cover the customer avatar or title.
+  const directActionStyle=el('style');directActionStyle.textContent=`
+    @media(max-width:900px){
+      .operator-conversation-header:has(#dialogDeveloperAsk:not([hidden])){padding-right:8px}
+      .operator-conversation-header:has(#dialogDeveloperAsk:not([hidden])) .operator-conversation-head-copy{flex-direction:column;align-items:stretch;gap:4px}
+      .operator-conversation-header:has(#dialogDeveloperAsk:not([hidden])) .operator-dialog-head-row{flex:none}
+      .operator-conversation-header:has(#dialogDeveloperAsk:not([hidden])) .operator-dialog-title{max-width:100%}
+      .operator-conversation-header:has(#dialogDeveloperAsk:not([hidden])) .operator-dialog-head-secondary{position:static;flex-wrap:wrap;justify-content:flex-end}
+      .operator-conversation-header #dialogDeveloperAsk{flex:1;min-width:0;min-height:44px}
+    }
+  `;document.head.append(directActionStyle);
   const notificationStyle=el('style');notificationStyle.textContent=`
     .dialog-consultation-menu{border:1px solid var(--line,#d7e2dd);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 84px)}
     .notification-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 16px 10px;flex:none}.notification-header>div{display:grid;gap:3px}.notification-header strong{font-size:19px}.notification-header small,.notification-meta{color:var(--muted,#596661);font-size:12px}
