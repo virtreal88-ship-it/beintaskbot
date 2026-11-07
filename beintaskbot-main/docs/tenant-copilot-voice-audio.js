@@ -2,12 +2,13 @@
 (function(root,factory){
   if(typeof module==='object' && module.exports)module.exports=factory;
   else root.openExperimentalCopilotAudio=factory;
-})(typeof window==='object'?window:globalThis,async function openAudio(onPcm, deps=globalThis){
+})(typeof window==='object'?window:globalThis,async function openAudio(onPcm, deps=globalThis, onSpeechStart=()=>{}){
   const media=deps.navigator?.mediaDevices;
   const Ctx=deps.AudioContext||deps.webkitAudioContext;
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
   let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,segments=[],waiters=[];
-  let captureParts=[],captureBytes=0;
+  let captureParts=[],captureBytes=0,speechFrames=0,localSpeechLatched=false,localMuteTimer=null,localOutputMuted=false;
+  const setTimer=deps.setTimeout||setTimeout,clearTimer=deps.clearTimeout||clearTimeout;
   const MAX_PCM_CHUNK_BYTES=2048; // 1 x 1024-sample callback, about 43 ms at 24 kHz, for quicker server-VAD interruption.
   const stoppedTracks=new Set();
   const flush=()=>{
@@ -29,7 +30,7 @@
     if(unconfirmed)throw new Error('microphone_stop_unconfirmed');
   };
   try {
-    stream=await media.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});
+    stream=await media.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
     ctx=new Ctx({sampleRate:24000});
     if(ctx.sampleRate!==24000 || !ctx.createScriptProcessor)throw new Error('pcm_24000_unsupported');
     await ctx.resume();
@@ -40,6 +41,27 @@
       if(closed)return;
       const floats=event.inputBuffer.getChannelData(0),out=new Int16Array(floats.length);
       for(let i=0;i<floats.length;i++){const v=Math.max(-1,Math.min(1,floats[i]));out[i]=v<0?v*32768:v*32767;}
+      let sumSquares=0,crossings=0,previous=0;
+      for(let i=0;i<floats.length;i++){
+        const value=floats[i];sumSquares+=value*value;
+        if(i&&((value>=0)!==(previous>=0)))crossings++;
+        previous=value;
+      }
+      const rms=floats.length?Math.sqrt(sumSquares/floats.length):0;
+      const zcr=floats.length>1?crossings/(floats.length-1):0;
+      // Browser-side fallback pauses queued output quickly on sustained
+      // speech-like microphone energy. Echo/noise suppression is enabled at
+      // capture; provider VAD remains authoritative for cancelling the turn.
+      const speechLike=rms>=0.035&&zcr>=0.01&&zcr<=0.35;
+      speechFrames=speechLike?speechFrames+1:0;
+      if(speechFrames>=2&&!localSpeechLatched&&segments.length){
+        localSpeechLatched=true;localOutputMuted=true;
+        finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
+        segments=[];currentItem=null;nextTime=ctx.currentTime;
+        if(localMuteTimer)clearTimer(localMuteTimer);
+        localMuteTimer=setTimer(()=>{localMuteTimer=null;localOutputMuted=false;localSpeechLatched=false;},750);
+        try{onSpeechStart();}catch(_){}
+      }else if(!speechLike)localSpeechLatched=false;
       const pcm=new Uint8Array(out.buffer);
       captureParts.push(pcm);captureBytes+=pcm.byteLength;
       if(captureBytes>=MAX_PCM_CHUNK_BYTES)flush();
@@ -59,6 +81,7 @@
   const stopNow=()=>{
     if(!closed){
       closed=true;finishWaiters(false);
+      if(localMuteTimer){clearTimer(localMuteTimer);localMuteTimer=null;}
       captureParts=[];captureBytes=0;
       for(const node of segments){try{node.stop();}catch(_){}}
       segments=[];
@@ -74,6 +97,7 @@
     contextState(){return ctx?.state||'unavailable';},
     mute(value){for(const track of stream.getAudioTracks())track.enabled=!value;},
     play(item,pcm){
+      if(localOutputMuted)return;
       if(closed || !(pcm instanceof Uint8Array) || !pcm.byteLength || pcm.byteLength%2)throw new Error('invalid_audio');
       if(currentItem!==null && currentItem!==item){
         if(ctx.currentTime<nextTime)throw new Error('overlapping_output_items');
@@ -97,11 +121,22 @@
       // advanced or cleared its local item (for example, when onended races
       // speech_started). Treat the command as "stop all current output";
       // throwing here makes the controller close the whole voice session.
+      if(localMuteTimer){clearTimer(localMuteTimer);localMuteTimer=null;}
+      localOutputMuted=false;localSpeechLatched=false;
       finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
       segments=[];currentItem=null;nextTime=ctx.currentTime;
       // Browser APIs do not prove what reached the listener, particularly with
       // wireless devices. Conservatively discard the whole interrupted item.
       return 0;
+    },
+    interruptLocalSpeech(){
+      if(!segments.length)return false;
+      localSpeechLatched=true;localOutputMuted=true;
+      finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
+      segments=[];currentItem=null;nextTime=ctx.currentTime;
+      if(localMuteTimer)clearTimer(localMuteTimer);
+      localMuteTimer=setTimer(()=>{localMuteTimer=null;localOutputMuted=false;localSpeechLatched=false;},750);
+      return true;
     },
     stopNow,
     async close(){
