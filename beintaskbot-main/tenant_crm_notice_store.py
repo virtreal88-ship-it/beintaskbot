@@ -166,7 +166,7 @@ def observe() -> int:
                     cur.executemany('''INSERT INTO saas_crm_notice_observations(tenant_id,kind,source_key,state)
                       VALUES(%s::uuid,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,kind,source_key) DO UPDATE SET state=EXCLUDED.state''', observations)
                 if kind == 'task' and len(rows) < 50:
-                    mark_checked(cur, tenant, 'crm_task')
+                    mark_checked(cur, tenant, 'crm_task', connection)
                 positions[kind] = rows[-1]['source_key'] if len(rows) == 50 else ''
             cur.execute("UPDATE saas_crm_notice_scan SET positions=%s::jsonb,next_scan=now()+interval '1 minute' WHERE tenant_id=%s::uuid", (json.dumps(positions), tenant))
         conn.commit()

@@ -6,16 +6,18 @@ from tenant_proactive_risk_policy import analyze_linear, analyze_crm_task, finge
 
 class LinearRiskRules(unittest.TestCase):
     def test_plain_service_outage_phrases_are_candidates_without_extra_action_words(self):
-        for title in ('Service unavailable', 'Service outage', 'Сервис не работает'):
+        for title in ('Service unavailable', 'Service outage', 'Сервис не работает', 'Сервис недоступен'):
             with self.subTest(title=title):
                 finding=next(item for item in analyze_linear({'title':title})
                              if item['rule_id']=='service_failure_claim')
                 self.assertIn('current service health was not checked',finding['assessment'])
 
     def test_cashier_changes_price_is_recognized_as_report(self):
-        finding=next(item for item in analyze_linear({'title':'Cashier changes price'})
-                     if item['rule_id']=='price_control_claim')
-        self.assertIn('No loss is established',finding['assessment'])
+        for title in ('Cashier changes price','Кассир изменяет цену','Кассир меняет цену'):
+            with self.subTest(title=title):
+                finding=next(item for item in analyze_linear({'title':title})
+                             if item['rule_id']=='price_control_claim')
+                self.assertIn('No loss is established',finding['assessment'])
 
     def test_price_and_permission_report_is_not_claimed_as_verified(self):
         findings = analyze_linear({'id':'issue-1','identifier':'BS-1513','title':'Urgent price permission issue',
@@ -75,6 +77,12 @@ class LinearRiskRules(unittest.TestCase):
 
 
 class CrmRiskRules(unittest.TestCase):
+    def test_plain_outage_mentions_are_candidates_without_action_words(self):
+        for text in ('Service unavailable', 'Service outage', 'Сервис недоступен'):
+            with self.subTest(text=text):
+                finding=analyze_crm_task({'kommo_task_id':17,'text':text,'completed':False})[0]
+                self.assertIn('service failure concern',finding['assessment'])
+
     def test_source_check_timestamp_rejects_naive_and_parses_utc(self):
         self.assertIsNone(source_timestamp('2026-11-07T12:00:00'))
         self.assertIsNone(source_timestamp('not-a-time'))

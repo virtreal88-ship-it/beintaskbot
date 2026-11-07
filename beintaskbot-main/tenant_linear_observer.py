@@ -19,6 +19,9 @@ RISK_SCAN_VERSION = 'v1'
 def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
                 source_scope: str = '', source_checked_at=None) -> None:
     if (issue.get('team') or {}).get('id') != config['team_id']:
+        cur.execute('''DELETE FROM saas_proactive_risk_findings
+          WHERE tenant_id=%s::uuid AND source_kind='linear' AND source_id=%s''',
+          (tenant, str(issue.get('id') or '')))
         return
     version = source_time(issue['updatedAt'])
     cur.execute('SELECT state_id,source_version FROM saas_linear_snapshots WHERE tenant_id=%s::uuid AND issue_id=%s::uuid FOR UPDATE', (tenant, issue['id']))
@@ -92,17 +95,16 @@ def sync_one() -> dict | None:
                 page = query(key, 'query($filter:IssueFilter,$after:String) { issues(first:30,filter:$filter,after:$after,orderBy:updatedAt) { nodes { '
                     + FIELDS + ' parent { id } labels(first:50) { nodes { name } } } pageInfo { hasNextPage endCursor } } }',
                     {'filter': issue_filter, 'after': state['cursor']})['issues']
+                source_checked_at = datetime.now(timezone.utc)
                 for row in page['nodes']:
                     store_issue(cur, tenant, config, row, baseline=since is None,
-                                source_scope=f'{config_version}:{config["team_id"]}')
+                                source_scope=f'{config_version}:{config["team_id"]}',
+                                source_checked_at=source_checked_at)
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
                 if not more:
-                    mark_checked(cur, tenant, 'linear')
-                    cur.execute('''UPDATE saas_proactive_risk_findings SET source_checked_at=now()
-                      WHERE tenant_id=%s::uuid AND source_kind='linear' AND source_scope=%s''',
-                      (tenant, f'{config_version}:{config["team_id"]}'))
+                    mark_checked(cur, tenant, 'linear', f'{config_version}:{config["team_id"]}')
                 cur.execute('''UPDATE saas_linear_sync SET config_version=%s,cursor=%s,since_at=%s,until_at=%s,
                   due_at=now()+interval '1 minute',updated_at=now(),risk_scan_version=%s WHERE tenant_id=%s::uuid''',
                   (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None,

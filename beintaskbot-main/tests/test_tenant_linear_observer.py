@@ -92,7 +92,9 @@ class Storage(unittest.TestCase):
 
     def test_foreign_team_and_older_data_never_stored(self):
         self.service.store_issue(self.cur,TENANT,config(),row(team={'id':OTHER}),baseline=False)
-        self.cur.execute.assert_not_called()
+        self.cur.execute.assert_called_once()
+        self.assertIn('DELETE FROM saas_proactive_risk_findings',self.cur.execute.call_args.args[0])
+        self.cur.reset_mock()
         self.cur.fetchone.return_value={'state_id':DONE,'source_version':source_time('2026-10-09T10:00:00Z')}
         self.service.store_issue(self.cur,TENANT,config(),row(),baseline=False)
         self.assertNotIn('INSERT',str(self.cur.execute.call_args_list))
@@ -102,11 +104,13 @@ class Storage(unittest.TestCase):
         self.service.analyze_linear.return_value=[candidate]
         issue=row(state={'id':OTHER},title='Cashier can change price without permission',priority=2)
         self.cur.fetchone.return_value=None
-        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False,source_scope='v1:'+TENANT)
+        checked=source_time('2026-11-07T12:00:00Z')
+        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False,
+                                 source_scope='v1:'+TENANT,source_checked_at=checked)
         self.service.analyze_linear.assert_called_once_with(issue)
         self.service.replace_source_findings.assert_called_once_with(self.cur,TENANT,'linear',OTHER,
             source_time(STAMP).isoformat(),issue['title'],[candidate],
-            source_scope='v1:'+TENANT,source_checked_at=None)
+            source_scope='v1:'+TENANT,source_checked_at=checked)
         self.assertNotIn('saas_linear_notice_deliveries',str(self.cur.execute.call_args_list))
 
     def test_fixed_page_and_durable_window(self):
@@ -139,15 +143,14 @@ class Storage(unittest.TestCase):
         self.assertFalse(result['has_next'])
         update=self.cur.execute.call_args_list[-1].args[1]
         self.assertEqual(update[-2:],('v1',TENANT))
-        self.assertIn("source_checked_at=now()",str(self.cur.execute.call_args_list))
 
-    def test_successful_incremental_check_marks_unchanged_findings_source_fresh(self):
+    def test_successful_incremental_check_does_not_claim_unobserved_findings_fresh(self):
         state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v1','cursor':None,
                'since_at':source_time(STAMP),'until_at':None}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.service.sync_one()
-        self.assertTrue(any('UPDATE saas_proactive_risk_findings SET source_checked_at=now()' in call.args[0]
-                            for call in self.cur.execute.call_args_list))
+        self.assertFalse(any('UPDATE saas_proactive_risk_findings SET source_checked_at=now()' in call.args[0]
+                             for call in self.cur.execute.call_args_list))
 
     def test_provider_failure_keeps_committed_backoff(self):
         state={'tenant_id':TENANT,'config_version':'v1','cursor':None,'since_at':None,'until_at':None}
@@ -163,7 +166,11 @@ class Storage(unittest.TestCase):
         service.cleanup();calls=self.cur.execute.call_args_list
         self.assertEqual(len(calls),4)
         for call in calls:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
-        self.assertNotIn('saas_linear_news_seen',str(calls));self.assertNotIn('connected',str(calls))
+        risk_cleanup=next(call.args[0] for call in calls if 'DELETE FROM saas_proactive_risk_findings' in call.args[0])
+        self.assertIn("source_kind='linear' AND NOT EXISTS",risk_cleanup)
+        self.assertIn('right(saas_proactive_risk_findings.source_scope',risk_cleanup)
+        self.assertIn("source_kind='crm_task' AND NOT EXISTS",risk_cleanup)
+        self.assertNotIn('saas_linear_news_seen',str(calls))
 
 
 class Worker(unittest.IsolatedAsyncioTestCase):

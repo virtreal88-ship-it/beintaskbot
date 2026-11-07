@@ -53,6 +53,7 @@ class RiskStore(unittest.TestCase):
         self.assertIn("m.tenant_id=%s::uuid",sql)
         self.assertIn("source_kind=ANY(%s)",sql)
         self.assertIn("source_scope=%s",sql)
+        self.assertIn("saas_proactive_risk_scope_checks",sql)
         self.assertNotIn('saas_tenant_notifications',sql)
         self.assertNotIn('send_message',sql)
 

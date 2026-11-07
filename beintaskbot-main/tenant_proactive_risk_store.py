@@ -35,12 +35,12 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
            str(item['recommended_step'])[:400], digest, source_checked_at))
 
 
-def mark_checked(cur, tenant_id: str, source_kind: str) -> None:
+def mark_checked(cur, tenant_id: str, source_kind: str, source_scope: str = '') -> None:
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
-    cur.execute('''INSERT INTO saas_proactive_risk_checks(tenant_id,source_kind,checked_at)
-      VALUES(%s::uuid,%s,now()) ON CONFLICT(tenant_id,source_kind) DO UPDATE SET checked_at=EXCLUDED.checked_at''',
-      (tenant_id, source_kind))
+    cur.execute('''INSERT INTO saas_proactive_risk_scope_checks(tenant_id,source_kind,source_scope,checked_at)
+      VALUES(%s::uuid,%s,%s,now()) ON CONFLICT(tenant_id,source_kind,source_scope)
+      DO UPDATE SET checked_at=EXCLUDED.checked_at''', (tenant_id, source_kind, str(source_scope)))
 
 
 def _active_sources(cur, tenant: str, profile: dict) -> dict[str, str]:
@@ -96,8 +96,11 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
                 AND (source_kind<>'crm_task' OR source_scope=%s)''',
               (tenant, list(sources), sources.get('linear', ''), sources.get('crm_task', '')))
             last_finding = cur.fetchone()['checked_at']
-            cur.execute('''SELECT max(checked_at) AS checked_at FROM saas_proactive_risk_checks
-              WHERE tenant_id=%s::uuid AND source_kind=ANY(%s)''', (tenant, list(sources)))
+            cur.execute('''SELECT max(checked_at) AS checked_at FROM saas_proactive_risk_scope_checks
+              WHERE tenant_id=%s::uuid AND source_kind=ANY(%s)
+                AND (source_kind<>'linear' OR source_scope=%s)
+                AND (source_kind<>'crm_task' OR source_scope=%s)''',
+              (tenant, list(sources), sources.get('linear', ''), sources.get('crm_task', '')))
             last_check = cur.fetchone()['checked_at']
     findings = []
     now = datetime.now(timezone.utc)

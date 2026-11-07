@@ -41,5 +41,11 @@ def ensure_schema(conn) -> None:
               checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,source_kind)
             )''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_proactive_risk_scope_checks (
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('linear','crm_task')),
+              source_scope TEXT NOT NULL, checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,source_kind,source_scope)
+            )''')
         conn.commit()
         _ready = True

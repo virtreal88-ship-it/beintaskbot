@@ -42,7 +42,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(self.module.observe(),1)
         self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v1',
             'CRM task 9',[candidate],source_scope='x:2026',source_checked_at=baseline)
-        self.module.mark_checked.assert_called_once_with(self.cur,'company-a','crm_task')
+        self.module.mark_checked.assert_called_once_with(self.cur,'company-a','crm_task','x:2026')
         self.assertNotIn('INSERT INTO saas_crm_notice_deliveries',str(self.cur.execute.call_args_list))
         self.conn.commit.assert_called_once()
 

@@ -8,8 +8,8 @@ import re
 _SIGNALS = {
     'access': re.compile(r'\b(permission|permissions|access|acl|unauthori[sz]ed|bypass|role|right|rights)\b|icaz[əe]|səlahiyyət|hüquq|icazəsiz|\b(прав\w*|доступ|обход|разрешен\w*)\b', re.I),
     'price': re.compile(r'\b(price|pricing|discount|payment|edit price|change price|modify price)\b|qiymət|ödəniş|endirim|\b(цен\w*|стоимост\w*|скидк\w*|оплат\w*)\b', re.I),
-    'outage': re.compile(r'\b(outage|service down|system down|unavailable|incident|crash|failure|downtime)\b|işləmir|dayanıb|nasazlıq|\b(сбой|недоступ|не работает|падени)\b', re.I),
-    'action': re.compile(r'\b(can|could|allow|allows|edit|change|changes|changing|modify|modifies|modifying|override|bypass|disable|without|despite|issue|risk|fail|failed|failure|blocked)\b|dəyiş|edə bilər|olmadan|baxmayaraq|mümkün|problem|\b(может|измен|обойти|без права|несмотря|проблем)\b', re.I),
+    'outage': re.compile(r'\b(outage|service down|system down|unavailable|incident|crash|failure|downtime)\b|işləmir|dayanıb|nasazlıq|\b(сбой|недоступ\w*|не работает|падени\w*)\b', re.I),
+    'action': re.compile(r'\b(can|could|allow|allows|edit|change|changes|changing|modify|modifies|modifying|override|bypass|disable|without|despite|issue|risk|fail|failed|failure|blocked)\b|dəyiş|edə bilər|olmadan|baxmayaraq|mümkün|problem|\b(может|измен\w*|меня\w*|обойти|без права|несмотря|проблем)\b', re.I),
     'urgent_text': re.compile(r'\b(urgent|asap|critical|immediately)\b|təcili|dərhal|kritik|\b(срочно|немедленно|критич)\b', re.I),
 }
 
@@ -103,14 +103,16 @@ def analyze_crm_task(task: dict, *, checked_at: datetime | None = None) -> list[
     text = str(task.get('text') or '')
     access, price, outage, action = (_SIGNALS[key].search(text) is not None
                                     for key in ('access', 'price', 'outage', 'action'))
-    if not action or not (outage or access or price):
+    if not (outage or (action and (access or price))):
         return []
     due = task.get('due_at')
     overdue = False
     if isinstance(due, datetime) and due.tzinfo is not None:
         overdue = due.astimezone(timezone.utc) <= (checked_at or datetime.now(timezone.utc)) and task.get('completed') is False
     unassigned = not task.get('responsible_id')
-    topic = 'price/access concern' if price and access else 'price-control concern' if price else 'access concern' if access else 'service failure concern'
+    topic = ('service failure concern' if outage and not (action and (access or price)) else
+             'price/access concern' if price and access else 'price-control concern' if price else
+             'access concern' if access else 'service failure concern')
     facts = [f"CRM task {task.get('kommo_task_id') or ''} text mentions a {topic}; this is a report, not a verified incident."]
     if due:
         facts.append(f"Task due_at is {due.isoformat() if hasattr(due, 'isoformat') else due}.")
@@ -118,7 +120,9 @@ def analyze_crm_task(task: dict, *, checked_at: datetime | None = None) -> list[
         facts.append('Task is incomplete and due_at is in the past (UTC comparison).')
     if unassigned:
         facts.append('CRM task responsible_id is empty.')
-    rule = 'crm_task_' + ('overdue_' if overdue else '') + ('unassigned_' if unassigned else '') + ('price_access' if price and access else 'price' if price else 'access' if access else 'outage')
+    rule = 'crm_task_' + ('overdue_' if overdue else '') + ('unassigned_' if unassigned else '') + (
+        'outage' if outage and not (action and (access or price)) else
+        'price_access' if price and access else 'price' if price else 'access' if access else 'outage')
     return [_finding(rule, 'P2', 'low' if not due else 'medium', facts,
         f'The CRM task reports a possible {topic}; no runtime ACL, price, or service-health evidence was checked. No loss is established.',
         'Verify the underlying system evidence and assign an owner if missing.', '')]
