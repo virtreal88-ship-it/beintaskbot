@@ -69,12 +69,15 @@
     }
   };
   const settings = $('view-settings');
+  const notificationSettingsRoot = $('chakra-notification-settings-root') || document.createElement('div');
+  notificationSettingsRoot.id = 'chakra-notification-settings-root';
+  if (!notificationSettingsRoot.parentElement) $('chakra-settings-root')?.before(notificationSettingsRoot);
   const settingsCopy = {
-    az:{employees:['Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],integrations:['İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],companies:['Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],workflow:['İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],advanced:['Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.'],title:'Geniş ayarlar',description:'Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.'},
-    ru:{employees:['Сотрудники','Приглашения, запросы доступа и команда.'],integrations:['Интеграции','Управляйте Connect WhatsApp и другими подключениями компании.'],companies:['Компании','Управляйте компаниями и доступом.'],workflow:['Правила работы','Воронки, этапы, права сотрудников и подтверждения.'],advanced:['Диагностика','Состояние системы и технические проверки.'],title:'Дополнительные настройки',description:'При необходимости настройте рабочие процессы и технические параметры компании.'},
-    en:{employees:['Employees','Invitations, access requests and your team.'],integrations:['Integrations','Manage Connect WhatsApp channels and other company connections.'],companies:['Companies','Manage company names and access.'],workflow:['Work rules','Pipelines, stages, employee permissions and approvals.'],advanced:['Diagnostics','System status and technical checks.'],title:'Advanced settings',description:'Adjust company workflows and technical settings when needed.'}
+    az:{notifications:['Bildirişlər','Hadisələr üçün kabinet və Web Push bildirişlərini seçin.'],employees:['Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],integrations:['İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],companies:['Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],workflow:['İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],advanced:['Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.'],title:'Geniş ayarlar',description:'Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.'},
+    ru:{notifications:['Уведомления','Выберите уведомления в кабинете и Web Push для событий.'],employees:['Сотрудники','Приглашения, запросы доступа и команда.'],integrations:['Интеграции','Управляйте Connect WhatsApp и другими подключениями компании.'],companies:['Компании','Управляйте компаниями и доступом.'],workflow:['Правила работы','Воронки, этапы, права сотрудников и подтверждения.'],advanced:['Диагностика','Состояние системы и технические проверки.'],title:'Дополнительные настройки',description:'При необходимости настройте рабочие процессы и технические параметры компании.'},
+    en:{notifications:['Notifications','Choose in-app and Web Push notifications for events.'],employees:['Employees','Invitations, access requests and your team.'],integrations:['Integrations','Manage Connect WhatsApp channels and other company connections.'],companies:['Companies','Manage company names and access.'],workflow:['Work rules','Pipelines, stages, employee permissions and approvals.'],advanced:['Diagnostics','System status and technical checks.'],title:'Advanced settings',description:'Adjust company workflows and technical settings when needed.'}
   };
-  const groups = ['employees','integrations','companies','workflow','advanced'];
+  const groups = ['notifications','employees','integrations','companies','workflow','advanced'];
   const pageCopy={ru:['Настройки','Управляйте командой, правами и рабочими процессами компании.'],az:['Tənzimləmələr','Komandanı, hüquqları və şirkətin iş qaydalarını idarə edin.'],en:['Settings','Manage your team, access rights and company workflows.']};
   const settingsLanguage=()=>settingsCopy[window.tenantI18n?.language||document.documentElement.lang]||settingsCopy.az;
   let section = 'employees';
@@ -89,6 +92,7 @@
     // The member manager is the only employee editor.  Chakra keeps personal
     // account, notification and session preferences under Diagnostics.
     if (panel.id === 'staffManagement') return 'employees';
+    if (panel.id === 'chakra-notification-settings-root') return 'notifications';
     if (panel.id === 'chakra-settings-root') return 'advanced';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
     if (['companyManagement','summaryLanguageSettings'].includes(panel.id)) return 'companies';
@@ -105,7 +109,7 @@
     if(heading?.querySelector('p'))heading.querySelector('p').textContent=page[1];
     sections.querySelectorAll('[data-settings-tab]').forEach(button=>{button.textContent=languageCopy[button.dataset.settingsTab][0];});
     advancedTitle.querySelector('h2').textContent=languageCopy.title;advancedTitle.querySelector('p').textContent=languageCopy.description;
-    const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
+    const panels = [...settings.querySelectorAll(':scope > #chakra-notification-settings-root,:scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const staffDenied=panel=>panel.id==='staffManagement'&&panel.dataset.staffAllowed==='false';
     const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration'&&!staffDenied(panel));
     const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
@@ -121,7 +125,7 @@
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
   window.tenantOpenSettingsSection = target => {
     if(target==='employees'&&document.getElementById('view-employees')){const entry=document.getElementById('companyEmployeesNav');if(entry)entry.click();return;}
-    if (['integrations','ai','notifications'].includes(target)) {
+    if (['integrations','ai'].includes(target)) {
       document.querySelector('.nav [data-view="integrations"]')?.click();
       return;
     }

@@ -16,7 +16,7 @@
   const snapshot = data => JSON.stringify([data?.member, data?.integrations]);
   const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
     data.member.role === 'owner' || binding(data)?.can_review_news === true));
-  const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-integrations-root,' +
+  const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
     '#integrationMarketplaceDialog,#tenantLinearPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
   const style = document.createElement('style');
   style.textContent = protectedSelector.split(',').map(selector =>
