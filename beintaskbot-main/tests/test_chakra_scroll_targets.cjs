@@ -1,0 +1,35 @@
+/* Render the shipped React/Chakra bundle, not a hand-written scroll wrapper. */
+const {JSDOM,VirtualConsole}=require('../.support-test-deps/node_modules/jsdom');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const read=name=>fs.readFileSync(path.join(__dirname,'../docs',name),'utf8');
+const errors=[],consoleSink=new VirtualConsole();
+consoleSink.on('jsdomError',error=>{if(!String(error.type).includes('css'))errors.push(error);});
+const dom=new JSDOM('<body><main><section class="view"><h1>CRM</h1><div id="tableHost"></div><div id="kanbanHost"></div></section></main></body>',{url:'https://fixture.test/app',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:consoleSink});
+const w=dom.window,d=w.document;
+w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});
+w.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}};
+w.tenantViewDemand={watch(){}};
+w.fetch=()=>{throw new Error('No external requests allowed in scroll target test');};
+const observers=[],NativeMutationObserver=w.MutationObserver;
+w.MutationObserver=class extends NativeMutationObserver{constructor(callback){super(callback);observers.push(this);}};
+Object.defineProperty(w.HTMLElement.prototype,'clientWidth',{get(){return this.matches('[data-horizontal-scroll]')?500:0;}});
+Object.defineProperty(w.HTMLElement.prototype,'scrollWidth',{get(){return this.matches('[data-horizontal-scroll]')?1600:0;}});
+w.HTMLElement.prototype.getBoundingClientRect=function(){return {top:100,bottom:500,left:0,right:500,width:this.clientWidth,height:400};};
+const tick=()=>new Promise(r=>w.requestAnimationFrame(()=>w.requestAnimationFrame(r)));
+(async()=>{
+ w.eval(read('tenant-chakra-ui.js'));
+ const rows=Array.from({length:5},(_,i)=>({kommo_lead_id:i+1,name:'Synthetic deal '+i,stage_name:'Stage '+i}));
+ w.tenantChakraCRM.renderDeals('tableHost',rows,true);
+ w.tenantChakraCRM.renderDeals('kanbanHost',rows,false);
+ for(let n=0;n<20&&d.querySelectorAll('[data-horizontal-scroll]').length<2;n++)await tick();
+ const table=d.querySelector('#tableHost [data-horizontal-scroll]'),kanban=d.querySelector('#kanbanHost [data-horizontal-scroll]');
+ assert(table?.querySelector('table'),'actual Chakra Table.ScrollArea retains the discovery attribute');
+ assert(kanban&&kanban.textContent.includes('Stage 4'),'actual DealKanban Flex retains the discovery attribute');
+ w.eval(read('tenant-horizontal-scroll.js'));await tick();
+ assert(table.classList.contains('app-horizontal-scrollport')&&kanban.classList.contains('app-horizontal-scrollport'),'both shipped wrappers are discovered');
+ const control=d.getElementById('appHorizontalScroll'),slider=control.querySelector('input');assert(!control.hidden);
+ table.dispatchEvent(new w.Event('pointerover',{bubbles:true}));await tick();slider.value='500';slider.dispatchEvent(new w.Event('input'));assert.equal(table.scrollLeft,550);
+ kanban.dispatchEvent(new w.Event('pointerover',{bubbles:true}));await tick();slider.value='250';slider.dispatchEvent(new w.Event('input'));assert.equal(kanban.scrollLeft,275);assert.equal(table.scrollLeft,550);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: shipped Chakra table and CRM kanban render discoverable wrappers controlled independently by the compact slider.');
+})().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>{observers.forEach(observer=>observer.disconnect());w.close();});

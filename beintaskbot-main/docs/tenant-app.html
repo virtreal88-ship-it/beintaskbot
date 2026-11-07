@@ -92,8 +92,8 @@
     #supportCases .support-cases-rejected{display:flex;align-items:center;gap:9px;margin:0 0 18px;color:var(--muted);font-size:14px}
     #supportCases .support-cases-rejected input{width:18px;height:18px;margin:0;accent-color:var(--brand)}
     #supportCases .support-cases-summary{margin:0 0 12px;color:var(--muted);font-size:14px}
-    #supportCases .support-cases-list{overflow:hidden;border-radius:12px;background:var(--card)}
-    #supportCases .support-cases-table{width:100%;min-width:0;table-layout:fixed;border-collapse:collapse}
+    #supportCases .support-cases-list{overflow-x:auto;border-radius:12px;background:var(--card)}
+    #supportCases .support-cases-table{width:100%;min-width:980px;table-layout:fixed;border-collapse:collapse}
     #supportCases .support-cases-table th,#supportCases .support-cases-table td{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;overflow-wrap:anywhere}
     #supportCases .support-cases-table th{height:50px;background:color-mix(in srgb,var(--paper) 80%,var(--card));font-size:13px;color:var(--muted);white-space:nowrap}
     #supportCases .support-cases-table td{height:66px;font-size:14px}
@@ -112,10 +112,18 @@
     #supportCases .support-case-open{width:34px;height:34px;padding:0;font-size:24px;line-height:1}
     html[data-app-theme=dark] #supportCases .support-case-status[data-case-status="needs_clarification"],html[data-app-theme=dark] #supportCases .case-result.is-unconfirmed{color:#ffd28a}html[data-app-theme=dark] #supportCases .outline{background:var(--card);color:var(--brand-deep);border-color:var(--line)}html[data-app-theme=dark] #supportCases .primary{background:var(--brand);color:#08140f}html[data-app-theme=dark] #supportCases .support-cases-search{background:var(--card)}html[data-app-theme=dark] #supportCases .support-cases-table .case-readiness{padding:1px 4px;border-radius:4px;background:color-mix(in srgb,var(--danger) 14%,var(--card));font-weight:700}
     @media(max-width:1100px){#supportCases .support-cases-table th,#supportCases .support-cases-table td{padding:10px 7px;font-size:12px}#supportCases .support-case-status{padding:4px 6px}}
-    @media(max-width:760px){#supportCases .support-cases-heading{align-items:flex-start}#supportCases .support-cases-heading-actions{gap:6px}#supportCases .support-cases-heading-actions button{min-height:40px;padding:8px 10px;font-size:12px}#supportCases .support-cases-toolbar{grid-template-columns:auto minmax(0,1fr);gap:7px}#supportCases .support-cases-search{height:42px;padding:0 10px}#supportCases .support-cases-filter>summary{height:42px;min-width:76px;padding:0 9px}#supportCases .support-cases-table th,#supportCases .support-cases-table td{padding:8px 5px;font-size:11px}#supportCases .support-cases-table th:nth-child(1){width:15%}#supportCases .support-cases-table th:nth-child(2){width:31%}#supportCases .support-cases-table th:nth-child(3){width:0}#supportCases .support-cases-table th:nth-child(3),#supportCases .support-cases-table td:nth-child(3){display:none}#supportCases .support-cases-table th:nth-child(4){width:20%}#supportCases .support-cases-table th:nth-child(5){width:0}#supportCases .support-cases-table th:nth-child(5),#supportCases .support-cases-table td:nth-child(5){display:none}#supportCases .support-cases-table th:nth-child(6){width:22%}#supportCases .support-cases-table th:nth-child(7){width:7%}#supportCases .support-cases-table th:nth-child(8){width:5%}#supportCases .support-case-channel-icon{display:none}#supportCases .support-cases-table .support-case-mobile-meta{display:block;margin-top:2px;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    @media(max-width:760px){#supportCases .support-cases-heading{align-items:flex-start}#supportCases .support-cases-heading-actions{gap:6px}#supportCases .support-cases-heading-actions button{min-height:40px;padding:8px 10px;font-size:12px}#supportCases .support-cases-toolbar{grid-template-columns:auto minmax(0,1fr);gap:7px}#supportCases .support-cases-search{height:42px;padding:0 10px}#supportCases .support-cases-filter>summary{height:42px;min-width:76px;padding:0 9px}}
 
-    @media(max-width:760px){#supportCases .support-cases-list{overflow:hidden}#supportCases .support-cases-table{display:block;width:100%;min-width:0}#supportCases .support-cases-table thead{display:none}#supportCases .support-cases-table tbody{display:grid;gap:8px;padding:8px}#supportCases .support-cases-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"date status" "subject status" "customer customer" "outcome action";gap:5px 8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card)}#supportCases .support-cases-table td{display:block;width:auto!important;height:auto;min-width:0;border:0;padding:0!important;font-size:12px}#supportCases .support-cases-table td:nth-child(1){grid-area:date}#supportCases .support-cases-table td:nth-child(2){grid-area:subject}#supportCases .support-cases-table td:nth-child(4){grid-area:customer}#supportCases .support-cases-table td:nth-child(6){grid-area:status;align-self:center;max-width:112px}#supportCases .support-cases-table td:nth-child(7){grid-area:outcome;justify-self:start}#supportCases .support-cases-table td:nth-child(8){grid-area:action;justify-self:end}#supportCases .support-cases-table td:first-child b{display:inline;margin-right:6px;font-size:12px}#supportCases .support-cases-table td:first-child small{display:inline;margin:0;font-size:11px}#supportCases .support-cases-table td:nth-child(2)>div{min-width:0}#supportCases .support-cases-table td:nth-child(2)>div>b{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:13px;line-height:1.3}#supportCases .support-cases-table .support-case-topic{margin-top:3px;font-size:10px}#supportCases .support-cases-table .case-readiness{font-size:9px}#supportCases .support-cases-table .support-case-mobile-meta{display:block;margin-top:2px;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#supportCases .support-cases-table td:nth-child(4) .support-case-identity{display:inline;overflow-wrap:anywhere}#supportCases .support-case-status{font-size:10px;padding:5px 6px}#supportCases .support-case-open{width:30px;height:30px}}
-</style>
+
+
+    /* Keep wide data in its own scrollport, rather than stacking or clipping columns. */
+    main,.view{min-width:0}
+    .table{max-width:100%;overflow-x:auto}
+    .table>.row:has(>:nth-child(4)){width:100%;min-width:720px;grid-template-columns:minmax(220px,1.4fr) minmax(120px,.8fr) minmax(130px,.8fr) minmax(120px,.7fr);gap:18px}
+    .table>.row>div{min-width:0;overflow-wrap:anywhere}
+    .table>.row>.hide-mobile{display:block}
+    html[data-chakra-ui=ready] :is(#tasksList,#customersList,#dealsList):has(>.row){overflow-x:auto}
+  </style>
 <style>
   .support-case-modal{padding:0;background:rgba(4,9,15,.78)}
   .support-case-detail{position:relative;box-sizing:border-box;width:min(88vw,1400px);height:min(90vh,1000px);max-height:90vh;padding:0;overflow:hidden;grid-template-rows:auto minmax(0,1fr) auto;gap:0;border:1px solid #27323c;border-radius:10px;background:#f8fafb;color:#14202b;box-shadow:0 24px 80px #0009}
@@ -667,4 +675,5 @@
 <script src="/assets/tenant-telegram-binding.js"></script>
 <script type="module" src="/assets/tenant-chakra-ui.js"></script>
 <script src="/assets/tenant-pwa.js"></script>
+<script src="/assets/tenant-horizontal-scroll.js"></script>
 </body></html>

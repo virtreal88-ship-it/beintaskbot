@@ -1,0 +1,39 @@
+name: Page horizontal scroll
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-linear-board.js'
+      - 'beintaskbot-main/docs/tenant-horizontal-scroll.js'
+      - 'beintaskbot-main/tests/test_horizontal_scroll_control.cjs'
+      - 'beintaskbot-main/tests/test_chakra_scroll_targets.cjs'
+      - 'beintaskbot-main/ui/src/app-theme.css'
+      - 'beintaskbot-main/ui/src/main.jsx'
+      - 'beintaskbot-main/docs/tenant-chakra-ui.js'
+      - 'beintaskbot-main/tests/test_page_horizontal_scroll.cjs'
+      - 'beintaskbot-main/tests/test_tenant_linear_board.cjs'
+      - '.github/workflows/page-horizontal-scroll.yml'
+  workflow_dispatch:
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify scoped Linear interactions
+        run: node beintaskbot-main/tests/test_tenant_linear_board.cjs
+      - name: Install isolated DOM test dependency
+        run: npm install --prefix beintaskbot-main/.support-test-deps --no-save jsdom@26
+      - name: Verify compact scroll control behavior
+        run: node beintaskbot-main/tests/test_horizontal_scroll_control.cjs
+      - name: Verify shipped Chakra scroll targets
+        run: node beintaskbot-main/tests/test_chakra_scroll_targets.cjs
+      - name: Verify desktop and narrow-screen geometry with synthetic data
+        env:
+          CHROMIUM: google-chrome
+        run: node beintaskbot-main/tests/test_page_horizontal_scroll.cjs
