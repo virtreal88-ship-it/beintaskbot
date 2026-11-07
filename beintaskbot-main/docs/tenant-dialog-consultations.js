@@ -207,6 +207,7 @@
   document.addEventListener('tenant-chat-attachments-ready',()=>{mount();render();void load();});
   document.addEventListener('tenant-view',event=>{viewRevision++;if(event.detail?.view!=='dialogs'&&focused)leaveReplyView();});
   document.addEventListener('tenant-consultation-changed',()=>void load());
+  document.addEventListener('tenant-risk-alert-read',()=>void loadNotifications());
   document.addEventListener('tenant-language',()=>{render();if($('dialogConsultationStart'))$('dialogConsultationStart').textContent=t('consult');if($('dialogHelperTypeLabel'))$('dialogHelperTypeLabel').textContent=t('helperType');const type=$('dialogHelperType');if(type){type.setAttribute('aria-label',t('helperType'));for(const option of type.options)option.textContent=t(option.value==='Helper'?'helper':'developer');}const marker=$('dialogDeveloperMarker');if(marker)marker.textContent=t(marker.dataset.enabled==='true'?'unmark':'mark');if($('dialogDeveloperBadge'))$('dialogDeveloperBadge').textContent=t('badge');document.querySelectorAll('[data-developer-empty]').forEach(node=>node.textContent=t('noTargets'));});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void load();});
   const timer=setInterval(()=>{if(!document.hidden)void load();},60000);window.addEventListener('beforeunload',()=>clearInterval(timer));mount();void load();

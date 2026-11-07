@@ -10,6 +10,8 @@ pytest.importorskip('psycopg')
 import tenant_account_store as account_store
 import tenant_member_store
 import tenant_telegram_binding
+import tenant_proactive_risk_delivery
+import tenant_proactive_risk_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 TENANT = '00000000-0000-0000-0000-000000000101'
@@ -123,5 +125,13 @@ def test_save_updates_only_current_members_notification_preferences(monkeypatch)
         assert saved_again[str(ACTOR)]['notifications'] == updated
         assert saved_again[str(ACTOR)]['ai_agents_manage'] is True
         assert saved_again[str(OTHER_ACTOR)]['notifications'] == {'incoming_message': {'push': False}}
+
+        registered=[]
+        monkeypatch.setattr(tenant_proactive_risk_schema,'ensure_schema',lambda _conn:None)
+        monkeypatch.setattr(tenant_proactive_risk_delivery,'register_baseline_backfill',
+            lambda cur,tenant,owner: registered.append((tenant,owner)))
+        risk_opt_in={'proactive_risk':{'internal':True,'push':True}}
+        account_store.notification_preferences(tenant_id=TENANT,actor_id=ACTOR,value=risk_opt_in)
+        assert registered==[(TENANT,ACTOR)]
     finally:
         database.close()

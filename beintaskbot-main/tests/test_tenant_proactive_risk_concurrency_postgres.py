@@ -85,6 +85,34 @@ def test_concurrent_first_observation_enqueues_one_alert(risk_postgres):
     assert count == 1
 
 
+def test_concurrent_baseline_backfill_enqueues_one_owner_alert(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: [])
+    _observe(dsn, schema, tenant, 8)  # persisted before risk opt-in
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: ['internal'])
+    with _profiled_connection(dsn, schema) as conn:
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_backfills(tenant_id,owner_id)
+          VALUES(%s,101)''', (tenant,))
+    monkeypatch.setattr(delivery, 'current_finding', lambda _cur, event, _profile: event)
+
+    gate = Barrier(2)
+    def seed(_n):
+        gate.wait(timeout=10)
+        with _profiled_connection(dsn, schema) as conn:
+            with conn.cursor() as cur:
+                count = delivery._seed_baseline_alerts(cur)
+            conn.commit()
+            return count
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        counts = list(pool.map(seed, range(2)))
+    with _profiled_connection(dsn, schema) as conn:
+        rows = conn.execute('''SELECT recipient_id,source_id,state FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid''', (tenant,)).fetchall()
+    assert sorted(counts) == [0, 1]
+    assert rows == [{'recipient_id':101,'source_id':'8','state':'pending'}]
+
+
 def test_parallel_sources_cannot_exceed_daily_tenant_limit(risk_postgres):
     dsn, schema, tenant = risk_postgres
     with ThreadPoolExecutor(max_workers=12) as pool:

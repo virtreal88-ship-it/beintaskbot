@@ -166,6 +166,47 @@ class TestRiskAlertPostgres:
         assert self.query("SELECT state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid AND source_id='510'", (TENANT,))[0]['state'] == 'cancelled'
         assert self.query('SELECT id FROM saas_tenant_notifications') == []
 
+    def test_opt_in_backfills_existing_finding_once_and_owner_only(self):
+        self.preferences[OWNER] = {}
+        self.record()
+        assert self.query('SELECT id FROM saas_proactive_risk_alert_events') == []
+        self.preferences[OWNER] = {'internal': True, 'push': True}
+        with self.db.cursor() as cur:
+            assert delivery.register_baseline_backfill(cur, TENANT, OWNER)
+        assert delivery.expand_events() == 1
+        self.assertBellAndPush()
+        assert self.query('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid AND recipient_id=%s''', (TENANT, OWNER))[0]['n'] == 1
+
+        # Repeated worker ticks and saving the same opt-in after reload/restart
+        # do not enqueue another delivery for the same finding.
+        with self.db.cursor() as cur:
+            assert not delivery.register_baseline_backfill(cur, TENANT, OWNER)
+        assert delivery.expand_events() == 0
+        assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications')[0]['n'] == 1
+        assert self.query('SELECT count(*) AS n FROM saas_proactive_risk_alert_events')[0]['n'] == 1
+
+    def test_baseline_skips_stale_crm_then_fresh_observation_can_alert(self):
+        self.preferences[OWNER] = {}
+        self.record()
+        self.preferences[OWNER] = {'internal': True, 'push': True}
+        self.query('''UPDATE saas_crm_tasks SET synced_at=%s
+          WHERE tenant_id=%s::uuid AND kommo_task_id=%s''',
+          (NOW-timedelta(hours=1),TENANT,int(SOURCE_ID)))
+        with self.db.cursor() as cur:
+            delivery.register_baseline_backfill(cur,TENANT,OWNER)
+        assert delivery.expand_events() == 0
+        assert self.query('SELECT id FROM saas_tenant_notifications') == []
+        assert self.query('SELECT id FROM saas_proactive_risk_alert_events') == []
+
+        # Once the source sync is fresh again, an unchanged stored finding with
+        # no prior event is eligible, while its source is still revalidated.
+        self.query('''UPDATE saas_crm_tasks SET synced_at=%s
+          WHERE tenant_id=%s::uuid AND kommo_task_id=%s''', (NOW,TENANT,int(SOURCE_ID)))
+        self.record()
+        assert delivery.expand_events() == 1
+        self.assertBellAndPush()
+
     def test_owner_change_and_tenant_isolation_cancel_delivery(self):
         self.record()
         self.query('UPDATE saas_tenants SET owner_telegram_id=999 WHERE id=%s::uuid', (TENANT,))
@@ -245,6 +286,15 @@ class TestRiskAlertPostgres:
         self.record()
         alert_id=str(self.query('SELECT id FROM saas_proactive_risk_alert_events')[0]['id'])
         self.query("UPDATE saas_proactive_risk_alert_events SET state='expanded'")
+        alert_key='proactive_risk:'+alert_id
+        self.query('''INSERT INTO saas_tenant_notifications
+          (id,tenant_id,telegram_id,event_key,title,body,target_url)
+          VALUES(%s::uuid,%s::uuid,%s,%s,'Risk','Neutral','/app')''',
+          (str(uuid.uuid4()),TENANT,OWNER,alert_key))
+        self.query('''INSERT INTO saas_tenant_notifications
+          (id,tenant_id,telegram_id,event_key,title,body,target_url)
+          VALUES(%s::uuid,%s::uuid,%s,'task_assigned','Task','Other event','/app')''',
+          (str(uuid.uuid4()),TENANT,OWNER))
         monkeypatch.setattr(risk_store,'_connect',lambda:self.db)
         monkeypatch.setattr(risk_store,'ensure_schema',lambda _conn:None)
         finding={'source_kind':'crm_task','source_id':SOURCE_ID,'source':'CRM task','source_title':'CRM task 509',
@@ -257,6 +307,9 @@ class TestRiskAlertPostgres:
         assert detail['source_title']=='CRM task 509'
         assert detail['facts']==['Task is overdue']
         assert detail['source_url']=='/app?view=tasks'
+        read=self.query('SELECT event_key,read_at FROM saas_tenant_notifications ORDER BY event_key')
+        assert next(row for row in read if row['event_key']==alert_key)['read_at'] is not None
+        assert next(row for row in read if row['event_key']=='task_assigned')['read_at'] is None
         with pytest.raises(TenantLinearError) as denied:
             risk_store.alert_detail({**owner,'role':'admin'},alert_id)
         assert denied.value.status==403

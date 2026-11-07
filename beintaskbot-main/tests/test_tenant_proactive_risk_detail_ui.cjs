@@ -18,6 +18,7 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
  const dom=new JSDOM('<!doctype html><body></body>',{url:'https://crm.pro.az/app',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window,d=w.document;let resolveOld;
  const owner=tenant=>({member:{tenant_id:tenant,telegram_id:101,role:'owner',active:true}});
+ const readEvents=[];d.addEventListener('tenant-risk-alert-read',event=>readEvents.push(event.detail?.alert_id));
  w.tenantProfileSnapshot=owner('tenant-a');
  w.fetch=()=>new Promise(resolve=>{resolveOld=resolve;});
  w.eval(source);
@@ -27,6 +28,7 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
  resolveOld({ok:true,status:200,json:async()=>({success:true,alert:{source_kind:'crm_task',source_title:'OLD TENANT SECRET',facts:['private'],source_url:'/app?view=tasks'}})});
  await sleep(15);
  assert.equal(d.querySelector('[role="dialog"]'),null,'late response from previous tenant is discarded');
+ assert.equal(readEvents.length,0,'late response cannot acknowledge an alert from another tenant');
  assert(!d.body.textContent.includes('OLD TENANT SECRET'));
  assert.equal(w.location.search,'','tenant change removes the alert route');
 
@@ -37,10 +39,12 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
  await until(()=>!!d.querySelector('[role="dialog"] h2'),'CRM risk detail did not load');
  const dialog=d.querySelector('[role="dialog"]');
  assert.equal(dialog.querySelector('h2').textContent,'CRM task 509');
+ assert.equal(readEvents[0],id,'opening an authorized risk detail refreshes the bell read state');
  const crmLink=dialog.querySelector('a[href="/app?view=tasks"]');assert(crmLink,'CRM source link is present and stays inside the app');
  assert(dialog.textContent.includes('Task text reports a service issue.'));
  w.history.back();await until(()=>!d.querySelector('[role="dialog"]'),'Back did not close the risk detail');
  w.history.forward();await until(()=>!!d.querySelector('[role="dialog"]'),'Forward did not reopen the risk detail');
+ assert(readEvents.length>=2,'opening the push/deep link marks its risk notification read idempotently');
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:owner('tenant-c')}));
  assert.equal(d.querySelector('[role="dialog"]'),null,'profile switch closes the detail');
  assert(!d.body.textContent.includes('CRM task 509'));

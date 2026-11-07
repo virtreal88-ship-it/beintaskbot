@@ -19,6 +19,7 @@ from tenant_proactive_risk_schema import ensure_schema
 
 MAX_RISK_ALERTS_PER_DAY = 10
 MAX_RISK_EVENTS_PER_TICK = 5
+MAX_BASELINE_FINDINGS_PER_TICK = 5
 MAX_PUSH_ATTEMPTS_PER_TICK = 5
 CRM_SOURCE_MAX_AGE = timedelta(minutes=15)
 RISK_EVENT = 'proactive_risk'
@@ -90,6 +91,111 @@ def _queue_new_finding(cur, tenant: str, source_kind: str, source_id: str,
     return str(event_id) if cur.fetchone() else None
 
 
+def _event_exists(cur, tenant: str, source_kind: str, source_id: str,
+                  rule_id: str, source_scope: str, signature: str) -> bool:
+    cur.execute('''SELECT 1 FROM saas_proactive_risk_alert_events
+      WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s AND rule_id=%s
+        AND source_scope=%s AND alert_fingerprint=%s LIMIT 1''',
+      (tenant, source_kind, str(source_id), rule_id, str(source_scope), signature))
+    return cur.fetchone() is not None
+
+
+def register_baseline_backfill(cur, tenant: str, owner_id: int) -> bool:
+    """Register one bounded initial review after the owner saves risk opt-in."""
+    profile = _owner_profile(cur, str(tenant), int(owner_id))
+    if not profile or not _channels(profile, str(tenant)):
+        return False
+    cur.execute('''INSERT INTO saas_proactive_risk_alert_backfills(tenant_id,owner_id)
+      VALUES(%s::uuid,%s) ON CONFLICT(tenant_id,owner_id) DO NOTHING RETURNING tenant_id''',
+      (str(tenant), int(owner_id)))
+    return cur.fetchone() is not None
+
+
+def _seed_baseline_alerts(cur, limit: int = MAX_BASELINE_FINDINGS_PER_TICK) -> int:
+    """Queue a bounded, one-time pass over stored findings for opted-in owners.
+
+    Pending events still pass the normal owner, preference, source-scope and
+    live-evidence checks before they can create a bell item or push delivery.
+    """
+    safe_limit = max(1, min(int(limit), MAX_BASELINE_FINDINGS_PER_TICK))
+    cur.execute("""SELECT * FROM saas_proactive_risk_alert_backfills
+      WHERE state='pending' ORDER BY updated_at,tenant_id,owner_id
+      LIMIT 1 FOR UPDATE SKIP LOCKED""")
+    job = cur.fetchone()
+    if not job:
+        return 0
+    tenant = str(job['tenant_id'])
+    owner_id = int(job['owner_id'])
+    profile = _owner_profile(cur, tenant, owner_id)
+    if not profile:
+        cur.execute("""UPDATE saas_proactive_risk_alert_backfills SET state='done',updated_at=now()
+          WHERE tenant_id=%s::uuid AND owner_id=%s""", (tenant, owner_id))
+        return 0
+    channels = _channels(profile, tenant)
+    if not channels:
+        # Keep the cursor; a later explicit re-opt-in can resume the same job.
+        cur.execute('''UPDATE saas_proactive_risk_alert_backfills SET updated_at=now()
+          WHERE tenant_id=%s::uuid AND owner_id=%s''', (tenant, owner_id))
+        return 0
+
+    cursor = (job.get('cursor_source_kind') or '', job.get('cursor_source_id') or '',
+              job.get('cursor_rule_id') or '')
+    cur.execute('''SELECT source_kind,source_id,rule_id,source_scope,source_version,
+                          severity,confidence,source_title
+      FROM saas_proactive_risk_findings
+      WHERE tenant_id=%s::uuid AND active=TRUE
+        AND (severity='P1' OR (severity='P2' AND confidence IN ('medium','high')))
+        AND (source_kind,source_id,rule_id)>(%s,%s,%s)
+      ORDER BY source_kind,source_id,rule_id LIMIT %s''', (tenant, *cursor, safe_limit))
+    rows = cur.fetchall()
+    if not rows:
+        cur.execute("""UPDATE saas_proactive_risk_alert_backfills SET state='done',updated_at=now()
+          WHERE tenant_id=%s::uuid AND owner_id=%s""", (tenant, owner_id))
+        return 0
+
+    queued = 0
+    last = cursor
+    for row in rows:
+        row_key = (str(row['source_kind']), str(row['source_id']), str(row['rule_id']))
+        lock_source_transition(cur, tenant, row_key[0], row_key[1])
+        cur.execute('''SELECT source_kind,source_id,rule_id,source_scope,source_version,
+                              severity,confidence,source_title
+          FROM saas_proactive_risk_findings WHERE tenant_id=%s::uuid AND source_kind=%s
+            AND source_id=%s AND rule_id=%s AND active=TRUE FOR UPDATE''',
+          (tenant, *row_key))
+        current = cur.fetchone()
+        if current and alertable(current):
+            signature = alert_fingerprint(current)
+            if not _event_exists(cur, tenant, current['source_kind'], current['source_id'],
+                                 current['rule_id'], current['source_scope'], signature):
+                candidate = {**current, 'tenant_id':tenant, 'recipient_id':owner_id,
+                             'alert_fingerprint':signature}
+                if current_finding(cur, candidate, profile):
+                    event_id = _queue_new_finding(cur, tenant, current['source_kind'], current['source_id'],
+                        current['source_scope'], current['source_version'], current)
+                    if event_id:
+                        queued += 1
+                    else:
+                        # Opt-in, owner or scope changed while this batch was running.
+                        # Retry this row after access/preferences are restored.
+                        break
+        last = row_key
+        cur.execute('''UPDATE saas_proactive_risk_alert_backfills
+          SET cursor_source_kind=%s,cursor_source_id=%s,cursor_rule_id=%s,updated_at=now()
+          WHERE tenant_id=%s::uuid AND owner_id=%s''', (*last, tenant, owner_id))
+
+    if last != cursor:
+        cur.execute('''SELECT 1 FROM saas_proactive_risk_findings
+          WHERE tenant_id=%s::uuid AND active=TRUE
+            AND (severity='P1' OR (severity='P2' AND confidence IN ('medium','high')))
+            AND (source_kind,source_id,rule_id)>(%s,%s,%s) LIMIT 1''',
+          (tenant, *last))
+        if not cur.fetchone():
+            cur.execute("""UPDATE saas_proactive_risk_alert_backfills SET state='done',updated_at=now()
+              WHERE tenant_id=%s::uuid AND owner_id=%s""", (tenant, owner_id))
+    return queued
+
+
 def _cancel_event(cur, tenant: str, event_id) -> None:
     cur.execute("""UPDATE saas_proactive_risk_alert_events SET state='cancelled'
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND state IN ('pending','expanded')""", (tenant, event_id))
@@ -99,14 +205,15 @@ def _cancel_event(cur, tenant: str, event_id) -> None:
 
 def record_finding_transitions(cur, tenant: str, source_kind: str, source_id: str,
                                source_scope: str, source_version: str,
-                               previous: dict[str, str], findings: list[dict]) -> None:
-    """Queue only new/escalated important findings, then cancel stale work."""
+                               findings: list[dict]) -> None:
+    """Queue important findings with no prior alert, then cancel stale work."""
     current = {(str(source_scope), str(item.get('rule_id')), alert_fingerprint(item))
                for item in findings if alertable(item)}
     for item in findings:
         rule = str(item.get('rule_id') or '')
         signature = alert_fingerprint(item)
-        if alertable(item) and previous.get(rule) != signature:
+        if (alertable(item) and not _event_exists(cur, tenant, source_kind, str(source_id), rule,
+                                                   source_scope, signature)):
             _queue_new_finding(cur, tenant, source_kind, str(source_id), source_scope,
                                str(source_version), item)
     cur.execute('''SELECT id,rule_id,alert_fingerprint,source_scope
@@ -225,6 +332,7 @@ def expand_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            _seed_baseline_alerts(cur)
             cur.execute('''SELECT * FROM saas_proactive_risk_alert_events
               WHERE state='pending' ORDER BY created_at,id LIMIT %s FOR UPDATE SKIP LOCKED''', (safe_limit,))
             for event in cur.fetchall():

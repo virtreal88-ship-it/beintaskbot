@@ -15,12 +15,8 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
     """Replace the current risk view atomically when a source is observed."""
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
-    from tenant_proactive_risk_delivery import alert_fingerprint, lock_source_transition, record_finding_transitions
+    from tenant_proactive_risk_delivery import lock_source_transition, record_finding_transitions
     lock_source_transition(cur, str(tenant_id), source_kind, str(source_id))
-    cur.execute('''SELECT rule_id,severity,confidence FROM saas_proactive_risk_findings
-      WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s FOR UPDATE''',
-      (tenant_id, source_kind, str(source_id)))
-    previous = {str(row['rule_id']): alert_fingerprint(row) for row in cur.fetchall()}
     cur.execute('DELETE FROM saas_proactive_risk_findings WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s',
                 (tenant_id, source_kind, str(source_id)))
     digest = fingerprint(findings)
@@ -40,7 +36,7 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
            json.dumps(item.get('facts') or [], ensure_ascii=False), str(item['assessment'])[:800],
            str(item['recommended_step'])[:400], digest, source_checked_at))
     record_finding_transitions(cur, str(tenant_id), source_kind, str(source_id),
-                               str(source_scope), str(source_version), previous, findings)
+                               str(source_scope), str(source_version), findings)
 
 
 def mark_checked(cur, tenant_id: str, source_kind: str, source_scope: str = '') -> None:
@@ -158,8 +154,17 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             event = cur.fetchone()
             if not event:
                 raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404)
+            # Opening the risk-specific bell or push deep link acknowledges only
+            # the matching risk entry. Push-only alerts simply have no bell row.
+            cur.execute('''UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now())
+              WHERE tenant_id=%s::uuid AND telegram_id=%s AND event_key=%s AND read_at IS NULL''',
+              (tenant, actor, 'proactive_risk:' + alert_id))
             finding = current_finding(cur, event, profile)
             if not finding:
+                # The owner opened this exact authorized alert, but its source
+                # has gone stale. Keep the acknowledgement while failing closed
+                # on the detail itself.
+                conn.commit()
                 raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
             conn.commit()
             finding['checked_at'] = datetime.now(timezone.utc).isoformat()

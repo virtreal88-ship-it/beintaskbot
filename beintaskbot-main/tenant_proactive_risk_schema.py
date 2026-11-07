@@ -82,5 +82,18 @@ def ensure_schema(conn) -> None:
               WHERE status='pending' ''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_sending_idx
               ON saas_proactive_risk_alert_deliveries(updated_at) WHERE status='sending' ''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_proactive_risk_alert_backfills (
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              owner_id BIGINT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done')),
+              cursor_source_kind TEXT NOT NULL DEFAULT '',
+              cursor_source_id TEXT NOT NULL DEFAULT '',
+              cursor_rule_id TEXT NOT NULL DEFAULT '',
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,owner_id)
+            )''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_backfill_pending_idx
+              ON saas_proactive_risk_alert_backfills(updated_at,tenant_id) WHERE state='pending' ''')
         conn.commit()
         _ready = True

@@ -1,4 +1,4 @@
-"""Read-only owner view of risk findings and alert opt-in state."""
+"""Owner view of risk findings and acknowledged, source-revalidated alerts."""
 import asyncio
 from aiohttp import web
 from tenant_linear_policy import TenantLinearError
