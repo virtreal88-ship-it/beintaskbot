@@ -288,7 +288,7 @@ def test_two_parallel_push_claims_do_not_upgrade_shared_tenant_lock(risk_postgre
               VALUES(%s,%s,101,'push','device-hash','pending')''',(tenant,event_id))
 
     gate=Barrier(2)
-    def authorize(cur,item,*,channel=None):
+    def authorize(cur,item,**_kwargs):
         owner=delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id']))
         gate.wait(timeout=10)
         return owner,True
