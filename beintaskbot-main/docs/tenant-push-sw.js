@@ -6,7 +6,14 @@ function allowedTarget(value){
     const url=new URL(value||'/app',self.location.origin);
     if(url.origin!==self.location.origin||url.pathname!=='/app')return '/app';
     const view=url.searchParams.get('view')||'';
-    if(['tasks','customers','hot_orders','approvals','linear'].includes(view))return url.pathname+url.search;
+    if(view==='linear'){
+      const alert=url.searchParams.get('risk_alert_id');
+      if(alert&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(alert)
+        &&[...url.searchParams.keys()].every(key=>['view','risk_alert_id'].includes(key)))return '/app?view=linear&risk_alert_id='+encodeURIComponent(alert);
+      if(!alert&&[...url.searchParams.keys()].every(key=>key==='view'))return '/app?view=linear';
+      return '/app';
+    }
+    if(['tasks','customers','hot_orders','approvals'].includes(view))return url.pathname+url.search;
     const channel=url.searchParams.get('channel_id')||'',lead=url.searchParams.get('lead_id')||'',conversation=url.searchParams.get('conversation_id')||'';
     if(view==='dialogs'&&url.searchParams.get('open_dialog')==='1'&&url.searchParams.get('provider')==='connect'
       &&/^[0-9a-f-]{36}$/i.test(channel)&&/^\d{1,20}$/.test(lead)&&conversation.length>0&&conversation.length<=220&&!/[\u0000-\u001f\u007f]/.test(conversation))return url.pathname+url.search;
@@ -35,9 +42,10 @@ self.addEventListener('push',event=>{
     }));return;
   }
   const linear=kind==='linear',risk=kind==='risk_alert',hot=kind==='hot_order',review=['hot_order_review','hot_order_decided'].includes(kind);
+  let target='/app?view=linear';try{const payload=event.data.json();if(risk)target=allowedTarget(payload.url);}catch{}
   event.waitUntil(self.registration.showNotification('CRM Smart Assistant',{
     body:risk ? 'Tapşırıq üzrə yoxlanmalı siqnal var. Kabinetdə yoxlayın.' : linear ? 'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.' : review ? 'İsti sifariş üzrə yenilik var. Kabinetdə yoxlayın.' : hot ? 'Yeni isti sifariş var. Kabinetdə yoxlayın.' : 'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
-    tag:risk ? 'crm-proactive-risk' : linear ? 'crm-linear' : hot||review ? 'crm-hot-order' : 'crm-task-approval',data:{url:risk||linear ? '/app?view=linear' : kind==='hot_order_review' ? '/app?view=approvals' : hot||review ? '/app?view=hot_orders' : '/app'}
+    tag:risk ? 'crm-proactive-risk' : linear ? 'crm-linear' : hot||review ? 'crm-hot-order' : 'crm-task-approval',data:{url:risk ? target : linear ? '/app?view=linear' : kind==='hot_order_review' ? '/app?view=approvals' : hot||review ? '/app?view=hot_orders' : '/app'}
   }));
 });
 self.addEventListener('notificationclick',event=>{

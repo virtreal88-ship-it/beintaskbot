@@ -21,6 +21,7 @@ import tenant_proactive_risk_delivery as delivery
 import tenant_proactive_risk_schema as risk_schema
 from tenant_proactive_risk_policy import analyze_crm_task, crm_scope
 from tenant_proactive_risk_store import replace_source_findings
+import tenant_proactive_risk_store as risk_store
 
 
 TENANT = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
@@ -233,10 +234,36 @@ class TestRiskAlertPostgres:
         assert row['telegram_id'] == OWNER
         assert row['title'] == 'Risk yoxlaması tələb olunur'
         assert 'Change price' not in row['body']
-        assert row['target_url'] == '/app?view=linear'
+        alert_id=self.query("SELECT id FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid",(TENANT,))[0]['id']
+        assert row['target_url'] == '/app?view=linear&risk_alert_id='+str(alert_id)
         deliveries = self.query('''SELECT recipient_id,channel,endpoint_hash,status
           FROM saas_proactive_risk_alert_deliveries ORDER BY channel''')
         assert [(x['recipient_id'], x['channel']) for x in deliveries] == [(OWNER,'internal'),(OWNER,'push')]
+
+    def test_single_alert_detail_is_owner_scoped_and_fails_closed(self, monkeypatch):
+        from tenant_linear_policy import TenantLinearError
+        self.record()
+        alert_id=str(self.query('SELECT id FROM saas_proactive_risk_alert_events')[0]['id'])
+        self.query("UPDATE saas_proactive_risk_alert_events SET state='expanded'")
+        monkeypatch.setattr(risk_store,'_connect',lambda:self.db)
+        monkeypatch.setattr(risk_store,'ensure_schema',lambda _conn:None)
+        finding={'source_kind':'crm_task','source_id':SOURCE_ID,'source':'CRM task','source_title':'CRM task 509',
+                 'source_url':'/app?view=tasks','rule_id':'service_unavailable','severity':'P1',
+                 'confidence':'high','facts':['Task is overdue'],'assessment':'Needs review',
+                 'recommended_step':'Assign an owner'}
+        monkeypatch.setattr(delivery,'current_finding',lambda *_args:finding)
+        owner={'tenant_id':TENANT,'telegram_id':OWNER,'role':'owner','active':True,'tenant_status':'active'}
+        detail=risk_store.alert_detail(owner,alert_id)
+        assert detail['source_title']=='CRM task 509'
+        assert detail['facts']==['Task is overdue']
+        assert detail['source_url']=='/app?view=tasks'
+        with pytest.raises(TenantLinearError) as denied:
+            risk_store.alert_detail({**owner,'role':'admin'},alert_id)
+        assert denied.value.status==403
+        monkeypatch.setattr(delivery,'current_finding',lambda *_args:None)
+        with pytest.raises(TenantLinearError) as stale:
+            risk_store.alert_detail(owner,alert_id)
+        assert stale.value.status==404
 
 
 def test_preferences_make_risk_opt_in_owner_only_and_no_telegram():
@@ -270,6 +297,8 @@ def test_push_payload_is_neutral_and_routes_to_bell_section():
         'body': 'Tapşırıq üzrə yoxlanmalı siqnal var. Kabinetdə yoxlayın.',
         'url': '/app?view=linear', 'tag': 'crm-proactive-risk', 'kind': 'risk_alert'}
     assert not any(value in str(payload) for value in (TENANT, SOURCE_ID, 'price', 'permission'))
+    alert_id='01a1b1af-4d2c-71f2-aaeb-f01eccac0031'
+    assert payload_for('proactive_risk','/app?view=linear&risk_alert_id='+alert_id)['url'] == '/app?view=linear&risk_alert_id='+alert_id
 
 
 def test_linear_delivery_rechecks_exact_team_and_live_issue(monkeypatch):
@@ -287,11 +316,17 @@ def test_linear_delivery_rechecks_exact_team_and_live_issue(monkeypatch):
     cur = Mock(); cur.fetchone.return_value = stored
     config = {'team_id':'team-a','done_state_ids':[],'workflow':{'enabled':True,'sync_enabled':True}}
     issue = {'id':'issue-1','team':{'id':'team-a'},'state':{'id':'todo'},
-             'updatedAt':version,'title':'Access problem','description':'permission change'}
+             'updatedAt':version,'title':'Access problem','description':'permission change',
+             'url':'https://linear.app/acme/issue/issue-1'}
     monkeypatch.setattr(tenant_linear_context,'context',lambda _cur,_session: ({},config,'api-key',version))
     monkeypatch.setattr(tenant_linear_tasks_provider,'issue',lambda _key,_id: issue)
     monkeypatch.setattr(tenant_proactive_risk_policy,'analyze_linear',lambda *_args,**_kwargs:[finding])
     owner = {'tenant_id':TENANT,'telegram_id':OWNER,'onboarding':{}}
     assert delivery._finding_is_current(cur,event,owner) is True
+    detail=delivery.current_finding(cur,event,owner)
+    assert detail['source_title']=='Access problem'
+    assert detail['source_url']=='https://linear.app/acme/issue/issue-1'
+    assert detail['rule_id']=='access_control_claim'
     issue['team']={'id':'other-team'}
     assert delivery._finding_is_current(cur,event,owner) is False
+    assert delivery.current_finding(cur,event,owner) is None

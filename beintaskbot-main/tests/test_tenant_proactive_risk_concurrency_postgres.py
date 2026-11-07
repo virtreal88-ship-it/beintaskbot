@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import psycopg
@@ -39,6 +40,13 @@ def risk_postgres(monkeypatch):
             patcher.setattr(risk_schema, '_ensure_schema', lambda _conn: None)
             patcher.setattr(risk_schema, '_ready', False)
             risk_schema.ensure_schema(conn)
+        conn.execute('''CREATE TABLE saas_push_devices(
+          endpoint_hash TEXT PRIMARY KEY,owner_telegram_id BIGINT NOT NULL,subscription BYTEA NOT NULL)''')
+        conn.execute('''CREATE TABLE saas_member_push_devices(
+          tenant_id UUID NOT NULL,telegram_id BIGINT NOT NULL,endpoint_hash TEXT NOT NULL,
+          active BOOLEAN NOT NULL DEFAULT TRUE,PRIMARY KEY(tenant_id,telegram_id,endpoint_hash))''')
+        conn.execute("INSERT INTO saas_push_devices VALUES('device-hash',101,%s)",(b'encrypted',))
+        conn.execute("INSERT INTO saas_member_push_devices VALUES(%s,101,'device-hash',TRUE)",(tenant,))
         conn.commit()
 
     monkeypatch.setattr(delivery, '_read_tenant_workflow', lambda _cur, _tenant: {})
@@ -87,3 +95,35 @@ def test_parallel_sources_cannot_exceed_daily_tenant_limit(risk_postgres):
     states = {row['state']: row['n'] for row in counts}
     assert states.get('pending', 0) == delivery.MAX_RISK_ALERTS_PER_DAY
     assert states.get('suppressed', 0) == 24 - delivery.MAX_RISK_ALERTS_PER_DAY
+
+
+def test_two_parallel_push_claims_do_not_upgrade_shared_tenant_lock(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    event_ids=[str(uuid4()),str(uuid4())]
+    with _profiled_connection(dsn,schema) as conn:
+        for event_id,source_id in zip(event_ids,('claim-a','claim-b')):
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+              VALUES(%s,%s,101,'crm_task',%s,'service_unavailable','scope','v1','fp','expanded')''',
+              (event_id,tenant,source_id))
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+              (tenant_id,event_id,recipient_id,channel,endpoint_hash,status)
+              VALUES(%s,%s,101,'push','device-hash','pending')''',(tenant,event_id))
+
+    gate=Barrier(2)
+    def authorize(cur,item,*,channel=None):
+        owner=delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id']))
+        gate.wait(timeout=10)
+        return owner,True
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_read_tenant_workflow',lambda _cur,_tenant:{})
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',authorize)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda _n:delivery.claim_push(),range(2)))
+    assert all(row and row['send'] for row in results)
+    assert {str(row['event_id']) for row in results}==set(event_ids)
+    with _profiled_connection(dsn,schema) as conn:
+        states=conn.execute("SELECT status,count(*) AS n FROM saas_proactive_risk_alert_deliveries GROUP BY status").fetchall()
+    assert {row['status']:row['n'] for row in states}=={'sending':2}

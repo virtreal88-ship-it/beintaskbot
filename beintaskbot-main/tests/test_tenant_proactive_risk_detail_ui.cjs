@@ -1,0 +1,13 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),path=require('node:path');
+const root=path.join(__dirname,'..'),source=fs.readFileSync(path.join(root,'docs/tenant-risk-alert-detail.js'),'utf8');
+new Function(source);
+assert.match(source,/\/api\/platform\/risks\/alerts\//);
+assert.match(source,/owner\?\.role!=='owner'/);
+assert.match(source,/scope!==scopeOf\(profile\)/);
+assert.match(source,/response\.status===404/);
+assert.match(source,/textContent/);
+assert.doesNotMatch(source,/\.innerHTML\s*=/);
+assert.match(fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8'),/tenant-risk-alert-detail\.js/);
+const board=fs.readFileSync(path.join(root,'docs/tenant-linear-board.js'),'utf8');
+assert.doesNotMatch(board,/risks\/dry-run|riskFindings|risk-findings|proactive-risk/);
+console.log('PASS: risk detail is owner-gated, scope-race guarded, text-only, single-alert API; Linear findings list remains absent.');

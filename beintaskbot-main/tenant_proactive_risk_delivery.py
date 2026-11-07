@@ -119,7 +119,7 @@ def record_finding_transitions(cur, tenant: str, source_kind: str, source_id: st
             _cancel_event(cur, tenant, event['id'])
 
 
-def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:
+def current_finding(cur, event: dict, owner_profile: dict) -> dict | None:
     tenant = str(event['tenant_id'])
     cur.execute('''SELECT * FROM saas_proactive_risk_findings
       WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s AND rule_id=%s
@@ -127,33 +127,36 @@ def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:
       (tenant, event['source_kind'], event['source_id'], event['rule_id'], event['source_scope']))
     stored = cur.fetchone()
     if not stored or alert_fingerprint(stored) != event['alert_fingerprint'] or not alertable(stored):
-        return False
+        return None
 
     now = datetime.now(timezone.utc)
     if event['source_kind'] == 'crm_task':
         if not TenantPolicy(owner_profile).allows('tasks'):
-            return False
+            return None
         cur.execute('''SELECT account_domain,connected_at FROM saas_tenant_integrations
           WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected' FOR SHARE''', (tenant,))
         connection = cur.fetchone()
         if not connection or crm_scope(connection['account_domain'], connection['connected_at']) != event['source_scope']:
-            return False
+            return None
         cur.execute('''SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id::text=%s''',
                     (tenant, str(event['source_id'])))
         task = cur.fetchone()
         if not task or task.get('completed') is not False:
-            return False
+            return None
         synced = task.get('synced_at')
         if isinstance(synced, str):
             try:
                 synced = datetime.fromisoformat(synced.replace('Z', '+00:00'))
             except ValueError:
-                return False
+                return None
         if not synced or synced.tzinfo is None or now - synced.astimezone(timezone.utc) > CRM_SOURCE_MAX_AGE:
-            return False
-        return any(alertable(item) and item.get('rule_id') == event['rule_id']
-                   and alert_fingerprint(item) == event['alert_fingerprint']
-                   for item in analyze_crm_task(task, checked_at=now))
+            return None
+        finding = next((item for item in analyze_crm_task(task, checked_at=now)
+                        if alertable(item) and item.get('rule_id') == event['rule_id']
+                        and alert_fingerprint(item) == event['alert_fingerprint']), None)
+        return ({**finding, 'source_kind':'crm_task', 'source_id':str(event['source_id']),
+                 'source_title':str(stored.get('source_title') or f"CRM task {event['source_id']}")[:200],
+                 'source_url':'/app?view=tasks', 'source':'CRM task'} if finding else None)
 
     # Linear authorization is re-read from the current owner membership and
     # encrypted tenant connection, then the exact issue is fetched live.
@@ -169,30 +172,38 @@ def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:
     except TenantLinearError as error:
         if error.status in {429, 500, 502, 503}:
             raise
-        return False
+        return None
     workflow = config.get('workflow') or {}
     team = str(config.get('team_id') or '')
     if workflow.get('enabled') is not True or workflow.get('sync_enabled') is not True:
-        return False
+        return None
     if linear_scope(config_version, team) != event['source_scope']:
-        return False
+        return None
     try:
         current = issue(key, str(event['source_id']))
     except TenantLinearError as error:
         if error.status in {429, 500, 502, 503}:
             raise
-        return False
+        return None
     if not current or str((current.get('team') or {}).get('id') or '') != team:
-        return False
+        return None
     if str((current.get('state') or {}).get('id') or '') in set(config.get('done_state_ids') or []):
-        return False
+        return None
     if not source_time(current.get('updatedAt')):
-        return False
+        return None
     onboarding = owner_profile.get('onboarding') or {}
     timezone_name = onboarding.get('timezone') or (onboarding.get('company') or {}).get('timezone')
-    return any(alertable(item) and item.get('rule_id') == event['rule_id']
-               and alert_fingerprint(item) == event['alert_fingerprint']
-               for item in analyze_linear(current, tenant_timezone=timezone_name, checked_at=now))
+    finding = next((item for item in analyze_linear(current, tenant_timezone=timezone_name, checked_at=now)
+                    if alertable(item) and item.get('rule_id') == event['rule_id']
+                    and alert_fingerprint(item) == event['alert_fingerprint']), None)
+    return ({**finding, 'source_kind':'linear', 'source_id':str(event['source_id']),
+             'source_title':str(current.get('title') or stored.get('source_title') or '')[:200],
+             'source_url':str(current.get('url') or ''),
+             'source':'Linear'} if finding else None)
+
+
+def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:
+    return current_finding(cur, event, owner_profile) is not None
 
 
 def _authorize_event(cur, event: dict, *, channel: str | None = None) -> tuple[dict | None, bool]:
@@ -233,7 +244,8 @@ def expand_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
                       (uuid.uuid4(), event['tenant_id'], event['recipient_id'], event_key,
                        'Risk yoxlaması tələb olunur',
                        'Tapşırıq üzrə yoxlanmalı siqnal var. Mənbəni kabinetdə yoxlayın.',
-                       '/app?view=linear', event['tenant_id'], event['recipient_id'], event_key))
+                       '/app?view=linear&risk_alert_id=' + str(event['id']),
+                       event['tenant_id'], event['recipient_id'], event_key))
                     cur.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
                       (tenant_id,event_id,recipient_id,channel,status)
                       VALUES(%s::uuid,%s::uuid,%s,'internal','delivered') ON CONFLICT DO NOTHING''',
@@ -293,7 +305,7 @@ def claim_push() -> dict | None:
               JOIN saas_tenants t ON t.id=b.tenant_id
               WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.endpoint_hash=%s
                 AND p.owner_telegram_id=b.telegram_id
-              FOR UPDATE OF b,p,t''',
+              FOR UPDATE OF b,p''',
               (item['tenant_id'], item['recipient_id'], item['endpoint_hash']))
             device = cur.fetchone() or {}
             item.update(device)
@@ -308,6 +320,7 @@ def claim_push() -> dict | None:
             if not event_allowed and item.get('event_state') == 'expanded':
                 _cancel_event(cur, item['tenant_id'], item['event_id'])
             item.update(send=allowed, event=RISK_EVENT)
+            item['target_url'] = '/app?view=linear&risk_alert_id=' + str(item['event_id'])
         conn.commit()
     return item
 

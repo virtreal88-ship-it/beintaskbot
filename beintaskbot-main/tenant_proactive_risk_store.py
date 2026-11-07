@@ -132,3 +132,41 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
             'alert_opt_in_channels': opt_in_channels,
             'findings': findings, 'checked_at': max((value for value in (last_finding, last_check) if value), default=None).isoformat() if (last_finding or last_check) else None,
             'unavailable_sources': [name for kind, name in (('linear', 'Linear'), ('crm_task', 'CRM')) if kind not in sources]}
+
+
+def alert_detail(session: dict, alert_id: str) -> dict:
+    """Return a single alert only after owner and live source revalidation."""
+    import uuid
+    from tenant_proactive_risk_delivery import _channels, _owner_profile, current_finding
+
+    tenant, actor = owner(session)
+    try:
+        alert_id = str(uuid.UUID(str(alert_id)))
+    except (ValueError, TypeError, AttributeError):
+        raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404) from None
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile = _owner_profile(cur, tenant, actor)
+            if not profile:
+                raise TenantLinearError('Yalnız aktiv şirkət sahibi üçün.', 403)
+            if not _channels(profile, tenant):
+                raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404)
+            cur.execute('''SELECT * FROM saas_proactive_risk_alert_events
+              WHERE tenant_id=%s::uuid AND recipient_id=%s AND id=%s::uuid AND state='expanded' ''',
+              (tenant, actor, alert_id))
+            event = cur.fetchone()
+            if not event:
+                raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404)
+            finding = current_finding(cur, event, profile)
+            if not finding:
+                raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
+            conn.commit()
+            finding['checked_at'] = datetime.now(timezone.utc).isoformat()
+            finding['source_url'] = (finding.get('source_url') if finding.get('source_kind') == 'linear'
+                                     and str(finding.get('source_url') or '').startswith('https://linear.app/')
+                                     else '/app?view=tasks' if finding.get('source_kind') == 'crm_task' else '')
+            return {key: finding.get(key) for key in (
+                'source_kind', 'source_id', 'source', 'source_title', 'source_url',
+                'rule_id', 'severity', 'confidence', 'facts', 'assessment',
+                'recommended_step', 'checked_at')}

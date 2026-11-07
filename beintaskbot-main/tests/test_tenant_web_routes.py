@@ -15,7 +15,7 @@ MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
  ('GET','/.well-known/oauth-authorization-server'),('GET','/oauth/authorize'),
  ('POST','/oauth/authorize'),('POST','/oauth/token'),('POST','/oauth/revoke'))
 
-EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/risks/dry-run"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
+EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/risks/dry-run"),("GET","/api/platform/risks/alerts/{alert_id}"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += (("GET","/api/platform/crm/chat/quote-receipt"),)
 EXPECTED_API += (("POST","/api/platform/crm/chat/send-voice"),("GET","/api/platform/crm/chat/voice-receipt"),("POST","/api/platform/crm/chat/voice-manual-confirmation"),("GET","/api/platform/crm/chat/voice-capability"),("GET","/api/platform/crm/chat/voice-status"))
 EXPECTED_API += (("GET","/api/platform/notifications"),("POST","/api/platform/notifications/{notification_id}/read"))
@@ -29,6 +29,7 @@ EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowled
 
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
+EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js']
 EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
 EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
@@ -147,7 +148,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.module.register_feature_routes(self.app, self.context)
 
     async def resolve(self, method, path):
-        path=path.replace('{notification_id}', '00000000-0000-0000-0000-000000000001')
+        path=path.replace('{notification_id}', '00000000-0000-0000-0000-000000000001').replace('{alert_id}', '00000000-0000-4000-8000-000000000001')
         request = make_mocked_request(method, path, app=self.app)
         match = await self.app.router.resolve(request)
         return request, match
@@ -170,7 +171,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected |= {('HEAD', path) for method, path in AI_API if method == 'GET'}
         self.assertEqual(actual, expected)
         for method, path in EXPECTED_API:
-            request, match = await self.resolve(method, path.replace('{company}', 'demo').replace('{lesson_id}', '00000000-0000-0000-0000-000000000001').replace('{token}', 'testtoken').replace('{asset_id}', 'test.jpg'))
+            request, match = await self.resolve(method, path.replace('{company}', 'demo').replace('{lesson_id}', '00000000-0000-0000-0000-000000000001').replace('{alert_id}', '00000000-0000-4000-8000-000000000001').replace('{token}', 'testtoken').replace('{asset_id}', 'test.jpg'))
             self.assertIsNone(match.http_exception)
             self.assertEqual((await match.handler(request)).status, 200)
 
