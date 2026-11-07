@@ -160,6 +160,7 @@ class Session:
         self.produced = 0
         self.interrupt_pending = False
         self.truncate_pending = None
+        self.truncate_pending_audio_end_ms = None
         self.output_finished = False
         self.greeting_pending = False
         self.greeting_item_id = None
@@ -453,6 +454,13 @@ class Session:
             self.queued_input_item_ids.append(turn['item_id'])
         await self._dispatch_pending()
 
+    async def _notify_listening_if_idle(self):
+        if (not self.closed and not self.response_inflight and not self.response_pending and
+            self.current_reservation is None and self.item is None and not self.interrupt_pending and
+            self.truncate_pending is None and self.input_turn is None and self.pending_input_item_id is None and
+            not self.queued_input_item_ids and not self.greeting_pending):
+            await self._send_client({'type':'listening'})
+
     async def _watch(self):
         try:
             while not self.closed:
@@ -520,12 +528,50 @@ class Session:
                     self.stopped_input_turns.clear()
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
-        if kind == 'talk_start' and set(event)=={'type'}:
+        if kind == 'talk_start' and set(event) in ({'type'},{'type','item_id','audio_end_ms'}):
+            item_id=event.get('item_id')
+            audio_end_ms=event.get('audio_end_ms')
+            if 'item_id' in event and (not isinstance(item_id,str) or not item_id or len(item_id)>128):
+                raise Refused('talk_interrupt_item_invalid')
+            if 'audio_end_ms' in event and (type(audio_end_ms) is not int or audio_end_ms<0):
+                raise Refused('talk_interrupt_offset_invalid')
             async with self.lock:
                 if (self.muted or self.input_turn is not None or self.pending_input_item_id is not None or
-                    self.response_pending or self.response_inflight or self.current_reservation is not None or
-                    self.item is not None or self.interrupt_pending or self.truncate_pending or self.greeting_pending):
+                    self.response_pending or self.interrupt_pending or self.truncate_pending or self.greeting_pending):
                     raise Refused('talk_not_ready')
+                if self.response_inflight and self.item is None:
+                    # The user can interrupt while the model is still thinking,
+                    # before its first audio chunk reaches the browser.
+                    if item_id is not None and item_id not in self.seen_assistant_item_ids:
+                        raise Refused('talk_interrupt_item_unexpected')
+                    if not self.cancel_requested:
+                        self.cancel_requested=True
+                        await self._send_provider({'type':'response.cancel'})
+                elif self.item is not None:
+                    # Stop local playback immediately and trim the provider's
+                    # conversation item at the browser's conservative playback
+                    # offset. If the client has not seen the first audio frame,
+                    # offset zero safely discards all unheard output.
+                    target_item=self.item
+                    if item_id is not None and item_id!=target_item:
+                        raise Refused('talk_interrupt_item_mismatch')
+                    offset=audio_end_ms if item_id is not None else 0
+                    max_audio_ms=self.produced//(self.SAMPLE_RATE*2//1000)
+                    if offset>max_audio_ms:
+                        raise Refused('talk_interrupt_offset_out_of_range')
+                    self.interrupt_pending=True
+                    self.truncate_pending=target_item
+                    self.truncate_pending_audio_end_ms=offset
+                    if self.transcript is not None:self.transcript.interrupted(target_item)
+                    if self.response_inflight and not self.cancel_requested:
+                        self.cancel_requested=True
+                        await self._send_provider({'type':'response.cancel'})
+                    await self._send_provider({'type':'conversation.item.truncate','item_id':target_item,
+                                               'content_index':0,'audio_end_ms':offset})
+                elif self.response_pending or self.response_inflight or self.current_reservation is not None:
+                    raise Refused('talk_not_ready')
+                elif item_id is not None and item_id not in self.seen_assistant_item_ids:
+                    raise Refused('talk_interrupt_item_unknown')
                 self.input_sequence+=1
                 self.input_turn={'sequence':self.input_sequence,'stopped':False,'item_id':None,
                                  'manual':True,'audio_bytes':0}
@@ -693,6 +739,7 @@ class Session:
                     # conservative zero offset prevents unplayed speech from
                     # remaining in conversation context.
                     self.truncate_pending=self.item
+                    self.truncate_pending_audio_end_ms=0
                     if self.transcript is not None:self.transcript.interrupted(self.item)
                     await self._send_client({'type': 'interrupt', 'item_id': self.item})
                     await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
@@ -842,13 +889,16 @@ class Session:
         if kind == 'conversation.item.truncated':
             async with self.lock:
                 if (not self.truncate_pending or event.get('item_id')!=self.truncate_pending or
-                    event.get('content_index')!=0 or event.get('audio_end_ms')!=0):
+                    event.get('content_index')!=0 or type(event.get('audio_end_ms')) is not int or
+                    event.get('audio_end_ms')!=self.truncate_pending_audio_end_ms):
                     raise Refused('invalid_truncation_confirmation')
                 self.truncate_pending=None
+                self.truncate_pending_audio_end_ms=None
                 self.interrupt_pending=False
                 self.item,self.produced=None,0
                 self.output_finished=False
                 await self._dispatch_pending()
+                await self._notify_listening_if_idle()
             return
         if kind == 'response.done':
             async with self.lock:
@@ -873,6 +923,7 @@ class Session:
                 self.cancel_requested = False
                 await self._settle_response_if_ready()
                 await self._dispatch_pending()
+                await self._notify_listening_if_idle()
             return
         if kind == 'response.created':
             rid=(event.get('response') or {}).get('id')

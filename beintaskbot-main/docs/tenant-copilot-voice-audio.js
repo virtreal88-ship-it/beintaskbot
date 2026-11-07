@@ -6,7 +6,7 @@
   const media=deps.navigator?.mediaDevices;
   const Ctx=deps.AudioContext||deps.webkitAudioContext;
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
-  let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,segments=[],waiters=[];
+  let stream,ctx,processor,source,silence,closed=false, currentItem=null,nextTime=0,itemStartTime=null,itemEndTime=null,segments=[],waiters=[];
   let captureParts=[],captureBytes=0,speechFrames=0,localSpeechLatched=false,localMuteTimer=null,localOutputMuted=false;
   const setTimer=deps.setTimeout||setTimeout,clearTimer=deps.clearTimeout||clearTimeout;
   const MAX_PCM_CHUNK_BYTES=2048; // 1 x 1024-sample callback, about 43 ms at 24 kHz, for quicker server-VAD interruption.
@@ -101,15 +101,16 @@
       if(closed || !(pcm instanceof Uint8Array) || !pcm.byteLength || pcm.byteLength%2)throw new Error('invalid_audio');
       if(currentItem!==null && currentItem!==item){
         if(ctx.currentTime<nextTime)throw new Error('overlapping_output_items');
-        currentItem=null;segments=[];
+        currentItem=null;itemStartTime=null;itemEndTime=null;segments=[];
       }
-      currentItem=item;
+      if(currentItem===null){currentItem=item;itemStartTime=null;itemEndTime=null;}
       const length=pcm.byteLength/2,buf=ctx.createBuffer(1,length,24000),channel=buf.getChannelData(0),view=new DataView(pcm.buffer,pcm.byteOffset,pcm.byteLength);
       for(let i=0;i<length;i++)channel[i]=view.getInt16(i*2,true)/32768;
       const node=ctx.createBufferSource();node.buffer=buf;node.connect(ctx.destination);
       const at=Math.max(ctx.currentTime,nextTime);segments.push(node);
+      if(itemStartTime===null)itemStartTime=at;
       node.onended=()=>{segments=segments.filter(s=>s!==node);if(!segments.length)finishWaiters(true);};
-      node.start(at);nextTime=at+length/24000;
+      node.start(at);nextTime=at+length/24000;itemEndTime=nextTime;
     },
     finished(item){
       if(closed||currentItem!==item)return Promise.resolve(false);
@@ -124,16 +125,33 @@
       if(localMuteTimer){clearTimer(localMuteTimer);localMuteTimer=null;}
       localOutputMuted=false;localSpeechLatched=false;
       finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
-      segments=[];currentItem=null;nextTime=ctx.currentTime;
+      segments=[];currentItem=null;itemStartTime=null;itemEndTime=null;nextTime=ctx.currentTime;
       // Browser APIs do not prove what reached the listener, particularly with
       // wireless devices. Conservatively discard the whole interrupted item.
       return 0;
+    },
+    interruptForTalk(){
+      const item=currentItem;
+      let audioEndMs=0;
+      if(item!==null&&itemStartTime!==null&&itemEndTime!==null){
+        const totalMs=Math.max(0,(itemEndTime-itemStartTime)*1000);
+        const deviceLatency=Number.isFinite(ctx.outputLatency)?ctx.outputLatency:
+          (Number.isFinite(ctx.baseLatency)?ctx.baseLatency:0);
+        // Bias the offset behind the output clock so unheard audio queued in a
+        // browser/device buffer is not retained in Realtime conversation context.
+        const safelyPlayedMs=Math.max(0,(ctx.currentTime-itemStartTime-deviceLatency-0.08)*1000);
+        audioEndMs=Math.floor(Math.min(totalMs,safelyPlayedMs));
+      }
+      finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
+      segments=[];currentItem=null;itemStartTime=null;itemEndTime=null;nextTime=ctx.currentTime;
+      localOutputMuted=false;localSpeechLatched=false;
+      return item===null?null:{item_id:item,audio_end_ms:audioEndMs};
     },
     interruptLocalSpeech(){
       if(!segments.length)return false;
       localSpeechLatched=true;localOutputMuted=true;
       finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
-      segments=[];currentItem=null;nextTime=ctx.currentTime;
+      segments=[];currentItem=null;itemStartTime=null;itemEndTime=null;nextTime=ctx.currentTime;
       if(localMuteTimer)clearTimer(localMuteTimer);
       localMuteTimer=setTimer(()=>{localMuteTimer=null;localOutputMuted=false;localSpeechLatched=false;},750);
       return true;

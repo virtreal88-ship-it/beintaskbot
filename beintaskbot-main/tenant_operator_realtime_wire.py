@@ -350,7 +350,13 @@ class _RealtimeWire:
             if 'response_id' in event and (not isinstance(event['response_id'],str) or not event['response_id'] or len(event['response_id'])>128):
                 raise ValueError('response_id_invalid')
         elif kind=='conversation.item.truncate' and set(event)=={'type','item_id','content_index','audio_end_ms'}:
-            if not isinstance(event['item_id'],str) or event['content_index']!=0 or event['audio_end_ms']!=0:
+            # The server bounds this offset against the exact PCM bytes it
+            # sent for the active item. Preserve the same finite ceiling here
+            # while allowing push-to-talk to retain the portion actually
+            # played before the user interrupted.
+            if (not isinstance(event['item_id'],str) or not event['item_id'] or len(event['item_id'])>128 or
+                event['content_index']!=0 or type(event['audio_end_ms']) is not int or
+                not 0<=event['audio_end_ms']<=100_000):
                 raise ValueError('truncate_invalid')
         else:raise ValueError('provider_event_forbidden')
         await self.socket.send_json(event)

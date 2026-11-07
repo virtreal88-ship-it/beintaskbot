@@ -53,6 +53,16 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(input_audio['turn_detection'])
         await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='});self.assertEqual(self.socket.sent[-1]['type'],'input_audio_buffer.append')
 
+    async def test_truncate_accepts_bounded_playback_offset_for_click_interruption(self):
+        await self.open()
+        await self.wire.send({'type':'conversation.item.truncate','item_id':'assistant-item',
+                              'content_index':0,'audio_end_ms':125})
+        self.assertEqual(self.socket.sent[-1]['audio_end_ms'],125)
+        for offset in [-1,100_001,True,1.5]:
+            with self.assertRaisesRegex(ValueError,'truncate_invalid'):
+                await self.wire.send({'type':'conversation.item.truncate','item_id':'assistant-item',
+                                      'content_index':0,'audio_end_ms':offset})
+
     async def test_mismatched_policy_closes_admission(self):
         changes=[lambda s:s['audio']['input'].__setitem__('turn_detection',{'type':'server_vad','create_response':True}),
                  lambda s:s['audio']['input'].__setitem__('turn_detection',{'type':'server_vad','interrupt_response':False}),
@@ -136,6 +146,65 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),3)
         self.assertTrue(await session.end('test'))
         self.assertFalse(lease.held);self.assertTrue(wire.socket.closed)
+
+    async def test_click_interrupt_stops_exact_item_and_dispatches_followup_after_truncate(self):
+        class Authority:
+            async def check(self,scope,stage):return True
+        class Lease:
+            def __init__(self):self.held=False
+            async def claim(self,scope):self.held=True;return 1
+            async def assert_current(self,scope,fence):
+                if not self.held or fence!=1:raise ValueError('lease_lost')
+            async def confirm_provider_open(self,scope,fence):return True
+            async def release(self,scope,fence):self.held=False;return True
+        class Context:
+            async def read_authorized(self,scope):
+                return {'existing_copilot_instructions':'Never send messages or call tools.', 'lines':[], 'extra_context':{}}
+            async def revalidate(self,scope):return True
+        class Client:
+            def __init__(self):self.events=[]
+            async def send(self,event):self.events.append(copy.deepcopy(event))
+        scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic');sid=str(uuid.uuid4())
+        authority=Authority();lease=Lease();policy=PilotAdmission(authority,lease,scope,sid)
+        wire=SyntheticRealtimeWire(Socket(),policy);client=Client()
+        session=Session(scope,authority=authority,ledger=None,lease=lease,context=Context(),provider=wire,
+                        client=client,session_id=sid,pilot_policy=policy,max_seconds=5,idle_seconds=4)
+        await session.start()
+        try:
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            await session.receive_client({'type':'talk_end'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-0'})
+            await session.receive_provider({'type':'response.created','response':{'id':'response-0'}})
+            await session.receive_provider({'type':'response.output_item.added','response_id':'response-0',
+                                            'item':{'id':'assistant-0','type':'message','role':'assistant'}})
+            await session.receive_provider({'type':'response.output_audio.delta','response_id':'response-0',
+                                            'item_id':'assistant-0','content_index':0,'delta':'AQA='})
+            self.assertEqual(client.events[-1]['type'],'audio')
+
+            # The Talk button is usable while audio is still being generated.
+            await session.receive_client({'type':'talk_start','item_id':'assistant-0','audio_end_ms':0})
+            self.assertEqual(client.events[-1],{'type':'talk_ready'})
+            self.assertEqual(wire.socket.sent[-2:],[
+                {'type':'response.cancel'},
+                {'type':'conversation.item.truncate','item_id':'assistant-0','content_index':0,'audio_end_ms':0},
+            ])
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            await session.receive_client({'type':'talk_end'})
+            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+            response_creates=lambda:sum(event['type']=='response.create' for event in wire.socket.sent)
+            self.assertEqual(response_creates(),1,'follow-up waits while the interrupted item is not yet truncated')
+
+            await session.receive_provider({'type':'response.done','response':{
+                'id':'response-0','status':'cancelled','output':[{'type':'message','role':'assistant'}],'usage':{}}})
+            self.assertEqual(response_creates(),1,'response.done alone cannot dispatch over unconfirmed truncation')
+            await session.receive_provider({'type':'conversation.item.truncated','item_id':'assistant-0',
+                                            'content_index':0,'audio_end_ms':0})
+            self.assertEqual(response_creates(),2,'the new user turn is dispatched after exact truncate confirmation')
+            self.assertTrue(any(event=={'type':'thinking'} for event in client.events))
+        finally:
+            await session.end('test')
+        self.assertFalse(lease.held)
 
     async def test_wrong_scope_quote_or_missing_tenant_hold_cannot_bind(self):
         await self.open();scope=self.scope();good=self.receipt(scope)

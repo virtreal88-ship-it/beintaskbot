@@ -71,6 +71,32 @@ test('stale interrupt item stops current audio without throwing or ending the se
   assert.equal(trackStops,1,'interrupt recovery does not leak the microphone');
 });
 
+test('talk interruption stops playback and reports only a conservative heard offset', async () => {
+  let processor, context, stopped=0;
+  class FakeAudioContext {
+    constructor(options){this.sampleRate=options.sampleRate;this.state='running';this.destination={};this.currentTime=1;this.outputLatency=0.05;context=this;}
+    async resume(){}
+    createMediaStreamSource(){return{connect(){},disconnect(){}};}
+    createScriptProcessor(){processor={connect(){},disconnect(){},onaudioprocess:null};return processor;}
+    createGain(){return{gain:{value:1},connect(){},disconnect(){}};}
+    createBuffer(_channels,length){return{getChannelData:()=>new Float32Array(length)};}
+    createBufferSource(){return{buffer:null,connect(){},start(){},stop(){stopped++;},disconnect(){}};}
+    async close(){this.state='closed';}
+  }
+  const deps={AudioContext:FakeAudioContext,navigator:{mediaDevices:{getUserMedia:async()=>({
+    getTracks:()=>[{stop(){}}],getAudioTracks:()=>[],
+  })}}};
+  const audio=await openAudio(()=>{},deps);
+  audio.play('assistant-item',new Uint8Array(48000));
+  context.currentTime=1.5;
+  const interrupted=audio.interruptForTalk();
+  assert.equal(interrupted.item_id,'assistant-item');
+  assert.ok(interrupted.audio_end_ms>=360&&interrupted.audio_end_ms<=380,
+    'the transcript is truncated behind the browser output clock, not at the end of queued audio');
+  assert.equal(stopped,1,'the assistant stops immediately when the user presses Talk');
+  await audio.close();
+});
+
 test('local barge-in pauses queued assistant audio on sustained speech, not quiet or high-frequency noise', async () => {
   let processor, stopped=0, speechStarts=0;
   class FakeAudioContext {
