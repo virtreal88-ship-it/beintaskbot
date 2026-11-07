@@ -8,13 +8,12 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
  try{
   const page=await browser.newPage({viewport:{width:390,height:844}}),writes=[];
   page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname.startsWith('/api/'))writes.push(new URL(request.url()).pathname);});
-  await page.goto(origin+'/app');await page.locator('[data-support-id="'+ticket+'"]').click();await page.locator('[data-consult-id="'+oldConsult+'"]').waitFor();
+  await page.goto(origin+'/app');await page.locator('[data-support-id="'+ticket+'"]').click();await page.locator('#supportTab-developer').click();await page.locator('[data-consult-id="'+oldConsult+'"]').waitFor();
   async function sendImage(id,summary){
-   await page.locator('#consultCreate').click();const form=page.locator('#caseDeveloperForm');await form.waitFor();assert.equal(await form.locator('#consultRecipient').count(),1);
+   await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();const form=page.locator('#caseDeveloperForm');await form.waitFor();assert.equal(await form.locator('#consultRecipient').count(),1);
    assert.equal(await form.locator('#consultReason').inputValue(),'','a follow-up never reuses an earlier remote access code');
    await form.locator('#consultReason').fill(summary);await form.locator('#caseConsultFirst').selectOption(id);await form.locator('#caseConsultLast').selectOption(id);await form.locator('input[value="'+id+'"]').check();
-   assert.equal(await form.locator('#caseConsultSend').isDisabled(),true,'the selected recipient still needs explicit confirmation');
-   await form.locator('#caseConsultRecipientConfirm').check();assert.equal(await form.locator('#caseConsultSend').isDisabled(),false);
+   assert.equal(await form.locator('#caseConsultRecipientConfirm').count(),0);assert.equal(await form.locator('#caseConsultSend').isDisabled(),false);
    const dispatchResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname.endsWith('/dispatch'));
    await form.locator('#caseConsultSend').evaluate(button=>{button.click();button.click();});const response=await dispatchResponse,result=await response.json();assert.equal(response.status(),200,JSON.stringify(result));assert.equal(result.result?.state,'pending',JSON.stringify(result));
    await page.locator('#consultRows').getByText(/принял запрос в очередь/).last().waitFor();assert.equal(await page.locator('#consultCreate').isDisabled(),true,'queue receipt does not claim delivery');
@@ -30,7 +29,7 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   assert.equal((await page.request.post(origin+'/simulate/client-attachment')).status(),200);
   await page.reload();await page.locator('#supportTicketTitle').waitFor();assert.equal(new URL(page.url()).searchParams.get('support_ticket_id'),ticket,'reload restores the exact case');
   await page.getByText('We are checking.',{exact:true}).waitFor();
-  await page.locator('#caseMediaLoad').click();const newImage=page.locator('#supportExistingMedia input[value="'+image2+'"]');await newImage.waitFor();await newImage.check();await page.locator('[data-case-media-attach]').click();await page.locator('[data-message-id="'+image2+'"]').waitFor();
+  await page.locator('#supportTab-details').click();await page.locator('#supportCaseMaterials>summary').click();await page.locator('#caseMediaLoad').click();const newImage=page.locator('#supportExistingMedia input[value="'+image2+'"]');await newImage.waitFor();await newImage.check();await page.locator('[data-case-media-attach]').click();await page.locator('[data-message-id="'+image2+'"]').waitFor();
   const second=await sendImage(image2,'Customer provided a new image.');
   const secondEarly=await page.request.post(origin+'/simulate/reply');assert.equal(secondEarly.status(),200);assert.equal((await secondEarly.json()).linked_replies,1,'second pending request cannot bind before its own receipt');
   const secondReceipt=await page.request.post(origin+'/simulate/receipt');assert.equal(secondReceipt.status(),200);assert.equal((await secondReceipt.json()).state,'sent');

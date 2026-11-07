@@ -112,7 +112,7 @@
     const loaded=!!audio?.getAttribute('src')&&audio?.dataset.mediaPreview==='audio';
     const blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState)&&!(host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true');
     if(audio){audio.hidden=false;audio.tabIndex=loaded?0:-1;const controls=audio.closest('.operator-audio-controls');if(controls){controls.inert=!loaded;controls.setAttribute('aria-disabled',String(!loaded));}}
-    if(primary){primary.hidden=true;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)||host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
+    if(primary){primary.hidden=host.closest('[data-support-dialog-history]')?loaded:true;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)||host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
     if(menuLoad)menuLoad.disabled=busy||blocked;
     const status=host.querySelector('[data-media-load-status]'),language=window.tenantI18n?.language||'en';
     const idle=({ru:'Аудио не загружено',az:'Səs yüklənməyib',en:'Audio not loaded'})[language]||'Audio not loaded';
@@ -189,13 +189,13 @@
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}delete host.dataset.mediaPreviewState;updateMediaMenu(host);
     });
   }
-  const viewLead=host=>{if(lead)return lead;const route=window.tenantOperator?.currentDialog,shell=host.closest?.('#chatRows')?.closest('[data-dialog-key]');return route&&shell?.dataset.dialogKey===[route.provider||'connect',route.channel_id||'',route.conversation_id||'',route.lead_id||''].join(':')?route.lead_id:undefined;};
+  const viewLead=host=>{const caseHistory=host.closest?.('[data-support-dialog-history]');if(caseHistory)return caseHistory.dataset.leadId;if(lead)return lead;const route=window.tenantOperator?.currentDialog,shell=host.closest?.('#chatRows')?.closest('[data-dialog-key]');return route&&shell?.dataset.dialogKey===[route.provider||'connect',route.channel_id||'',route.conversation_id||'',route.lead_id||''].join(':')?route.lead_id:undefined;};
   function bind(){
     // Same-dialog renders retain stable media hosts. Retire only removed assets.
     for(const [url,preview] of previews){if(!preview.host.isConnected){stop(preview.media);URL.revokeObjectURL(url);urls.delete(url);previews.delete(url);}}
 
     document.querySelectorAll('[data-media-download]').forEach(button=>{button.onclick=()=>downloadAttachment(button,button.dataset.mediaDownload,button.closest('.operator-media-card')?.querySelector('[data-media-load-status]')||button.closest('.operator-media-card')?.querySelector('[role="status"]'));});
-    document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
+    document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment], [data-support-dialog-history] [data-chat-attachment]').forEach(host=>{
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[data-media-load-status]')||host.querySelector('[role="status"]');
       if(!button)return;
       const menuLoad=host.querySelector('[data-media-menu-load]');if(menuLoad&&!menuLoad.dataset.bound){menuLoad.dataset.bound='true';menuLoad.onclick=()=>{menuLoad.closest('details')?.removeAttribute('open');button.click();};}
