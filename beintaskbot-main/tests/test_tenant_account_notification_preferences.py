@@ -129,9 +129,12 @@ def test_save_updates_only_current_members_notification_preferences(monkeypatch)
         registered=[]
         monkeypatch.setattr(tenant_proactive_risk_schema,'ensure_schema',lambda _conn:None)
         monkeypatch.setattr(tenant_proactive_risk_delivery,'register_baseline_backfill',
-            lambda cur,tenant,owner: registered.append((tenant,owner)))
+            lambda cur,tenant,owner,**kwargs: registered.append((tenant,owner,kwargs.get('restart',False))))
         risk_opt_in={'proactive_risk':{'internal':True,'push':True}}
         account_store.notification_preferences(tenant_id=TENANT,actor_id=ACTOR,value=risk_opt_in)
-        assert registered==[(TENANT,ACTOR)]
+        assert registered==[(TENANT,ACTOR,True)]
+        profile['workflow']['policies']['members'][str(ACTOR)]['notifications']=risk_opt_in
+        account_store.notification_preferences(tenant_id=TENANT,actor_id=ACTOR,value=risk_opt_in)
+        assert registered[-1]==(TENANT,ACTOR,False),'saving an unchanged opt-in does not restart the baseline job'
     finally:
         database.close()

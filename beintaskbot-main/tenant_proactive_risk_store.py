@@ -146,10 +146,9 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             profile = _owner_profile(cur, tenant, actor)
             if not profile:
                 raise TenantLinearError('Yalnız aktiv şirkət sahibi üçün.', 403)
-            if not _channels(profile, tenant):
-                raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404)
             cur.execute('''SELECT * FROM saas_proactive_risk_alert_events
-              WHERE tenant_id=%s::uuid AND recipient_id=%s AND id=%s::uuid AND state='expanded' ''',
+              WHERE tenant_id=%s::uuid AND recipient_id=%s AND id=%s::uuid
+                AND state IN ('expanded','cancelled') ''',
               (tenant, actor, alert_id))
             event = cur.fetchone()
             if not event:
@@ -159,6 +158,9 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             cur.execute('''UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now())
               WHERE tenant_id=%s::uuid AND telegram_id=%s AND event_key=%s AND read_at IS NULL''',
               (tenant, actor, 'proactive_risk:' + alert_id))
+            if event['state'] != 'expanded' or not _channels(profile, tenant):
+                conn.commit()
+                raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
             finding = current_finding(cur, event, profile)
             if not finding:
                 # The owner opened this exact authorized alert, but its source

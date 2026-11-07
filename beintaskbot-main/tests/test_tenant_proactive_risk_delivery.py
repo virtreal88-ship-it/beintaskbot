@@ -186,6 +186,79 @@ class TestRiskAlertPostgres:
         assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications')[0]['n'] == 1
         assert self.query('SELECT count(*) AS n FROM saas_proactive_risk_alert_events')[0]['n'] == 1
 
+    def test_backfill_retries_undelivered_cancellation_but_dedupes_delivered_owner_event(self):
+        self.preferences[OWNER] = {}
+        self.record()
+        finding = self.candidate()[0]
+        signature = delivery.alert_fingerprint(finding)
+        for recipient,state,source_id in ((999,'expanded',SOURCE_ID),(OWNER,'suppressed',SOURCE_ID),
+                                          (OWNER,'cancelled',SOURCE_ID)):
+            self.query('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+              VALUES(%s::uuid,%s::uuid,%s,'crm_task',%s,%s,%s,'v1',%s,%s)''',
+              (str(uuid.uuid4()),TENANT,recipient,source_id,finding['rule_id'],
+               crm_scope('example.kommo.com',CONNECTED),signature,state))
+        self.preferences[OWNER] = {'internal': True}
+        with self.db.cursor() as cur:
+            assert delivery.register_baseline_backfill(cur,TENANT,OWNER)
+        assert delivery.expand_events() == 1
+        rows=self.query('''SELECT recipient_id,state FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid AND source_id=%s ORDER BY created_at''',(TENANT,SOURCE_ID))
+        assert rows[-1]['recipient_id']==OWNER and rows[-1]['state']=='expanded'
+        assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications WHERE telegram_id=%s',(OWNER,))[0]['n']==1
+        assert delivery._event_exists(self.db.cursor(),TENANT,'crm_task',SOURCE_ID,finding['rule_id'],
+            crm_scope('example.kommo.com',CONNECTED),signature)
+
+    def test_baseline_quota_defers_cursor_instead_of_losing_finding(self):
+        for source_id in range(700,710):
+            self.seed_source(TENANT,OWNER,str(source_id));self.record(source_id=str(source_id))
+        self.preferences[OWNER]={'internal':True}
+        for source_id in range(710,711):
+            self.seed_source(TENANT,OWNER,str(source_id));self.record(source_id=str(source_id))
+        # Remove the just-created event so the baseline job is the only producer.
+        self.query("DELETE FROM saas_proactive_risk_alert_events WHERE source_id='710'")
+        with self.db.cursor() as cur:
+            delivery.register_baseline_backfill(cur,TENANT,OWNER)
+            cur.execute('''UPDATE saas_proactive_risk_alert_backfills SET cursor_source_kind='crm_task',
+              cursor_source_id='709',cursor_rule_id='zzzz',state='pending'
+              WHERE tenant_id=%s::uuid AND owner_id=%s''',(TENANT,OWNER))
+        assert delivery.seed_baseline_alerts(limit=1)==0
+        job=self.query('''SELECT cursor_source_id,state,retry_after FROM saas_proactive_risk_alert_backfills
+          WHERE tenant_id=%s::uuid AND owner_id=%s''',(TENANT,OWNER))[0]
+        assert job['cursor_source_id']=='709' and job['state']=='pending' and job['retry_after'] is not None
+
+    def test_temporary_linear_failure_defers_and_other_tenant_delivery_continues(self,monkeypatch):
+        from tenant_linear_policy import TenantLinearError
+        self.preferences[OWNER]={}
+        self.preferences[303]={}
+        self.record()
+        self.seed_source(OTHER_TENANT,303,'520')
+        self.record(tenant=OTHER_TENANT,source_id='520')
+        self.preferences[OWNER]={'internal':True}
+        self.preferences[303]={'internal':True}
+        with self.db.cursor() as cur:
+            delivery.register_baseline_backfill(cur,TENANT,OWNER)
+            delivery.register_baseline_backfill(cur,OTHER_TENANT,303)
+        self.query("UPDATE saas_proactive_risk_alert_backfills SET updated_at=now()-interval '1 hour' WHERE tenant_id=%s::uuid",(TENANT,))
+
+        def inspect_source(_cur,event,_profile):
+            if event['tenant_id']==TENANT:
+                raise TenantLinearError('Linear temporarily unavailable',503)
+            return event
+        monkeypatch.setattr(delivery,'current_finding',inspect_source)
+        assert delivery.seed_baseline_alerts(limit=2)==1
+        first=self.query('''SELECT retry_after,cursor_source_id FROM saas_proactive_risk_alert_backfills
+          WHERE tenant_id=%s::uuid''',(TENANT,))[0]
+        assert first['retry_after'] is not None and first['cursor_source_id']==''
+        assert self.query('''SELECT recipient_id,source_id FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid''',(OTHER_TENANT,))==[{'recipient_id':303,'source_id':'520'}]
+
+        # The deferred source does not prevent another company's already queued
+        # alert from reaching its own bell entry on this subsequent expansion.
+        assert delivery.expand_events()==1
+        assert self.query('SELECT tenant_id,telegram_id FROM saas_tenant_notifications')==[
+            {'tenant_id':OTHER_TENANT,'telegram_id':303}]
+
     def test_baseline_skips_stale_crm_then_fresh_observation_can_alert(self):
         self.preferences[OWNER] = {}
         self.record()
@@ -253,13 +326,19 @@ class TestRiskAlertPostgres:
         assert item and item['send'] is False
         assert self.query("SELECT status FROM saas_proactive_risk_alert_deliveries WHERE channel='push'")[0]['status'] == 'skipped'
 
-    def test_daily_company_cap_suppresses_eleventh_distinct_source(self):
+    def test_daily_company_cap_defers_eleventh_distinct_source(self):
         for source_id in range(600, 611):
             self.seed_source(TENANT, OWNER, str(source_id))
             self.record(source_id=str(source_id))
         states = self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid', (TENANT,))
         assert sum(row['state'] == 'pending' for row in states) == 10
-        assert sum(row['state'] == 'suppressed' for row in states) == 1
+        assert len(states) == 10, 'quota pressure does not create a permanent suppressed tombstone'
+        self.query('''UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days'
+          WHERE id=(SELECT id FROM saas_proactive_risk_alert_events ORDER BY created_at LIMIT 1)''')
+        self.record(source_id='610')
+        assert self.query('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day' AND state<>'suppressed' ''',
+          (TENANT,))[0]['n'] == 10
 
     def test_provider_acceptance_is_not_reported_as_read_receipt(self):
         self.record()
@@ -313,10 +392,13 @@ class TestRiskAlertPostgres:
         with pytest.raises(TenantLinearError) as denied:
             risk_store.alert_detail({**owner,'role':'admin'},alert_id)
         assert denied.value.status==403
-        monkeypatch.setattr(delivery,'current_finding',lambda *_args:None)
+        self.query("UPDATE saas_proactive_risk_alert_events SET state='cancelled' WHERE id=%s::uuid",(alert_id,))
+        monkeypatch.setattr(delivery,'current_finding',lambda *_args:pytest.fail('cancelled alert detail must not reread its source'))
         with pytest.raises(TenantLinearError) as stale:
             risk_store.alert_detail(owner,alert_id)
         assert stale.value.status==404
+        read=self.query('SELECT read_at FROM saas_tenant_notifications WHERE event_key=%s',(alert_key,))[0]
+        assert read['read_at'] is not None, 'opening a cancelled risk notice still acknowledges that exact notice'
 
 
 def test_preferences_make_risk_opt_in_owner_only_and_no_telegram():

@@ -89,10 +89,12 @@ def ensure_schema(conn) -> None:
               cursor_source_kind TEXT NOT NULL DEFAULT '',
               cursor_source_id TEXT NOT NULL DEFAULT '',
               cursor_rule_id TEXT NOT NULL DEFAULT '',
+              retry_after TIMESTAMPTZ NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,owner_id)
             )''')
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_backfills ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ NULL")
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_backfill_pending_idx
               ON saas_proactive_risk_alert_backfills(updated_at,tenant_id) WHERE state='pending' ''')
         conn.commit()

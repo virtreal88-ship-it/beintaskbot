@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from uuid import uuid4
 
 import psycopg
@@ -96,13 +96,11 @@ def test_concurrent_baseline_backfill_enqueues_one_owner_alert(risk_postgres, mo
     monkeypatch.setattr(delivery, 'current_finding', lambda _cur, event, _profile: event)
 
     gate = Barrier(2)
+    monkeypatch.setattr(delivery, '_connect', lambda: _profiled_connection(dsn, schema))
+    monkeypatch.setattr(delivery, 'ensure_schema', lambda _conn: None)
     def seed(_n):
         gate.wait(timeout=10)
-        with _profiled_connection(dsn, schema) as conn:
-            with conn.cursor() as cur:
-                count = delivery._seed_baseline_alerts(cur)
-            conn.commit()
-            return count
+        return delivery.seed_baseline_alerts(limit=1)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         counts = list(pool.map(seed, range(2)))
@@ -111,6 +109,60 @@ def test_concurrent_baseline_backfill_enqueues_one_owner_alert(risk_postgres, mo
           WHERE tenant_id=%s::uuid''', (tenant,)).fetchall()
     assert sorted(counts) == [0, 1]
     assert rows == [{'recipient_id':101,'source_id':'8','state':'pending'}]
+
+
+def test_parallel_backfill_sources_release_quota_lock_between_rows(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: [])
+    _observe(dsn, schema, tenant, 21)
+    _observe(dsn, schema, tenant, 22)
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: ['internal'])
+    with _profiled_connection(dsn, schema) as conn:
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_backfills(tenant_id,owner_id)
+          VALUES(%s,101)''', (tenant,))
+    monkeypatch.setattr(delivery, 'current_finding', lambda _cur, event, _profile: event)
+    monkeypatch.setattr(delivery, '_connect', lambda: _profiled_connection(dsn, schema))
+    monkeypatch.setattr(delivery, 'ensure_schema', lambda _conn: None)
+    assert delivery.seed_baseline_alerts(limit=2) == 2
+    with _profiled_connection(dsn, schema) as conn:
+        rows = conn.execute('''SELECT source_id FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid ORDER BY source_id''', (tenant,)).fetchall()
+    assert rows == [{'source_id':'21'},{'source_id':'22'}]
+
+
+def test_observer_can_take_next_source_between_backfill_transactions(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: [])
+    _observe(dsn, schema, tenant, 31)
+    _observe(dsn, schema, tenant, 32)
+    monkeypatch.setattr(delivery, '_channels', lambda _profile, _tenant: ['internal'])
+    with _profiled_connection(dsn, schema) as conn:
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_backfills(tenant_id,owner_id)
+          VALUES(%s,101)''', (tenant,))
+    monkeypatch.setattr(delivery, 'current_finding', lambda _cur, event, _profile: event)
+    monkeypatch.setattr(delivery, '_connect', lambda: _profiled_connection(dsn, schema))
+    monkeypatch.setattr(delivery, 'ensure_schema', lambda _conn: None)
+    first_committed, observer_done = Event(), Event()
+
+    def backfill():
+        first = delivery.seed_baseline_alerts(limit=1)
+        first_committed.set()
+        assert observer_done.wait(10), 'observer must proceed after backfill commits its first source'
+        return first + delivery.seed_baseline_alerts(limit=1)
+
+    def observe_next():
+        assert first_committed.wait(10), 'first backfill source did not commit'
+        _observe(dsn, schema, tenant, 32)
+        observer_done.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a=pool.submit(backfill);b=pool.submit(observe_next)
+        assert a.result(timeout=20)==1
+        b.result(timeout=20)
+    with _profiled_connection(dsn, schema) as conn:
+        counts=conn.execute('''SELECT source_id,count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid GROUP BY source_id ORDER BY source_id''',(tenant,)).fetchall()
+    assert counts==[{'source_id':'31','n':1},{'source_id':'32','n':1}]
 
 
 def test_parallel_sources_cannot_exceed_daily_tenant_limit(risk_postgres):
@@ -122,7 +174,15 @@ def test_parallel_sources_cannot_exceed_daily_tenant_limit(risk_postgres):
           WHERE tenant_id=%s::uuid GROUP BY state''', (tenant,)).fetchall()
     states = {row['state']: row['n'] for row in counts}
     assert states.get('pending', 0) == delivery.MAX_RISK_ALERTS_PER_DAY
-    assert states.get('suppressed', 0) == 24 - delivery.MAX_RISK_ALERTS_PER_DAY
+    assert states.get('suppressed', 0) == 0
+    assert sum(states.values()) == delivery.MAX_RISK_ALERTS_PER_DAY
+    with _profiled_connection(dsn, schema) as conn:
+        conn.execute("UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days' WHERE tenant_id=%s::uuid AND source_id='100'", (tenant,))
+    _observe(dsn, schema, tenant, 123)
+    with _profiled_connection(dsn, schema) as conn:
+        recent = conn.execute('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day' AND state<>'suppressed' ''', (tenant,)).fetchone()['n']
+    assert recent == delivery.MAX_RISK_ALERTS_PER_DAY
 
 
 def test_two_parallel_push_claims_do_not_upgrade_shared_tenant_lock(risk_postgres, monkeypatch):
