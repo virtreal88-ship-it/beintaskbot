@@ -126,7 +126,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('simulation/issues', ('GET',)), ('simulation/issues/{run_id}/review', ('POST',)),
     ('dashboard', ('GET',)), ('dashboard/events', ('GET',)),
 ] for method in methods)
-FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'proactive_risk_handler', 'news_handler',
+FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'proactive_risk_handler', 'proactive_risk_alert_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_upload_handler',
     'customer_voice_handler', 'customer_voice_receipt_handler', 'customer_voice_capability_handler', 'customer_voice_status_handler',
     'customer_voice_manual_confirmation_handler',
