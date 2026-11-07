@@ -14,9 +14,17 @@ class TenantChakraUiTests(unittest.TestCase):
 
     def test_chakra_source_covers_core_crm_surfaces(self):
         source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
-        for component in ("ChakraProvider", "TasksTable", "DealKanban", "DealTable", "SettingsHub", "MemberDialog", "IntegrationMarketplace"):
+        workspace = (ROOT / "docs" / "tenant-workspace.js").read_text(encoding="utf-8")
+        for component in ("ChakraProvider", "TasksTable", "DealKanban", "DealTable", "SettingsHub", "NotificationPreferencesHub", "MemberDialog", "IntegrationMarketplace"):
             self.assertIn(component, source)
         self.assertIn('closeOnInteractOutside={false}', source)
+        self.assertIn('id = \'chakra-notification-settings-root\'', workspace)
+        self.assertIn("panel.id === 'chakra-notification-settings-root'", workspace)
+        self.assertIn('function NotificationPreferencesHub()', source)
+        self.assertIn('api("/api/platform/notification-preferences")', source)
+        self.assertIn('clean("#chakra-notification-settings-root")', source)
+        self.assertIn('["settings", "chakra-notification-settings-root"', source)
+        self.assertIn('host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root"', source)
 
     def test_market_is_separate_navigation_surface_with_expected_catalog(self):
         page = (ROOT / "docs" / "tenant-app.html").read_text(encoding="utf-8")
