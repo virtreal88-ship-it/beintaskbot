@@ -48,13 +48,21 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
     async def test_effective_policy_must_be_read_back_before_audio(self):
         with self.assertRaises(ValueError):await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='})
         await self.open();self.assertEqual(self.socket.sent[0]['type'],'session.update')
+        input_audio=self.socket.sent[0]['session']['audio']['input']
+        self.assertEqual(input_audio['noise_reduction'],{'type':'near_field','strength':1})
+        self.assertEqual(input_audio['turn_detection']['threshold'],0.5)
+        self.assertTrue(input_audio['turn_detection']['interrupt_response'])
         await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='});self.assertEqual(self.socket.sent[-1]['type'],'input_audio_buffer.append')
 
     async def test_mismatched_policy_closes_admission(self):
         changes=[lambda s:s['audio']['input']['turn_detection'].__setitem__('create_response',True),
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('interrupt_response',False),
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',1000),
+                 lambda s:s['audio']['input']['turn_detection'].__setitem__('threshold',0.8),
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('future_trigger',True),
+                 lambda s:s['audio']['input']['noise_reduction'].__setitem__('type','far_field'),
+                 lambda s:s['audio']['input']['noise_reduction'].__setitem__('strength',0.5),
+                 lambda s:s['audio']['input']['noise_reduction'].__setitem__('future_option',True),
                  lambda s:s['audio']['input'].__setitem__('transcription',{'model':'unapproved'}),
                  lambda s:s.__setitem__('tools',[{'name':'send'}]),lambda s:s.__setitem__('max_output_tokens',999999),
                  lambda s:s.__setitem__('max_output_tokens',32000),

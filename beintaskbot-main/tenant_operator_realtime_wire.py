@@ -232,7 +232,10 @@ class _RealtimeWire:
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
-                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True,'idle_timeout_ms':None}},
+                            'noise_reduction':{'type':'near_field','strength':1},
+                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True,
+                                              'idle_timeout_ms':None,'threshold':0.5,'prefix_padding_ms':300,
+                                              'silence_duration_ms':500}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -270,12 +273,17 @@ class _RealtimeWire:
         try:
             if event['type']!='session.updated':raise ValueError()
             s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
+            noise=incoming.get('noise_reduction')
             checks={
               'id':s.get('id')==session_id,'type':s.get('type')=='realtime','model':s.get('model')==MODEL,
               'output_modalities':s.get('output_modalities')==['audio'],'tools':s.get('tools')==[],
               'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
               'instructions':s.get('instructions')==expected['instructions'],
               'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
+              'audio.input.noise_reduction.type':isinstance(noise,dict) and noise.get('type')=='near_field',
+              'audio.input.noise_reduction.strength':(isinstance(noise,dict) and type(noise.get('strength')) in (int,float)
+                                                       and noise.get('strength')==1),
+              'audio.input.noise_reduction.fields':isinstance(noise,dict) and set(noise)<={'type','strength'},
               # OpenAI normalizes an omitted transcription config to null in
               # session.updated. Null means no separate transcription model.
               'audio.input.transcription':incoming.get('transcription') is None,
@@ -283,6 +291,9 @@ class _RealtimeWire:
               'audio.input.turn_detection.create_response':vad.get('create_response') is False,
               'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is True,
               'audio.input.turn_detection.idle_timeout_ms':vad.get('idle_timeout_ms') is None,
+              'audio.input.turn_detection.threshold':vad.get('threshold')==0.5,
+              'audio.input.turn_detection.prefix_padding_ms':vad.get('prefix_padding_ms')==300,
+              'audio.input.turn_detection.silence_duration_ms':vad.get('silence_duration_ms')==500,
               'audio.input.turn_detection.fields':set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'},
               'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
             }
