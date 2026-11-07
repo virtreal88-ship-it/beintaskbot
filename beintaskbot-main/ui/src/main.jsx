@@ -461,7 +461,7 @@ function DealTable({ rows = [], customer = false, onOpen }) {
       overflow="hidden"
       shadow="xs"
     >
-      <Table.ScrollArea>
+      <Table.ScrollArea data-horizontal-scroll="">
         <Table.Root size="sm" minW="760px">
           <Table.Header bg="app.raised">
             <Table.Row>
@@ -521,7 +521,7 @@ function DealKanban({ rows = [], onOpen }) {
   }, [rows]);
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
   return (
-    <Flex gap="4" align="flex-start" overflowX="auto" pb="3">
+    <Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
       {groups.map(([stage, items]) => (
         <Box
           key={stage}
