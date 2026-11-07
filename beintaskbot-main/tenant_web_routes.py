@@ -11,6 +11,7 @@ from tenant_notice_transport import TelegramBot
 from tenant_finance_api import finance_handler
 from tenant_linear_api import linear_handler
 from tenant_linear_tasks_api import tasks_handler
+from tenant_proactive_risk_api import handler as proactive_risk_handler
 from tenant_news_api import news_handler
 from tenant_news_telegram_api import handler as news_telegram_handler
 from tenant_chat_ai_api import handler as chat_ai_handler
@@ -73,6 +74,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/finance', finance_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/settings', linear_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/tasks', tasks_handler(member, origin, logger), ('GET', 'POST')),
+        ('/api/platform/risks/dry-run', proactive_risk_handler(member, logger), ('GET',)),
         ('/api/platform/news', news_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/news/ai', news_handler(member, origin, logger, ai=True), ('GET', 'POST')),
         ('/api/platform/chat/ai/settings', chat_ai_handler(member, origin, logger, settings=True), ('GET', 'POST')),

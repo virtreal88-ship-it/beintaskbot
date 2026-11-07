@@ -19,13 +19,23 @@ def ensure_observer_schema(conn) -> None:
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_linear_sync (
               tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
               config_version TEXT NOT NULL DEFAULT '', cursor TEXT NULL, since_at TIMESTAMPTZ NULL,
-              until_at TIMESTAMPTZ NULL, due_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              until_at TIMESTAMPTZ NULL, due_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              risk_scan_version TEXT NOT NULL DEFAULT ''
             )''')
+            cur.execute("ALTER TABLE saas_linear_sync ADD COLUMN IF NOT EXISTS risk_scan_version TEXT NOT NULL DEFAULT ''")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_linear_snapshots (
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, issue_id UUID NOT NULL,
               source_version TIMESTAMPTZ NOT NULL, state_id TEXT NOT NULL, snapshot JSONB NOT NULL,
+              source_scope TEXT NOT NULL DEFAULT '', observed_at TIMESTAMPTZ NULL, risk_checked_at TIMESTAMPTZ NULL,
+              risk_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
               PRIMARY KEY(tenant_id,issue_id)
             )''')
+            cur.execute("ALTER TABLE saas_linear_snapshots ADD COLUMN IF NOT EXISTS source_scope TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE saas_linear_snapshots ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ NULL")
+            cur.execute("ALTER TABLE saas_linear_snapshots ADD COLUMN IF NOT EXISTS risk_checked_at TIMESTAMPTZ NULL")
+            cur.execute("ALTER TABLE saas_linear_snapshots ADD COLUMN IF NOT EXISTS risk_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb")
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_linear_risk_recheck_idx
+              ON saas_linear_snapshots(tenant_id,source_scope,risk_checked_at NULLS FIRST)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_linear_notice_events (
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, id UUID NOT NULL,
               issue_id UUID NOT NULL, source_version TIMESTAMPTZ NOT NULL, event TEXT NOT NULL

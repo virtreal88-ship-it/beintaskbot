@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 import test_tenant_hot_orders as loaders
 from tenant_linear_observer_policy import source_time, event_kind, event_id, news_candidate
+from tenant_proactive_risk_policy import analyze_linear, linear_scope
 from tenant_linear_policy import settings, TenantLinearError
 
 TENANT='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
@@ -75,8 +76,11 @@ class Storage(unittest.TestCase):
         self.context=Mock(return_value=({},config(),'private-key','v1'))
         self.query=Mock(return_value={'issues':{'nodes':[],'pageInfo':{'hasNextPage':False,'endCursor':None}}})
         self.service=loaders.load('tenant_linear_observer',{'_connect':self.connect,'ensure_observer_schema':Mock(),
+            'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
+            'analyze_linear':Mock(return_value=[]),'linear_scope':linear_scope,
             'context':self.context,'query':self.query,'FIELDS':'id'},
-            {'tenant_platform','tenant_linear_context','tenant_linear_provider','tenant_linear_tasks_provider','tenant_linear_observer_schema'})
+            {'tenant_platform','tenant_linear_context','tenant_linear_provider','tenant_linear_tasks_provider','tenant_linear_observer_schema',
+             'tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
 
     def test_news_seen_key_prevents_reimport_and_no_publication(self):
         self.cur.fetchone.side_effect=[None,{'issue_id':OTHER}]
@@ -90,14 +94,30 @@ class Storage(unittest.TestCase):
 
     def test_foreign_team_and_older_data_never_stored(self):
         self.service.store_issue(self.cur,TENANT,config(),row(team={'id':OTHER}),baseline=False)
-        self.cur.execute.assert_not_called()
+        self.cur.execute.assert_called_once()
+        self.assertIn('DELETE FROM saas_proactive_risk_findings',self.cur.execute.call_args.args[0])
+        self.cur.reset_mock()
         self.cur.fetchone.return_value={'state_id':DONE,'source_version':source_time('2026-10-09T10:00:00Z')}
         self.service.store_issue(self.cur,TENANT,config(),row(),baseline=False)
         self.assertNotIn('INSERT',str(self.cur.execute.call_args_list))
 
+    def test_linear_risk_candidate_is_stored_only_with_current_snapshot(self):
+        candidate={'rule_id':'access_price_claim','severity':'P2'}
+        self.service.analyze_linear.return_value=[candidate]
+        issue=row(state={'id':OTHER},title='Cashier can change price without permission',priority=2)
+        self.cur.fetchone.return_value=None
+        checked=source_time('2026-11-07T12:00:00Z')
+        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False,
+                                 source_scope='v1:'+TENANT,source_checked_at=checked)
+        self.service.analyze_linear.assert_called_once_with(issue,tenant_timezone=None,checked_at=checked)
+        self.service.replace_source_findings.assert_called_once_with(self.cur,TENANT,'linear',OTHER,
+            source_time(STAMP).isoformat(),issue['title'],[candidate],
+            source_scope='v1:'+TENANT,source_checked_at=checked)
+        self.assertNotIn('saas_linear_notice_deliveries',str(self.cur.execute.call_args_list))
+
     def test_fixed_page_and_durable_window(self):
         end=datetime(2026,10,8,12,tzinfo=timezone.utc);start=datetime(2026,10,8,11,tzinfo=timezone.utc)
-        state={'tenant_id':TENANT,'config_version':'v1','cursor':'next','since_at':start,'until_at':end}
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v3','cursor':'next','since_at':start,'until_at':end}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.query.return_value['issues']['pageInfo']={'hasNextPage':True,'endCursor':'next-2'}
         result=self.service.sync_one();self.assertTrue(result['has_next'])
@@ -105,13 +125,67 @@ class Storage(unittest.TestCase):
         self.assertEqual(key,'private-key');self.assertIn('first:30',query);self.assertIn('parent { id }',query)
         self.assertEqual(variables['filter']['team']['id']['eq'],TENANT);self.assertEqual(variables['after'],'next')
         update=self.cur.execute.call_args_list[-1].args[1]
-        self.assertEqual(update,('v1','next-2',start,end,TENANT));self.assertEqual(self.conn.commit.call_count,2)
+        self.assertEqual(update,('v1','next-2',start,end,'v3',TENANT));self.assertEqual(self.conn.commit.call_count,2)
 
     def test_config_change_resets_scan_without_history_alarms(self):
         state={'tenant_id':TENANT,'config_version':'old','cursor':'old-cursor','since_at':source_time(STAMP),'until_at':None}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.service.sync_one();variables=self.query.call_args.args[2]
         self.assertIsNone(variables['after']);self.assertNotIn('gte',variables['filter']['updatedAt'])
+
+    def test_risk_rollout_backfills_unchanged_issues_even_with_existing_watermark(self):
+        start=source_time(STAMP)
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'','cursor':'old-page',
+               'since_at':start,'until_at':None}
+        self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
+        result=self.service.sync_one()
+        variables=self.query.call_args.args[2]
+        self.assertIsNone(variables['after'])
+        self.assertNotIn('gte',variables['filter']['updatedAt'])
+        self.assertFalse(result['has_next'])
+        update=self.cur.execute.call_args_list[-1].args[1]
+        self.assertEqual(update[-2:],('v3',TENANT))
+
+    def test_successful_incremental_check_does_not_claim_unobserved_findings_fresh(self):
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v3','cursor':None,
+               'since_at':source_time(STAMP),'until_at':None}
+        self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
+        self.service.sync_one()
+        self.assertFalse(any('UPDATE saas_proactive_risk_findings SET source_checked_at=now()' in call.args[0]
+                             for call in self.cur.execute.call_args_list))
+
+    def test_saved_snapshot_recheck_crosses_due_threshold_without_source_change_or_duplicate_rule(self):
+        observed=datetime(2026,11,5,9,tzinfo=timezone.utc)
+        version=datetime(2026,11,5,9,tzinfo=timezone.utc)
+        issue={'id':OTHER,'team':{'id':TENANT},'title':'Routine task','dueDate':'2026-11-07',
+               'updatedAt':'2026-11-05T09:00:00Z','state':{'id':BEFORE}}
+        saved={'issue_id':OTHER,'source_version':version,'state_id':BEFORE,'risk_snapshot':issue,'observed_at':observed}
+        self.cur.fetchall.return_value=[saved]
+        self.service.analyze_linear.side_effect=analyze_linear
+        scope=linear_scope('v1',TENANT)
+        before=datetime(2026,11,6,12,tzinfo=timezone.utc)
+        after=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        self.assertEqual(self.service.reevaluate_saved_snapshots(self.cur,TENANT,config(),source_scope=scope,
+            tenant_timezone='Pacific/Auckland',checked_at=before),1)
+        first=self.service.replace_source_findings.call_args.args[6]
+        self.assertNotIn('overdue_task',[item['rule_id'] for item in first])
+        self.assertEqual(self.service.replace_source_findings.call_args.kwargs['source_checked_at'],observed)
+        self.assertEqual(self.service.reevaluate_saved_snapshots(self.cur,TENANT,config(),source_scope=scope,
+            tenant_timezone='Pacific/Auckland',checked_at=after),1)
+        second=self.service.replace_source_findings.call_args.args[6]
+        self.assertEqual([item['rule_id'] for item in second],['overdue_task'])
+        self.assertEqual(self.service.replace_source_findings.call_args.kwargs['source_checked_at'],observed)
+        self.assertEqual(self.service.reevaluate_saved_snapshots(self.cur,TENANT,config(),source_scope=scope,
+            tenant_timezone='Pacific/Auckland',checked_at=after),1)
+        repeated=self.service.replace_source_findings.call_args.args[6]
+        self.assertEqual([item['rule_id'] for item in repeated],['overdue_task'])
+        self.assertEqual(repeated[0]['facts'],second[0]['facts'])
+        select_sql=self.cur.execute.call_args_list[0].args[0]
+        self.assertIn('source_scope=%s',select_sql)
+        self.assertIn('state_id<>ALL(%s)',select_sql)
+        self.assertIn("risk_checked_at<=%s::timestamptz-%s::interval",select_sql)
+        self.assertIn('LIMIT %s FOR UPDATE SKIP LOCKED',select_sql)
+        self.assertEqual(len(self.cur.execute.call_args_list[0].args[1]),6)
 
     def test_provider_failure_keeps_committed_backoff(self):
         state={'tenant_id':TENANT,'config_version':'v1','cursor':None,'since_at':None,'until_at':None}
@@ -122,12 +196,21 @@ class Storage(unittest.TestCase):
         self.assertIn("interval '5 minutes'",str(self.cur.execute.call_args_list))
 
     def test_cleanup_bounded_even_when_disconnected_and_keeps_dedup(self):
-        service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock()},
-            {'tenant_platform','tenant_linear_observer_schema'})
+        service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock(),
+            'ensure_risk_schema':Mock()}, {'tenant_platform','tenant_linear_observer_schema','tenant_proactive_risk_schema'})
         service.cleanup();calls=self.cur.execute.call_args_list
-        self.assertEqual(len(calls),3)
-        for call in calls:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
-        self.assertNotIn('saas_linear_news_seen',str(calls));self.assertNotIn('connected',str(calls))
+        self.assertEqual(len(calls),6)
+        for call in calls[:2]:self.assertIn('LIMIT 100',call.args[0])
+        for call in calls[2:]:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
+        risk_cleanup=next(call.args[0] for call in calls if 'DELETE FROM saas_proactive_risk_findings' in call.args[0])
+        self.assertIn("source_kind='linear' AND NOT EXISTS",risk_cleanup)
+        self.assertIn('floor(extract(epoch from i.updated_at)*1000000)',risk_cleanup)
+        self.assertIn("source_kind='crm_task' AND NOT EXISTS",risk_cleanup)
+        self.assertIn('i.account_domain||\':\'||floor(extract(epoch from i.connected_at)*1000000)',risk_cleanup)
+        stale_risk_cleanup=next(call.args[0] for call in calls if "SET risk_snapshot='{}'::jsonb" in call.args[0])
+        self.assertIn('NOT EXISTS',stale_risk_cleanup)
+        self.assertIn("LIMIT 100 FOR UPDATE SKIP LOCKED",stale_risk_cleanup)
+        self.assertNotIn('saas_linear_news_seen',str(calls))
 
 
 class Worker(unittest.IsolatedAsyncioTestCase):

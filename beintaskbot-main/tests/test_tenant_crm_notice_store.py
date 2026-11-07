@@ -4,14 +4,18 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, MagicMock, patch
 from test_tenant_hot_orders import load
 from test_tenant_crm_notice import member,task
+from tenant_proactive_risk_policy import crm_scope_from_connection
 
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.module=load('tenant_crm_notice_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(),'ensure_schema':Mock()},
-            {'tenant_platform','tenant_crm_notice_schema'})
+        self.module=load('tenant_crm_notice_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(),'ensure_schema':Mock(),
+            'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
+            'analyze_crm_task':Mock(return_value=[]),'source_timestamp':Mock(side_effect=lambda value:value),
+            'crm_scope_from_connection':crm_scope_from_connection},
+            {'tenant_platform','tenant_crm_notice_schema','tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
     def test_round_robin_scans_one_company_with_fixed_page_sizes(self):
         baseline=datetime.fromtimestamp(100,timezone.utc)
         self.cur.fetchone.side_effect=[{'tenant_id':'company-a','positions':{},'baseline':baseline,'connection_id':'x:2026'},
@@ -25,6 +29,47 @@ class StoreTests(unittest.TestCase):
         for call in self.cur.execute.call_args_list:
             if 'LIMIT 50' in call.args[0]:self.assertEqual(call.args[1][0],'company-a')
         self.conn.commit.assert_called_once()
+
+    def test_crm_task_risk_scan_persists_candidate_without_adding_delivery(self):
+        baseline=datetime.now(timezone.utc)
+        self.cur.fetchone.return_value={'tenant_id':'company-a','positions':{},'baseline':baseline,'connection_id':'x:2026'}
+        task={'tenant_id':'company-a','kommo_task_id':9,'source_key':'9','kommo_lead_id':None,'text':'Cashier can change price without permission',
+            'completed':False,'responsible_id':None,'due_at':None,'synced_at':baseline,
+            'raw':{'created_at':1,'updated_at':'source-v1'}}
+        self.cur.fetchall.side_effect=[[],[], [task], [], [], [], [], []]
+        candidate={'rule_id':'crm_task_unassigned_price_access','severity':'P2'}
+        self.module.analyze_crm_task.return_value=[candidate]
+        with patch.dict(self.module.observe.__globals__,{'profiles':Mock(return_value=[]),
+                'connection_id':Mock(return_value='x:2026')}):
+            self.assertEqual(self.module.observe(),1)
+        self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v1',
+            'CRM task 9',[candidate],source_scope='x:2026',source_checked_at=baseline)
+        self.module.mark_checked.assert_called_once_with(self.cur,'company-a','crm_task','x:2026')
+        self.assertNotIn('INSERT INTO saas_crm_notice_deliveries',str(self.cur.execute.call_args_list))
+        self.conn.commit.assert_called_once()
+
+    def test_completed_crm_task_clears_old_risk_finding(self):
+        baseline=datetime.now(timezone.utc)
+        self.cur.fetchone.return_value={'tenant_id':'company-a','positions':{},'baseline':baseline,'connection_id':'x:2026'}
+        task={'tenant_id':'company-a','kommo_task_id':9,'source_key':'9','kommo_lead_id':None,
+            'text':'Service outage reported','completed':True,'responsible_id':None,'due_at':None,
+            'synced_at':baseline,'raw':{'updated_at':'source-v2'}}
+        self.cur.fetchall.side_effect=[[],[],[task],[],[],[],[],[]]
+        with patch.dict(self.module.observe.__globals__,{'profiles':Mock(return_value=[]),
+                'connection_id':Mock(return_value='x:2026')}):
+            self.module.observe()
+        self.module.analyze_crm_task.assert_not_called()
+        self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v2',
+            'CRM task 9',[],source_scope='x:2026',source_checked_at=baseline)
+
+    def test_crm_retention_compares_the_exact_active_connection_scope(self):
+        self.module.cleanup_expired_risk_findings(self.cur)
+        sql=self.cur.execute.call_args.args[0]
+        self.assertIn("source_kind='crm_task'",sql)
+        self.assertIn("i.provider='kommo' AND i.status='connected'",sql)
+        self.assertIn("f.source_scope=i.account_domain||':'||floor(extract(epoch from i.connected_at)*1000000)",sql)
+        self.assertIn('LIMIT 100 FOR UPDATE SKIP LOCKED',sql)
+
     def test_plan_is_unique_and_preferences_do_not_catch_up_later(self):
         self.cur.fetchone.return_value={'id':'event'}
         opted=member();off=member(identity=21);off['workflow']['policies']={}
