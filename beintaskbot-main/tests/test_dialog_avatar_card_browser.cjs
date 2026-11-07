@@ -8,7 +8,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
-  for(const [width,height,language] of [[320,760,'ru'],[360,800,'ru'],[390,844,'az'],[430,900,'az'],[1280,900,'en']]){
+  for(const [width,height,language] of [[320,760,'ru'],[360,800,'ru'],[390,844,'az'],[430,900,'az'],[1280,900,'en'],[390,420,'ru']]){
    const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];let marker=true,nameFailure=false,nameGate=null,releaseName;const savedNames=new Map();
    page.on('pageerror',error=>errors.push(error.stack));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
    // Production stores question templates in this tenant/employee scoped key.
@@ -33,6 +33,12 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await page.locator('#operatorClientDeveloperHost #dialogDeveloperMarker').count(),1);assert.equal(await page.locator('#operatorClientDeveloperStatus #dialogDeveloperBadge').count(),1);assert.equal(await page.locator('#operatorDialogTitleSlot #dialogDeveloperBadge').count(),0);
     const bell=page.locator('#dialogConsultationBell');assert.equal(await bell.count(),1,'global bell remains in place');assert.equal(await page.locator('#dialogConsultationMobileBell,#operatorDialogNotificationsHost').count(),0,'no duplicate global bell or new scoped bell is inserted in the dialogue');
     const geometry=await avatar.boundingBox();assert.ok(geometry.width>=43.95&&geometry.height>=43.95,JSON.stringify(geometry));assert.equal(await page.locator('[data-operator-create-ticket]').count(),1,'task creation stays available');
+    const headerControls=['#operatorClientCardOpen','[data-operator-create-ticket]','#dialogDeveloperAsk','#operatorMoreActions summary'];
+    const headerGeometry=await page.evaluate(selectors=>selectors.map(selector=>{const node=document.querySelector(selector),box=node.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return {selector,x:box.x,y:box.y,right:box.right,bottom:box.bottom,clickable:hit===node||node.contains(hit)};}),headerControls);
+    for(const box of headerGeometry){assert.ok(box.x>=0&&box.right<=width&&box.y>=0&&box.bottom<=height,'header control fits viewport '+JSON.stringify(box));assert.equal(box.clickable,true,'header control is not covered '+JSON.stringify(box));}
+    for(let a=0;a<headerGeometry.length;a++)for(let b=a+1;b<headerGeometry.length;b++){const one=headerGeometry[a],two=headerGeometry[b];assert.ok(one.right<=two.x||two.right<=one.x||one.bottom<=two.y||two.bottom<=one.y,'header controls must not overlap '+JSON.stringify([one,two]));}
+    for(const selector of headerControls)await page.locator(selector).click({trial:true});
+    await page.locator('#operatorMoreActions summary').click();assert.equal(await menu.getAttribute('open'),'');await page.locator('#operatorMoreActions summary').click();
     await avatar.focus();await page.keyboard.press('Enter');await card.waitFor();assert.equal(await avatar.getAttribute('aria-expanded'),'true');assert.equal(await page.evaluate(()=>document.activeElement.id),'operatorConversationNameInput');assert.match(await card.locator('.operator-agent-label').innerText(),/Assigned agent/);assert.equal(await card.locator('select').count(),0,'moving the agent name never changes assignment');
     assert.equal(calls.some(c=>c.method==='POST'&&(c.path.endsWith('/display-name')||(c.path.endsWith('/developer-marker')&&typeof JSON.parse(c.body).enabled==='boolean'))),false,'opening card never saves or toggles anything');
     await field.fill('Unsaved / Несохранённое имя');await field.evaluate(n=>n.setSelectionRange(3,9));await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));await card.waitFor();assert.equal(await field.inputValue(),'Unsaved / Несохранённое имя');assert.equal(await field.evaluate(n=>n.selectionStart),3,'same-source background rendering preserves typed name and selection');

@@ -47,6 +47,7 @@ ASSETS = (
     ('/assets/tenant-news-ai-settings.js', 'tenant-news-ai-settings.js', 'no-cache'),
     ('/assets/tenant-linear-settings.js', 'tenant-linear-settings.js', 'no-cache'),
     ('/assets/tenant-linear-board.js', 'tenant-linear-board.js', 'no-cache'),
+    ('/assets/tenant-risk-alert-detail.js', 'tenant-risk-alert-detail.js', 'no-cache'),
     ('/assets/tenant-linear-rules.js', 'tenant-linear-rules.js', 'no-cache'),
     ('/assets/tenant-task-approvals.js', 'tenant-task-approvals.js', 'no-store'),
     ('/assets/tenant-task-completion.js', 'tenant-task-completion.js', 'no-store'),

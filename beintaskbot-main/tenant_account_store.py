@@ -180,6 +180,14 @@ def notification_preferences(*, tenant_id: str, actor_id: int, value: dict | Non
         actor_key=str(int(actor_id))
         with _connect() as conn:
             _ensure_schema(conn)
+            risk_channels = normalized.get('proactive_risk') or {}
+            old_risk_channels = existing.get('proactive_risk') or {}
+            restart_risk_backfill = (
+                not any(old_risk_channels.get(channel) is True for channel in ('internal', 'push'))
+                and any(risk_channels.get(channel) is True for channel in ('internal', 'push')))
+            if any(risk_channels.get(channel) is True for channel in ('internal', 'push')):
+                from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
+                ensure_risk_schema(conn)
             with conn.cursor() as cur:
                 cur.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by)
                     VALUES(%s::uuid,'members',jsonb_build_object(%s::text,jsonb_build_object('notifications',%s::jsonb)),%s)
@@ -188,6 +196,9 @@ def notification_preferences(*, tenant_id: str, actor_id: int, value: dict | Non
                                   COALESCE(saas_tenant_workflow_policies.value->(%s::text),'{}'::jsonb),TRUE),
                         ARRAY[%s::text,'notifications']::text[],%s::jsonb,TRUE),updated_by=%s,updated_at=now()''',
                     (tenant_id,actor_key,_json(normalized),int(actor_id),actor_key,actor_key,actor_key,_json(normalized),int(actor_id)))
+                if any(risk_channels.get(channel) is True for channel in ('internal', 'push')):
+                    from tenant_proactive_risk_delivery import register_baseline_backfill
+                    register_baseline_backfill(cur, tenant_id, int(actor_id), restart=restart_risk_backfill)
             conn.commit()
         existing=normalized
     catalog=[item for item in notification_catalog() if item['key'] in supported]

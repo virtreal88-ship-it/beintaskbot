@@ -2344,7 +2344,13 @@ function SettingsHub() {
               >
                 <Text fontSize="sm">{event.label}</Text>
                 <Flex gap="4">
-                  {notificationData.channels_available.map((channel) => (
+                  {notificationData.channels_available
+                    .filter((channel) =>
+                      (event.channels || notificationData.channels_available).includes(
+                        channel,
+                      ),
+                    )
+                    .map((channel) => (
                     <PermissionCheckbox
                       key={`${event.key}:${channel}`}
                       value={channel}
