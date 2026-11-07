@@ -370,12 +370,55 @@ class TestRiskAlertPostgres:
         assert sum(row['state'] == 'deferred' for row in states) == 1
         self.query('''UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days'
           WHERE id=(SELECT id FROM saas_proactive_risk_alert_events ORDER BY created_at LIMIT 1)''')
+        self.query('''UPDATE saas_proactive_risk_alert_events SET quota_reserved_at=now()-interval '2 days'
+          WHERE id=(SELECT id FROM saas_proactive_risk_alert_events WHERE state='pending' ORDER BY created_at LIMIT 1)''')
         self.query("UPDATE saas_proactive_risk_alert_events SET retry_after=now()-interval '1 minute' WHERE source_id='610'")
         assert delivery.promote_deferred_events(limit=1)==1
         assert self.query('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
-          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+          WHERE tenant_id=%s::uuid AND quota_reserved_at>=now()-interval '1 day'
             AND state NOT IN ('suppressed','deferred') ''',
           (TENANT,))[0]['n'] == 10
+
+    def test_push_opt_out_does_not_cancel_current_bell_episode(self):
+        self.preferences[OWNER]={'internal':True,'push':True}
+        self.record()
+        assert delivery.expand_events()==1
+        alert=self.query('SELECT id,state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]
+        self.preferences[OWNER]={'internal':True,'push':False}
+        item=delivery.claim_push()
+        assert item and item['send'] is False
+        assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE id=%s::uuid',(alert['id'],))[0]['state']=='expanded'
+        self.record()
+        assert self.query('SELECT count(*) AS n FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]['n']==1
+        assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key=%s',('proactive_risk:'+str(alert['id']),))[0]['n']==1
+
+    def test_transient_push_source_failure_defers_item_and_claims_other_tenant(self,monkeypatch):
+        from tenant_linear_policy import TenantLinearError
+        self.preferences[OWNER]={'internal':True,'push':True}
+        self.preferences[303]={'internal':True,'push':True}
+        self.seed_source(TENANT,OWNER,'510')
+        self.record(source_id='510')
+        self.seed_source(OTHER_TENANT,303,'520')
+        self.record(tenant=OTHER_TENANT,source_id='520')
+        assert delivery.expand_events()==2
+        self.query('''UPDATE saas_proactive_risk_alert_deliveries SET updated_at=
+          CASE WHEN tenant_id=%s::uuid THEN now()-interval '2 minutes' ELSE now()-interval '1 minute' END
+          WHERE channel='push' ''',(TENANT,))
+        authorize=delivery._authorize_event
+        def authorize_transient(cur,event,**kwargs):
+            if event['tenant_id']==TENANT:
+                raise TenantLinearError('Linear temporarily unavailable',503)
+            return authorize(cur,event,**kwargs)
+        monkeypatch.setattr(delivery,'_authorize_event',authorize_transient)
+        item=delivery.claim_push()
+        assert item and item['tenant_id']==OTHER_TENANT and item['send'] is True
+        rows=self.query('''SELECT e.tenant_id,d.status,d.retry_after FROM saas_proactive_risk_alert_deliveries d
+          JOIN saas_proactive_risk_alert_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
+          WHERE d.channel='push' ORDER BY e.tenant_id''')
+        failed=next(row for row in rows if row['tenant_id']==TENANT)
+        claimed=next(row for row in rows if row['tenant_id']==OTHER_TENANT)
+        assert failed['status']=='pending' and failed['retry_after'] is not None
+        assert claimed['status']=='sending'
 
     def test_provider_acceptance_is_not_reported_as_read_receipt(self):
         self.record()

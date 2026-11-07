@@ -231,16 +231,47 @@ def test_parallel_sources_cannot_exceed_daily_tenant_limit(risk_postgres, monkey
     assert states.get('suppressed', 0) == 0
     assert sum(states.values()) == 24
     with _profiled_connection(dsn, schema) as conn:
-        conn.execute("UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days' WHERE tenant_id=%s::uuid AND source_id='100'", (tenant,))
+        conn.execute("UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days',quota_reserved_at=now()-interval '2 days' WHERE tenant_id=%s::uuid AND source_id='100'", (tenant,))
         conn.execute("UPDATE saas_proactive_risk_alert_events SET retry_after=now()-interval '1 minute' WHERE tenant_id=%s::uuid AND source_id='123'",(tenant,))
     monkeypatch.setattr(delivery, '_connect', lambda: _profiled_connection(dsn, schema))
     monkeypatch.setattr(delivery, 'ensure_schema', lambda _conn: None)
     assert delivery.promote_deferred_events(limit=1)==1
     with _profiled_connection(dsn, schema) as conn:
         recent = conn.execute('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
-          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+          WHERE tenant_id=%s::uuid AND quota_reserved_at>=now()-interval '1 day'
             AND state NOT IN ('suppressed','deferred') ''', (tenant,)).fetchone()['n']
     assert recent == delivery.MAX_RISK_ALERTS_PER_DAY
+
+
+def test_parallel_deferred_promotions_reserve_quota_atomically(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(lambda source: _observe(dsn, schema, tenant, source), range(200, 209)))
+    deferred_ids=[str(uuid4()),str(uuid4())]
+    with _profiled_connection(dsn,schema) as conn:
+        for event_id,source_id in zip(deferred_ids,('old-backlog-a','old-backlog-b')):
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,
+               alert_fingerprint,state,retry_after,created_at)
+              VALUES(%s,%s,101,'crm_task',%s,'service_unavailable','scope','v1','fp','deferred',
+                now()-interval '1 minute',now()-interval '2 days')''',(event_id,tenant,source_id))
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    gate=Barrier(2)
+    def promote(_n):
+        gate.wait(timeout=10)
+        return delivery.promote_deferred_events(limit=1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        promoted=list(pool.map(promote,range(2)))
+    assert sum(promoted)==1
+    with _profiled_connection(dsn,schema) as conn:
+        states=conn.execute('''SELECT state,count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid GROUP BY state''',(tenant,)).fetchall()
+        reserved=conn.execute('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
+          WHERE tenant_id=%s::uuid AND quota_reserved_at>=now()-interval '1 day'
+            AND state NOT IN ('deferred','suppressed')''',(tenant,)).fetchone()['n']
+    assert {row['state']:row['n'] for row in states}=={'deferred':1,'pending':10}
+    assert reserved==delivery.MAX_RISK_ALERTS_PER_DAY
 
 
 def test_two_parallel_push_claims_do_not_upgrade_shared_tenant_lock(risk_postgres, monkeypatch):

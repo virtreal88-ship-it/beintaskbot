@@ -61,6 +61,7 @@ def ensure_schema(conn) -> None:
                 CONSTRAINT saas_proactive_risk_alert_events_state_check
                 CHECK(state IN ('pending','expanded','deferred','cancelled','suppressed')),
               retry_after TIMESTAMPTZ NULL,
+              quota_reserved_at TIMESTAMPTZ NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               UNIQUE(tenant_id,id)
             )''')
@@ -81,6 +82,10 @@ def ensure_schema(conn) -> None:
               END IF;
             END $$''')
             cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ NULL")
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS quota_reserved_at TIMESTAMPTZ NULL")
+            cur.execute('''UPDATE saas_proactive_risk_alert_events SET quota_reserved_at=created_at
+              WHERE quota_reserved_at IS NULL AND state NOT IN ('deferred','suppressed')
+                AND created_at>=now()-interval '1 day' ''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_pending_idx
               ON saas_proactive_risk_alert_events(created_at,tenant_id) WHERE state='pending' ''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_retry_pending_idx
@@ -93,13 +98,18 @@ def ensure_schema(conn) -> None:
               endpoint_hash TEXT NOT NULL DEFAULT '',
               status TEXT NOT NULL DEFAULT 'pending'
               CHECK(status IN ('pending','sending','accepted','delivered','unknown','skipped','expired')),
+              retry_after TIMESTAMPTZ NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,event_id,recipient_id,channel,endpoint_hash),
               FOREIGN KEY(tenant_id,event_id)
                 REFERENCES saas_proactive_risk_alert_events(tenant_id,id) ON DELETE CASCADE
             )''')
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_deliveries ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ NULL")
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_pending_idx
               ON saas_proactive_risk_alert_deliveries(channel,updated_at)
+              WHERE status='pending' ''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_retry_idx
+              ON saas_proactive_risk_alert_deliveries(channel,retry_after,updated_at)
               WHERE status='pending' ''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_sending_idx
               ON saas_proactive_risk_alert_deliveries(updated_at) WHERE status='sending' ''')

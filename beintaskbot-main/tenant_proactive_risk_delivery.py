@@ -21,6 +21,7 @@ MAX_RISK_ALERTS_PER_DAY = 10
 MAX_RISK_EVENTS_PER_TICK = 5
 MAX_BASELINE_FINDINGS_PER_TICK = 5
 MAX_PUSH_ATTEMPTS_PER_TICK = 5
+MAX_PUSH_SOURCE_CHECKS_PER_CLAIM = 25
 CRM_SOURCE_MAX_AGE = timedelta(minutes=15)
 RISK_EVENT = 'proactive_risk'
 DEFERRED_FOR_QUOTA = object()
@@ -86,17 +87,18 @@ def _queue_new_finding(cur, tenant: str, source_kind: str, source_id: str,
     # for this tenant to prevent parallel scans of different tasks exceeding it.
     lock_daily_quota_transition(cur, tenant)
     cur.execute('''SELECT count(*) AS count FROM saas_proactive_risk_alert_events
-      WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+              WHERE tenant_id=%s::uuid AND quota_reserved_at>=now()-interval '1 day'
         AND state NOT IN ('suppressed','deferred') ''', (tenant,))
     limited = int((cur.fetchone() or {}).get('count') or 0) >= MAX_RISK_ALERTS_PER_DAY
     event_id = uuid.uuid4()
     cur.execute('''INSERT INTO saas_proactive_risk_alert_events
-      (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state,retry_after)
+      (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state,retry_after,quota_reserved_at)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,
-        CASE WHEN %s THEN now()+interval '15 minutes' ELSE NULL END)
+        CASE WHEN %s THEN now()+interval '15 minutes' ELSE NULL END,
+        CASE WHEN %s THEN NULL ELSE now() END)
       ON CONFLICT DO NOTHING RETURNING id''',
       (event_id, tenant, recipient, source_kind, str(source_id), finding['rule_id'], str(source_scope),
-       str(source_version), alert_fingerprint(finding), 'deferred' if limited else 'pending', limited))
+       str(source_version), alert_fingerprint(finding), 'deferred' if limited else 'pending', limited, limited))
     inserted = cur.fetchone()
     if limited:
         return DEFERRED_FOR_QUOTA if inserted else None
@@ -270,7 +272,7 @@ def promote_deferred_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
                 if not cur.fetchone():
                     continue
                 cur.execute('''SELECT count(*) AS count FROM saas_proactive_risk_alert_events
-                  WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+                  WHERE tenant_id=%s::uuid AND quota_reserved_at>=now()-interval '1 day'
                     AND state NOT IN ('suppressed','deferred')''',(tenant,))
                 used=int((cur.fetchone() or {}).get('count') or 0)
                 if used >= MAX_RISK_ALERTS_PER_DAY:
@@ -279,7 +281,8 @@ def promote_deferred_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
                       WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='deferred' ''',
                       (tenant,event['id']))
                     continue
-                cur.execute('''UPDATE saas_proactive_risk_alert_events SET state='pending',retry_after=NULL
+                cur.execute('''UPDATE saas_proactive_risk_alert_events
+                  SET state='pending',retry_after=NULL,quota_reserved_at=now()
                   WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='deferred' RETURNING id''',
                   (tenant,event['id']))
                 promoted += int(cur.fetchone() is not None)
@@ -496,50 +499,70 @@ def claim_push() -> dict | None:
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_proactive_risk_alert_deliveries SET status='unknown',updated_at=now()
               WHERE channel='push' AND status='sending' AND updated_at<now()-interval '5 minutes' ''')
-            cur.execute('''SELECT d.*,e.source_kind,e.source_id,e.rule_id,e.source_scope,e.source_version,
-                    e.alert_fingerprint,e.state AS event_state,p.subscription,p.owner_telegram_id,
-                    b.active AS device_active,t.owner_telegram_id AS current_owner_id
-              FROM saas_proactive_risk_alert_deliveries d
-              JOIN saas_proactive_risk_alert_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
-              JOIN saas_tenants t ON t.id=d.tenant_id
-              LEFT JOIN saas_push_devices p ON p.endpoint_hash=d.endpoint_hash
-              LEFT JOIN saas_member_push_devices b ON b.tenant_id=d.tenant_id
-                AND b.telegram_id=d.recipient_id AND b.endpoint_hash=d.endpoint_hash
-              WHERE d.channel='push' AND d.status='pending' AND e.state='expanded'
-              ORDER BY d.updated_at,d.event_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED''')
-            item = cur.fetchone()
-            if not item:
+            for _ in range(MAX_PUSH_SOURCE_CHECKS_PER_CLAIM):
+                cur.execute('''SELECT d.*,e.source_kind,e.source_id,e.rule_id,e.source_scope,e.source_version,
+                        e.alert_fingerprint,e.state AS event_state,p.subscription,p.owner_telegram_id,
+                        b.active AS device_active,t.owner_telegram_id AS current_owner_id
+                  FROM saas_proactive_risk_alert_deliveries d
+                  JOIN saas_proactive_risk_alert_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
+                  JOIN saas_tenants t ON t.id=d.tenant_id
+                  LEFT JOIN saas_push_devices p ON p.endpoint_hash=d.endpoint_hash
+                  LEFT JOIN saas_member_push_devices b ON b.tenant_id=d.tenant_id
+                    AND b.telegram_id=d.recipient_id AND b.endpoint_hash=d.endpoint_hash
+                  WHERE d.channel='push' AND d.status='pending' AND e.state='expanded'
+                    AND (d.retry_after IS NULL OR d.retry_after<=now())
+                  ORDER BY d.updated_at,d.event_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED''')
+                item = cur.fetchone()
+                if not item:
+                    conn.commit()
+                    return None
+                item['tenant_id'] = str(item['tenant_id'])
+                try:
+                    owner, event_allowed = _authorize_event(cur, item)
+                except Exception as error:
+                    if not _transient_source_error(error):
+                        raise
+                    cur.execute('''UPDATE saas_proactive_risk_alert_deliveries
+                      SET retry_after=now()+interval '15 minutes',updated_at=now()
+                      WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s
+                        AND channel='push' AND endpoint_hash=%s AND status='pending' ''',
+                      delivery_key(item))
+                    conn.commit()
+                    continue
+
+                channels = _channels(owner, item['tenant_id']) if owner else []
+                push_enabled = event_allowed and 'push' in channels
+                # Only reserve a push after the source check. Re-read and lock
+                # the exact owner-device binding at this final boundary.
+                cur.execute('''SELECT p.subscription,p.owner_telegram_id,b.active AS device_active,
+                        t.owner_telegram_id AS current_owner_id
+                  FROM saas_member_push_devices b
+                  JOIN saas_push_devices p ON p.endpoint_hash=b.endpoint_hash
+                  JOIN saas_tenants t ON t.id=b.tenant_id
+                  WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.endpoint_hash=%s
+                    AND p.owner_telegram_id=b.telegram_id
+                  FOR UPDATE OF b,p''',
+                  (item['tenant_id'], item['recipient_id'], item['endpoint_hash']))
+                device = cur.fetchone() or {}
+                item.update(device)
+                device_allowed = bool(device.get('device_active') is True and device.get('subscription')
+                    and device.get('owner_telegram_id') == item['recipient_id']
+                    and device.get('current_owner_id') == item['recipient_id'])
+                allowed = bool(push_enabled and item.get('event_state') == 'expanded' and device_allowed)
+                cur.execute('''UPDATE saas_proactive_risk_alert_deliveries SET status=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s
+                    AND channel='push' AND endpoint_hash=%s AND status='pending' ''',
+                  ('sending' if allowed else 'skipped', *delivery_key(item)))
+                # Push opt-out alone must not cancel a still-current signal or
+                # its already delivered in-app bell entry.
+                if not event_allowed and item.get('event_state') == 'expanded':
+                    _cancel_event(cur, item['tenant_id'], item['event_id'])
+                item.update(send=allowed, event=RISK_EVENT)
+                item['target_url'] = '/app?view=linear&risk_alert_id=' + str(item['event_id'])
                 conn.commit()
-                return None
-            item['tenant_id'] = str(item['tenant_id'])
-            owner, event_allowed = _authorize_event(cur, item, channel='push')
-            # Source/Linear revalidation above can be slow. Re-read and lock the
-            # exact owner-device binding only at the reservation boundary.
-            cur.execute('''SELECT p.subscription,p.owner_telegram_id,b.active AS device_active,
-                    t.owner_telegram_id AS current_owner_id
-              FROM saas_member_push_devices b
-              JOIN saas_push_devices p ON p.endpoint_hash=b.endpoint_hash
-              JOIN saas_tenants t ON t.id=b.tenant_id
-              WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.endpoint_hash=%s
-                AND p.owner_telegram_id=b.telegram_id
-              FOR UPDATE OF b,p''',
-              (item['tenant_id'], item['recipient_id'], item['endpoint_hash']))
-            device = cur.fetchone() or {}
-            item.update(device)
-            device_allowed = bool(device.get('device_active') is True and device.get('subscription')
-                and device.get('owner_telegram_id') == item['recipient_id']
-                and device.get('current_owner_id') == item['recipient_id'])
-            allowed = bool(event_allowed and item.get('event_state') == 'expanded' and device_allowed)
-            cur.execute('''UPDATE saas_proactive_risk_alert_deliveries SET status=%s,updated_at=now()
-              WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s
-                AND channel='push' AND endpoint_hash=%s AND status='pending' ''',
-              ('sending' if allowed else 'skipped', *delivery_key(item)))
-            if not event_allowed and item.get('event_state') == 'expanded':
-                _cancel_event(cur, item['tenant_id'], item['event_id'])
-            item.update(send=allowed, event=RISK_EVENT)
-            item['target_url'] = '/app?view=linear&risk_alert_id=' + str(item['event_id'])
-        conn.commit()
-    return item
+                return item
+            conn.commit()
+    return None
 
 
 def finish_push(item: dict, status: str) -> None:
