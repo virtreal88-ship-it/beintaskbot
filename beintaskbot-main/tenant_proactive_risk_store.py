@@ -1,4 +1,4 @@
-"""Dry-run finding persistence and owner-only preview reads; never delivers messages."""
+"""Risk finding persistence, owner-only preview reads and alert transition hooks."""
 import json
 from datetime import datetime, timedelta, timezone
 from tenant_platform import _connect, _read_tenant_workflow
@@ -15,6 +15,11 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
     """Replace the current dry-run view atomically when a source is observed."""
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
+    from tenant_proactive_risk_delivery import alert_fingerprint, record_finding_transitions
+    cur.execute('''SELECT rule_id,severity,confidence FROM saas_proactive_risk_findings
+      WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s FOR UPDATE''',
+      (tenant_id, source_kind, str(source_id)))
+    previous = {str(row['rule_id']): alert_fingerprint(row) for row in cur.fetchall()}
     cur.execute('DELETE FROM saas_proactive_risk_findings WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s',
                 (tenant_id, source_kind, str(source_id)))
     digest = fingerprint(findings)
@@ -33,6 +38,8 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
            item['confidence'], str(source_title or '')[:200], item.get('source_url') or '',
            json.dumps(item.get('facts') or [], ensure_ascii=False), str(item['assessment'])[:800],
            str(item['recommended_step'])[:400], digest, source_checked_at))
+    record_finding_transitions(cur, str(tenant_id), source_kind, str(source_id),
+                               str(source_scope), str(source_version), previous, findings)
 
 
 def mark_checked(cur, tenant_id: str, source_kind: str, source_scope: str = '') -> None:

@@ -20,6 +20,10 @@ _PAYLOADS = {
         'title': 'CRM Smart Assistant',
         'body': 'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.',
         'url': '/app?view=linear', 'tag': 'crm-linear', 'kind': 'linear'},
+    'proactive_risk': {
+        'title': 'CRM Smart Assistant',
+        'body': 'Tapşırıq üzrə yoxlanmalı siqnal var. Kabinetdə yoxlayın.',
+        'url': '/app?view=linear', 'tag': 'crm-proactive-risk', 'kind': 'risk_alert'},
     'hot_order_available': {
         'title': 'CRM Smart Assistant',
         'body': 'Yeni isti sifariş var. Kabinetdə yoxlayın.',

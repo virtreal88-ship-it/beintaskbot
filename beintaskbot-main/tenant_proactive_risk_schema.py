@@ -47,5 +47,40 @@ def ensure_schema(conn) -> None:
               source_scope TEXT NOT NULL, checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,source_kind,source_scope)
             )''')
+            # Dedicated, opt-in outbox. Alert rows contain routing/evidence
+            # hashes only; source text is re-read from its tenant-scoped store
+            # immediately before either in-app or Web Push delivery.
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_proactive_risk_alert_events (
+              id UUID PRIMARY KEY,
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              recipient_id BIGINT NOT NULL,
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('linear','crm_task')),
+              source_id TEXT NOT NULL, rule_id TEXT NOT NULL, source_scope TEXT NOT NULL,
+              source_version TEXT NOT NULL, alert_fingerprint TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending'
+                CHECK(state IN ('pending','expanded','cancelled','suppressed')),
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              UNIQUE(tenant_id,id)
+            )''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_pending_idx
+              ON saas_proactive_risk_alert_events(created_at,tenant_id) WHERE state='pending' ''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_proactive_risk_alert_deliveries (
+              tenant_id UUID NOT NULL,
+              event_id UUID NOT NULL,
+              recipient_id BIGINT NOT NULL,
+              channel TEXT NOT NULL CHECK(channel IN ('internal','push')),
+              endpoint_hash TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending','sending','delivered','unknown','skipped','expired')),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,event_id,recipient_id,channel,endpoint_hash),
+              FOREIGN KEY(tenant_id,event_id)
+                REFERENCES saas_proactive_risk_alert_events(tenant_id,id) ON DELETE CASCADE
+            )''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_pending_idx
+              ON saas_proactive_risk_alert_deliveries(channel,updated_at)
+              WHERE status='pending' ''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_delivery_sending_idx
+              ON saas_proactive_risk_alert_deliveries(updated_at) WHERE status='sending' ''')
         conn.commit()
         _ready = True

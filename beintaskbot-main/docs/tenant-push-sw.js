@@ -34,10 +34,10 @@ self.addEventListener('push',event=>{
       tag:task?'crm-task-notice':eventKey==='incoming_message'?dialogNoticeTag(target):'crm-notice',data:{url:task?'/app?view=tasks':target}
     }));return;
   }
-  const linear=kind==='linear',hot=kind==='hot_order',review=['hot_order_review','hot_order_decided'].includes(kind);
+  const linear=kind==='linear',risk=kind==='risk_alert',hot=kind==='hot_order',review=['hot_order_review','hot_order_decided'].includes(kind);
   event.waitUntil(self.registration.showNotification('CRM Smart Assistant',{
-    body:linear ? 'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.' : review ? 'İsti sifariş üzrə yenilik var. Kabinetdə yoxlayın.' : hot ? 'Yeni isti sifariş var. Kabinetdə yoxlayın.' : 'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
-    tag:linear ? 'crm-linear' : hot||review ? 'crm-hot-order' : 'crm-task-approval',data:{url:linear ? '/app?view=linear' : kind==='hot_order_review' ? '/app?view=approvals' : hot||review ? '/app?view=hot_orders' : '/app'}
+    body:risk ? 'Tapşırıq üzrə yoxlanmalı siqnal var. Kabinetdə yoxlayın.' : linear ? 'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.' : review ? 'İsti sifariş üzrə yenilik var. Kabinetdə yoxlayın.' : hot ? 'Yeni isti sifariş var. Kabinetdə yoxlayın.' : 'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
+    tag:risk ? 'crm-proactive-risk' : linear ? 'crm-linear' : hot||review ? 'crm-hot-order' : 'crm-task-approval',data:{url:risk||linear ? '/app?view=linear' : kind==='hot_order_review' ? '/app?view=approvals' : hot||review ? '/app?view=hot_orders' : '/app'}
   }));
 });
 self.addEventListener('notificationclick',event=>{
