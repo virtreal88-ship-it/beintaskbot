@@ -2,7 +2,7 @@
 (function(root,factory){
   if(typeof module==='object' && module.exports)module.exports=factory;
   else root.openExperimentalCopilotAudio=factory;
-})(typeof window==='object'?window:globalThis,async function openAudio(onPcm, deps=globalThis, onSpeechStart=()=>{}){
+})(typeof window==='object'?window:globalThis,async function openAudio(onPcm, deps=globalThis, onSpeechStart=()=>{}, options={}){
   const media=deps.navigator?.mediaDevices;
   const Ctx=deps.AudioContext||deps.webkitAudioContext;
   if(!media?.getUserMedia || !Ctx)throw new Error('audio_unsupported');
@@ -54,7 +54,7 @@
       // capture; provider VAD remains authoritative for cancelling the turn.
       const speechLike=rms>=0.035&&zcr>=0.01&&zcr<=0.35;
       speechFrames=speechLike?speechFrames+1:0;
-      if(speechFrames>=2&&!localSpeechLatched&&segments.length){
+      if(options.pushToTalk!==true&&speechFrames>=2&&!localSpeechLatched&&segments.length){
         localSpeechLatched=true;localOutputMuted=true;
         finishWaiters(false);for(const node of segments){try{node.stop();}catch(_){}}
         segments=[];currentItem=null;nextTime=ctx.currentTime;

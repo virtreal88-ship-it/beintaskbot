@@ -138,6 +138,7 @@ class Session:
         self.response_pending = False
         self.input_sequence = 0
         self.input_turn = None
+        self.manual_turns = True
         self.stopped_input_turns = []
         self.pending_input_item_id = None
         self.queued_input_item_ids = []
@@ -260,7 +261,7 @@ class Session:
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
             stage='provider_open'
-            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=True,
+            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
                                                                     transcription=None, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
@@ -519,6 +520,31 @@ class Session:
                     self.stopped_input_turns.clear()
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
+        if kind == 'talk_start' and set(event)=={'type'}:
+            async with self.lock:
+                if (self.muted or self.input_turn is not None or self.pending_input_item_id is not None or
+                    self.response_pending or self.response_inflight or self.current_reservation is not None or
+                    self.item is not None or self.interrupt_pending or self.truncate_pending or self.greeting_pending):
+                    raise Refused('talk_not_ready')
+                self.input_sequence+=1
+                self.input_turn={'sequence':self.input_sequence,'stopped':False,'item_id':None,
+                                 'manual':True,'audio_bytes':0}
+                self.activity=time.monotonic()
+                await self._send_client({'type':'talk_ready'})
+            return
+        if kind == 'talk_end' and set(event)=={'type'}:
+            async with self.lock:
+                turn=self.input_turn
+                if not isinstance(turn,dict) or turn.get('manual') is not True or turn.get('stopped'):
+                    raise Refused('talk_not_active')
+                if not turn.get('audio_bytes'):
+                    self.input_turn=None
+                    await self._send_client({'type':'talk_empty'})
+                    return
+                turn['stopped']=True
+                self.activity=time.monotonic()
+                await self._send_provider({'type':'input_audio_buffer.commit'})
+            return
         if kind == 'audio' and set(event) == {'type', 'pcm'} and isinstance(event['pcm'], bytes):
             data = event['pcm']
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
@@ -528,9 +554,13 @@ class Session:
                     # Ignore early frames until the greeting has actually
                     # finished playing; the browser also gates microphone uplink.
                     return
+                if not isinstance(self.input_turn,dict) or self.input_turn.get('stopped') is True:
+                    raise Refused('audio_without_talk_start')
                 if self.input_bytes + len(data) > self.max_input_bytes:
                     raise Refused('session_input_limit')
                 self.input_bytes += len(data)
+                if self.input_turn.get('manual') is True:
+                    self.input_turn['audio_bytes']+=len(data)
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
                 self.activity=time.monotonic()
             return
@@ -631,6 +661,11 @@ class Session:
             # whose exact terminal event has already been accepted.
             return
         if kind == 'input_audio_buffer.speech_started':
+            # The production pilot disables provider VAD. Ignore unsolicited
+            # VAD notifications so they can never open or cancel a click-owned
+            # microphone turn if a provider event is delayed or duplicated.
+            if getattr(self,'manual_turns',False):
+                return
             async with self.lock:
                 if self.muted:
                     return
@@ -666,6 +701,8 @@ class Session:
                 self.input_turn = {'sequence':self.input_sequence,'stopped':False,'item_id':None}
             return
         if kind == 'input_audio_buffer.speech_stopped':
+            if getattr(self,'manual_turns',False):
+                return
             async with self.lock:
                 if self.muted or self.input_turn is None:
                     # Replayed stop events must not enqueue another response.
@@ -696,7 +733,13 @@ class Session:
                     # A commit racing with mute is deliberately discarded.
                     self.seen_input_item_ids.add(item_id)
                     return
-                if self.stopped_input_turns:
+                if isinstance(self.input_turn,dict) and self.input_turn.get('manual') is True:
+                    turn=self.input_turn
+                    if not turn.get('stopped') or turn.get('item_id') not in (None,item_id):
+                        raise Refused('unmatched_manual_commit')
+                    turn['item_id']=item_id
+                    self.input_turn=None
+                elif self.stopped_input_turns:
                     turn=self.stopped_input_turns.pop(0)
                     turn['item_id']=item_id
                 else:
