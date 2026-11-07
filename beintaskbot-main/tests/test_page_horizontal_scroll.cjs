@@ -30,7 +30,7 @@ setTimeout(async()=>{
  document.querySelector('main').insertAdjacentHTML('beforeend','<div class="table" id="dealsList"><div class="row"><div>Long readable title '+ 'words '.repeat(50)+'</div><div class="hide-mobile">Stage</div><div class="hide-mobile">Message</div><div>Date</div></div></div><section id="supportCases"><div class="support-cases-list"><table class="support-cases-table"><thead><tr>'+Array.from({length:8},(_,i)=>'<th>Column '+i+'</th>').join('')+'</tr></thead><tbody><tr>'+Array.from({length:8},(_,i)=>'<td>Value '+i+'</td>').join('')+'</tr></tbody></table></div></section>');
  const list=document.getElementById('dealsList'),cases=document.querySelector('.support-cases-list');
  list.scrollLeft=100;cases.scrollLeft=100;
- await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+ await new Promise(r=>setTimeout(r,200));
  const range=document.querySelector('#appHorizontalScroll input');
  range.value='500';range.dispatchEvent(new Event('input',{bubbles:true}));
  const controlRect=document.getElementById('appHorizontalScroll').getBoundingClientRect();
@@ -44,8 +44,8 @@ try {
  for (const width of [1440,800,500]) {
   const run=spawnSync(process.env.CHROMIUM||'chromium',[`--user-data-dir=${dir}/profile-${width}`,'--headless','--no-sandbox','--disable-gpu','--no-proxy-server','--allow-file-access-from-files',`--window-size=${width},1000`,'--virtual-time-budget=3000','--dump-dom',`file://${file}`],{encoding:'utf8',maxBuffer:8*1024*1024,timeout:30000});
   assert.equal(run.status,0,run.stderr);
-  const match=run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
-  assert(match,'browser completed fixture');
+  const match=run.stdout.match(/<pre id="result">(\{[^<]+\})<\/pre>/);
+  assert(match,'browser completed fixture: '+run.stdout.slice(-5000));
   const r=JSON.parse(match[1]);
   assert(r.sameRow&&r.moved&&r.board.scroll>r.board.width,'Linear columns scroll in one row');
   assert.equal(r.cardWrap,'anywhere');
