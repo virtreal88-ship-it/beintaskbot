@@ -528,7 +528,8 @@ def create(profile, data):
     if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids',
         'assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'}:
         raise TenantLinearError('Некорректные поля обращения.')
-    if (data.get('developer_confirmed') is not True or not data.get('assigned_developer_channel_id')
+    legacy_developer=any(key in data for key in ('assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'))
+    if legacy_developer and (data.get('developer_confirmed') is not True or not data.get('assigned_developer_channel_id')
             or not isinstance(data.get('assigned_developer_conversation_id'),str)
             or not data.get('assigned_developer_conversation_id').strip()):
         raise TenantLinearError('Перед созданием обращения выберите и подтвердите разработчика.',409)
@@ -541,24 +542,29 @@ def create(profile, data):
             tenant, actor = _authorize(cur, profile)
             from tenant_dialog_consultations import access as dialogs_access,developer_target
             access_tenant,_dialog_actor,dialogs_policy=dialogs_access(cur,profile,'dialogs')
-            if str(access_tenant)!=str(tenant):raise TenantLinearError('Получатель вне выбранной компании.',403)
-            destination=developer_target(cur,tenant,dialogs_policy,
-                identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
+            if str(access_tenant)!=str(tenant):raise TenantLinearError('Диалог вне выбранной компании.',403)
+            destination=None
+            if legacy_developer:
+                destination=developer_target(cur,tenant,dialogs_policy,
+                    identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
                 description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
-            cur.execute('''SELECT assigned_developer_channel_id::text,assigned_developer_conversation_id
-              FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,receipt['id']))
-            existing=cur.fetchone() or {}
-            if not receipt.get('created') and (str(existing.get('assigned_developer_channel_id') or '')!=str(destination.get('channel_id') or destination['connect_channel_id'])
-                or str(existing.get('assigned_developer_conversation_id') or '')!=str(destination['conversation_id'])):
-                raise TenantLinearError('Обращение уже существует с другим разработчиком. Проверьте его назначение.',409)
-            if receipt.get('created'):
-                cur.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
-                  assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
-                  (str(destination.get('channel_id') or destination['connect_channel_id']),destination['conversation_id'],tenant,receipt['id']))
-            _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],
-              {'developer_confirmed':True,'developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id'])})
+            if legacy_developer:
+                cur.execute('''SELECT assigned_developer_channel_id::text,assigned_developer_conversation_id
+                  FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,receipt['id']))
+                existing=cur.fetchone() or {}
+                if not receipt.get('created') and (str(existing.get('assigned_developer_channel_id') or '')!=str(destination.get('channel_id') or destination['connect_channel_id'])
+                    or str(existing.get('assigned_developer_conversation_id') or '')!=str(destination['conversation_id'])):
+                    raise TenantLinearError('Обращение уже существует с другим разработчиком. Проверьте его назначение.',409)
+                if receipt.get('created'):
+                    cur.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+                      assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+                      (str(destination.get('channel_id') or destination['connect_channel_id']),destination['conversation_id'],tenant,receipt['id']))
+                _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],
+                  {'developer_confirmed':True,'developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id'])})
+            else:
+                _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],{'developer_assignment':False})
         conn.commit()
     summarize_created(tenant,receipt)
     result=detail(profile,receipt['id'])

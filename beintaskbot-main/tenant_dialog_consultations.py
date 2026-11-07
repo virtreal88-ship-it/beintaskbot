@@ -281,11 +281,13 @@ def _verified_contact_phone(cur,tenant,channel,conversation):
     return '+'+jid.split('@',1)[0] if jid else ''
 
 
-def prepare(profile,data,origin,*,ai_summary=None):
+def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    optional={'case_id','include_customer_identity'}
+    optional={'case_id','include_customer_identity','reuse_existing'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
+    if 'reuse_existing' in data and type(data['reuse_existing']) is not bool:
+        raise TenantLinearError('Некорректный режим повторного запроса.',400)
     include_identity=data.get('include_customer_identity',False)
     if type(include_identity) is not bool:raise TenantLinearError('Параметр публикации личности некорректен.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
@@ -298,6 +300,7 @@ def prepare(profile,data,origin,*,ai_summary=None):
     normalized={**data,'request_id':request,'channel_id':channel,'destination_channel_id':dest,
         'message_ids':selected,'media_ids':sorted(media),'summary':summary.strip(),
         'include_customer_identity':include_identity}
+    normalized.pop('reuse_existing',None)  # Admission preference is not outgoing content or request identity.
     if case_id:normalized['case_id']=case_id
     else:normalized.pop('case_id',None)
     digest=hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
@@ -305,6 +308,8 @@ def prepare(profile,data,origin,*,ai_summary=None):
         require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy,source=_scope(cur,profile,channel,data['conversation_id'],manual=True,case_id=case_id,sending=True)
+            from tenant_consultation_episode import lock_source,implicit_case,existing,queued,auto_intent
+            lock_source(cur,tenant,channel,data['conversation_id'])
             target=developer_target(cur,tenant,policy,dest,data['destination_conversation_id'])
             if channel==dest and source['conversation_id']==target['conversation_id']:raise TenantLinearError('Выберите другой диалог.',400)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialog-consultation:'+tenant+':'+request,))
@@ -315,10 +320,24 @@ def prepare(profile,data,origin,*,ai_summary=None):
                 cur.execute('SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid',(tenant,old['id'],request))
                 previous=cur.fetchone() or {}
                 return {'id':old['id'],'case_id':case_id,'request_id':request,'created':False,'state':previous.get('state','ready')}
+            if not case_id:
+                case_id=implicit_case(cur,tenant,channel,data['conversation_id'],selected)
+                if case_id:
+                    _case_access(cur,profile,case_id,channel,data['conversation_id'],sending=True)
+                    normalized['case_id']=case_id
             if case_id:
                 from tenant_support_case_context import selection as case_selection
                 rows=case_selection(cur,tenant,case_id,channel,data['conversation_id'],selected)
             else:rows=selection(cur,tenant,source,selected)
+            auto=auto_intent(cur,tenant,case_id,request,auto_dispatch_id,dest,data['destination_conversation_id'])
+            admitted_media=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
+            pending=existing(cur,tenant,channel,data['conversation_id'],selected,case_id,dest,data['destination_conversation_id'],
+                summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True)
+            if pending:
+                return {'id':pending['id'],'case_id':pending.get('case_id'),'request_id':pending['request_id'],
+                        'state':pending['state'],'created':False,'reused':True}
+            if queued(cur,tenant,case_id,request,selected,auto):
+                raise TenantLinearError('Для этого обращения уже есть автоматический запрос разработчику. Откройте обращение; повторная отправка отключена.',409)
             if any(row['id'] in media and row['message_type'] not in _MEDIA_TYPES for row in rows):
                 raise TenantLinearError('Выберите только сообщения с файлами.',400)
             if ai_summary is not None:
@@ -338,6 +357,7 @@ def prepare(profile,data,origin,*,ai_summary=None):
             # ignored/withheld media flags. Fresh UUIDs cannot bypass uncertainty.
             scope={**normalized,'media_ids':sorted(allowed)}
             scope.pop('request_id')
+            scope.pop('reuse_existing',None)
             scope_hash=hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()
             # Legacy requests omitted the new opt-in key. Treat omission and
             # explicit false as the same content so UUID rotation cannot evade

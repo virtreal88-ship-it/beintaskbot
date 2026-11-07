@@ -17,6 +17,9 @@ on:
       - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
       - 'beintaskbot-main/tests/test_operator_case_recovery*'
       - 'beintaskbot-main/tests/test_case_developer_settings_ui.cjs'
+      - 'beintaskbot-main/tests/test_developer_primary_reserve.py'
+      - 'beintaskbot-main/tenant_consultation_episode.py'
+      - 'beintaskbot-main/tests/test_consultation_episode*.py'
       - 'beintaskbot-main/tests/operator_case_ui_fixture.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
       - 'beintaskbot-main/tenant_ai_agents_schema.py'
@@ -229,6 +232,9 @@ jobs:
             tests/test_tenant_ai_pilot_reset_postgres.py \
             tests/test_tenant_ai_pilot_worker.py \
             tests/test_tenant_ai_agent_no_answer.py \
+            tests/test_developer_primary_reserve.py \
+            tests/test_consultation_episode.py \
+            tests/test_consultation_episode_postgres.py \
             tests/test_tenant_ai_agent_no_answer_postgres.py \
             tests/test_tenant_notification_center.py \
             tests/test_tenant_notification_center_postgres.py \

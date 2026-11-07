@@ -65,7 +65,9 @@ def _eligible(cur, tenant, actor, policy):
       to_regclass('saas_connect_dialog_links') IS NOT NULL AS links,
       to_regclass('saas_support_events') IS NOT NULL AS events,
       to_regclass('saas_internal_consultations') IS NOT NULL AS consultations,
-      to_regclass('saas_tenant_webhook_events') IS NOT NULL AS webhooks""")
+      to_regclass('saas_tenant_webhook_events') IS NOT NULL AS webhooks,
+      to_regclass('saas_approval_notification_events') IS NOT NULL AS approval_events,
+      to_regclass('saas_task_commands') IS NOT NULL AS approval_commands""")
     ready = cur.fetchone() or {}
     consult_joins = ''
     consult_columns = 'NULL::text AS reply_id,NULL::text AS consultation_id,NULL::text AS source_channel,NULL::text AS source_conversation,NULL::bigint AS source_lead,NULL::text AS case_id'
@@ -89,6 +91,24 @@ def _eligible(cur, tenant, actor, policy):
     case_joins=''
     proof_ctes=[]
     proof_params=[]
+    approval_join=''
+    approval_column='FALSE AS approval_finished'
+    if ready.get('approval_events') and ready.get('approval_commands'):
+        # Legacy event keys omit the creator. Never guess which command owns
+        # a key shared by multiple creators, or infer completion from absence.
+        proof_ctes.append('''finished_approval_proofs AS MATERIALIZED (
+          SELECT e.request_id::text||':'||e.event AS notification_event_key
+          FROM saas_approval_notification_events e
+          LEFT JOIN saas_task_commands c USING(tenant_id,actor_id,request_id)
+          WHERE e.tenant_id=%s::uuid
+            AND e.event IN ('task_approval_requested','task_completion_requested')
+          GROUP BY e.request_id,e.event
+          HAVING count(*)=1 AND bool_and(e.expanded AND
+            COALESCE(c.state->>'step' IN ('done','rejected'),FALSE))
+        )''')
+        proof_params.append(tenant)
+        approval_join=' LEFT JOIN finished_approval_proofs ap ON ap.notification_event_key=n.event_key'
+        approval_column='(ap.notification_event_key IS NOT NULL) AS approval_finished'
     handoff_case='NULL::text'
     consultation_case='NULL::text'
     consultation_id='NULL::text'
@@ -160,7 +180,7 @@ def _eligible(cur, tenant, actor, policy):
     deal_guard = '''p.target_deal='' OR EXISTS(SELECT 1 FROM saas_crm_deals d
       WHERE d.tenant_id=p.tenant_id AND d.kommo_lead_id::text=p.target_deal AND d.deleted_at IS NULL AND (''' + (' OR '.join(deal_scope) or 'FALSE') + '))'
     sql = 'WITH '+(', '.join(proof_ctes)+', ' if proof_ctes else '')+'''personal AS NOT MATERIALIZED (
-      SELECT n.*,''' + consult_columns + ',' + case_columns + ''',
+      SELECT n.*,''' + consult_columns + ',' + case_columns + ',' + approval_column + ''',
         split_part(n.event_key,':',1)='dialog_consultation' AS is_reply,
         (''' + consult_guard + ''') AS reply_allowed,
         COALESCE(substring(n.target_url from '[?&]view=([^&#]+)'),'') AS target_view,
@@ -169,7 +189,7 @@ def _eligible(cur, tenant, actor, policy):
         COALESCE(substring(n.target_url from '[?&]channel_id=([^&#]+)'),'') AS target_channel,
         COALESCE(substring(n.target_url from '[?&]conversation_id=([^&#]+)'),'') AS target_conversation,
         COALESCE(substring(n.target_url from '[?&]deal_id=([^&#]+)'),'') AS target_deal
-      FROM saas_tenant_notifications n ''' + consult_joins + case_joins + '''
+      FROM saas_tenant_notifications n ''' + consult_joins + case_joins + approval_join + '''
       WHERE n.tenant_id=%s::uuid AND n.telegram_id=%s
     ), classified AS NOT MATERIALIZED (
       SELECT personal.*,CASE WHEN is_reply THEN 'legacy'
@@ -274,11 +294,11 @@ def listing(profile, status='unread', limit=20, before=''):
         with conn.cursor() as cur:
             tenant, actor, policy = _access(cur, profile)
             sql, params = _eligible(cur, tenant, actor, policy)
-            where = ["read_at IS NULL"] if status == 'unread' else ['TRUE']
+            where = ["read_at IS NULL AND NOT approval_finished"] if status == 'unread' else ['TRUE']
             if cursor:
                 where.append('(created_at,id)<(%s::timestamptz,%s::uuid)'); params += list(cursor)
             cur.execute(sql + '''SELECT page.*,totals.unread_count FROM
-              (SELECT count(*) AS unread_count FROM eligible WHERE read_at IS NULL) totals
+              (SELECT count(*) AS unread_count FROM eligible WHERE read_at IS NULL AND NOT approval_finished) totals
               LEFT JOIN LATERAL(SELECT * FROM eligible WHERE ''' + ' AND '.join(where) + '''
                 ORDER BY created_at DESC,id DESC LIMIT %s) page ON TRUE''', (*params, limit + 1))
             rows = cur.fetchall()
@@ -340,7 +360,7 @@ def mark_read(profile, notification_id, *, opened_case_id=_UNSET,opened_event_ke
             if row.get('reply_id'):
                 cur.execute('''INSERT INTO saas_dialog_consultation_reads(tenant_id,reply_id,actor_id)
                   VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT DO NOTHING''', (tenant, row['reply_id'], actor))
-            cur.execute(sql + 'SELECT count(*) AS unread_count FROM eligible WHERE read_at IS NULL', tuple(params))
+            cur.execute(sql + 'SELECT count(*) AS unread_count FROM eligible WHERE read_at IS NULL AND NOT approval_finished', tuple(params))
             unread = int(cur.fetchone()['unread_count'])
         conn.commit()
     return {'id': key, 'read_at': str(stamp), 'unread_count': unread}

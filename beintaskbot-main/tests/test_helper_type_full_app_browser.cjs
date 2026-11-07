@@ -8,7 +8,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
-  for(const [width,height] of [[390,844],[1280,900],[390,500]]){
+  for(const [width,height] of [[320,700],[390,844],[1280,900],[390,500]]){
    const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];
    page.on('pageerror',error=>errors.push(error.message));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
    // Production stores question templates in this tenant/employee scoped key.
@@ -19,8 +19,10 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
     if(name==='/api/platform/me')return route.fulfill({json:profile});
     let result={};
-    if(name.endsWith('/dialogs/history'))result={dialog,messages:[{id:'m1',external_id:'e1',direction:'incoming',message_type:'text',body:'Customer question',happened_at:'2026-10-21T10:00:00Z'}],next_before:null};
+    if(name.endsWith('/dialogs/history'))result={dialog:{...dialog,conversation_id:url.searchParams.get('conversation_id')||dialog.conversation_id},messages:[{id:'m1',external_id:'e1',direction:'incoming',message_type:'text',body:'Customer question',happened_at:'2026-10-21T10:00:00Z'}],next_before:null};
     else if(name.endsWith('/dialogs'))result={dialogs:[{...dialog,last_message_id:'m1',last_message_direction:'incoming',last_message_text:'Customer question',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],next_offset:null};
+    else if(name.endsWith('/preview'))result={messages:[{id:'m1',body:'Synthetic problem',happened_at:'2026-10-21T10:00:00Z',message_type:'text'}]};
+    else if(name.endsWith('/destinations'))result={destinations:[{channel_id:channel,conversation_id:'developer',customer_name:'Developer',channel_name:'Test'}]};
     else if(name.endsWith('/developer-marker'))result={enabled:false};
     else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
     return route.fulfill({json:{success:true,result}});
@@ -32,6 +34,19 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await page.locator('#operatorCopilot').isVisible(),false,'type lives inside the initially closed assistant panel');
     assert.ok(calls.some(call=>call.path==='/assets/tenant-operator-dialogs.js'));
     assert.ok(calls.some(call=>call.path==='/assets/tenant-dialog-consultations.js'));
+    const ask=page.locator('#dialogDeveloperAsk');await ask.waitFor({state:'visible'});
+    const geometry=await ask.evaluate(node=>{const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth,clickable:hit===node||node.contains(hit)};});
+    assert.equal(geometry.overflow,false,`direct action must not overflow at ${width}: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.left>=0&&geometry.right<=width&&geometry.top>=0&&geometry.bottom<=height,`direct action fits viewport: ${JSON.stringify(geometry)}`);
+    assert.equal(geometry.clickable,true,'direct action is unobscured with helper closed');
+    await ask.dblclick();await page.locator('.dialog-consultation-form textarea').waitFor();
+    assert.equal(await page.locator('.dialog-consultation-overlay').count(),1,'double click opens one modal');
+    await page.locator('.dialog-consultation-form button[type=button]').click();assert.equal(await page.locator('.dialog-consultation-overlay').count(),0);
+    await ask.click();await page.locator('.dialog-consultation-form textarea').waitFor();
+    await page.evaluate(()=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,conversation_id:'another-synthetic-dialog'}));
+    await page.waitForFunction(()=>!document.querySelector('.dialog-consultation-overlay'));
+    assert.equal(calls.some(call=>/\/dispatch$/.test(call.path)),false,'cancel and source switch never send');
+    await page.evaluate(conversation=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,conversation_id:conversation}),dialog.conversation_id);
     await page.locator('#operatorCopilotToggle').click();
     assert.equal(await page.locator('#dialogHelperType').inputValue(),'Helper');
     assert.equal(await page.evaluate(()=>document.activeElement.id),'dialogHelperType','opening starts at the assistant type, avoiding prompt autofocus scrolling');

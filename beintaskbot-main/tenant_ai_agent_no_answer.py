@@ -15,7 +15,7 @@ def validate_policy(value):
     if value is None:
         value = {}
     allowed = {'enabled', 'action', 'fallback_action', 'max_clarifications', 'stop_reply', 'developer_id',
-               'auto_case_dispatch_enabled','developer_destinations'}
+               'auto_case_dispatch_enabled','developer_destinations','developer_routing','developer_reserve_destination'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise TenantLinearError('No-answer policy is invalid.')
     enabled = value.get('enabled', False)
@@ -49,10 +49,28 @@ def validate_policy(value):
         item={'channel_id':channel,'conversation_id':conversation.strip()}
         key=(item['channel_id'],item['conversation_id'])
         if key not in seen:seen.add(key);normalized.append(item)
+    routing=value.get('developer_routing')
+    reserve=value.get('developer_reserve_destination')
+    extra={}
+    if 'developer_routing' in value or 'developer_reserve_destination' in value:
+        if routing!='primary_reserve':raise TenantLinearError('Developer routing is invalid.')
+        if len(normalized)>1:raise TenantLinearError('Choose one primary developer.')
+        if reserve is not None:
+            if not isinstance(reserve,dict) or set(reserve)!={'channel_id','conversation_id'}:
+                raise TenantLinearError('Reserve developer is invalid.')
+            conversation=reserve['conversation_id']
+            if not isinstance(conversation,str) or not conversation.strip() or len(conversation)>160:
+                raise TenantLinearError('Reserve developer is invalid.')
+            reserve={'channel_id':identifier(reserve['channel_id']),'conversation_id':conversation.strip()}
+            if not normalized:raise TenantLinearError('Choose a primary before a reserve developer.')
+            if reserve==normalized[0]:raise TenantLinearError('Primary and reserve developers must differ.')
+        # The reserve is configuration only. Runtime dispatch and reply guards
+        # deliberately consume developer_destinations, which contains primary only.
+        extra={'developer_routing':'primary_reserve','developer_reserve_destination':reserve}
     if auto_dispatch and not normalized:raise TenantLinearError('Select at least one developer for automatic case dispatch.')
     return {'enabled': enabled, 'action': action, 'fallback_action': fallback,
             'max_clarifications': limit, 'stop_reply': reply.strip(),'developer_id':developer,
-            'auto_case_dispatch_enabled':auto_dispatch,'developer_destinations':normalized}
+            'auto_case_dispatch_enabled':auto_dispatch,'developer_destinations':normalized,**extra}
 
 
 def assess(raw, knowledge):

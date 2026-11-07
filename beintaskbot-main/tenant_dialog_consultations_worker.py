@@ -140,14 +140,20 @@ def dispatch_auto_case(item_id):
           'destination_channel_id':target['channel_id'],'destination_conversation_id':target['conversation_id'],
           'message_ids':[str(row['id']) for row in messages],'media_ids':[],
           'summary':ai_summary['text'],
-          'confirm':True,'include_customer_identity':False},'https://crm.pro.az',ai_summary=ai_summary)
+          'confirm':True,'include_customer_identity':False},'https://crm.pro.az',ai_summary=ai_summary,auto_dispatch_id=item_id)
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE saas_ai_case_developer_dispatches SET consultation_id=%s::uuid,updated_at=now() WHERE id=%s::uuid AND state='preparing'",(consultation['id'],item_id))
             conn.commit()
-        result=dispatch(profile,consultation['id'],request,auto_dispatch_id=item_id)
-        state=result.get('state') if result.get('state') in {'sent','pending','unknown','blocked'} else 'unknown'
-        reason=str(result.get('error') or '')[:240]
+        if consultation.get('reused'):
+            # Never convert an employee's prepared request into an automatic
+            # send, or repeat an already attempted external operation.
+            state='blocked'
+            reason='existing_consultation_requires_review'
+        else:
+            result=dispatch(profile,consultation['id'],request,auto_dispatch_id=item_id)
+            state=result.get('state') if result.get('state') in {'sent','pending','unknown','blocked'} else 'unknown'
+            reason=str(result.get('error') or '')[:240]
     except TenantLinearError as error:
         state='blocked';reason=str(error)[:240]
     except Exception:
