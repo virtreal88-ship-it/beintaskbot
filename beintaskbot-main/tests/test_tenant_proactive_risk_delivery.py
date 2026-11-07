@@ -1,6 +1,7 @@
 """Isolated PostgreSQL-compatible checks for owner-only risk alert delivery."""
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -109,11 +110,16 @@ class TestRiskAlertPostgres:
           VALUES(%s::uuid,%s,%s,%s,%s,%s,%s::jsonb,%s)''',
           (tenant, int(source_id), task['text'], task['due_at'], task['responsible_id'],
            task['completed'], json.dumps(task['raw']), task['synced_at']))
-        endpoint = ('a' if tenant == TENANT else 'b') * 63 + str(source_id)[-1]
+        endpoint = self.endpoint_hash(tenant, source_id)
         self.db.execute('INSERT INTO saas_push_devices(endpoint_hash,owner_telegram_id,subscription) VALUES(%s,%s,%s)',
                         (endpoint, actor, 'encrypted-subscription'))
         self.db.execute('''INSERT INTO saas_member_push_devices(tenant_id,telegram_id,endpoint_hash,active)
           VALUES(%s::uuid,%s,%s,TRUE)''', (tenant, actor, endpoint))
+
+    @staticmethod
+    def endpoint_hash(tenant, source_id):
+        prefix = 'a' if tenant == TENANT else 'b'
+        return prefix * 56 + hashlib.sha256(str(source_id).encode()).hexdigest()[:8]
 
     def candidate(self, source_id=SOURCE_ID):
         task = self.task(source_id)
@@ -142,7 +148,7 @@ class TestRiskAlertPostgres:
         assert len(self.query('SELECT id FROM saas_tenant_notifications')) == 1
         item = delivery.claim_push()
         assert item and item['send'] is True and item['recipient_id'] == OWNER
-        assert item['endpoint_hash'] == 'a' * 63 + '9'
+        assert item['endpoint_hash'] == self.endpoint_hash(TENANT, SOURCE_ID)
         delivery.finish_push(item, 'unknown')
         assert delivery.claim_push() is None
         assert self.query("SELECT status FROM saas_proactive_risk_alert_deliveries WHERE channel='push'")[0]['status'] == 'unknown'
@@ -168,13 +174,13 @@ class TestRiskAlertPostgres:
 
     def test_revoked_owner_device_does_not_cancel_another_bound_device(self):
         self.record()
-        second = 'c' * 63 + '9'
+        second = 'c' * 56 + hashlib.sha256(b'second-device').hexdigest()[:8]
         self.query('INSERT INTO saas_push_devices(endpoint_hash,owner_telegram_id,subscription) VALUES(%s,%s,%s)',
                    (second, OWNER, 'second-encrypted-subscription'))
         self.query('''INSERT INTO saas_member_push_devices(tenant_id,telegram_id,endpoint_hash,active)
           VALUES(%s::uuid,%s,%s,TRUE)''', (TENANT, OWNER, second))
         assert delivery.expand_events() == 1
-        revoked = 'a' * 63 + '9'
+        revoked = self.endpoint_hash(TENANT, SOURCE_ID)
         self.query('''UPDATE saas_proactive_risk_alert_deliveries SET updated_at=now()-interval '1 day'
           WHERE tenant_id=%s::uuid AND channel='push' AND endpoint_hash=%s''', (TENANT, revoked))
         self.query('''UPDATE saas_member_push_devices SET active=FALSE
@@ -187,6 +193,40 @@ class TestRiskAlertPostgres:
         assert item and item['send'] is True and item['endpoint_hash'] == second
         assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',
                           (TENANT,))[0]['state'] == 'expanded'
+
+    def test_device_revoked_during_slow_source_recheck_is_not_reserved(self, monkeypatch):
+        self.record()
+        assert delivery.expand_events() == 1
+        authorize = delivery._authorize_event
+
+        def revoke_after_source_check(cur, event, *, channel=None):
+            result = authorize(cur, event, channel=channel)
+            cur.execute('''UPDATE saas_member_push_devices SET active=FALSE
+              WHERE tenant_id=%s::uuid AND telegram_id=%s AND endpoint_hash=%s''',
+              (TENANT, OWNER, self.endpoint_hash(TENANT, SOURCE_ID)))
+            return result
+
+        monkeypatch.setattr(delivery, '_authorize_event', revoke_after_source_check)
+        item = delivery.claim_push()
+        assert item and item['send'] is False
+        assert self.query("SELECT status FROM saas_proactive_risk_alert_deliveries WHERE channel='push'")[0]['status'] == 'skipped'
+
+    def test_daily_company_cap_suppresses_eleventh_distinct_source(self):
+        for source_id in range(600, 611):
+            self.seed_source(TENANT, OWNER, str(source_id))
+            self.record(source_id=str(source_id))
+        states = self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid', (TENANT,))
+        assert sum(row['state'] == 'pending' for row in states) == 10
+        assert sum(row['state'] == 'suppressed' for row in states) == 1
+
+    def test_provider_acceptance_is_not_reported_as_read_receipt(self):
+        self.record()
+        assert delivery.expand_events() == 1
+        item = delivery.claim_push()
+        assert item and item['send'] is True
+        delivery.finish_push(item, 'accepted')
+        status = self.query("SELECT status FROM saas_proactive_risk_alert_deliveries WHERE channel='push'")[0]['status']
+        assert status == 'accepted'
 
     def assertBellAndPush(self):
         row = self.query('SELECT * FROM saas_tenant_notifications WHERE tenant_id=%s::uuid', (TENANT,))[0]

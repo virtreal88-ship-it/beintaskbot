@@ -37,6 +37,16 @@ def alert_fingerprint(finding: dict) -> str:
                          'confidence': str(finding.get('confidence') or '')}])
 
 
+def _advisory_lock(cur, namespace: str, identity: str) -> None:
+    key = hashlib.sha256(f'{namespace}:{identity}'.encode()).hexdigest()[:16]
+    cur.execute("SELECT pg_advisory_xact_lock(('x' || %s)::bit(64)::bigint)", (key,))
+
+
+def lock_source_transition(cur, tenant: str, source_kind: str, source_id: str) -> None:
+    """Call before reading/replacing source findings to serialize first scans too."""
+    _advisory_lock(cur, 'risk-source', f'{tenant}:{source_kind}:{source_id}')
+
+
 def _channels(profile: dict, tenant: str) -> list[str]:
     return notification_channels(TenantPolicy(profile), event=RISK_EVENT, tenant_id=tenant)
 
@@ -65,6 +75,9 @@ def _queue_new_finding(cur, tenant: str, source_kind: str, source_id: str,
     profile = _owner_profile(cur, tenant, recipient)
     if not profile or not _channels(profile, tenant):
         return None
+    # The daily quota spans all source locks, so serialize the count and insert
+    # for this tenant to prevent parallel scans of different tasks exceeding it.
+    _advisory_lock(cur, 'risk-daily-quota', tenant)
     cur.execute('''SELECT count(*) AS count FROM saas_proactive_risk_alert_events
       WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day' AND state<>'suppressed' ''', (tenant,))
     limited = int((cur.fetchone() or {}).get('count') or 0) >= MAX_RISK_ALERTS_PER_DAY
@@ -88,11 +101,6 @@ def record_finding_transitions(cur, tenant: str, source_kind: str, source_id: st
                                source_scope: str, source_version: str,
                                previous: dict[str, str], findings: list[dict]) -> None:
     """Queue only new/escalated important findings, then cancel stale work."""
-    # Serialize concurrent observers for this exact tenant/source. In particular,
-    # the first observation has no finding row to lock, so row locks alone would
-    # allow two scans to enqueue the same transition.
-    lock_key = hashlib.sha256(f'{tenant}:{source_kind}:{source_id}'.encode()).hexdigest()[:16]
-    cur.execute("SELECT pg_advisory_xact_lock(('x' || %s)::bit(64)::bigint)", (lock_key,))
     current = {(str(source_scope), str(item.get('rule_id')), alert_fingerprint(item))
                for item in findings if alertable(item)}
     for item in findings:
@@ -276,9 +284,22 @@ def claim_push() -> dict | None:
                 return None
             item['tenant_id'] = str(item['tenant_id'])
             owner, event_allowed = _authorize_event(cur, item, channel='push')
-            device_allowed = bool(item.get('device_active') is True and item.get('subscription')
-                and item.get('owner_telegram_id') == item['recipient_id']
-                and item.get('current_owner_id') == item['recipient_id'])
+            # Source/Linear revalidation above can be slow. Re-read and lock the
+            # exact owner-device binding only at the reservation boundary.
+            cur.execute('''SELECT p.subscription,p.owner_telegram_id,b.active AS device_active,
+                    t.owner_telegram_id AS current_owner_id
+              FROM saas_member_push_devices b
+              JOIN saas_push_devices p ON p.endpoint_hash=b.endpoint_hash
+              JOIN saas_tenants t ON t.id=b.tenant_id
+              WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.endpoint_hash=%s
+                AND p.owner_telegram_id=b.telegram_id
+              FOR UPDATE OF b,p,t''',
+              (item['tenant_id'], item['recipient_id'], item['endpoint_hash']))
+            device = cur.fetchone() or {}
+            item.update(device)
+            device_allowed = bool(device.get('device_active') is True and device.get('subscription')
+                and device.get('owner_telegram_id') == item['recipient_id']
+                and device.get('current_owner_id') == item['recipient_id'])
             allowed = bool(event_allowed and item.get('event_state') == 'expanded' and device_allowed)
             cur.execute('''UPDATE saas_proactive_risk_alert_deliveries SET status=%s,updated_at=now()
               WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s
@@ -292,7 +313,7 @@ def claim_push() -> dict | None:
 
 
 def finish_push(item: dict, status: str) -> None:
-    if status not in {'delivered', 'unknown', 'expired'}:
+    if status not in {'accepted', 'unknown', 'expired'}:
         raise ValueError('Invalid delivery result')
     with _connect() as conn:
         ensure_schema(conn)
@@ -333,6 +354,7 @@ async def deliver(bot, private_key: str, claims: dict, logger) -> None:
             continue
         result = await attempt(item, 'push', None, text=lambda _row: '', parts=lambda _text: [],
                                push_sender=send_push, private_key=private_key, claims=claims)
-        if result.status != 'delivered':
-            logger.warning('Proactive risk push result=%s tenant=%s', result.status, item['tenant_id'])
-        await asyncio.to_thread(finish_push, item, result.status)
+        status = 'accepted' if result.status == 'delivered' else result.status
+        if status != 'accepted':
+            logger.warning('Proactive risk push result=%s tenant=%s', status, item['tenant_id'])
+        await asyncio.to_thread(finish_push, item, status)

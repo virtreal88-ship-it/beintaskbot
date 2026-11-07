@@ -12,10 +12,11 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
                             source_version: str, source_title: str,
                             findings: list[dict], *, source_scope: str = '',
                             source_checked_at: datetime | None = None) -> None:
-    """Replace the current dry-run view atomically when a source is observed."""
+    """Replace the current risk view atomically when a source is observed."""
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
-    from tenant_proactive_risk_delivery import alert_fingerprint, record_finding_transitions
+    from tenant_proactive_risk_delivery import alert_fingerprint, lock_source_transition, record_finding_transitions
+    lock_source_transition(cur, str(tenant_id), source_kind, str(source_id))
     cur.execute('''SELECT rule_id,severity,confidence FROM saas_proactive_risk_findings
       WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s FOR UPDATE''',
       (tenant_id, source_kind, str(source_id)))
@@ -84,9 +85,12 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
                     or profile.get('tenant_status') != 'active'):
                 raise TenantLinearError('Yalnız aktiv şirkət sahibi üçün.', 403)
             profile = {**profile, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
+            from tenant_proactive_risk_delivery import _channels
+            opt_in_channels = _channels(profile, tenant)
             sources = _active_sources(cur, tenant, profile)
             if not sources:
-                return {'tenant_id': tenant, 'user_id': actor, 'mode': 'dry_run', 'deliveries_enabled': False,
+                return {'tenant_id': tenant, 'user_id': actor, 'mode': 'owner_review',
+                        'alert_opt_in_channels': opt_in_channels,
                         'findings': [], 'checked_at': None, 'unavailable_sources': ['Linear', 'CRM']}
             cur.execute('''SELECT source_kind,source_id,rule_id,source_scope,source_version,severity,confidence,source_title,
                     source_url,facts,assessment,recommended_step,fingerprint,checked_at,source_checked_at
@@ -124,6 +128,7 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
             'source_checked_at': source_checked_at.isoformat() if source_checked_at else None,
             'freshness': 'stale' if source_checked_at is None or now - freshness_stamp.astimezone(timezone.utc) > timedelta(minutes=15) else 'recent',
             'source': 'Linear' if row['source_kind'] == 'linear' else 'CRM task'})
-    return {'tenant_id': tenant, 'user_id': actor, 'mode': 'dry_run', 'deliveries_enabled': False,
+    return {'tenant_id': tenant, 'user_id': actor, 'mode': 'owner_review',
+            'alert_opt_in_channels': opt_in_channels,
             'findings': findings, 'checked_at': max((value for value in (last_finding, last_check) if value), default=None).isoformat() if (last_finding or last_check) else None,
             'unavailable_sources': [name for kind, name in (('linear', 'Linear'), ('crm_task', 'CRM')) if kind not in sources]}

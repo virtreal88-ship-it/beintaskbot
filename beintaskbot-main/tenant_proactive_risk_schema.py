@@ -1,4 +1,4 @@
-"""Tenant-isolated storage for read-only proactive risk dry runs."""
+"""Tenant-isolated storage for proactive risk findings and owner alert outbox."""
 from threading import Lock
 from tenant_platform import _ensure_schema
 
@@ -71,7 +71,7 @@ def ensure_schema(conn) -> None:
               channel TEXT NOT NULL CHECK(channel IN ('internal','push')),
               endpoint_hash TEXT NOT NULL DEFAULT '',
               status TEXT NOT NULL DEFAULT 'pending'
-                CHECK(status IN ('pending','sending','delivered','unknown','skipped','expired')),
+              CHECK(status IN ('pending','sending','accepted','delivered','unknown','skipped','expired')),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,event_id,recipient_id,channel,endpoint_hash),
               FOREIGN KEY(tenant_id,event_id)
