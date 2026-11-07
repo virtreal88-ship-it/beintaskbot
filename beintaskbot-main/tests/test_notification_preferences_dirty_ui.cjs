@@ -13,6 +13,11 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
 (async()=>{
  assert.match(source,/host === "chakra-notification-settings-root" \? "#chakra-notification-settings-root"/,
    'the notification root itself is watched for edits');
+ const component=source.slice(source.indexOf('function NotificationPreferencesHub()'),source.indexOf('window.tenantChakraCRM'));
+ assert.match(component,/const mounted = useRef\(false\)/,'the component tracks whether its profile-scoped view is still mounted');
+ assert.match(component,/const requestGeneration = useRef\(0\)/,'overlapping or invalidated requests cannot publish late results');
+ assert.equal((component.match(/if \(!mounted\.current \|\| generation !== requestGeneration\.current\) return;/g)||[]).length,4,
+   'load/save success and error paths discard stale responses before state or dirty updates');
  const dom=new JSDOM(html,{url:'https://crm.test/app?view=settings',runScripts:'outside-only'}),w=dom.window,d=w.document;
  let now=1_000_000,activations=0,resets=0;
  w.Date.now=()=>now;
@@ -31,6 +36,11 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
  host.hidden=true;await settle();now+=31_000;host.hidden=false;await settle();
  assert.equal(resets,1,'a clean component can still be refreshed after the retention TTL');
  assert.equal(activations,2);
+ const previousActivations=activations;
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,tenant_id:'tenant-b'}}}));
+ await settle();
+ assert.equal(resets,2,'profile changes invalidate the previous notification component');
+ assert.equal(activations,previousActivations+1,'the new profile gets a fresh component instance');
  dom.window.close();
  console.log('PASS: notification preferences retain unsaved edits when reopened and refresh clean state after TTL.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

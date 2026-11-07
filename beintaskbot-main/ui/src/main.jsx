@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./app-shell.js";
 import { AIDashboard } from "./ai-dashboard.jsx";
@@ -2358,35 +2358,50 @@ function NotificationPreferencesHub() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const mounted = useRef(false);
+  const requestGeneration = useRef(0);
   const load = async () => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError("");
     try {
-      setData(await api("/api/platform/notification-preferences"));
+      const result = await api("/api/platform/notification-preferences");
+      if (!mounted.current || generation !== requestGeneration.current) return;
+      setData(result);
       window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
+      if (!mounted.current || generation !== requestGeneration.current) return;
       setError(e.message || "Bildiriş ayarları yüklənmədi.");
     } finally {
-      setLoading(false);
+      if (mounted.current && generation === requestGeneration.current) setLoading(false);
     }
   };
   useEffect(() => {
+    mounted.current = true;
     void load();
+    return () => {
+      mounted.current = false;
+      requestGeneration.current += 1;
+    };
   }, []);
   const save = async () => {
     if (!data || saving) return;
+    const generation = ++requestGeneration.current;
     setSaving(true);
     setError("");
     try {
-      setData(await api("/api/platform/notification-preferences", {
+      const result = await api("/api/platform/notification-preferences", {
         method: "POST",
         body: JSON.stringify({ preferences: data.preferences || {} }),
-      }));
+      });
+      if (!mounted.current || generation !== requestGeneration.current) return;
+      setData(result);
       window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
+      if (!mounted.current || generation !== requestGeneration.current) return;
       setError(e.message || "Bildiriş ayarları saxlanmadı.");
     } finally {
-      setSaving(false);
+      if (mounted.current && generation === requestGeneration.current) setSaving(false);
     }
   };
   return (
