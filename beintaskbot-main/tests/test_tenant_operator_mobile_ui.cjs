@@ -6,9 +6,10 @@ const route={provider:'connect',agent_id:'00000000-0000-0000-0000-000000000301',
 const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
 const page={success:true,result:{dialog:route,messages:[{id:'message-1',external_id:'external-1',direction:'incoming',message_type:'text',body:'Need assistance',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:00:00Z'}],next_before:null}};
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
-function boot(url='https://crm.test/app?view=dialogs',activeDialogs=false,storedRoute=null,routeHistory=false,mobile=true){
+function boot(url='https://crm.test/app?view=dialogs',activeDialogs=false,storedRoute=null,routeHistory=false,mobile=true,storedHistory=null){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url,runScripts:'outside-only'}),w=dom.window,calls=[],viewportListeners={};
  if(activeDialogs){w.document.getElementById('view-dialogs').classList.add('active');w.tenantAppNavigate=view=>{const url=new w.URL(w.location.href);url.searchParams.set('view',view);w.history.replaceState(w.history.state?.view===view?{...w.history.state,view}:{view},'',url);w.document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id==='view-'+view));w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view}}));};}
+ if(storedHistory)w.history.replaceState(storedHistory,'');
  if(storedRoute)for(const [key,value] of storedRoute)w.sessionStorage.setItem(key,value);
  if(routeHistory)w.addEventListener('popstate',()=>{const view=new URL(w.location.href).searchParams.get('view');if(view){w.document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id==='view-'+view));w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view}}));}});
  w.TextEncoder=TextEncoder;Object.defineProperty(w.crypto,'subtle',{value:require('node:crypto').webcrypto.subtle});w.tenantProfileSnapshot=profile;w.matchMedia=query=>({matches:mobile&&query==='(max-width: 900px)',media:query,addListener(){},removeListener(){}});
@@ -68,7 +69,7 @@ function boot(url='https://crm.test/app?view=dialogs',activeDialogs=false,stored
  assert.match(stale.w.document.getElementById('operatorGroupSettingsBody').textContent,/Legacy dialogue channel is ambiguous/,'assignment reports route conflict without closing the dialog');
  assert.equal(stale.w.history.state.operatorDialog.conversation_id,other.conversation_id,'assignment opens for the selected dialog');
  assert.equal(stale.calls.filter(u=>u.includes('/knowledge-candidates/')).length,1,'assignment does not reopen the previous case');
- const saved=Object.entries(stale.w.sessionStorage),reload=boot(stale.w.location.href,true,saved);await settle();await settle();
+ const saved=Object.entries(stale.w.sessionStorage),reload=boot(stale.w.location.href,true,saved,false,true,stale.w.history.state);await settle();await settle();
  assert.equal(reload.calls.filter(u=>u.includes('/knowledge-candidates/')).length,0,'refresh does not resolve the previous case again');
  assert(reload.calls.some(u=>u.includes('/dialogs/history')&&u.includes('994509876543')),'refresh restores the selected route');
  reload.dom.window.close();stale.dom.window.close();
