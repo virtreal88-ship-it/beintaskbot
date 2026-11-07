@@ -10,7 +10,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));document.getElementById('view-dialogs').classList.add('active');
   window.testRoute={provider:'connect',lead_id:41,channel_id:'00000000-0000-4000-8000-000000000002',conversation_id:'client',state:'human',agent_id:'00000000-0000-4000-8000-000000000003',can_send:true,controls_allowed:true,available_actions:[]};
   window.tenantProfileSnapshot={member:{tenant_id:'00000000-0000-4000-8000-000000000001',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
-  window.requests=[];window.voiceEvents=[];window.incomingEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;window.interruptCalls=0;window.deferTalkReady=false;window.releaseTalkReady=null;
+  window.requests=[];window.voiceEvents=[];window.incomingEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;window.interruptCalls=0;window.deferTalkReady=false;window.releaseTalkReady=null;window.talkEndEmpty=false;window.muteCalls=[];window.interruptItem='assistant-1';
   window.fetch=async(url,options={})=>{url=String(url);window.requests.push({url,method:options.method||'GET'});let result={};
    if(url.includes('/dialogs/copilot-voice/preflight'))result={available:true};
    else if(url.includes('/dialogs/history'))result={dialog:window.testRoute,messages:[{id:'one',external_id:'one',direction:'incoming',message_type:'text',body:'synthetic'}]};
@@ -21,7 +21,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
    static OPEN=1;
    constructor(url){this.url=url;this.readyState=0;window.sockets.push(this);setTimeout(()=>{this.readyState=1;this.onopen?.();setTimeout(()=>this.emit({type:'ready'}),0);},0);}
    emit(event){window.incomingEvents.push(event);this.onmessage?.({data:JSON.stringify(event)});}
-   send(value){if(value instanceof ArrayBuffer){window.voiceEvents.push({type:'audio',bytes:value.byteLength});return;}if(typeof value==='string'){const event=JSON.parse(value);window.voiceEvents.push(event);if(event.type==='end')setTimeout(()=>this.emit({type:'ended'}),0);if(event.type==='talk_start'){if(window.deferTalkReady)window.releaseTalkReady=()=>this.emit({type:'talk_ready'});else setTimeout(()=>this.emit({type:'talk_ready'}),0);}if(event.type==='talk_end')setTimeout(()=>this.emit({type:'thinking'}),0);if(event.type==='played_all')setTimeout(()=>this.emit({type:'listening'}),0);}}
+   send(value){if(value instanceof ArrayBuffer){window.voiceEvents.push({type:'audio',bytes:value.byteLength});return;}if(typeof value==='string'){const event=JSON.parse(value);window.voiceEvents.push(event);if(event.type==='end')setTimeout(()=>this.emit({type:'ended'}),0);if(event.type==='talk_start'){if(window.deferTalkReady)window.releaseTalkReady=()=>this.emit({type:'talk_ready'});else setTimeout(()=>this.emit({type:'talk_ready'}),0);}if(event.type==='talk_end')setTimeout(()=>this.emit(window.talkEndEmpty?{type:'talk_empty'}:{type:'thinking'}),0);if(event.type==='played_all')setTimeout(()=>this.emit({type:'listening'}),0);}}
    close(){this.readyState=3;this.onclose?.();}
   }
   window.WebSocket=FakeSocket;
@@ -29,7 +29,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-copilot-voice-audio.js','docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>{
   window.acquireTenantMicrophone=async()=>()=>window.releaseCount++;
-  window.playCount=0;window.openExperimentalCopilotAudio=async(onPcm)=>{window.emitPcm=onPcm;return{flush(){onPcm(new Uint8Array(120));},mute:value=>{window.muted=value;},play:()=>{window.playCount++;},contextState:()=> 'running',interrupt:()=>{window.interruptCalls++;return 0;},interruptForTalk:()=>{window.interruptCalls++;return{item_id:'assistant-1',audio_end_ms:120};},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}};};
+  window.playCount=0;window.openExperimentalCopilotAudio=async(onPcm)=>{window.emitPcm=onPcm;return{flush(){onPcm(new Uint8Array(120));},mute:value=>{window.muted=value;window.muteCalls.push(value);},play:()=>{window.playCount++;},contextState:()=> 'running',interrupt:()=>{window.interruptCalls++;return 0;},interruptForTalk:()=>{window.interruptCalls++;return{item_id:window.interruptItem,audio_end_ms:120};},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}};};
  });
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  await page.locator('#operatorCopilotVoiceToggle').click();
@@ -93,6 +93,22 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'thinking'}));
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>window.playCount===3,'the follow-up answer can play after the user turn');
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] .voice-session-talk')?.getAttribute('aria-label')==='Нажмите, чтобы перебить и говорить');
+ // A full unacknowledged queue discards only this partial utterance. The
+ // active voice connection stays open so the user can retry after talk_ready.
+ await page.evaluate(()=>{window.deferTalkReady=true;window.talkEndEmpty=true;window.interruptItem='assistant-2';});
+ await voice.getByRole('button',{name:'Нажмите, чтобы перебить и говорить'}).click();
+ await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_start'),null,{timeout:1000});
+ await page.evaluate(()=>{for(let i=0;i<240;i++)window.emitPcm(new Uint8Array(2048));});
+ assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='end')),false,'a full unacknowledged queue does not end the voice session');
+ assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio'&&x.bytes===2048).length),120,'partial speech is discarded rather than sent as a corrupted turn');
+ assert.equal(await page.evaluate(()=>window.muted),true,'capture is muted while waiting for server acknowledgement');
+ await page.evaluate(()=>{window.deferTalkReady=false;window.releaseTalkReady?.();});
+ await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===3);
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] button[aria-label="Нажмите, чтобы говорить"]')?.disabled===false);
+ assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='end')),false,'empty-turn acknowledgement restores retry without closing the call');
+ assert.equal(await page.evaluate(()=>window.muted),false,'microphone is restored after the empty turn is confirmed');
+ await page.evaluate(()=>{window.talkEndEmpty=false;});
  await voice.getByRole('button',{name:'Завершить разговор'}).click();
  await page.waitForFunction(()=>window.releaseCount===1 && window.audioClosed===1);
  await voice.waitFor({state:'hidden'});

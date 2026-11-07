@@ -5,8 +5,8 @@
 })(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
-  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер слишком долго подтверждал начало реплики. Разговор завершён; нажмите микрофон, чтобы начать снова.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Нажмите, чтобы говорить',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
-    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server yeni replikaya çox gec icazə verdi. Söhbət bitdi; yenidən başlamaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışmaq üçün toxunun',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
+  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер задержал подтверждение. Разговор не завершён.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Нажмите, чтобы говорить',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
+    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server təsdiqi gecikdirir. Söhbət bitməyib.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışmaq üçün toxunun',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
   const document = root.ownerDocument;
   const micIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>';
@@ -21,7 +21,7 @@
   buttons.append(start,talk,end);
   root.append(status,buttons);
   const MAX_PENDING_AUDIO_BYTES=480000; // 10 seconds at 24 kHz PCM16 mono; bounded while talk_ready is in flight.
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false, assistantResponding=false, currentAssistantItem=null, pendingAudio=[], pendingAudioBytes=0;
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false, talkQueueOverflow=false, assistantResponding=false, currentAssistantItem=null, pendingAudio=[], pendingAudioBytes=0;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false, playbackStartedItems=new Set();
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
@@ -44,7 +44,7 @@
     hideAfterConnect=false;
     const stopVersion=++generation;
     settleEnd(confirmed);
-    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;pendingAudio=[];pendingAudioBytes=0;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=true;
+    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;talkQueueOverflow=false;assistantResponding=false;currentAssistantItem=null;pendingAudio=[];pendingAudioBytes=0;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingOpenAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -95,8 +95,14 @@
             const copy=bytes instanceof Uint8Array?bytes.slice():null;
             if(!copy)return;
             if(pendingAudioBytes+copy.byteLength>MAX_PENDING_AUDIO_BYTES){
-              muted=true;inputEnabled=false;talkActive=false;talkPending=false;pendingAudio=[];pendingAudioBytes=0;
-              void finish(labels.inputQueueSlow);return;
+              // Keep the voice session alive. The server has not acknowledged
+              // this manual turn, so its audio cannot be safely committed.
+              // Mute capture, discard the partial local turn, and close only
+              // the empty turn after talk_ready arrives.
+              talkQueueOverflow=true;muted=true;inputEnabled=false;talkActive=false;
+              pendingAudio=[];pendingAudioBytes=0;
+              try{audio?.mute(true);}catch(_){}
+              status.textContent=labels.inputQueueSlow;return;
             }
             pendingAudio.push(copy);pendingAudioBytes+=copy.byteLength;
           }
@@ -143,15 +149,26 @@
             setVoiceState(greetingPending?'responding':'listening');
             status.textContent=greetingPending?labels.responding:labels.listening;
           } else if(event.type==='talk_ready'){
-            talkPending=false;talkActive=true;assistantResponding=false;currentAssistantItem=null;inputEnabled=true;talk.disabled=false;talk.setAttribute('aria-pressed','true');
+            talkPending=false;assistantResponding=false;currentAssistantItem=null;
+            if(talkQueueOverflow){
+              // No partial utterance is sent to the model. Close this empty
+              // server turn and let the user retry without ending the call.
+              talkActive=false;inputEnabled=false;pendingAudio=[];pendingAudioBytes=0;
+              talk.disabled=true;talk.setAttribute('aria-pressed','false');audio?.mute(true);
+              send({type:'talk_end'});setVoiceState('listening');status.textContent=labels.inputQueueSlow;
+              return;
+            }
+            talkActive=true;inputEnabled=true;talk.disabled=false;talk.setAttribute('aria-pressed','true');
             talk.setAttribute('aria-label',labels.talkSend);talk.title=labels.talkSend;talk.innerHTML=sendIcon;
             const queued=pendingAudio;pendingAudio=[];pendingAudioBytes=0;
             for(const pcm of queued)send({type:'audio',pcm});
             setVoiceState('listening');status.textContent=labels.talking;
           } else if(event.type==='talk_empty'){
+            const delayedTurn=talkQueueOverflow;
             talkPending=false;talkActive=false;inputEnabled=false;assistantResponding=false;currentAssistantItem=null;pendingAudio=[];pendingAudioBytes=0;talk.disabled=false;talk.setAttribute('aria-pressed','false');
+            if(talkQueueOverflow){talkQueueOverflow=false;muted=false;try{audio?.mute(false);}catch(_){}}
             talk.setAttribute('aria-label',labels.talkStart);talk.title=labels.talkStart;talk.innerHTML=micIcon;
-            setVoiceState('listening');status.textContent=labels.empty;
+            setVoiceState('listening');status.textContent=delayedTurn?labels.inputRetry:labels.empty;
           } else if(event.type==='thinking'){
             // A thinking event after the user committed a turn means the
             // pending click-to-talk operation has become an assistant reply.
