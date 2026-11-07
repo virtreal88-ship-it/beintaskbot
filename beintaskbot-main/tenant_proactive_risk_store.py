@@ -1,4 +1,4 @@
-"""Dry-run finding persistence and owner-only preview reads; never delivers messages."""
+"""Risk finding persistence, owner-only preview reads and alert transition hooks."""
 import json
 from datetime import datetime, timedelta, timezone
 from tenant_platform import _connect, _read_tenant_workflow
@@ -12,9 +12,17 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
                             source_version: str, source_title: str,
                             findings: list[dict], *, source_scope: str = '',
                             source_checked_at: datetime | None = None) -> None:
-    """Replace the current dry-run view atomically when a source is observed."""
+    """Replace the current risk view atomically when a source is observed."""
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
+    from tenant_proactive_risk_delivery import (
+        lock_daily_quota_transition, lock_source_transition, record_finding_transitions,
+    )
+    # CRM observation can update many sources in one transaction. Keep the
+    # lock order consistent with the baseline backfill before taking a source
+    # lock, otherwise each side can hold one lock while waiting for the other.
+    lock_daily_quota_transition(cur, str(tenant_id))
+    lock_source_transition(cur, str(tenant_id), source_kind, str(source_id))
     cur.execute('DELETE FROM saas_proactive_risk_findings WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s',
                 (tenant_id, source_kind, str(source_id)))
     digest = fingerprint(findings)
@@ -33,6 +41,8 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
            item['confidence'], str(source_title or '')[:200], item.get('source_url') or '',
            json.dumps(item.get('facts') or [], ensure_ascii=False), str(item['assessment'])[:800],
            str(item['recommended_step'])[:400], digest, source_checked_at))
+    record_finding_transitions(cur, str(tenant_id), source_kind, str(source_id),
+                               str(source_scope), str(source_version), findings)
 
 
 def mark_checked(cur, tenant_id: str, source_kind: str, source_scope: str = '') -> None:
@@ -77,9 +87,12 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
                     or profile.get('tenant_status') != 'active'):
                 raise TenantLinearError('Yalnız aktiv şirkət sahibi üçün.', 403)
             profile = {**profile, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
+            from tenant_proactive_risk_delivery import _channels
+            opt_in_channels = _channels(profile, tenant)
             sources = _active_sources(cur, tenant, profile)
             if not sources:
-                return {'tenant_id': tenant, 'user_id': actor, 'mode': 'dry_run', 'deliveries_enabled': False,
+                return {'tenant_id': tenant, 'user_id': actor, 'mode': 'owner_review',
+                        'alert_opt_in_channels': opt_in_channels,
                         'findings': [], 'checked_at': None, 'unavailable_sources': ['Linear', 'CRM']}
             cur.execute('''SELECT source_kind,source_id,rule_id,source_scope,source_version,severity,confidence,source_title,
                     source_url,facts,assessment,recommended_step,fingerprint,checked_at,source_checked_at
@@ -117,6 +130,56 @@ def list_findings(session: dict, *, limit: int = 50) -> dict:
             'source_checked_at': source_checked_at.isoformat() if source_checked_at else None,
             'freshness': 'stale' if source_checked_at is None or now - freshness_stamp.astimezone(timezone.utc) > timedelta(minutes=15) else 'recent',
             'source': 'Linear' if row['source_kind'] == 'linear' else 'CRM task'})
-    return {'tenant_id': tenant, 'user_id': actor, 'mode': 'dry_run', 'deliveries_enabled': False,
+    return {'tenant_id': tenant, 'user_id': actor, 'mode': 'owner_review',
+            'alert_opt_in_channels': opt_in_channels,
             'findings': findings, 'checked_at': max((value for value in (last_finding, last_check) if value), default=None).isoformat() if (last_finding or last_check) else None,
             'unavailable_sources': [name for kind, name in (('linear', 'Linear'), ('crm_task', 'CRM')) if kind not in sources]}
+
+
+def alert_detail(session: dict, alert_id: str) -> dict:
+    """Return a single alert only after owner and live source revalidation."""
+    import uuid
+    from tenant_proactive_risk_delivery import _channels, _owner_profile, current_finding
+
+    tenant, actor = owner(session)
+    try:
+        alert_id = str(uuid.UUID(str(alert_id)))
+    except (ValueError, TypeError, AttributeError):
+        raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404) from None
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile = _owner_profile(cur, tenant, actor)
+            if not profile:
+                raise TenantLinearError('Yalnız aktiv şirkət sahibi üçün.', 403)
+            cur.execute('''SELECT * FROM saas_proactive_risk_alert_events
+              WHERE tenant_id=%s::uuid AND recipient_id=%s AND id=%s::uuid
+                AND state IN ('expanded','cancelled') ''',
+              (tenant, actor, alert_id))
+            event = cur.fetchone()
+            if not event:
+                raise TenantLinearError('Bildiriş artıq əlçatan deyil.', 404)
+            # Opening the risk-specific bell or push deep link acknowledges only
+            # the matching risk entry. Push-only alerts simply have no bell row.
+            cur.execute('''UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now())
+              WHERE tenant_id=%s::uuid AND telegram_id=%s AND event_key=%s AND read_at IS NULL''',
+              (tenant, actor, 'proactive_risk:' + alert_id))
+            if event['state'] != 'expanded' or not _channels(profile, tenant):
+                conn.commit()
+                raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
+            finding = current_finding(cur, event, profile)
+            if not finding:
+                # The owner opened this exact authorized alert, but its source
+                # has gone stale. Keep the acknowledgement while failing closed
+                # on the detail itself.
+                conn.commit()
+                raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
+            conn.commit()
+            finding['checked_at'] = datetime.now(timezone.utc).isoformat()
+            finding['source_url'] = (finding.get('source_url') if finding.get('source_kind') == 'linear'
+                                     and str(finding.get('source_url') or '').startswith('https://linear.app/')
+                                     else '/app?view=tasks' if finding.get('source_kind') == 'crm_task' else '')
+            return {key: finding.get(key) for key in (
+                'source_kind', 'source_id', 'source', 'source_title', 'source_url',
+                'rule_id', 'severity', 'confidence', 'facts', 'assessment',
+                'recommended_step', 'checked_at')}

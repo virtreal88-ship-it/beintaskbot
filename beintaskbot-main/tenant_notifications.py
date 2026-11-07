@@ -15,13 +15,18 @@ EVENTS = {
     'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker', 'master')},
     'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
     'linear_status_changed': {'label': 'Linear seçilmiş statusa keçdi', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
+    # Risk alerts are deliberately a separate, owner-only opt-in. Telegram is
+    # not a supported channel for this event.
+    'proactive_risk': {'label': 'Risk yoxlaması tələb olunur', 'module': 'settings',
+                       'roles': ('owner',), 'channels': ('internal', 'push')},
     'ai_developer_consultation': {'label': 'AI tərtibatçı məsləhəti', 'module': 'support', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
 }
 
 
 def notification_catalog() -> list[dict]:
     """Single catalog for both the editor and server recipient checks."""
-    return [{'key': key, **value, 'roles': list(value['roles']), 'channels': list(CHANNELS)}
+    return [{'key': key, **value, 'roles': list(value['roles']),
+             'channels': list(value.get('channels', CHANNELS))}
             for key, value in EVENTS.items()]
 
 
@@ -31,7 +36,8 @@ def validate_notification_preferences(value: object) -> None:
     for event, channels in value.items():
         if event not in EVENTS or not isinstance(channels, dict):
             raise ValueError('Bildiriş növü düzgün deyil.')
-        if any(channel not in CHANNELS or not isinstance(enabled, bool)
+        allowed = EVENTS[event].get('channels', CHANNELS)
+        if any(channel not in allowed or not isinstance(enabled, bool)
                for channel, enabled in channels.items()):
             raise ValueError('Bildiriş kanalı üçün aktiv/deaktiv seçin.')
 
@@ -57,5 +63,6 @@ def notification_channels(policy, *, event: str, tenant_id: str) -> list[str]:
         return []
     preferences = policy.member_settings.get('notifications') or {}
     channels = preferences.get(event) or {}
-    return [channel for channel in CHANNELS
+    allowed = EVENTS[event].get('channels', CHANNELS)
+    return [channel for channel in allowed
             if channels.get(channel) is True and company.get(channel, True) is True]
