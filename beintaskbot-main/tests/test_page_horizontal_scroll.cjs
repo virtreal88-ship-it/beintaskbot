@@ -27,14 +27,15 @@ setTimeout(async()=>{
  const top=[...board.children].map(x=>x.getBoundingClientRect().top);
  board.scrollLeft=board.scrollWidth;
  const moved=board.scrollLeft>0;
- document.querySelector('main').insertAdjacentHTML('beforeend','<div class="table" id="dealsList"><div class="row"><div>Long readable title '+ 'words '.repeat(50)+'</div><div class="hide-mobile">Stage</div><div class="hide-mobile">Message</div><div>Date</div></div></div><section id="supportCases"><div class="support-cases-list"><table class="support-cases-table"><thead><tr>'+Array.from({length:8},(_,i)=>'<th>Column '+i+'</th>').join('')+'</tr></thead><tbody><tr>'+Array.from({length:8},(_,i)=>'<td>Value '+i+'</td>').join('')+'</tr></tbody></table></div></section>');
+ document.querySelector('main').insertAdjacentHTML('beforeend','<div class="table" id="dealsList"><div class="row"><div>Long readable title '+ 'words '.repeat(50)+'</div><div class="hide-mobile">Stage</div><div class="hide-mobile">Message</div><div>Date</div></div></div><div class="table" id="nativeCompaniesList"><div class="row"><div>Company</div><div><button>Edit</button></div></div></div><section id="supportCases"><div class="support-cases-list"><table class="support-cases-table"><thead><tr>'+Array.from({length:8},(_,i)=>'<th>Column '+i+'</th>').join('')+'</tr></thead><tbody><tr>'+Array.from({length:8},(_,i)=>'<td>Value '+i+'</td>').join('')+'</tr></tbody></table></div></section>');
  const list=document.getElementById('dealsList'),cases=document.querySelector('.support-cases-list');
  list.scrollLeft=100;cases.scrollLeft=100;
  await new Promise(r=>setTimeout(r,200));
  const range=document.querySelector('#appHorizontalScroll input');
  range.value='500';range.dispatchEvent(new Event('input',{bubbles:true}));
  const controlRect=document.getElementById('appHorizontalScroll').getBoundingClientRect();
- const result={controlHidden:document.getElementById('appHorizontalScroll').hidden,controlWidth:controlRect.width,controlRight:controlRect.right,rangeValue:range.value,viewport:innerWidth,documentWidth:document.documentElement.scrollWidth,board:measure(board),sameRow:top.every(x=>x===top[0]),moved,cardWrap:getComputedStyle(document.querySelector('.tl-card')).overflowWrap,list:measure(list),listMoved:list.scrollLeft>0,columnsVisible:[...list.querySelectorAll('.hide-mobile')].every(x=>getComputedStyle(x).display!=='none'),cases:measure(cases),casesMoved:cases.scrollLeft>0,caseRow:getComputedStyle(cases.querySelector('tbody tr')).display,caseColumns:[...cases.querySelectorAll('td')].every(x=>getComputedStyle(x).display==='table-cell'),riskPanel:!!document.getElementById('tlRiskReview'),riskFetch:requests.some(x=>x.includes('/risks/'))};
+ const twoCellList=document.getElementById('nativeCompaniesList');
+ const result={twoCellList:measure(twoCellList),controlHidden:document.getElementById('appHorizontalScroll').hidden,controlWidth:controlRect.width,controlRight:controlRect.right,rangeValue:range.value,viewport:innerWidth,documentWidth:document.documentElement.scrollWidth,board:measure(board),sameRow:top.every(x=>x===top[0]),moved,cardWrap:getComputedStyle(document.querySelector('.tl-card')).overflowWrap,list:measure(list),listMoved:list.scrollLeft>0,columnsVisible:[...list.querySelectorAll('.hide-mobile')].every(x=>getComputedStyle(x).display!=='none'),cases:measure(cases),casesMoved:cases.scrollLeft>0,caseRow:getComputedStyle(cases.querySelector('tbody tr')).display,caseColumns:[...cases.querySelectorAll('td')].every(x=>getComputedStyle(x).display==='table-cell'),riskPanel:!!document.getElementById('tlRiskReview'),riskFetch:requests.some(x=>x.includes('/risks/'))};
  document.body.insertAdjacentHTML('beforeend','<pre id="result">'+JSON.stringify(result)+'</pre>');
 },0);
 </script>`;
@@ -54,6 +55,7 @@ try {
   assert.equal(r.caseRow,'table-row');
   assert(!r.riskPanel&&!r.riskFetch,'risk review absent from Linear');
   assert(!r.controlHidden&&r.controlWidth<=r.viewport*.3&&r.controlRight<=r.viewport,'compact bottom-right control');
+  if(width<=760) assert(r.twoCellList.scroll<=r.twoCellList.width,'ordinary two-cell lists remain responsive');
   if(r.list.width<720) assert(r.listMoved,'narrow list scrolls');
   if(r.cases.width<980) assert(r.casesMoved,'narrow case table scrolls');
   console.log('PASS:',JSON.stringify(r));

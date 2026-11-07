@@ -38,9 +38,10 @@
   document.addEventListener('scroll',event=>{if(event.target.matches?.(selectors)&&wide(event.target))active=event.target;schedule();},{capture:true,passive:true});
   window.addEventListener('resize',schedule,{passive:true});
   slider.addEventListener('input',()=>{if(active?.isConnected){active.scrollLeft=Number(slider.value)/1000*(active.scrollWidth-active.clientWidth);slider.setAttribute('aria-valuetext',`${Math.round(Number(slider.value)/10)}%`);}});
-  // Content, navigation and sidebar changes can resize a scrollport without a window resize.
+  // Observe body-level legacy modals and portalled dialogs as well as main content.
+  // Ignore our own control mutations so range/visibility updates cannot reschedule themselves.
   const resize=new ResizeObserver(schedule);resize.observe(document.querySelector('main')||document.body);
-  new MutationObserver(records=>{if(records.some(record=>!control.contains(record.target)))schedule();}).observe(document.querySelector('main')||document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','hidden','style']});
+  new MutationObserver(records=>{if(records.some(record=>!control.contains(record.target)))schedule();}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','hidden','style','role','aria-modal']});
   new MutationObserver(schedule).observe(document.body,{attributes:true,attributeFilter:['data-sidebar','data-mobile-menu']});
   schedule();
 })();
