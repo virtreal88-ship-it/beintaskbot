@@ -998,18 +998,23 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(event.get('type')=='response.cancel' for event in self.received),
                              'server_vad owns response cancellation; the app must not send a racing duplicate cancel')
             self.assertEqual(client.events[-1],{'type':'interrupt','item_id':'audio-1'})
+            self.assertEqual(session.truncate_pending,'audio-1')
+            # The provider's exact truncation confirmation, not a browser
+            # playback ACK, is the gate that allows the next response turn.
+            await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
+            self.assertEqual(self.received[-1],{'type':'conversation.item.truncate','item_id':'audio-1',
+                                                'content_index':0,'audio_end_ms':0})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-2'})
             await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response'}})
+            self.assertTrue(any(event.get('type')=='response.create' for event in self.received))
+            # A delayed browser ACK is advisory and cannot duplicate the
+            # truncate or prevent the user's second turn from being answered.
             await session.receive_client({'type':'played','item_id':'audio-1','played_ms':0})
-            await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
-            await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
             self.assertEqual(ledger.events,['reserve','claim','unknown','reserve','claim'])
             self.assertTrue(await session.end('test'))
             self.assertFalse(lease.held);self.assertTrue(self.ws.closed)
             self.assertEqual(ledger.events[-1],'unknown')
-            self.assertEqual(self.received[-2]['type'],'conversation.item.truncate')
-            self.assertEqual(self.received[-2]['audio_end_ms'],0)
             self.assertEqual(self.received[-1]['type'],'response.create')
         finally:
             await session.end('cleanup')

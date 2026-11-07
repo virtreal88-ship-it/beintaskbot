@@ -537,16 +537,20 @@ class Session:
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:
             async with self.lock:
                 ms = event['played_ms']
-                if not self.interrupt_pending or event['item_id'] != self.item or type(ms) is not int or ms != 0:
+                if type(ms) is not int or ms != 0:
                     raise Refused('invalid_playback_ack')
-                self.truncate_pending=self.item
-                if self.transcript is not None:self.transcript.interrupted(self.item)
-                await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
-                                          'content_index': 0, 'audio_end_ms': ms})
-                self.interrupt_pending = False
-                self.item, self.produced = None, 0
-                self.output_finished = False
-                await self._dispatch_pending()
+                # Server VAD now owns the authoritative truncate request. A
+                # browser playback ACK can arrive before or after its provider
+                # confirmation, so accept it as advisory and never make the
+                # next turn depend on it.
+                if event['item_id'] == self.truncate_pending:
+                    return
+                if event['item_id'] != self.item:
+                    if event['item_id'] in getattr(self,'seen_assistant_item_ids',set()):
+                        return  # late ACK for an already completed item
+                    raise Refused('invalid_playback_ack')
+                if not self.interrupt_pending:
+                    raise Refused('invalid_playback_ack')
             return
         if kind == 'played_all' and set(event) == {'type','item_id'}:
             async with self.lock:
@@ -647,8 +651,17 @@ class Session:
                     self.cancel_requested=True
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
+                    # Stop local playback immediately, but do not wait for a
+                    # browser ACK before telling Realtime to trim the unheard
+                    # output. With the server-side WebSocket transport, the
+                    # browser owns playback timing; at an interruption the
+                    # conservative zero offset prevents unplayed speech from
+                    # remaining in conversation context.
+                    self.truncate_pending=self.item
                     if self.transcript is not None:self.transcript.interrupted(self.item)
                     await self._send_client({'type': 'interrupt', 'item_id': self.item})
+                    await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
+                                               'content_index': 0, 'audio_end_ms': 0})
                 self.input_sequence += 1
                 self.input_turn = {'sequence':self.input_sequence,'stopped':False,'item_id':None}
             return
@@ -789,6 +802,9 @@ class Session:
                     event.get('content_index')!=0 or event.get('audio_end_ms')!=0):
                     raise Refused('invalid_truncation_confirmation')
                 self.truncate_pending=None
+                self.interrupt_pending=False
+                self.item,self.produced=None,0
+                self.output_finished=False
                 await self._dispatch_pending()
             return
         if kind == 'response.done':
