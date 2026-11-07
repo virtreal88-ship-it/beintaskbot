@@ -374,6 +374,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.closed=False;session.authority=Authority();session.lease=Lease()
         session.scope=('tenant','actor','channel','conversation');session.fence=3
         session.muted=False;session.greeting_pending=False;session.response_inflight=False;session.item=None
+        session.input_turn={'sequence':1,'stopped':False,'manual':True,'audio_bytes':0}
         session.input_bytes=0;session.max_input_bytes=192000
         session.io_lock=asyncio.Lock();session.started=0;session.max_seconds=120
         session.provider=Provider();session.activity=1.0
@@ -394,6 +395,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.closed=False;session.authority=Authority();session.lease=Lease()
         session.scope=('tenant','actor','channel','conversation');session.fence=4
         session.muted=False;session.greeting_pending=False;session.response_inflight=True;session.item=None
+        session.input_turn={'sequence':1,'stopped':False,'manual':True,'audio_bytes':0}
         session.input_bytes=0;session.max_input_bytes=192000;session.max_seconds=120;session.started=0
         session.provider=Provider();session.activity=1.0;session.io_lock=asyncio.Lock()
         frame=b'\x01\x00'*1024
@@ -554,7 +556,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         wire=_RealtimeWire(self.socket,OneUseGuard())
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[{'text':'синтетический mətn'}],'extra_context':{}}
-        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=True,transcription=None,reconnect=False)
+        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         scope={'request_id':str(uuid.uuid4()),'tenant_id':str(uuid.uuid4()),'session_id':str(uuid.uuid4()),
                'channel_id':str(uuid.uuid4()),'conversation_id':'synthetic','actor_id':7,'response_number':1,'executor':'test'}
         receipt={**scope,'state':'claimed','model':MODEL,'quote_version':QUOTE,'reserved_microusd':MINIMUM_HOLD,
@@ -568,7 +570,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                         'input_audio_buffer.append','response.create'])
         settings=self.received[0]['session'];vad=settings['audio']['input']['turn_detection']
         self.assertEqual(settings['max_output_tokens'],4096)
-        self.assertFalse(vad['create_response']);self.assertTrue(vad['interrupt_response']);self.assertIsNone(vad['idle_timeout_ms'])
+        self.assertIsNone(vad)
         self.assertNotIn('transcription',settings['audio']['input'])
         self.assertEqual(settings['tools'],[]);self.assertEqual(settings['tool_choice'],'none')
         self.assertNotIn('синтетический',settings['instructions'])
@@ -629,7 +631,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         async def credential():called.append(True);return 'synthetic-key'
         provider=OpenAIRealtimeProvider(credential,OneUseGuard())
         with self.assertRaises(TenantLinearError):await provider.open({},tools=[],create_response=False,
-                            interrupt_response=True,transcription=None,reconnect=False)
+                            interrupt_response=False,transcription=None,reconnect=False)
         self.assertEqual(called,[])
 
     async def test_composed_provider_protocol_over_loopback_with_test_connector(self):
@@ -642,7 +644,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[],'extra_context':{}}
         with patch('tenant_operator_realtime_wire._open_openai_socket',test_connector):
-            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=True,transcription=None,reconnect=False)
+            await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
             self.assertTrue(provider.ready);self.assertEqual(calls,['credential','connector'])
             self.assertNotIn('synthetic-key-never-log',json.dumps(self.received))
             await provider.close();self.assertTrue(self.ws.closed)
@@ -652,7 +654,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         policy,_=await self.admitted_policy()
         provider=OpenAIRealtimeProvider(bad_credential,policy)
         with self.assertRaisesRegex(ValueError,'provider_credential_unavailable') as failure:
-            await provider.open({},tools=[],create_response=False,interrupt_response=True,transcription=None,reconnect=False)
+            await provider.open({},tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception))
         async def credential():return 'synthetic-secret-do-not-log'
         async def test_connector(_,_owner):return self.socket
@@ -663,7 +665,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
              patch.object(_RealtimeWire,'_verify',side_effect=ValueError('synthetic-secret-do-not-log')):
             with self.assertLogs('tenant_operator_realtime_wire',level='WARNING') as captured:
                 with self.assertRaisesRegex(ValueError,'provider_open_unavailable') as failure:
-                    await provider.open(snapshot,tools=[],create_response=False,interrupt_response=True,transcription=None,reconnect=False)
+                    await provider.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=None,reconnect=False)
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
         self.assertNotIn('synthetic-secret','\n'.join(captured.output))
 
@@ -709,18 +711,29 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(session.greeting_pending)
                 self.assertFalse(any(event.get('type')=='response.create' for event in self.received),
                                  'voice waits for the employee instead of spending a greeting response')
+                await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+                await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                self.assertIsNone(session.input_turn,'provider VAD cannot open a manual turn')
+                with self.assertRaisesRegex(Refused,'audio_without_talk_start'):
+                    await session._receive_client({'type':'audio','pcm':bytes(480)})
+                self.assertFalse(any(event.get('type')=='input_audio_buffer.append' for event in self.received),
+                                 'microphone audio is rejected until the first click')
+                await session.receive_client({'type':'talk_start'})
+                self.assertEqual(client.events[-1]['type'],'talk_ready')
+                await session.receive_client({'type':'talk_end'})
+                self.assertEqual(client.events[-1]['type'],'talk_empty')
+                self.assertFalse(any(event.get('type')=='input_audio_buffer.commit' for event in self.received),
+                                 'an empty click cannot create a provider turn')
+                await session.receive_client({'type':'talk_start'})
                 await session.receive_client({'type':'audio','pcm':bytes(480)})
                 self.assertEqual(session.input_bytes,480,'microphone audio is accepted immediately after ready')
                 await asyncio.sleep(.01)
                 self.assertTrue(any(event.get('type')=='input_audio_buffer.append' for event in self.received))
-                # Realtime may report a created message item separately from
-                # the added/done notifications. Accept it only under the same
-                # strict message-role checks as the other item events.
-                await session.receive_provider({'type':'conversation.item.created',
-                    'item':{'id':'synthetic-context','type':'message','role':'user','content':[]}})
-                await session.receive_provider({'type':'input_audio_buffer.speech_started'})
-                await session.receive_client({'type':'audio','pcm':bytes(480)})
-                await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+                self.assertFalse(any(event.get('type')=='response.create' for event in self.received),
+                                 'no answer is dispatched before the employee presses Send')
+                await session.receive_client({'type':'talk_end'})
+                await asyncio.sleep(.01)
+                self.assertEqual(self.received[-1]['type'],'input_audio_buffer.commit')
                 await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
                 await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
                 self.assertTrue(session.response_inflight)
@@ -925,7 +938,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         with patch('tenant_operator_realtime_wire._new_owned_session',return_value=owned),\
              patch('tenant_operator_realtime_wire._connect_websocket',cancelled_connect):
             task=asyncio.create_task(provider.open({},tools=[],create_response=False,
-                                         interrupt_response=True,transcription=None,reconnect=False))
+                                         interrupt_response=False,transcription=None,reconnect=False))
             await entered.wait();task.cancel()
             with self.assertRaises(asyncio.CancelledError):await task
             closing=asyncio.create_task(provider.close());await asyncio.sleep(0)
@@ -965,10 +978,13 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         provider=TestWire(self.socket,OneUseGuard());lease=Lease();ledger=Ledger();client=Client()
         session=Session((str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic'),authority=Authority(),ledger=ledger,
                         lease=lease,context=Context(),provider=provider,client=client)
+        # Exercise the retained VAD handler in compatibility mode; live pilot
+        # sessions explicitly use click-to-talk and ignore these notifications.
+        session.manual_turns=False
         try:
             await session.start()
-            await session.receive_client({'type':'audio','pcm':bytes(480)})
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
             await session.receive_provider({'type':'conversation.item.input_audio_transcription.delta','item_id':'input-1',

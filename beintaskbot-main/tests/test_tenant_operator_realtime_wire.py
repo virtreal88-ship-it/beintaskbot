@@ -34,7 +34,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.socket=Socket();self.guard=Guard();self.wire=SyntheticRealtimeWire(self.socket,self.guard)
         self.snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.',
                        'lines':[],'extra_context':{}}
-        self.options={'tools':[],'create_response':False,'interrupt_response':True,'transcription':None,'reconnect':False}
+        self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':None,'reconnect':False}
 
     async def open(self):await self.wire.open(self.snapshot,**self.options)
 
@@ -50,16 +50,14 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         await self.open();self.assertEqual(self.socket.sent[0]['type'],'session.update')
         input_audio=self.socket.sent[0]['session']['audio']['input']
         self.assertEqual(input_audio['noise_reduction'],{'type':'near_field','strength':1})
-        self.assertEqual(input_audio['turn_detection']['threshold'],0.5)
-        self.assertTrue(input_audio['turn_detection']['interrupt_response'])
+        self.assertIsNone(input_audio['turn_detection'])
         await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='});self.assertEqual(self.socket.sent[-1]['type'],'input_audio_buffer.append')
 
     async def test_mismatched_policy_closes_admission(self):
-        changes=[lambda s:s['audio']['input']['turn_detection'].__setitem__('create_response',True),
-                 lambda s:s['audio']['input']['turn_detection'].__setitem__('interrupt_response',False),
-                 lambda s:s['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',1000),
-                 lambda s:s['audio']['input']['turn_detection'].__setitem__('threshold',0.8),
-                 lambda s:s['audio']['input']['turn_detection'].__setitem__('future_trigger',True),
+        changes=[lambda s:s['audio']['input'].__setitem__('turn_detection',{'type':'server_vad','create_response':True}),
+                 lambda s:s['audio']['input'].__setitem__('turn_detection',{'type':'server_vad','interrupt_response':False}),
+                 lambda s:s['audio']['input'].__setitem__('turn_detection',{}),
+                 lambda s:s['audio']['input'].__setitem__('turn_detection','server_vad'),
                  lambda s:s['audio']['input']['noise_reduction'].__setitem__('type','far_field'),
                  lambda s:s['audio']['input']['noise_reduction'].__setitem__('strength',0.5),
                  lambda s:s['audio']['input']['noise_reduction'].__setitem__('future_option',True),
@@ -129,8 +127,9 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session.greeting_pending)
         self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),0)
         for n in range(3):
-            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
-            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            await session.receive_client({'type':'talk_end'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
             await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
             await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})

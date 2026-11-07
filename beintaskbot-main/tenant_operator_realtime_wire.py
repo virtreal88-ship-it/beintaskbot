@@ -214,7 +214,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not True or transcription is not None
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -233,9 +233,10 @@ class _RealtimeWire:
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
                             'noise_reduction':{'type':'near_field','strength':1},
-                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True,
-                                              'idle_timeout_ms':None,'threshold':0.5,'prefix_padding_ms':300,
-                                              'silence_duration_ms':500}},
+                            # Click-to-talk owns turn boundaries. The server
+                            # commits input only after the employee presses
+                            # Send, so VAD cannot auto-submit a pause or noise.
+                            'turn_detection':None},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -272,7 +273,7 @@ class _RealtimeWire:
     def _verify(event,expected,session_id):
         try:
             if event['type']!='session.updated':raise ValueError()
-            s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
+            s=event['session'];audio=s['audio'];incoming=audio['input']
             noise=incoming.get('noise_reduction')
             checks={
               'id':s.get('id')==session_id,'type':s.get('type')=='realtime','model':s.get('model')==MODEL,
@@ -287,14 +288,7 @@ class _RealtimeWire:
               # OpenAI normalizes an omitted transcription config to null in
               # session.updated. Null means no separate transcription model.
               'audio.input.transcription':incoming.get('transcription') is None,
-              'audio.input.turn_detection.type':vad.get('type')=='server_vad',
-              'audio.input.turn_detection.create_response':vad.get('create_response') is False,
-              'audio.input.turn_detection.interrupt_response':vad.get('interrupt_response') is True,
-              'audio.input.turn_detection.idle_timeout_ms':vad.get('idle_timeout_ms') is None,
-              'audio.input.turn_detection.threshold':vad.get('threshold')==0.5,
-              'audio.input.turn_detection.prefix_padding_ms':vad.get('prefix_padding_ms')==300,
-              'audio.input.turn_detection.silence_duration_ms':vad.get('silence_duration_ms')==500,
-              'audio.input.turn_detection.fields':set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'},
+              'audio.input.turn_detection.disabled':incoming.get('turn_detection') is None,
               'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
             }
             mismatch=[name for name,valid in checks.items() if not valid]
@@ -350,6 +344,7 @@ class _RealtimeWire:
             try:audio=base64.b64decode(event['audio'],validate=True)
             except (ValueError,TypeError,binascii.Error):raise ValueError('audio_invalid') from None
             if not audio or len(audio)>9600 or len(audio)%2:raise ValueError('audio_invalid')
+        elif kind=='input_audio_buffer.commit' and set(event)=={'type'}:pass
         elif kind=='input_audio_buffer.clear' and set(event)=={'type'}:pass
         elif kind=='response.cancel' and set(event) in ({'type'},{'type','response_id'}):
             if 'response_id' in event and (not isinstance(event['response_id'],str) or not event['response_id'] or len(event['response_id'])>128):
