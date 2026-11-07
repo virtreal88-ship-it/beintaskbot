@@ -5,7 +5,7 @@ import json
 import time
 import unittest
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
 from aiohttp import web
@@ -43,7 +43,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
         session.authority=Authority();session.lease=Lease();session.fence=1
         session.response_inflight=True;session.response_pending=False;session.cancel_requested=True
-        session.provider_response_id='cancelled-response';session.cancelled_response_ids=set()
+        session.provider_response_id='cancelled-response';session.finished_response_ids=set()
         session.current_reservation={'request_id':'synthetic'};session.current_response_usage_microusd=None
         session.current_input_item_id='input-1';session.current_response_kind='user'
         session.lock=asyncio.Lock();session._send_client=AsyncMock()
@@ -54,7 +54,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         await session._receive_provider({'type':'response.done','response':{
             'id':'cancelled-response','status':'cancelled',
             'status_details':{'reason':'turn_detected'},'output':[]}})
-        self.assertIn('cancelled-response',session.cancelled_response_ids)
+        self.assertIn('cancelled-response',session.finished_response_ids)
         self.assertFalse(session.response_inflight)
 
         # Its late audio must be discarded, while an unrelated/unreserved ID
@@ -79,6 +79,39 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             'response_id':'active-response','item_id':'active-item','content_index':0,
             'delta':base64.b64encode(bytes(2048)).decode('ascii')})
         session._send_client.assert_awaited_once()
+
+    async def test_late_audio_from_completed_response_does_not_close_next_turn(self):
+        class Authority:
+            async def check(self,*_):return None
+        class Lease:
+            async def assert_current(self,*_):return None
+        session=object.__new__(Session)
+        session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
+        session.authority=Authority();session.lease=Lease();session.fence=1
+        session.response_inflight=True;session.response_pending=False;session.cancel_requested=False
+        session.provider_response_id='completed-response';session.finished_response_ids=set()
+        session.current_reservation={'request_id':'synthetic'};session.current_response_usage_microusd=None
+        session.current_input_item_id='input-1';session.current_response_kind='user'
+        session.lock=asyncio.Lock();session._send_client=AsyncMock()
+        session._settle_response_if_ready=AsyncMock();session._dispatch_pending=AsyncMock()
+        session.transcript=Mock()
+
+        with patch('tenant_operator_realtime_usage.usage_cost_microusd',return_value=1):
+            await session._receive_provider({'type':'response.done','response':{
+                'id':'completed-response','status':'completed','output':[],'usage':{}}})
+        self.assertIn('completed-response',session.finished_response_ids)
+        await session._receive_provider({'type':'response.output_audio.delta',
+            'response_id':'completed-response','item_id':'late-item','content_index':0,
+            'delta':base64.b64encode(bytes(2048)).decode('ascii')})
+        self.assertFalse(session.closed)
+        session._send_client.assert_not_awaited()
+        self.assertEqual(session.transcript.method_calls,[])
+
+        session.response_inflight=True;session.provider_response_id='next-response'
+        with self.assertRaises(Refused):
+            await session._receive_provider({'type':'response.output_audio.delta',
+                'response_id':'unrelated-response','item_id':'unrelated-item','content_index':0,
+                'delta':base64.b64encode(bytes(2048)).decode('ascii')})
 
     async def test_browser_playback_completion_is_not_rejected_by_server_wall_clock(self):
         class Authority:

@@ -17,7 +17,7 @@ _SAFE_RESPONSE_REJECTION_CODES=frozenset({
     'response_not_inflight','response_id_mismatch',
 })
 _SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected'})
-_CANCELLED_RESPONSE_EVENT_TYPES=frozenset({
+_TERMINAL_RESPONSE_EVENT_TYPES=frozenset({
     'response.done','response.output_item.added','response.output_item.done',
     'response.content_part.added','response.content_part.done',
     'response.output_audio.delta','response.output_audio.done',
@@ -151,10 +151,10 @@ class Session:
         self.seen_assistant_item_ids = set()
         self.assistant_response_ids = {}
         self.provider_response_id = None
-        # Server VAD can cancel a response, then the provider may still flush
-        # queued events for that exact response after response.done. Keep IDs
-        # scoped to this session so stale output can be discarded safely.
-        self.cancelled_response_ids = set()
+        # Realtime may flush a queued delta after the terminal response.done
+        # event. Keep the exact response IDs scoped to this short-lived
+        # session so late output is discarded without closing the next turn.
+        self.finished_response_ids = set()
         self.item = None
         self.produced = 0
         self.interrupt_pending = False
@@ -621,10 +621,10 @@ class Session:
         if kind=='response.done':
             response=event.get('response')
             response_id=response.get('id') if isinstance(response,dict) else None
-        if (kind in _CANCELLED_RESPONSE_EVENT_TYPES and isinstance(response_id,str) and
-                response_id in getattr(self,'cancelled_response_ids',())):
+        if (kind in _TERMINAL_RESPONSE_EVENT_TYPES and isinstance(response_id,str) and
+                response_id in getattr(self,'finished_response_ids',())):
             # Never expose late audio, transcripts or items from a response
-            # whose exact VAD cancellation has already been confirmed.
+            # whose exact terminal event has already been accepted.
             return
         if kind == 'input_audio_buffer.speech_started':
             async with self.lock:
@@ -801,10 +801,10 @@ class Session:
                 if (not isinstance(output,list) or any(not isinstance(item,dict) or item.get('type')!='message' or
                     item.get('role')!='assistant' for item in output)):
                     raise Refused('provider_item_forbidden')
-                details=response.get('status_details')
-                if (self.cancel_requested and response.get('status')=='cancelled' and
-                    isinstance(details,dict) and details.get('reason')=='turn_detected'):
-                    self.cancelled_response_ids.add(response['id'])
+                # A provider can queue audio deltas around response.done. Once
+                # this exact ID is terminal, discard any later event for it;
+                # an unrelated ID still fails the active-response guard.
+                self.finished_response_ids.add(response['id'])
                 # The speech model and committed-turn transcription are billed
                 # separately. Reconcile only after both exact receipts arrive.
                 from tenant_operator_realtime_usage import usage_cost_microusd
