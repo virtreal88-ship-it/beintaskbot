@@ -2,7 +2,7 @@
 (() => {
   const $=id=>document.getElementById(id);
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let profile,epoch=0,rows=[],cursor=null,version='',rights={},loading=false,sending=false,pending=null,loadedSearch='',dialogEpoch=0;
+  let profile,epoch=0,loadEpoch=0,rows=[],cursor=null,version='',rights={},loading=false,sending=false,pending=null,loadedSearch='',dialogEpoch=0,selectedState=null;
   document.head.insertAdjacentHTML('beforeend',`<style>
     .tl-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px}.tl-toolbar .search{min-width:140px}
     .tl-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(min(290px,100%),1fr);gap:16px;align-items:start;min-width:0;max-width:100%;overflow-x:auto;padding-bottom:12px;overscroll-behavior-x:contain}
@@ -15,8 +15,8 @@
   </style>`);
   document.querySelector('.nav').insertAdjacentHTML('beforeend','<button data-view="linear" id="tlNav" hidden style="display:none"><span>▦</span> Linear</button>');
   document.querySelector('main').insertAdjacentHTML('beforeend',`<section class="view" id="view-linear"><div class="top"><div><h1>Linear</h1><p id="tlCount"></p></div></div>
-    <div class="tl-toolbar"><input class="search" id="tlSearch" placeholder="Linear-da axtarış"><button class="outline" id="tlFind">Axtar</button><select class="search" id="tlStateFilter"><option value="">Bütün statuslar</option></select><button class="refresh" id="tlRefresh">Yenilə</button><button class="primary" id="tlCreate" hidden>+ Tapşırıq</button></div>
-    <div id="tlBoardNotice" class="notice" role="status"></div><button id="tlRecover" class="outline" hidden>Yarımçıq sorğunu yoxla</button><div class="tl-board" id="tlBoard" tabindex="0" role="region" aria-label="Linear tapşırıq lövhəsi"></div><button class="outline" id="tlNext" hidden>Daha çox</button>
+    <div class="tl-toolbar"><input class="search" id="tlSearch" placeholder="Linear-da axtarış"><button class="outline" id="tlFind">Axtar</button><select class="search" id="tlStateFilter"><option value="">Bütün statuslar</option></select><button class="refresh" id="tlRefresh">Yenilə</button><button class="primary" id="tlCreate" hidden>+ Tapşırıq</button><button class="outline" id="tlNext" hidden>Daha çox</button></div>
+    <div id="tlBoardNotice" class="notice" role="status"></div><button id="tlRecover" class="outline" hidden>Yarımçıq sorğunu yoxla</button><div class="tl-board" id="tlBoard" tabindex="0" role="region" aria-label="Linear tapşırıq lövhəsi"></div>
     </section>
     <div class="modal" id="tlTaskModal"><div class="modal-card panel"><div class="modal-head"><h2 id="tlTaskTitle"></h2><button class="close" id="tlTaskClose" aria-label="Bağla">×</button></div><div id="tlTaskFields"></div><p id="tlTaskMessage" role="status"></p><div class="tl-footer"><button class="primary" id="tlTaskSave">Saxla</button><button class="outline" id="tlTaskCancel">Bağla</button></div></div></div>`);
   function storageKey(person=profile){return 'tenant-linear-command:'+person.tenant_id+':'+person.telegram_id;}
@@ -25,7 +25,8 @@
     ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});const result=await response.json();
     if(!response.ok||!result.success){const error=new Error(result.error||'Linear sorğusu alınmadı.');error.status=response.status;throw error;}return result;}
   function date(value){const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';return d.toLocaleDateString('en-GB',{timeZone:'Asia/Baku'})+' '+d.toLocaleTimeString('en-GB',{timeZone:'Asia/Baku',hour12:false});}
-  function render(){const filter=$('tlStateFilter').value;const statuses=new Map(rows.map(row=>[row.state?.id,row.state]));
+  function render(){const filter=selectedState?.id||'';const statuses=new Map(rows.map(row=>[row.state?.id,row.state]));
+    if(selectedState&&!statuses.has(filter))statuses.set(filter,selectedState);
     $('tlStateFilter').innerHTML='<option value="">Bütün statuslar</option>'+[...statuses.values()].filter(Boolean).map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${rows.filter(r=>r.state?.id===s.id).length})</option>`).join('');
     if(statuses.has(filter))$('tlStateFilter').value=filter;const selected=rows.filter(row=>!$('tlStateFilter').value||row.state?.id===$('tlStateFilter').value);
     $('tlCount').textContent=`Yüklənib: ${rows.length} · Görünür: ${selected.length}`;
@@ -39,14 +40,26 @@
         ${row.capabilities?.can_edit?'<button class="outline" data-edit>Redaktə</button>':''}${row.capabilities?.can_change_status?'<button class="outline" data-status>Status</button>':''}
         ${(row.capabilities?.buttons||[]).map(button=>`<button class="outline" data-button-id="${esc(button.id)}">${esc(button.label)}</button>`).join('')}</div></article>`).join('')+'</section>').join('')||'<div class="empty">Bu səhifədə uyğun tapşırıq yoxdur. Daha çox düyməsi varsa növbəti səhifəni açın.</div>';
   }
-  async function load(more=false){if(loading||!profile)return;const current=epoch;const search=$('tlSearch').value.trim();if(more&&search!==loadedSearch){notice('Axtarış dəyişib. Əvvəlcə Axtar düyməsini basın.');return;}loading=true;$('tlRefresh').disabled=true;$('tlNext').disabled=true;notice('Yüklənir…');
-    try{const result=await api('?search='+encodeURIComponent($('tlSearch').value.trim())+(more&&cursor?'&after='+encodeURIComponent(cursor):''));
-      if(current!==epoch)return;if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib. Yeniləyin.');
-      if(more&&version!==result.config_version){rows=[];cursor=null;rights={};render();throw new Error('Qaydalar dəyişib. Siyahını yeniləyin.');}
-      rows=more?[...new Map([...rows,...result.issues].map(row=>[row.id,row])).values()]:result.issues;version=result.config_version;rights=result.capabilities;loadedSearch=search;
-      cursor=result.pageInfo.hasNextPage?result.pageInfo.endCursor:null;notice('');render();
-    }catch(error){if(current===epoch){if(!more||[403,409].includes(error.status)){rows=[];cursor=null;rights={};render();}notice(error.message);}}
-    finally{if(current===epoch){loading=false;$('tlRefresh').disabled=false;$('tlNext').disabled=false;}}}
+  async function load(more=false){if(!profile||(more&&loading))return;const current=epoch,request=++loadEpoch;const search=$('tlSearch').value.trim();
+    if(more&&search!==loadedSearch){notice('Axtarış dəyişib. Əvvəlcə Axtar düyməsini basın.');return;}
+    const active=()=>current===epoch&&request===loadEpoch;let append=more;const seen=new Set();
+    loading=true;$('tlNext').disabled=true;notice('Yüklənir…');
+    if(!more){rows=[];cursor=null;rights={};render();}
+    try{for(let page=0;page<100;page++){
+      const after=append?cursor:null;if(after)seen.add(after);
+      const result=await api('?search='+encodeURIComponent(search)+(after?'&after='+encodeURIComponent(after):''));
+      if(!active())return;if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id)){const error=new Error('Kabinet dəyişib. Yeniləyin.');error.status=403;throw error;}
+      if(append&&version!==result.config_version){const error=new Error('Qaydalar dəyişib. Siyahını yeniləyin.');error.status=409;throw error;}
+      rows=append?[...new Map([...rows,...result.issues].map(row=>[row.id,row])).values()]:result.issues;version=result.config_version;rights=result.capabilities;loadedSearch=search;
+      const next=result.pageInfo.hasNextPage?result.pageInfo.endCursor:null;
+      cursor=next;render();append=true;
+      if(result.pageInfo.hasNextPage&&(!next||seen.has(next))){cursor=null;render();throw new Error('Səhifələmə dayandı. Siyahını yeniləyin.');}
+      if(!cursor){notice('');return;}
+      notice(`Yüklənir… ${rows.length} tapşırıq`);
+    }
+    notice('Yükləmə limiti çatdı. Davam etmək üçün Daha çox düyməsini basın.');
+    }catch(error){if(active()){if(!append||[403,409].includes(error.status)){rows=[];cursor=null;rights={};render();}notice(error.message);}}
+    finally{if(active()){loading=false;$('tlRefresh').disabled=false;$('tlNext').disabled=false;}}}
   function close(){if(!sending){dialogEpoch++;$('tlTaskModal').classList.remove('show');}}
   function frozen(){if(!pending)return;const current=epoch;$('tlTaskTitle').textContent='Yarımçıq sorğu';$('tlTaskFields').innerHTML='<p>Sorğunun məlumatları saxlanılıb. Yenidən yoxlama eyni ID və eyni məlumatla aparılır; yeni tapşırıq yaradılmır.</p>';
     $('tlTaskMessage').textContent='';$('tlTaskSave').textContent='Eyni sorğunu yoxla';$('tlTaskSave').onclick=()=>send(pending,current);$('tlTaskModal').classList.add('show');}
@@ -86,15 +99,23 @@
   function apply(data){const next=data.member;const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.workflow,data.capabilities]);
     const changed=!profile||identity!==profile.identity;profile={...next,identity};const allowed=!!data.capabilities?.modules?.linear;
     $('tlNav').hidden=!allowed;$('tlNav').style.display=allowed?'':'none';
-    if(changed||!allowed){epoch++;rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
+    if(changed||!allowed){epoch++;selectedState=null;rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
       try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved&&String(saved.expected_tenant_id)===String(next.tenant_id)&&String(saved.expected_user_id)===String(next.telegram_id))pending=saved;}catch{}
       $('tlRecover').hidden=!pending;if(!allowed){$('view-linear').classList.remove('active');return;}}
+    return changed&&allowed;
   }
-  $('tlNav').onclick=()=>{document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b===$('tlNav')));document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-linear'));load();};
-  $('tlRefresh').onclick=()=>load();$('tlFind').onclick=()=>load();$('tlNext').onclick=()=>load(true);$('tlStateFilter').onchange=render;
+  $('tlNav').onclick=()=>{if(window.tenantAppNavigate?.('linear',true))return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b===$('tlNav')));document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-linear'));load();};
+  $('tlRefresh').onclick=()=>load();$('tlFind').onclick=()=>load();$('tlNext').onclick=()=>load(true);$('tlStateFilter').onchange=()=>{selectedState=rows.find(row=>row.state?.id===$('tlStateFilter').value)?.state||null;render();};
   $('tlSearch').onkeydown=event=>{if(event.key==='Enter')load();};$('tlCreate').onclick=()=>open('create');$('tlRecover').onclick=frozen;$('tlTaskClose').onclick=close;$('tlTaskCancel').onclick=close;
   $('tlBoard').onclick=event=>{const card=event.target.closest('[data-issue]');if(!card)return;const row=rows.find(item=>item.id===card.dataset.issue);if(!row)return;
     if(event.target.closest('[data-edit]'))open('edit',row);else if(event.target.closest('[data-status]'))open('status',row);else{const action=event.target.closest('[data-button-id]');if(action){const button=row.capabilities.buttons.find(b=>b.id===action.dataset.buttonId);if(button)open('button',row,button);}}};
-  document.addEventListener('tenant-profile',event=>apply(event.detail));const initial=epoch;
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)apply(data);}).catch(()=>{});
+  function restoreView(){
+    if($('tlNav').hidden)return;
+    const intended=new URLSearchParams(window.location?.search||'').get('view')||sessionStorage.getItem('tenant.app.view');
+    if(intended==='linear'&&!$('view-linear').classList.contains('active'))window.tenantAppNavigate?.('linear',false);
+    if($('view-linear').classList.contains('active')&&!loading)load();
+  }
+  document.addEventListener('tenant-view',event=>{if(event.detail?.view==='linear')load();});
+  document.addEventListener('tenant-profile',event=>{const changed=apply(event.detail);if(changed)restoreView();});const initial=epoch;
+  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member){apply(data);restoreView();}}).catch(()=>{});
 })();

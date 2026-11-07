@@ -101,6 +101,27 @@ async function dialogTests(){
  }finally{w.close();}
  console.log('PASS dialogs: startup dedupe, warm reuse, forced refresh, filter/history order, revocation');
 }
+async function dialogReloadTests(){
+ const owner=profile.member.tenant_id+':'+profile.member.telegram_id;
+ const setup=(view='dialogs',historyRoute=null)=>{
+  const b=browser(view),{w}=b;
+  w.sessionStorage.setItem(`tenant.operator.route.${profile.member.tenant_id}.${profile.member.telegram_id}.`,JSON.stringify(row(3)));
+  if(historyRoute)w.history.replaceState({view:'dialogs',operatorDialog:historyRoute,operatorDialogOwner:owner},'');
+  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+  b.histories=()=>b.requests.filter(r=>r.url.includes('/history?'));return b;
+ };
+ const tick=async()=>{await new Promise(resolve=>setTimeout(resolve,10));await settle();};
+ for(const view of ['dialogs','tasks','linear']){
+  const b=setup(view);try{await tick();assert.equal(b.histories().length,0,`stale session dialog never restores on ${view}`);assert.doesNotMatch(b.w.document.getElementById('operatorConversationHeader').textContent,/Synthetic 3/);
+   const search=b.w.document.getElementById('operatorSearch');assert.equal(search.value,'');assert.equal(search.readOnly,true);search.focus();assert.equal(search.readOnly,false);search.value='typed filter';search.dispatchEvent(new b.w.Event('input'));assert.equal(search.value,'typed filter');
+  }finally{b.w.close();}
+ }
+ const foreign=setup();try{await tick();for(const operatorDialogOwner of [undefined,'other-tenant:99']){foreign.w.dispatchEvent(new foreign.w.PopStateEvent('popstate',{state:{view:'dialogs',operatorDialog:row(9),operatorDialogOwner}}));await tick();assert.equal(foreign.histories().length,0,'Back/Forward rejects ownerless or another identity route');}}finally{foreign.w.close();}
+ const explicit=setup('dialogs',row(7));try{await tick();assert.equal(explicit.histories().length,1);assert.match(explicit.histories()[0].url,/lead_id=7/,'matching explicit history route survives reload');}finally{explicit.w.close();}
+ const newer=setup('dialogs',row(3));try{void newer.w.tenantOperator.openDialog(row(8));await tick();assert.equal(newer.histories().length,1);assert.match(newer.histories()[0].url,/lead_id=8/,'newer intentional selection supersedes scheduled restore');assert.doesNotMatch(newer.w.document.getElementById('operatorConversationHeader').textContent,/Synthetic 3/);}finally{newer.w.close();}
+ const leave=setup('dialogs',row(3));try{leave.w.document.getElementById('view-dialogs').classList.remove('active');leave.emit('tenant-view',{view:'linear'});await tick();assert.equal(leave.histories().length,0,'navigation away cancels scheduled restore');}finally{leave.w.close();}
+ console.log('PASS reload: no stale session replay, scoped explicit history, newer navigation, clean editable search');
+}
 async function bootstrapTests(){
  const b=browser('tasks'),{w,requests}=b;
  try{
@@ -145,6 +166,27 @@ async function defaultDialogsLandingTests(){
  const restricted=await boot('/app?view=tasks','',{tasks:true,dialogs:false,support:false,ai_agents:false});
  try{assert.ok(restricted.w.document.getElementById('view-tasks').classList.contains('active'));restricted.w.history.pushState({},'','/app');restricted.w.dispatchEvent(new restricted.w.PopStateEvent('popstate'));assert.ok(restricted.w.document.getElementById('view-tasks').classList.contains('active'),'a history URL without a view falls back to an available pane when support is unavailable');assert.equal(new URL(restricted.w.location.href).searchParams.get('view'),'tasks');}finally{restricted.dom.window.close();}
  console.log('PASS default landing: first bare app entry opens conversations; explicit/deep-link and remembered views plus back/forward are preserved');
+}
+async function linearRouterReloadTests(){
+ for(const late of [false,true]){
+ const b=browser('linear'),{w,requests}=b;
+ try{
+  w.eval([...w.document.scripts].find(script=>script.textContent.includes('const savedView=sessionStorage')).textContent);
+  const initialHistoryLength=w.history.length;
+  if(!late)w.eval(read('docs/tenant-linear-board.js'));
+  requests[0].resolve(response({...profile,capabilities:{modules:{dialogs:true,linear:true}}}));await settle();
+  if(late){w.eval(read('docs/tenant-linear-board.js'));await settle();}
+  assert.equal(w.history.length,initialHistoryLength,'restoration must not add a history entry');
+  assert.equal(w.document.querySelector('main>.view.active').id,'view-linear','reload retains the explicit Linear page');
+  assert.equal(new URL(w.location.href).searchParams.get('view'),'linear');
+  assert.ok(requests.some(request=>request.url.startsWith('/api/platform/linear/tasks')),'restored Linear page begins loading');
+  w.document.querySelector('.nav [data-view="dialogs"]').click();w.document.getElementById('tlNav').click();
+  assert.equal(new URL(w.location.href).searchParams.get('view'),'linear','Linear click updates the core URL');assert.equal(w.sessionStorage.getItem('tenant.app.view'),'linear');
+  w.history.back();await new Promise(resolve=>setTimeout(resolve,50));assert.equal(w.document.querySelector('main>.view.active').id,'view-dialogs');
+  w.history.forward();await new Promise(resolve=>setTimeout(resolve,50));assert.equal(w.document.querySelector('main>.view.active').id,'view-linear');
+ }finally{w.close();}
+ }
+ console.log('PASS Linear routing: early/late script reload, no extra history, shared router URL/session, Back/Forward');
 }
 async function focusTests(){
  const b=browser(),{w,requests,emit,reply}=b;
@@ -278,7 +320,7 @@ async function caseResolverNavigationTests(){
    }
   }finally{b.w.close();}
  }
- const ordinary=setup('');try{await tick();assert.equal(ordinary.histories().length,1);assert.match(ordinary.histories()[0].url,/lead_id=3/,'ordinary navigation still restores saved route');}finally{ordinary.w.close();}
+ const ordinary=setup('');try{await tick();assert.equal(ordinary.histories().length,0,'ordinary navigation must not reopen a stale session conversation');}finally{ordinary.w.close();}
  for(const cancel of ['close','escape','leave','select','revoke','switch']){
   const b=setup();try{
    await tick();const pending=b.resolvers()[0];
@@ -300,7 +342,7 @@ async function caseResolverNavigationTests(){
   await tick();const old=focus.resolvers()[0];focus.w.dispatchEvent(new focus.w.Event('focus'));focus.resolve(old);await settle();assert.equal(focus.histories().length,0);
   focus.requests.find(r=>r.url==='/api/platform/me').resolve(response(profile));await settle();assert.equal(focus.resolvers().length,2,'pending case restarts only after fresh authorization');focus.resolve();await settle();assert.equal(focus.histories().length,1);
  }finally{focus.w.close();}
- console.log('PASS case resolver: saved-route suppression, anchor, errors, ordinary restore, cancellation, navigation, scope changes and focus retry');
+ console.log('PASS case resolver: saved-route suppression, anchor, errors, no stale restore, cancellation, navigation, scope changes and focus retry');
 }
 
-(async()=>{await requestTests();await agentTests();await dialogTests();await bootstrapTests();await defaultDialogsLandingTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();await caseResolverNavigationTests();})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{await requestTests();await agentTests();await dialogTests();await dialogReloadTests();await bootstrapTests();await defaultDialogsLandingTests();await linearRouterReloadTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();await caseResolverNavigationTests();})().catch(error=>{console.error(error);process.exitCode=1;});
