@@ -9,7 +9,7 @@ from tenant_linear_tasks_provider import FIELDS
 from tenant_linear_observer_schema import ensure_observer_schema
 from tenant_linear_observer_policy import source_time, event_kind, event_id, news_candidate
 from tenant_linear_task_inputs import body_text
-from tenant_proactive_risk_policy import analyze_linear
+from tenant_proactive_risk_policy import analyze_linear, linear_scope
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
@@ -98,13 +98,13 @@ def sync_one() -> dict | None:
                 source_checked_at = datetime.now(timezone.utc)
                 for row in page['nodes']:
                     store_issue(cur, tenant, config, row, baseline=since is None,
-                                source_scope=f'{config_version}:{config["team_id"]}',
+                                source_scope=linear_scope(config_version, config['team_id']),
                                 source_checked_at=source_checked_at)
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
                 if not more:
-                    mark_checked(cur, tenant, 'linear', f'{config_version}:{config["team_id"]}')
+                    mark_checked(cur, tenant, 'linear', linear_scope(config_version, config['team_id']))
                 cur.execute('''UPDATE saas_linear_sync SET config_version=%s,cursor=%s,since_at=%s,until_at=%s,
                   due_at=now()+interval '1 minute',updated_at=now(),risk_scan_version=%s WHERE tenant_id=%s::uuid''',
                   (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None,

@@ -2,7 +2,7 @@
 (() => {
   const $=id=>document.getElementById(id);
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let profile,epoch=0,rows=[],cursor=null,version='',rights={},loading=false,sending=false,pending=null,loadedSearch='',dialogEpoch=0;
+  let profile,epoch=0,riskEpoch=0,rows=[],cursor=null,version='',rights={},loading=false,sending=false,pending=null,loadedSearch='',dialogEpoch=0;
   document.head.insertAdjacentHTML('beforeend',`<style>
     .tl-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px}.tl-toolbar .search{min-width:140px}
     .tl-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(290px,100%),1fr));gap:16px;align-items:start}
@@ -24,8 +24,13 @@
   async function api(params='',data){const response=await fetch('/api/platform/linear/tasks'+params,{credentials:'same-origin',cache:'no-store',
     ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});const result=await response.json();
     if(!response.ok||!result.success){const error=new Error(result.error||'Linear sorğusu alınmadı.');error.status=response.status;throw error;}return result;}
-  async function loadRisks(){const box=$('tlRiskReview');if(!profile||profile.role!=='owner'){box.hidden=true;return;}box.hidden=false;$('tlRiskStatus').textContent='Yoxlanır…';
+  function clearRisks(){riskEpoch++;$('tlRiskStatus').textContent='';$('tlRiskFindings').replaceChildren();}
+  async function loadRisks(){const box=$('tlRiskReview');if(!profile||profile.role!=='owner'){box.hidden=true;clearRisks();return;}box.hidden=false;
+    const current=epoch,request=++riskEpoch,identity=profile.identity;
+    const currentRequest=()=>current===epoch&&request===riskEpoch&&profile?.identity===identity;
+    $('tlRiskFindings').replaceChildren();$('tlRiskStatus').textContent='Yoxlanır…';
     try{const response=await fetch('/api/platform/risks/dry-run',{credentials:'same-origin',cache:'no-store'}),result=await response.json();
+      if(!currentRequest())return;
       if(!response.ok||!result.success)throw new Error(result.error||'Risk yoxlaması əlçatan deyil.');
       if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib. Yeniləyin.');
       const checked=result.checked_at?new Date(result.checked_at).toLocaleString('en-GB',{timeZone:'Asia/Baku'}):'hələ yoxlanmayıb';
@@ -35,7 +40,7 @@
       $('tlRiskFindings').innerHTML=(result.findings||[]).map(item=>`<article class="tl-card"><div class="sub">${esc(item.severity)} · Əminlik: ${esc(item.confidence)} · ${esc(item.source)} · ${esc(item.source_id)} · ${item.freshness==='stale'?'Mənbə köhnədir; yenidən yoxlayın.':'Yoxlama aktualdır.'}</div><h3>${esc(labels[item.rule_id]||item.rule_id)} — ${esc(item.source_title)}</h3>
         <b>Təsdiqlənən mənbə faktları</b><ul>${(item.facts||[]).map(f=>`<li>${esc(f)}</li>`).join('')}</ul><p><b>Qiymətləndirmə:</b> ${esc(item.assessment)}</p><p><b>Təklif olunan addım:</b> ${esc(item.recommended_step)}</p>
         <div class="sub">Mənbə versiyası: ${esc(item.source_updated_at||'mövcud deyil')} · Mənbə yoxlanması: ${item.source_checked_at?esc(new Date(item.source_checked_at).toLocaleString('en-GB',{timeZone:'Asia/Baku'})):'məlum deyil'}</div>${item.source_url?`<a href="${esc(item.source_url)}" rel="noopener noreferrer">Mənbəni aç</a>`:''}</article>`).join('')||'<p>Dry-run zamanı risk namizədi tapılmayıb. Bu, mənbələrin yoxlanmadığı mənasına gəlmir; yoxlama vaxtını yuxarıda görün.</p>';
-    }catch(error){$('tlRiskStatus').textContent=error.message;$('tlRiskFindings').replaceChildren();}}
+    }catch(error){if(!currentRequest())return;$('tlRiskStatus').textContent=error.message;$('tlRiskFindings').replaceChildren();}}
   function date(value){const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';return d.toLocaleDateString('en-GB',{timeZone:'Asia/Baku'})+' '+d.toLocaleTimeString('en-GB',{timeZone:'Asia/Baku',hour12:false});}
   function render(){const filter=$('tlStateFilter').value;const statuses=new Map(rows.map(row=>[row.state?.id,row.state]));
     $('tlStateFilter').innerHTML='<option value="">Bütün statuslar</option>'+[...statuses.values()].filter(Boolean).map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${rows.filter(r=>r.state?.id===s.id).length})</option>`).join('');
@@ -99,7 +104,7 @@
     const changed=!profile||identity!==profile.identity;profile={...next,identity};const allowed=!!data.capabilities?.modules?.linear;
     $('tlRiskReview').hidden=next.role!=='owner';
     $('tlNav').hidden=!allowed;$('tlNav').style.display=allowed?'':'none';
-    if(changed||!allowed){epoch++;rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
+    if(changed||!allowed){epoch++;clearRisks();rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
       try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved&&String(saved.expected_tenant_id)===String(next.tenant_id)&&String(saved.expected_user_id)===String(next.telegram_id))pending=saved;}catch{}
       $('tlRecover').hidden=!pending;if(!allowed){$('view-linear').classList.remove('active');return;}}
   }

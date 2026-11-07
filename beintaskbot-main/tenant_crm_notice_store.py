@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from tenant_platform import _connect, _read_tenant_workflow
 from tenant_crm_notice_schema import ensure_schema
 from tenant_crm_notice_policy import eligible, transitions, task_route
-from tenant_proactive_risk_policy import analyze_crm_task, source_timestamp
+from tenant_proactive_risk_policy import analyze_crm_task, source_timestamp, crm_scope_from_connection
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
@@ -158,7 +158,7 @@ def observe() -> int:
                         source_version = str(raw.get('updated_at') or row.get('synced_at') or row.get('due_at') or '')
                         findings = [] if row.get('completed') is True else analyze_crm_task(row)
                         replace_source_findings(cur, tenant, 'crm_task', key, source_version,
-                            'CRM task ' + key, findings, source_scope=connection,
+                            'CRM task ' + key, findings, source_scope=crm_scope_from_connection(connection),
                             source_checked_at=source_timestamp(row.get('synced_at')))
                     observations.append((tenant, kind, key, json.dumps(state)))
                     count += 1
@@ -166,7 +166,7 @@ def observe() -> int:
                     cur.executemany('''INSERT INTO saas_crm_notice_observations(tenant_id,kind,source_key,state)
                       VALUES(%s::uuid,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,kind,source_key) DO UPDATE SET state=EXCLUDED.state''', observations)
                 if kind == 'task' and len(rows) < 50:
-                    mark_checked(cur, tenant, 'crm_task', connection)
+                    mark_checked(cur, tenant, 'crm_task', crm_scope_from_connection(connection))
                 positions[kind] = rows[-1]['source_key'] if len(rows) == 50 else ''
             cur.execute("UPDATE saas_crm_notice_scan SET positions=%s::jsonb,next_scan=now()+interval '1 minute' WHERE tenant_id=%s::uuid", (json.dumps(positions), tenant))
         conn.commit()

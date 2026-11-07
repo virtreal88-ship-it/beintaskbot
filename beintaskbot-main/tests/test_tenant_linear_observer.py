@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 import test_tenant_hot_orders as loaders
 from tenant_linear_observer_policy import source_time, event_kind, event_id, news_candidate
+from tenant_proactive_risk_policy import linear_scope
 from tenant_linear_policy import settings, TenantLinearError
 
 TENANT='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
@@ -76,7 +77,8 @@ class Storage(unittest.TestCase):
         self.query=Mock(return_value={'issues':{'nodes':[],'pageInfo':{'hasNextPage':False,'endCursor':None}}})
         self.service=loaders.load('tenant_linear_observer',{'_connect':self.connect,'ensure_observer_schema':Mock(),
             'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
-            'analyze_linear':Mock(return_value=[]),'context':self.context,'query':self.query,'FIELDS':'id'},
+            'analyze_linear':Mock(return_value=[]),'linear_scope':linear_scope,
+            'context':self.context,'query':self.query,'FIELDS':'id'},
             {'tenant_platform','tenant_linear_context','tenant_linear_provider','tenant_linear_tasks_provider','tenant_linear_observer_schema',
              'tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
 
@@ -168,8 +170,9 @@ class Storage(unittest.TestCase):
         for call in calls:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
         risk_cleanup=next(call.args[0] for call in calls if 'DELETE FROM saas_proactive_risk_findings' in call.args[0])
         self.assertIn("source_kind='linear' AND NOT EXISTS",risk_cleanup)
-        self.assertIn('right(saas_proactive_risk_findings.source_scope',risk_cleanup)
+        self.assertIn('floor(extract(epoch from i.updated_at)*1000000)',risk_cleanup)
         self.assertIn("source_kind='crm_task' AND NOT EXISTS",risk_cleanup)
+        self.assertIn('i.account_domain||\':\'||floor(extract(epoch from i.connected_at)*1000000)',risk_cleanup)
         self.assertNotIn('saas_linear_news_seen',str(calls))
 
 

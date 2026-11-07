@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from tenant_platform import _connect, _read_tenant_workflow
 from tenant_linear_policy import TenantLinearError, owner
 from tenant_policy import TenantPolicy
-from tenant_proactive_risk_policy import fingerprint
+from tenant_proactive_risk_policy import fingerprint, linear_scope, crm_scope
 from tenant_proactive_risk_schema import ensure_schema
 
 
@@ -54,12 +54,12 @@ def _active_sources(cur, tenant: str, profile: dict) -> dict[str, str]:
         if connection:
             config = (connection.get('metadata') or {}).get('settings') or {}
             team_id = str(config.get('team_id') or '')
-            sources['linear'] = f"{connection['updated_at']}:{team_id}"
+            sources['linear'] = linear_scope(connection['updated_at'], team_id)
     if policy.allows('tasks'):
         cur.execute("SELECT account_domain,connected_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected'", (tenant,))
         connection = cur.fetchone()
         if connection:
-            sources['crm_task'] = f"{connection['account_domain']}:{connection['connected_at']}"
+            sources['crm_task'] = crm_scope(connection['account_domain'], connection['connected_at'])
     return sources
 
 

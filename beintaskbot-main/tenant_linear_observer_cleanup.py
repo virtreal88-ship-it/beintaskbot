@@ -33,11 +33,13 @@ def cleanup() -> None:
                   WHERE i.tenant_id=saas_proactive_risk_findings.tenant_id AND i.provider='linear'
                     AND i.status='connected' AND i.metadata->'settings'->'workflow'->'enabled'='true'::jsonb
                     AND i.metadata->'settings'->'workflow'->'sync_enabled'='true'::jsonb
-                    AND right(saas_proactive_risk_findings.source_scope,length(i.metadata->'settings'->>'team_id')+1)=':'||(i.metadata->'settings'->>'team_id')))
+                    AND saas_proactive_risk_findings.source_scope=
+                      floor(extract(epoch from i.updated_at)*1000000)::bigint::text||':'||(i.metadata->'settings'->>'team_id')))
                 OR (source_kind='crm_task' AND NOT EXISTS (
                   SELECT 1 FROM saas_tenant_integrations i
                   WHERE i.tenant_id=saas_proactive_risk_findings.tenant_id AND i.provider='kommo'
-                    AND i.status='connected' AND saas_proactive_risk_findings.source_scope LIKE i.account_domain||':%'))
+                    AND i.status='connected' AND saas_proactive_risk_findings.source_scope=
+                      i.account_domain||':'||floor(extract(epoch from i.connected_at)*1000000)::bigint::text))
               ) ORDER BY checked_at LIMIT 100 FOR UPDATE SKIP LOCKED)
               DELETE FROM saas_proactive_risk_findings f USING expired e
               WHERE f.tenant_id=e.tenant_id AND f.source_kind=e.source_kind

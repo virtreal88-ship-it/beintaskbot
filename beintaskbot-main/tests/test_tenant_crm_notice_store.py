@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, MagicMock, patch
 from test_tenant_hot_orders import load
 from test_tenant_crm_notice import member,task
+from tenant_proactive_risk_policy import crm_scope_from_connection
 
 
 class StoreTests(unittest.TestCase):
@@ -12,7 +13,8 @@ class StoreTests(unittest.TestCase):
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.module=load('tenant_crm_notice_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(),'ensure_schema':Mock(),
             'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
-            'analyze_crm_task':Mock(return_value=[]),'source_timestamp':Mock(side_effect=lambda value:value)},
+            'analyze_crm_task':Mock(return_value=[]),'source_timestamp':Mock(side_effect=lambda value:value),
+            'crm_scope_from_connection':crm_scope_from_connection},
             {'tenant_platform','tenant_crm_notice_schema','tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
     def test_round_robin_scans_one_company_with_fixed_page_sizes(self):
         baseline=datetime.fromtimestamp(100,timezone.utc)

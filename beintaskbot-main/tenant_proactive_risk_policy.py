@@ -32,6 +32,34 @@ def source_timestamp(value) -> datetime | None:
     return None
 
 
+def _epoch_microseconds(value) -> str:
+    stamp = source_timestamp(value)
+    if stamp is None:
+        return ''
+    delta = stamp - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    micros = delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
+    return str(micros)
+
+
+def linear_scope(config_version, team_id: str) -> str:
+    """Stable, SQL-reproducible scope for an exact Linear config version/team."""
+    stamp = _epoch_microseconds(config_version) or str(config_version)
+    return f'{stamp}:{team_id}'
+
+
+def crm_scope(account_domain: str, connected_at) -> str:
+    """Stable, SQL-reproducible scope for one CRM account connection."""
+    stamp = _epoch_microseconds(connected_at) or str(connected_at)
+    return f'{account_domain}:{stamp}'
+
+
+def crm_scope_from_connection(connection: str) -> str:
+    domain, separator, connected_at = str(connection or '').partition(':')
+    if not separator:
+        return str(connection or '')
+    return crm_scope(domain, connected_at)
+
+
 def _finding(rule_id, severity, confidence, facts, assessment, recommendation, source_url=''):
     return {
         'rule_id': rule_id,

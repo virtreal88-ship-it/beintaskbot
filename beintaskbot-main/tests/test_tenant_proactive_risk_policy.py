@@ -1,7 +1,7 @@
 """Deterministic candidate rules: facts stay separate from unverified claims."""
 import unittest
 from datetime import datetime, timezone, timedelta
-from tenant_proactive_risk_policy import analyze_linear, analyze_crm_task, fingerprint, source_timestamp
+from tenant_proactive_risk_policy import analyze_linear, analyze_crm_task, fingerprint, source_timestamp, linear_scope, crm_scope, crm_scope_from_connection
 
 
 class LinearRiskRules(unittest.TestCase):
@@ -77,6 +77,14 @@ class LinearRiskRules(unittest.TestCase):
 
 
 class CrmRiskRules(unittest.TestCase):
+    def test_connection_scopes_are_exact_and_sql_reproducible(self):
+        stamp=datetime(2026,11,7,12,34,56,123456,tzinfo=timezone.utc)
+        delta=stamp-datetime(1970,1,1,tzinfo=timezone.utc)
+        micros=delta.days*86_400_000_000+delta.seconds*1_000_000+delta.microseconds
+        self.assertEqual(linear_scope(stamp,'team-a'),f'{micros}:team-a')
+        self.assertEqual(crm_scope('crm-a',stamp),f'crm-a:{micros}')
+        self.assertEqual(crm_scope_from_connection(f'crm-a:{stamp}'),f'crm-a:{micros}')
+
     def test_plain_outage_mentions_are_candidates_without_action_words(self):
         for text in ('Service unavailable', 'Service outage', 'Сервис недоступен'):
             with self.subTest(text=text):
