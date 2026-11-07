@@ -96,26 +96,12 @@
     expertPanel.innerHTML='<h3>Внутренняя экспертная диагностика</h3>'+(result.expert_results||[]).map(item=>{const value=item.result;return `<article><b>${esc(item.expert_name)} · ${esc(item.model)}</b><p>${esc(expertStates[item.status]||item.status)}</p>${item.error_code?`<p>${esc(expertErrors[item.error_code]||'Экспертная диагностика недоступна.')}</p>`:''}${value?`<p>${esc(value.cause)}</p><p>Уверенность: ${esc(value.confidence)}</p><ul>${(value.evidence||[]).map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p>${esc(value.ticket_summary)}</p><p>Безопасные рекомендации: ${esc((value.safe_actions||[]).join('; '))}</p><p>Нужны данные: ${esc(value.additional_information)}</p><p>Требуется сотрудник: ${value.requires_human?'да':'нет'}</p>`:''}</article>`}).join('');
     if(result.expert_results?.length)host.append(expertPanel);
     $('supportClose').onclick=()=>closeTicketModal();
-    const developerSelect=$('supportDeveloperAssignee'),developerWrap=$('supportDeveloperAssigneeWrap');developerSelect.disabled=true;
-    if(!canOpen)developerWrap.hidden=true;
-    else void (async()=>{const version=detailRevision;try{
-      const response=await fetch((window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'dialog-consultations/destinations',{credentials:'same-origin',cache:'no-store'}),payload=await response.json();
-      if(!response.ok||!payload.success)throw Error(payload.error||t('error'));
-      if(!modalOpen||selected!==ticket.id||version!==detailRevision)return;
-      const destinations=payload.result?.destinations||[],choices=[];let persistedValue='';for(const item of destinations){
-        if(item.channel_id===ticket.channel_id&&item.conversation_id===ticket.conversation_id)continue;
-        const index=choices.push(item)-1,option=document.createElement('option');option.value=String(index);option.textContent=(item.customer_name||item.contact_name||item.conversation_id)+(item.channel_name?' · '+item.channel_name:'');developerSelect.append(option);
-      }
-      const current=choices.findIndex(item=>item.channel_id===ticket.assigned_developer_channel_id&&item.conversation_id===ticket.assigned_developer_conversation_id);
-      if(current>=0)developerSelect.value=String(current);else if(ticket.assigned_developer_channel_id&&ticket.assigned_developer_conversation_id){const option=new Option((ticket.assigned_developer_name||t('chooseDeveloper'))+' · '+({ru:'недоступен — проверьте адресата',az:'əlçatan deyil — alıcını yoxlayın',en:'unavailable — check recipient'}[i18n.language]||'unavailable'),'unavailable');option.disabled=true;developerSelect.append(option);developerSelect.value='unavailable';}persistedValue=developerSelect.value;developerSelect.disabled=ticket.status==='resolved';
-      developerSelect.onchange=async()=>{const requested=developerSelect.value;developerSelect.disabled=true;try{
-        const target=requested===''?null:choices[Number(requested)];
-        await api('/'+encodeURIComponent(ticket.id),'PATCH',{assigned_developer_channel_id:target?.channel_id||null,assigned_developer_conversation_id:target?.conversation_id||null});
-        persistedValue=requested;
-        if(target){ticket.assigned_developer_channel_id=target.channel_id;ticket.assigned_developer_conversation_id=target.conversation_id;ticket.assigned_developer_name=target.customer_name||target.contact_name||target.conversation_id;}
-        else{ticket.assigned_developer_channel_id=null;ticket.assigned_developer_conversation_id=null;ticket.assigned_developer_name='';}
-      }catch(error){developerSelect.value=persistedValue;notice(error.message||t('error'));}finally{developerSelect.disabled=ticket.status==='resolved';}};
-    }catch(error){if(modalOpen&&selected===ticket.id&&version===detailRevision)notice(error.message||t('error'));}})();
+    const developerWrap=$('supportDeveloperAssigneeWrap');developerWrap.replaceChildren();developerWrap.hidden=true;
+    if(canOpen&&ticket.assigned_developer_channel_id&&ticket.assigned_developer_conversation_id){
+      developerWrap.hidden=false;const historical=document.createElement('small');historical.dataset.legacyDeveloper='';
+      historical.textContent=({ru:'Ранее указанный разработчик: ',az:'Əvvəl göstərilən tərtibatçı: ',en:'Previously recorded developer: '}[i18n.language]||'Previously recorded developer: ')+(ticket.assigned_developer_name||t('chooseDeveloper'));
+      developerWrap.append(historical);
+    }
     $('supportSave').onclick=()=>{drafts.delete(ticket.id);mutate(ticket.id,{status:$('supportEditStatus').value,assigned_to:$('supportEditAssignee').value||null,description:$('supportDescription').value,suggestions:$('supportSuggestions').value,next_steps:$('supportNextSteps').value});};
     $('supportTake').onclick=()=>mutate(ticket.id,{status:'in_progress',assigned_to:member.telegram_id});
     $('supportResolve').onclick=()=>mutate(ticket.id,{status:'resolved'});

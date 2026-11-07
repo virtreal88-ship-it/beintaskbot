@@ -243,3 +243,100 @@ def test_case_notification_retains_original_and_exact_context_for_presentation(c
     assert 'support_ticket_id=' + data['case_id'] in item['target_url']
     assert local.execute('SELECT body FROM saas_dialog_consultation_replies WHERE id=%s::uuid', (rid,))[0]['body'] == original
     assert center.listing(PROFILE)['unread_count'] == 1
+
+
+# The production approval event key omits actor_id. Require one exact source.
+def approval_source(db, request_id, *, tenant=A, creator=11,
+                    event='task_approval_requested', step='done', expanded=True):
+    db.execute("""INSERT INTO saas_task_commands(tenant_id,actor_id,request_id,fingerprint,state)
+      VALUES(%s::uuid,%s,%s::uuid,'synthetic',%s::jsonb)""",
+      (tenant,creator,request_id,json.dumps({'step':step})))
+    db.execute("""INSERT INTO saas_approval_notification_events(tenant_id,actor_id,request_id,event,expanded)
+      VALUES(%s::uuid,%s,%s::uuid,%s,%s)""",(tenant,creator,request_id,event,expanded))
+    db.commit()
+
+
+@pytest.mark.parametrize('event', ['task_approval_requested','task_completion_requested'])
+@pytest.mark.parametrize('step', ['done','rejected'])
+def test_terminal_approval_leaves_unread_but_preserves_history_and_read_state(ledger,event,step):
+    request=str(uuid.uuid4())
+    approval_source(ledger,request,event=event,step=step)
+    old=notice(ledger,event=request+':'+event)
+    active=notice(ledger,event='task:still-important')
+    result=center.listing(PROFILE)
+    assert result['unread_count']==1
+    assert [row['id'] for row in result['notifications']]==[active]
+    history=center.listing(PROFILE,'all')
+    assert history['unread_count']==1
+    assert {row['id'] for row in history['notifications']}=={old,active}
+    assert all(row['read_at'] is None for row in history['notifications'])
+    assert center.mark_read(PROFILE,active)['unread_count']==0
+    assert center.listing(PROFILE)['notifications']==[]
+    assert next(row for row in center.listing(PROFILE,'all')['notifications'] if row['id']==old)['read_at'] is None
+    # An explicit historical read remains supported and cannot revive a badge.
+    assert center.mark_read(PROFILE,old)['unread_count']==0
+
+
+@pytest.mark.parametrize('step', ['waiting_approval','approval_accepted','task_creating','task_completing','unknown','cancelled',None])
+def test_unproven_or_inflight_approval_stays_unread(ledger,step):
+    request=str(uuid.uuid4())
+    approval_source(ledger,request,step=step)
+    key=notice(ledger,event=request+':task_approval_requested')
+    result=center.listing(PROFILE)
+    assert result['unread_count']==1
+    assert [row['id'] for row in result['notifications']]==[key]
+
+
+def test_missing_ambiguous_wrong_tenant_or_unexpanded_approval_source_does_not_hide(ledger):
+    visible=[]
+    # Missing command/event, different tenant and an unexpanded event cannot
+    # prove ownership of a persisted notification in this tenant.
+    for scenario in ('missing','other_tenant','unexpanded','ambiguous','wrong_event'):
+        request=str(uuid.uuid4())
+        if scenario=='other_tenant':approval_source(ledger,request,tenant=B,creator=22)
+        if scenario=='unexpanded':approval_source(ledger,request,expanded=False)
+        if scenario=='ambiguous':
+            approval_source(ledger,request)
+            approval_source(ledger,request,creator=99)
+        if scenario=='wrong_event':approval_source(ledger,request,event='task_completion_requested')
+        visible.append(notice(ledger,event=request+':task_approval_requested'))
+    result=center.listing(PROFILE)
+    assert result['unread_count']==len(visible)
+    assert {row['id'] for row in result['notifications']}==set(visible)
+
+
+def test_terminal_proof_cannot_hide_other_notice_types_or_similar_keys(ledger):
+    request=str(uuid.uuid4());approval_source(ledger,request)
+    visible=[notice(ledger,event=value) for value in (
+        'ai_handoff:'+request,request+':task_approval_decided',
+        request+':task_approval_requested:extra','prefix:'+request+':task_approval_requested')]
+    result=center.listing(PROFILE)
+    assert result['unread_count']==len(visible)
+    assert {row['id'] for row in result['notifications']}==set(visible)
+
+
+def test_approval_filter_tracks_current_state_without_modifying_history(ledger):
+    request=str(uuid.uuid4());approval_source(ledger,request,step='waiting_approval')
+    key=notice(ledger,event=request+':task_approval_requested')
+    assert center.listing(PROFILE)['unread_count']==1
+    ledger.execute("UPDATE saas_task_commands SET state=jsonb_build_object('step','done') WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,request))
+    ledger.commit()
+    assert center.listing(PROFILE)['unread_count']==0
+    assert center.listing(PROFILE,'all')['notifications'][0]['id']==key
+
+
+@pytest.mark.parametrize('table', ['saas_approval_notification_events','saas_task_commands'])
+def test_unavailable_approval_storage_keeps_saved_notifications_visible(ledger,table):
+    request=str(uuid.uuid4());approval_source(ledger,request)
+    key=notice(ledger,event=request+':task_approval_requested')
+    # Names are fixed test parameters; restore before the next shared fixture.
+    ledger.execute('ALTER TABLE '+table+' RENAME TO isolated_approval_unavailable')
+    ledger.commit()
+    try:
+        result=center.listing(PROFILE)
+        assert result['unread_count']==1
+        assert [row['id'] for row in result['notifications']]==[key]
+        assert center.mark_read(PROFILE,key)['unread_count']==0
+    finally:
+        ledger.execute('ALTER TABLE isolated_approval_unavailable RENAME TO '+table)
+        ledger.commit()

@@ -421,9 +421,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
             tenant, actor = _authorize(cur, profile)
             if creating and patch.get('mode')!='automatic':
                 patch['response_policy']['auto_case_dispatch_enabled']=False
-            if patch.get('response_policy') and patch['response_policy'].get('auto_case_dispatch_enabled'):
+            if creating and patch.get('response_policy') and (patch['response_policy'].get('auto_case_dispatch_enabled') or patch['response_policy'].get('developer_routing')=='primary_reserve'):
                 _validate_case_developer_destinations(cur,profile,tenant,patch['response_policy'])
-                if creating:patch['response_policy']['auto_case_dispatch_owner_id']=actor
+                if creating and patch['response_policy'].get('auto_case_dispatch_enabled'):patch['response_policy']['auto_case_dispatch_owner_id']=actor
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
             # A retry after a browser/network interruption must return the
             # original disabled agent.  The key is also employee-scoped so an
@@ -550,8 +550,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 merged['response_policy'] = validate_policy(merged.get('response_policy'))
                 if merged.get('mode')!='automatic':
                     merged['response_policy']['auto_case_dispatch_enabled']=False
-                if merged['response_policy'].get('auto_case_dispatch_enabled'):
+                if _developer_routes_need_validation(merged['response_policy'],previous.get('response_policy')):
                     _validate_case_developer_destinations(cur,profile,tenant,merged['response_policy'])
+                if merged['response_policy'].get('auto_case_dispatch_enabled'):
                     # Revalidation above requires the current company owner,
                     # including after an ownership transfer.
                     merged['response_policy']['auto_case_dispatch_owner_id']=actor
@@ -598,17 +599,31 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
     return result
 
 
+def _developer_routes_need_validation(current,previous=None):
+    """Revoked routes cannot block a safe stop; new stored routes still need access."""
+    if current.get('auto_case_dispatch_enabled'):return True
+    if current.get('developer_routing')!='primary_reserve':return False
+    previous=previous or {}
+    return (current.get('developer_destinations') or [])!=(previous.get('developer_destinations') or []) or current.get('developer_reserve_destination')!=previous.get('developer_reserve_destination')
+
+
 def _validate_case_developer_destinations(cur,profile,tenant,response_policy):
     """Bind auto-dispatch recipients to the same visible, active Developer targets as manual sends."""
     from tenant_dialog_consultations import access,developer_target
+    if not response_policy.get('auto_case_dispatch_enabled') and not response_policy.get('developer_destinations') and not response_policy.get('developer_reserve_destination'):
+        return
     access_tenant,_actor,dialogs_policy=access(cur,profile,'dialogs')
     if str(access_tenant)!=str(tenant):raise TenantLinearError('Developer recipients are outside this company.',403)
-    if dialogs_policy.profile.get('role')!='owner':
-        raise TenantLinearError('Only the owner can enable automatic external developer dispatch.',403)
-    cur.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,))
-    if (cur.fetchone() or {}).get('owner_telegram_id')!=_actor:
-        raise TenantLinearError('Only the current company owner can enable automatic external developer dispatch.',403)
-    for row in response_policy.get('developer_destinations') or []:
+    if response_policy.get('auto_case_dispatch_enabled'):
+        if dialogs_policy.profile.get('role')!='owner':
+            raise TenantLinearError('Only the owner can enable automatic external developer dispatch.',403)
+        cur.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,))
+        if (cur.fetchone() or {}).get('owner_telegram_id')!=_actor:
+            raise TenantLinearError('Only the current company owner can enable automatic external developer dispatch.',403)
+    routes=list(response_policy.get('developer_destinations') or [])
+    if response_policy.get('developer_reserve_destination'):
+        routes.append(response_policy['developer_reserve_destination'])
+    for row in routes:
         developer_target(cur,tenant,dialogs_policy,row['channel_id'],row['conversation_id'])
 
 

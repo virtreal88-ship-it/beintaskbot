@@ -1600,3 +1600,47 @@ def test_ai_consultation_requires_same_tenant_and_route_handoff_event(db, monkey
     for invalid in (job, {**job,'event_fingerprint':'correct-event','channel_id':CB},
                     {**job,'event_fingerprint':'correct-event','conversation_id':'another'}):
         assert consultations.create_from_ai(invalid,recipient_id=11,reason='test',evidence={}) == {'created':False,'reason':'support_case_missing'}
+
+
+def test_manual_case_creation_without_developer_is_independent_and_idempotent(db,monkeypatch):
+    import tenant_dialog_consultations as flow
+    # No developer catalog/schema/recipient is needed for ordinary case creation.
+    forbidden=__import__('unittest.mock',fromlist=['Mock']).Mock(side_effect=AssertionError('no developer lookup'))
+    monkeypatch.setattr(flow,'developer_target',forbidden)
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Support employee','[\"support\",\"dialogs\"]'::jsonb)",(A,))
+    db.commit()
+    employee={'tenant_id':A,'telegram_id':33}
+    payload={'request_id':str(uuid.uuid4()),'lead_id':41}
+    first=store.create(employee,payload)['ticket']
+    again=store.create(employee,payload)['ticket']
+    assert first['id']==again['id']
+    assert first['assigned_developer_channel_id'] is None
+    assert first['assigned_developer_conversation_id'] is None
+    assert first['assigned_to'] is None
+    assert not db.execute('SELECT id FROM saas_ai_case_developer_dispatches')
+    assert not db.execute('SELECT id FROM saas_internal_consultations')
+    forbidden.assert_not_called()
+
+
+def test_new_case_create_does_not_clear_existing_legacy_developer(db):
+    old=manual()['ticket']
+    current=store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41})['ticket']
+    assert current['id']==old['id']
+    assert current['assigned_developer_conversation_id']==old['assigned_developer_conversation_id']
+
+
+@pytest.mark.parametrize('extra',[{'developer_confirmed':True},{'assigned_developer_channel_id':CA},
+    {'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':'dev@g.us'}])
+def test_incomplete_legacy_developer_create_still_rejected(db,extra):
+    with pytest.raises(TenantLinearError):
+        store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41,**extra})
+    assert not db.execute('SELECT id FROM saas_support_tickets')
+
+
+def test_developer_free_create_retains_source_dialog_permission(db):
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Support only','[\"support\"]'::jsonb)",(A,))
+    db.commit()
+    with pytest.raises(TenantLinearError) as denied:
+        store.create({'tenant_id':A,'telegram_id':33},{'request_id':str(uuid.uuid4()),'lead_id':41})
+    assert denied.value.status==403
+    assert not db.execute('SELECT id FROM saas_support_tickets')
