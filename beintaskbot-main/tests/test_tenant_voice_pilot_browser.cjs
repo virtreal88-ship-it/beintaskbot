@@ -10,7 +10,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));document.getElementById('view-dialogs').classList.add('active');
   window.testRoute={provider:'connect',lead_id:41,channel_id:'00000000-0000-4000-8000-000000000002',conversation_id:'client',state:'human',agent_id:'00000000-0000-4000-8000-000000000003',can_send:true,controls_allowed:true,available_actions:[]};
   window.tenantProfileSnapshot={member:{tenant_id:'00000000-0000-4000-8000-000000000001',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
-  window.requests=[];window.voiceEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;window.interruptCalls=0;
+  window.requests=[];window.voiceEvents=[];window.incomingEvents=[];window.sockets=[];window.releaseCount=0;window.audioClosed=0;window.interruptCalls=0;window.deferTalkReady=false;window.releaseTalkReady=null;
   window.fetch=async(url,options={})=>{url=String(url);window.requests.push({url,method:options.method||'GET'});let result={};
    if(url.includes('/dialogs/copilot-voice/preflight'))result={available:true};
    else if(url.includes('/dialogs/history'))result={dialog:window.testRoute,messages:[{id:'one',external_id:'one',direction:'incoming',message_type:'text',body:'synthetic'}]};
@@ -20,8 +20,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   class FakeSocket{
    static OPEN=1;
    constructor(url){this.url=url;this.readyState=0;window.sockets.push(this);setTimeout(()=>{this.readyState=1;this.onopen?.();setTimeout(()=>this.emit({type:'ready'}),0);},0);}
-   emit(event){this.onmessage?.({data:JSON.stringify(event)});}
-   send(value){if(value instanceof ArrayBuffer){window.voiceEvents.push({type:'audio',bytes:value.byteLength});return;}if(typeof value==='string'){const event=JSON.parse(value);window.voiceEvents.push(event);if(event.type==='end')setTimeout(()=>this.emit({type:'ended'}),0);if(event.type==='talk_start')setTimeout(()=>this.emit({type:'talk_ready'}),0);if(event.type==='talk_end')setTimeout(()=>this.emit({type:'thinking'}),0);if(event.type==='played_all')setTimeout(()=>this.emit({type:'listening'}),0);}}
+   emit(event){window.incomingEvents.push(event);this.onmessage?.({data:JSON.stringify(event)});}
+   send(value){if(value instanceof ArrayBuffer){window.voiceEvents.push({type:'audio',bytes:value.byteLength});return;}if(typeof value==='string'){const event=JSON.parse(value);window.voiceEvents.push(event);if(event.type==='end')setTimeout(()=>this.emit({type:'ended'}),0);if(event.type==='talk_start'){if(window.deferTalkReady)window.releaseTalkReady=()=>this.emit({type:'talk_ready'});else setTimeout(()=>this.emit({type:'talk_ready'}),0);}if(event.type==='talk_end')setTimeout(()=>this.emit({type:'thinking'}),0);if(event.type==='played_all')setTimeout(()=>this.emit({type:'listening'}),0);}}
    close(){this.readyState=3;this.onclose?.();}
   }
   window.WebSocket=FakeSocket;
@@ -29,7 +29,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-microphone-lease.js','docs/tenant-copilot-voice-audio.js','docs/tenant-copilot-voice-controller.js','docs/tenant-copilot-voice-channel.js','docs/tenant-operator-copilot-voice.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>{
   window.acquireTenantMicrophone=async()=>()=>window.releaseCount++;
-  window.openExperimentalCopilotAudio=async(onPcm)=>{window.emitPcm=onPcm;return{flush(){onPcm(new Uint8Array(120));},mute:value=>{window.muted=value;},play:()=>{window.played=true;},contextState:()=> 'running',interrupt:()=>{window.interruptCalls++;return 0;},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}};};
+  window.playCount=0;window.openExperimentalCopilotAudio=async(onPcm)=>{window.emitPcm=onPcm;return{flush(){onPcm(new Uint8Array(120));},mute:value=>{window.muted=value;},play:()=>{window.playCount++;},contextState:()=> 'running',interrupt:()=>{window.interruptCalls++;return 0;},interruptForTalk:()=>{window.interruptCalls++;return{item_id:'assistant-1',audio_end_ms:120};},finished:async()=>true,stopNow(){},close:async()=>{window.audioClosed++;}};};
  });
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  await page.locator('#operatorCopilotVoiceToggle').click();
@@ -57,6 +57,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_end'));
  assert.equal(await page.evaluate(()=>window.voiceEvents.findIndex(x=>x.type==='talk_start')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'the second click submits the recorded turn');
  assert.equal(await page.evaluate(()=>window.voiceEvents.findLastIndex(x=>x.type==='audio')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'the final buffered audio is sent before the commit request');
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] .voice-session-talk')?.getAttribute('aria-label')==='Нажмите, чтобы перебить и говорить');
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>document.querySelector('#operatorCopilotVoiceToggle')?.dataset.voiceState==='responding');
  assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'responding');
@@ -67,6 +68,29 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'audio_done',item_id:'assistant-1'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played_all'));
  await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Нажмите, чтобы говорить');
+ // A user can interrupt a later answer at any point, then speak a follow-up
+ // without closing the session or losing the provider conversation context.
+ await page.evaluate(()=>window.sockets[0].emit({type:'thinking'}));
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='AI отвечает');
+ await page.evaluate(()=>window.deferTalkReady=true);
+ await voice.getByRole('button',{name:'Нажмите, чтобы перебить и говорить'}).click();
+ await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_start'&&x.item_id==='assistant-1'));
+ assert.deepEqual(await page.evaluate(()=>window.voiceEvents.findLast(x=>x.type==='talk_start')),
+   {type:'talk_start',item_id:'assistant-1',audio_end_ms:120},'the interruption carries the exact assistant item and conservative playback offset');
+ await page.evaluate(()=>window.emitPcm(new Uint8Array(480)));
+ assert.equal(await page.evaluate(()=>{const start=window.voiceEvents.findLastIndex(x=>x.type==='talk_start'&&x.item_id==='assistant-1');return window.voiceEvents.findIndex((x,i)=>i>start&&x.type==='audio'&&x.bytes===480)===-1;}),true,'microphone frames wait for server acknowledgement before uplink');
+ await page.evaluate(()=>{window.deferTalkReady=false;window.releaseTalkReady?.();});
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] button[aria-pressed="true"]')!==null);
+ assert.equal(await page.evaluate(()=>window.voiceEvents.findLastIndex(x=>x.type==='audio')>window.voiceEvents.findLastIndex(x=>x.type==='talk_start'&&x.item_id==='assistant-1')),true,'queued follow-up audio is sent after talk_ready');
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
+ assert.equal(await page.evaluate(()=>window.interruptCalls>=2),true,'late assistant audio is discarded while the user is speaking');
+ assert.equal(await page.evaluate(()=>window.playCount),2,'late assistant audio does not overwrite the follow-up turn');
+ await voice.getByRole('button',{name:'Нажмите, чтобы отправить'}).click();
+ await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===2);
+ await page.evaluate(()=>window.sockets[0].emit({type:'thinking'}));
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='}));
+ await page.waitForFunction(()=>window.playCount===3,'the follow-up answer can play after the user turn');
  await voice.getByRole('button',{name:'Завершить разговор'}).click();
  await page.waitForFunction(()=>window.releaseCount===1 && window.audioClosed===1);
  await voice.waitFor({state:'hidden'});
