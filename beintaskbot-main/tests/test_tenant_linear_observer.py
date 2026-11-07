@@ -185,6 +185,7 @@ class Storage(unittest.TestCase):
         self.assertIn('state_id<>ALL(%s)',select_sql)
         self.assertIn("risk_checked_at<=%s::timestamptz-%s::interval",select_sql)
         self.assertIn('LIMIT %s FOR UPDATE SKIP LOCKED',select_sql)
+        self.assertEqual(len(self.cur.execute.call_args_list[0].args[1]),6)
 
     def test_provider_failure_keeps_committed_backoff(self):
         state={'tenant_id':TENANT,'config_version':'v1','cursor':None,'since_at':None,'until_at':None}

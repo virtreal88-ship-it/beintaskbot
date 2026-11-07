@@ -161,7 +161,7 @@ def reevaluate_saved_snapshots(cur, tenant: str, config: dict, *, source_scope: 
         AND (risk_checked_at IS NULL OR risk_checked_at<=%s::timestamptz-%s::interval)
       ORDER BY risk_checked_at NULLS FIRST,source_version,issue_id
       LIMIT %s FOR UPDATE SKIP LOCKED''',
-      (tenant, source_scope, config['team_id'], config.get('done_state_ids', []), checked_at,
+      (tenant, source_scope, config.get('done_state_ids', []), checked_at,
        RISK_REEVALUATE_INTERVAL, safe_limit))
     rows = cur.fetchall()
     for row in rows:

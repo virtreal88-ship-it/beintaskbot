@@ -8,6 +8,8 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
 from tenant_proactive_risk_policy import linear_scope, crm_scope
+import tenant_linear_observer as linear_observer
+from tenant_proactive_risk_store import replace_source_findings
 import tenant_linear_observer_cleanup as cleanup_module
 import tenant_crm_notice_store as crm_notice_store
 
@@ -57,8 +59,10 @@ class PGliteDatabase:
 
 
 class PGliteCursor:
-    def __init__(self, database):
+    def __init__(self, database, connection=None):
         self.database = database
+        self.connection = connection
+        self.rows = []
 
     def __enter__(self):
         return self
@@ -67,7 +71,48 @@ class PGliteCursor:
         return None
 
     def execute(self, sql, params=None):
-        self.database.query(sql, params)
+        if self.connection and not self.connection.in_transaction:
+            self.database.execute('BEGIN')
+            self.connection.in_transaction = True
+        self.rows = self.database.query(sql, params)
+        for row in self.rows:
+            for key in ('source_version', 'observed_at', 'risk_checked_at', 'due_at', 'updated_at', 'since_at', 'until_at'):
+                value = row.get(key)
+                if isinstance(value, str):
+                    try: row[key] = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    except ValueError: pass
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class PGliteConnection:
+    """Small transaction-aware DB-API adapter for full observer SQL paths."""
+    def __init__(self, database):
+        self.database = database
+        self.in_transaction = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_args):
+        self.rollback() if exc_type else self.commit()
+
+    def cursor(self):
+        return PGliteCursor(self.database, self)
+
+    def commit(self):
+        if self.in_transaction:
+            self.database.execute('COMMIT')
+            self.in_transaction = False
+
+    def rollback(self):
+        if self.in_transaction:
+            self.database.execute('ROLLBACK')
+            self.in_transaction = False
 
 
 class ProactiveRiskRetentionPGlite(unittest.TestCase):
@@ -198,6 +243,66 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
             self.assertEqual(second_pass['disconnect-after-first-pass'], {})
             self.assertEqual(second_pass['config-change-after-first-pass'], {})
             self.assertEqual(second_pass['other-tenant-control'], old_risk_snapshot)
+        finally:
+            database.close()
+
+    def test_sync_runs_real_recheck_sql_and_rolls_back_failed_risk_write(self):
+        if not PGLITE.exists():
+            self.skipTest('Install @electric-sql/pglite in .support-test-deps to run isolated PostgreSQL checks')
+        database = PGliteDatabase()
+        try:
+            tenant='11111111-1111-4111-8111-111111111111'
+            team='22222222-2222-4222-8222-222222222222'
+            issue='33333333-3333-4333-8333-333333333333'
+            config={'team_id':team,'done_state_ids':['done'],'workflow':{'sync_enabled':True},
+                    'members':{},'news':{'enabled':False,'projects':[]}}
+            scope=linear_scope('v1',team)
+            database.execute('''CREATE TABLE saas_linear_sync (
+              tenant_id UUID PRIMARY KEY,config_version TEXT,cursor TEXT,since_at TIMESTAMPTZ,until_at TIMESTAMPTZ,
+              due_at TIMESTAMPTZ,updated_at TIMESTAMPTZ,risk_scan_version TEXT)''')
+            database.execute('''CREATE TABLE saas_tenants (
+              id UUID PRIMARY KEY,status TEXT,owner_telegram_id BIGINT,onboarding JSONB)''')
+            database.execute('''CREATE TABLE saas_tenant_integrations (
+              tenant_id UUID,provider TEXT,status TEXT,metadata JSONB,updated_at TIMESTAMPTZ)''')
+            database.execute('''CREATE TABLE saas_linear_snapshots (
+              tenant_id UUID,issue_id UUID,source_version TIMESTAMPTZ,state_id TEXT,snapshot JSONB,
+              source_scope TEXT,observed_at TIMESTAMPTZ,risk_checked_at TIMESTAMPTZ,risk_snapshot JSONB,
+              PRIMARY KEY(tenant_id,issue_id))''')
+            database.execute('''CREATE TABLE saas_proactive_risk_findings (
+              tenant_id UUID,source_kind TEXT,source_id TEXT)''')
+            database.execute('''CREATE TABLE saas_proactive_risk_scope_checks (
+              tenant_id UUID,source_kind TEXT,source_scope TEXT,checked_at TIMESTAMPTZ,
+              PRIMARY KEY(tenant_id,source_kind,source_scope))''')
+            database.execute("INSERT INTO saas_tenants VALUES($1,'active',7,'{\"timezone\":\"UTC\"}'::jsonb)",(tenant,))
+            metadata={'settings':{'team_id':team,'done_state_ids':['done'],
+                'workflow':{'enabled':True,'sync_enabled':True}}}
+            database.execute("INSERT INTO saas_tenant_integrations VALUES($1,'linear','connected',$2::jsonb,now())",
+                (tenant,json.dumps(metadata)))
+            database.execute("INSERT INTO saas_linear_sync VALUES($1,'v1',NULL,now()-interval '1 day',NULL,now(),now(),'v3')",
+                (tenant,))
+            due_issue={'title':'Past due item','dueDate':'2026-11-06','updatedAt':'2026-10-20T10:00:00Z',
+                       'assignee':{'id':'worker'},'priority':2,'url':'https://linear.app/acme/issue/X-1'}
+            database.execute('''INSERT INTO saas_linear_snapshots VALUES
+              ($1,$2,'2026-10-20T10:00:00Z','open','{}'::jsonb,$3,'2026-10-20T10:00:00Z',NULL,$4::jsonb)''',
+              (tenant,issue,scope,json.dumps(due_issue)))
+
+            connection=PGliteConnection(database)
+            with patch.object(linear_observer,'_connect',return_value=connection), \
+                 patch.object(linear_observer,'ensure_observer_schema'), \
+                 patch.object(linear_observer,'ensure_risk_schema'), \
+                 patch.object(linear_observer,'context',return_value=({},config,'fake-key','v1')), \
+                 patch.object(linear_observer,'query',return_value={'issues':{'nodes':[],
+                    'pageInfo':{'hasNextPage':False,'endCursor':None}}}):
+                with self.assertRaisesRegex(RuntimeError,'rule_id'):
+                    linear_observer.sync_one()
+
+            snapshot=database.query('SELECT risk_checked_at FROM saas_linear_snapshots WHERE tenant_id=$1',(tenant,))[0]
+            self.assertIsNone(snapshot['risk_checked_at'])
+            finding_count=database.query('SELECT count(*) AS n FROM saas_proactive_risk_findings')[0]['n']
+            self.assertEqual(finding_count,0)
+            due=database.query('SELECT due_at FROM saas_linear_sync WHERE tenant_id=$1',(tenant,))[0]['due_at']
+            self.assertGreater(datetime.fromisoformat(due.replace('Z','+00:00')),datetime.now(timezone.utc))
+            self.assertFalse(connection.in_transaction)
         finally:
             database.close()
 
