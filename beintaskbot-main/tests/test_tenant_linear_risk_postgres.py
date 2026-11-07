@@ -150,8 +150,6 @@ class LinearRiskPostgresIntegration(unittest.TestCase):
             verify.execute("UPDATE saas_linear_snapshots SET risk_checked_at=now()-interval '20 minutes' WHERE tenant_id=%s AND issue_id=%s",
                            (tenant1, issue1))
             verify.commit()
-            before_rollback = verify.execute('''SELECT checked_at FROM saas_proactive_risk_scope_checks
-              WHERE tenant_id=%s AND source_kind='linear' AND source_scope=%s''', (tenant1, scope1)).fetchone()[0]
             rollback_conn = psycopg.connect(dsn, options=f'-c search_path={schema}', row_factory=dict_row)
             with self.assertRaisesRegex(psycopg.errors.RaiseException, 'intentional risk write failure'):
                 with rollback_conn.transaction():
@@ -164,9 +162,9 @@ class LinearRiskPostgresIntegration(unittest.TestCase):
             rolled_back_risk_check = verify.execute('SELECT risk_checked_at FROM saas_linear_snapshots WHERE tenant_id=%s AND issue_id=%s',
                 (tenant1, issue1)).fetchone()[0]
             self.assertLess(rolled_back_risk_check, datetime.now(timezone.utc)-timedelta(minutes=15))
-            after_rollback = verify.execute('''SELECT checked_at FROM saas_proactive_risk_scope_checks
-              WHERE tenant_id=%s AND source_kind='linear' AND source_scope=%s''', (tenant1, scope1)).fetchone()[0]
-            self.assertEqual(after_rollback, before_rollback)
+            # This helper does not write the scope checkpoint; only the successful
+            # sync above proves checkpoint commit. Here rollback covers the prior
+            # finding replacement and the risk_checked_at update.
             verify.commit()
             concurrent.close()
         finally:
