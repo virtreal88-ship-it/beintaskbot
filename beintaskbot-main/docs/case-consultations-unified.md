@@ -50,3 +50,28 @@ rights and the exact stored source message are checked. These files are never
 added to the public customer snapshot. Media replies require inspection/manual
 text before AI draft; they never start background paid processing. The additional
 message_type/source_external_id columns default to text/empty for old records.
+
+## Case card tabs
+
+The existing case modal has Dialogue history, Case details and Developer response
+tabs. Panels stay mounted while switching, retaining edits and the case-scoped
+consultation form. The selected tab is restored in the case URL; a developer
+reply link selects the developer panel before focusing the exact reply.
+
+Dialogue history uses the same `dialogs/history` route and operator message
+renderer as the main dialogue, with read-only presentation and the existing
+protected attachment loader/download actions. Loading more dialogue history
+never adds messages to the case material map. The case's saved materials and
+explicit attachment picker remain in Case details, and only the case preview
+endpoint supplies the developer's shareable fragment.
+
+The recipient checkbox is replaced by the explicit Send button naming the
+selected developer. Only submission emits the existing `confirm: true` request.
+New case consultation requests explicitly send `include_customer_identity: false`;
+there is no identity-publication control or restored legacy opt-in. Existing
+public links, old identity disclosures and historical developer data are unchanged.
+
+`tests/test_case_card_tabs_browser.cjs` exercises the actual app in Chromium at
+320, 390 and 1280 pixels, including ARIA navigation, shared media controls,
+separate material scope, drafts, notification reply links, reload, late responses
+and revoked dialogue access. Its screenshots are synthetic local QA artifacts.

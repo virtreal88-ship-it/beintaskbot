@@ -32,6 +32,7 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
   await page.addScriptTag({path:path.join(base,'docs/tenant-support-consultations.js')});
   await page.addScriptTag({path:path.join(base,'docs/tenant-support-inbox.js')});
   await page.locator('[data-support-id]').click();
+  await page.locator('#supportTab-developer').click();
   const row=page.locator('[data-consult-id="'+consultId+'"]');
   await row.getByText('We are investigating',{exact:true}).waitFor();
   await row.getByText('Historical phone answer',{exact:true}).waitFor();
