@@ -1,11 +1,13 @@
 """Bounded retention independent of connection status. Keep dedup tombstones."""
 from tenant_platform import _connect
 from tenant_linear_observer_schema import ensure_observer_schema
+from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 
 
 def cleanup() -> None:
     with _connect() as conn:
         ensure_observer_schema(conn)
+        ensure_risk_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''WITH expired AS (
               SELECT tenant_id,id FROM saas_linear_news
@@ -23,4 +25,10 @@ def cleanup() -> None:
               ORDER BY source_version LIMIT 100 FOR UPDATE SKIP LOCKED)
               UPDATE saas_linear_snapshots n SET snapshot='{}'::jsonb FROM expired e
               WHERE n.tenant_id=e.tenant_id AND n.issue_id=e.issue_id''')
+            cur.execute('''WITH expired AS (
+              SELECT tenant_id,source_kind,source_id,rule_id FROM saas_proactive_risk_findings
+              WHERE checked_at<now()-interval '90 days' ORDER BY checked_at LIMIT 100 FOR UPDATE SKIP LOCKED)
+              DELETE FROM saas_proactive_risk_findings f USING expired e
+              WHERE f.tenant_id=e.tenant_id AND f.source_kind=e.source_kind
+                AND f.source_id=e.source_id AND f.rule_id=e.rule_id''')
         conn.commit()

@@ -9,6 +9,9 @@ from tenant_linear_tasks_provider import FIELDS
 from tenant_linear_observer_schema import ensure_observer_schema
 from tenant_linear_observer_policy import source_time, event_kind, event_id, news_candidate
 from tenant_linear_task_inputs import body_text
+from tenant_proactive_risk_policy import analyze_linear
+from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
+from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
 
 def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool) -> None:
@@ -24,6 +27,10 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool) 
       VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,issue_id) DO UPDATE
       SET source_version=EXCLUDED.source_version,state_id=EXCLUDED.state_id,snapshot=EXCLUDED.snapshot''',
       (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue)))
+    # Dry-run only. Findings are generated from the same already-authorized issue
+    # page; this path has no delivery/outbox or external model calls.
+    findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(issue)
+    replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings)
     if kind:
         cur.execute('''INSERT INTO saas_linear_notice_events(tenant_id,id,issue_id,source_version,event)
           VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s) ON CONFLICT DO NOTHING''', (tenant, event_id(tenant, issue), issue['id'], version, kind))
@@ -42,6 +49,7 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool) 
 def sync_one() -> dict | None:
     with _connect() as conn:
         ensure_observer_schema(conn)
+        ensure_risk_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''INSERT INTO saas_linear_sync(tenant_id)
               SELECT i.tenant_id FROM saas_tenant_integrations i JOIN saas_tenants t ON t.id=i.tenant_id
@@ -84,6 +92,8 @@ def sync_one() -> dict | None:
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
+                if not more:
+                    mark_checked(cur, tenant, 'linear')
                 cur.execute('''UPDATE saas_linear_sync SET config_version=%s,cursor=%s,since_at=%s,until_at=%s,
                   due_at=now()+interval '1 minute',updated_at=now() WHERE tenant_id=%s::uuid''',
                   (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None, tenant))

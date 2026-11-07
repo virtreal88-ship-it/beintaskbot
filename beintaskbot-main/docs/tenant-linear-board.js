@@ -16,13 +16,26 @@
   document.querySelector('.nav').insertAdjacentHTML('beforeend','<button data-view="linear" id="tlNav" hidden style="display:none"><span>▦</span> Linear</button>');
   document.querySelector('main').insertAdjacentHTML('beforeend',`<section class="view" id="view-linear"><div class="top"><div><h1>Linear</h1><p id="tlCount"></p></div></div>
     <div class="tl-toolbar"><input class="search" id="tlSearch" placeholder="Linear-da axtarış"><button class="outline" id="tlFind">Axtar</button><select class="search" id="tlStateFilter"><option value="">Bütün statuslar</option></select><button class="refresh" id="tlRefresh">Yenilə</button><button class="primary" id="tlCreate" hidden>+ Tapşırıq</button></div>
-    <div id="tlBoardNotice" class="notice" role="status"></div><button id="tlRecover" class="outline" hidden>Yarımçıq sorğunu yoxla</button><div class="tl-board" id="tlBoard"></div><button class="outline" id="tlNext" hidden>Daha çox</button></section>
+    <div id="tlBoardNotice" class="notice" role="status"></div><button id="tlRecover" class="outline" hidden>Yarımçıq sorğunu yoxla</button><div class="tl-board" id="tlBoard"></div><button class="outline" id="tlNext" hidden>Daha çox</button>
+    <section id="tlRiskReview" class="panel" hidden style="margin-top:22px"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><div><h2 style="margin:0">Risk yoxlaması · dry-run</h2><p>Yalnız müşahidə və nəzərdən keçirmə. Heç bir bildiriş göndərilmir və mənbə məlumatı dəyişdirilmir.</p></div><button class="outline" id="tlRiskRefresh">Yenilə</button></div><p id="tlRiskStatus" role="status"></p><div id="tlRiskFindings"></div></section></section>
     <div class="modal" id="tlTaskModal"><div class="modal-card panel"><div class="modal-head"><h2 id="tlTaskTitle"></h2><button class="close" id="tlTaskClose" aria-label="Bağla">×</button></div><div id="tlTaskFields"></div><p id="tlTaskMessage" role="status"></p><div class="tl-footer"><button class="primary" id="tlTaskSave">Saxla</button><button class="outline" id="tlTaskCancel">Bağla</button></div></div></div>`);
   function storageKey(person=profile){return 'tenant-linear-command:'+person.tenant_id+':'+person.telegram_id;}
   function notice(text){$('tlBoardNotice').textContent=text||'';$('tlBoardNotice').classList.toggle('show',!!text);}
   async function api(params='',data){const response=await fetch('/api/platform/linear/tasks'+params,{credentials:'same-origin',cache:'no-store',
     ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});const result=await response.json();
     if(!response.ok||!result.success){const error=new Error(result.error||'Linear sorğusu alınmadı.');error.status=response.status;throw error;}return result;}
+  async function loadRisks(){const box=$('tlRiskReview');if(!profile||profile.role!=='owner'){box.hidden=true;return;}box.hidden=false;$('tlRiskStatus').textContent='Yoxlanır…';
+    try{const response=await fetch('/api/platform/risks/dry-run',{credentials:'same-origin',cache:'no-store'}),result=await response.json();
+      if(!response.ok||!result.success)throw new Error(result.error||'Risk yoxlaması əlçatan deyil.');
+      if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib. Yeniləyin.');
+      const checked=result.checked_at?new Date(result.checked_at).toLocaleString('en-GB',{timeZone:'Asia/Baku'}):'hələ yoxlanmayıb';
+      const unavailable=(result.unavailable_sources||[]).length?(` Mənbə bağlı deyil: ${result.unavailable_sources.join(', ')}.`):'';
+      $('tlRiskStatus').textContent=`Son uğurlu yoxlama: ${checked}. Rejim: dry-run. Göndərişlər bağlıdır.${unavailable}`;
+      const labels={access_price_claim:'Qiymət və giriş hüququ barədə iddia',price_control_claim:'Qiymətə nəzarət barədə iddia',access_control_claim:'Giriş hüququ barədə iddia',service_failure_claim:'Xidmət nasazlığı barədə iddia',high_priority_unassigned:'Yüksək prioritetli, icraçısız tapşırıq'};
+      $('tlRiskFindings').innerHTML=(result.findings||[]).map(item=>`<article class="tl-card"><div class="sub">${esc(item.severity)} · Əminlik: ${esc(item.confidence)} · ${esc(item.source)} · ${esc(item.source_id)} · ${item.freshness==='stale'?'Mənbə köhnədir; yenidən yoxlayın.':'Yoxlama aktualdır.'}</div><h3>${esc(labels[item.rule_id]||item.rule_id)} — ${esc(item.source_title)}</h3>
+        <b>Təsdiqlənən mənbə faktları</b><ul>${(item.facts||[]).map(f=>`<li>${esc(f)}</li>`).join('')}</ul><p><b>Qiymətləndirmə:</b> ${esc(item.assessment)}</p><p><b>Təklif olunan addım:</b> ${esc(item.recommended_step)}</p>
+        <div class="sub">Mənbə versiyası: ${esc(item.source_updated_at||'mövcud deyil')} · Yoxlanıb: ${esc(new Date(item.checked_at).toLocaleString('en-GB',{timeZone:'Asia/Baku'}))}</div>${item.source_url?`<a href="${esc(item.source_url)}" rel="noopener noreferrer">Mənbəni aç</a>`:''}</article>`).join('')||'<p>Dry-run zamanı risk namizədi tapılmayıb. Bu, mənbələrin yoxlanmadığı mənasına gəlmir; yoxlama vaxtını yuxarıda görün.</p>';
+    }catch(error){$('tlRiskStatus').textContent=error.message;$('tlRiskFindings').replaceChildren();}}
   function date(value){const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';return d.toLocaleDateString('en-GB',{timeZone:'Asia/Baku'})+' '+d.toLocaleTimeString('en-GB',{timeZone:'Asia/Baku',hour12:false});}
   function render(){const filter=$('tlStateFilter').value;const statuses=new Map(rows.map(row=>[row.state?.id,row.state]));
     $('tlStateFilter').innerHTML='<option value="">Bütün statuslar</option>'+[...statuses.values()].filter(Boolean).map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${rows.filter(r=>r.state?.id===s.id).length})</option>`).join('');
@@ -38,7 +51,7 @@
         ${row.capabilities?.can_edit?'<button class="outline" data-edit>Redaktə</button>':''}${row.capabilities?.can_change_status?'<button class="outline" data-status>Status</button>':''}
         ${(row.capabilities?.buttons||[]).map(button=>`<button class="outline" data-button-id="${esc(button.id)}">${esc(button.label)}</button>`).join('')}</div></article>`).join('')+'</section>').join('')||'<div class="empty">Bu səhifədə uyğun tapşırıq yoxdur. Daha çox düyməsi varsa növbəti səhifəni açın.</div>';
   }
-  async function load(more=false){if(loading||!profile)return;const current=epoch;const search=$('tlSearch').value.trim();if(more&&search!==loadedSearch){notice('Axtarış dəyişib. Əvvəlcə Axtar düyməsini basın.');return;}loading=true;$('tlRefresh').disabled=true;$('tlNext').disabled=true;notice('Yüklənir…');
+  async function load(more=false){if(loading||!profile)return;const current=epoch;const search=$('tlSearch').value.trim();if(more&&search!==loadedSearch){notice('Axtarış dəyişib. Əvvəlcə Axtar düyməsini basın.');return;}if(!more&&profile.role==='owner')loadRisks();loading=true;$('tlRefresh').disabled=true;$('tlNext').disabled=true;notice('Yüklənir…');
     try{const result=await api('?search='+encodeURIComponent($('tlSearch').value.trim())+(more&&cursor?'&after='+encodeURIComponent(cursor):''));
       if(current!==epoch)return;if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib. Yeniləyin.');
       if(more&&version!==result.config_version){rows=[];cursor=null;rights={};render();throw new Error('Qaydalar dəyişib. Siyahını yeniləyin.');}
@@ -84,12 +97,14 @@
   }
   function apply(data){const next=data.member;const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.workflow,data.capabilities]);
     const changed=!profile||identity!==profile.identity;profile={...next,identity};const allowed=!!data.capabilities?.modules?.linear;
+    $('tlRiskReview').hidden=next.role!=='owner';
     $('tlNav').hidden=!allowed;$('tlNav').style.display=allowed?'':'none';
     if(changed||!allowed){epoch++;rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
       try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved&&String(saved.expected_tenant_id)===String(next.tenant_id)&&String(saved.expected_user_id)===String(next.telegram_id))pending=saved;}catch{}
       $('tlRecover').hidden=!pending;if(!allowed){$('view-linear').classList.remove('active');return;}}
   }
   $('tlNav').onclick=()=>{document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b===$('tlNav')));document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-linear'));load();};
+  $('tlRiskRefresh').onclick=()=>loadRisks();
   $('tlRefresh').onclick=()=>load();$('tlFind').onclick=()=>load();$('tlNext').onclick=()=>load(true);$('tlStateFilter').onchange=render;
   $('tlSearch').onkeydown=event=>{if(event.key==='Enter')load();};$('tlCreate').onclick=()=>open('create');$('tlRecover').onclick=frozen;$('tlTaskClose').onclick=close;$('tlTaskCancel').onclick=close;
   $('tlBoard').onclick=event=>{const card=event.target.closest('[data-issue]');if(!card)return;const row=rows.find(item=>item.id===card.dataset.issue);if(!row)return;

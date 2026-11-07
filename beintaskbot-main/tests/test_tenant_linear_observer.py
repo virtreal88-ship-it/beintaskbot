@@ -75,8 +75,10 @@ class Storage(unittest.TestCase):
         self.context=Mock(return_value=({},config(),'private-key','v1'))
         self.query=Mock(return_value={'issues':{'nodes':[],'pageInfo':{'hasNextPage':False,'endCursor':None}}})
         self.service=loaders.load('tenant_linear_observer',{'_connect':self.connect,'ensure_observer_schema':Mock(),
-            'context':self.context,'query':self.query,'FIELDS':'id'},
-            {'tenant_platform','tenant_linear_context','tenant_linear_provider','tenant_linear_tasks_provider','tenant_linear_observer_schema'})
+            'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
+            'analyze_linear':Mock(return_value=[]),'context':self.context,'query':self.query,'FIELDS':'id'},
+            {'tenant_platform','tenant_linear_context','tenant_linear_provider','tenant_linear_tasks_provider','tenant_linear_observer_schema',
+             'tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
 
     def test_news_seen_key_prevents_reimport_and_no_publication(self):
         self.cur.fetchone.side_effect=[None,{'issue_id':OTHER}]
@@ -94,6 +96,17 @@ class Storage(unittest.TestCase):
         self.cur.fetchone.return_value={'state_id':DONE,'source_version':source_time('2026-10-09T10:00:00Z')}
         self.service.store_issue(self.cur,TENANT,config(),row(),baseline=False)
         self.assertNotIn('INSERT',str(self.cur.execute.call_args_list))
+
+    def test_linear_risk_candidate_is_stored_only_with_current_snapshot(self):
+        candidate={'rule_id':'access_price_claim','severity':'P2'}
+        self.service.analyze_linear.return_value=[candidate]
+        issue=row(state={'id':OTHER},title='Cashier can change price without permission',priority=2)
+        self.cur.fetchone.return_value=None
+        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False)
+        self.service.analyze_linear.assert_called_once_with(issue)
+        self.service.replace_source_findings.assert_called_once_with(self.cur,TENANT,'linear',OTHER,
+            source_time(STAMP).isoformat(),issue['title'],[candidate])
+        self.assertNotIn('saas_linear_notice_deliveries',str(self.cur.execute.call_args_list))
 
     def test_fixed_page_and_durable_window(self):
         end=datetime(2026,10,8,12,tzinfo=timezone.utc);start=datetime(2026,10,8,11,tzinfo=timezone.utc)
@@ -122,10 +135,10 @@ class Storage(unittest.TestCase):
         self.assertIn("interval '5 minutes'",str(self.cur.execute.call_args_list))
 
     def test_cleanup_bounded_even_when_disconnected_and_keeps_dedup(self):
-        service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock()},
-            {'tenant_platform','tenant_linear_observer_schema'})
+        service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock(),
+            'ensure_risk_schema':Mock()}, {'tenant_platform','tenant_linear_observer_schema','tenant_proactive_risk_schema'})
         service.cleanup();calls=self.cur.execute.call_args_list
-        self.assertEqual(len(calls),3)
+        self.assertEqual(len(calls),4)
         for call in calls:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
         self.assertNotIn('saas_linear_news_seen',str(calls));self.assertNotIn('connected',str(calls))
 

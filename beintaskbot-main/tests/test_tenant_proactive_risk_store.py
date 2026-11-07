@@ -1,0 +1,68 @@
+"""Owner-only read path and tenant-scoped dry-run storage contracts."""
+import unittest
+from unittest.mock import MagicMock, Mock
+from datetime import datetime, timezone
+from test_tenant_hot_orders import load
+
+TENANT='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
+
+
+class RiskStore(unittest.TestCase):
+    def setUp(self):
+        self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
+        self.cur=self.conn.cursor.return_value.__enter__.return_value
+        self.service=load('tenant_proactive_risk_store',{'_connect':self.connect,
+            '_read_tenant_workflow':Mock(return_value={}), 'ensure_schema':Mock()},
+            {'tenant_platform','tenant_proactive_risk_schema'})
+
+    def test_non_owner_is_denied_before_database_access(self):
+        with self.assertRaises(self.service.TenantLinearError):
+            self.service.list_findings({'tenant_id':TENANT,'telegram_id':20,'role':'worker','active':True,'tenant_status':'active'})
+        self.connect.assert_not_called()
+
+    def test_stale_owner_session_is_rechecked_against_current_membership(self):
+        current={'tenant_id':TENANT,'telegram_id':20,'role':'worker','active':True,'tenant_status':'active',
+            'modules':{},'notification_rules':{}}
+        self.cur.fetchone.return_value=current
+        with self.assertRaises(self.service.TenantLinearError) as error:
+            self.service.list_findings({'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,'tenant_status':'active'})
+        self.assertEqual(error.exception.status,403)
+        self.assertEqual(self.cur.execute.call_count,1)
+
+    def test_owner_preview_is_tenant_scoped_and_explicitly_dry_run(self):
+        checked=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        member={'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,'tenant_status':'active',
+            'modules':{},'notification_rules':{}}
+        row={'source_kind':'linear','source_id':'issue-1','rule_id':'access_price_claim','source_version':'v1',
+            'severity':'P1','confidence':'medium','source_title':'Price permission','source_url':'https://linear.app/a/issue/BS-1',
+            'facts':['reported issue'],'assessment':'Not verified','recommended_step':'Check ACL','fingerprint':'f',
+            'checked_at':checked}
+        self.cur.fetchone.side_effect=[member,{'ok':1},{'ok':1},{'checked_at':checked},{'checked_at':checked}]
+        self.cur.fetchall.return_value=[row]
+        result=self.service.list_findings({'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,
+            'tenant_status':'active'})
+        self.assertEqual(result['tenant_id'],TENANT)
+        self.assertEqual(result['mode'],'dry_run')
+        self.assertFalse(result['deliveries_enabled'])
+        self.assertEqual(len(result['findings']),1)
+        self.assertEqual(result['findings'][0]['source_url'],row['source_url'])
+        sql=str(self.cur.execute.call_args_list)
+        self.assertIn("m.tenant_id=%s::uuid",sql)
+        self.assertIn("source_kind=ANY(%s)",sql)
+        self.assertNotIn('saas_tenant_notifications',sql)
+        self.assertNotIn('send_message',sql)
+
+    def test_untrusted_external_url_is_removed_from_preview(self):
+        checked=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        member={'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,'tenant_status':'active','modules':{},'notification_rules':{}}
+        row={'source_kind':'linear','source_id':'issue-1','rule_id':'access_control_claim','source_version':'v1',
+            'severity':'P2','confidence':'low','source_title':'Test','source_url':'https://linear.app.evil/a',
+            'facts':[],'assessment':'Not verified','recommended_step':'Check','fingerprint':'f','checked_at':checked}
+        self.cur.fetchone.side_effect=[member,{'ok':1},{'ok':1},{'checked_at':checked},{'checked_at':checked}]
+        self.cur.fetchall.return_value=[row]
+        result=self.service.list_findings({'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,'tenant_status':'active'})
+        self.assertEqual(result['findings'][0]['source_url'],'')
+
+
+if __name__=='__main__':
+    unittest.main()

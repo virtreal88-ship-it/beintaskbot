@@ -2,7 +2,7 @@
 from tenant_linear_provider import query
 from tenant_linear_policy import TenantLinearError
 
-FIELDS = '''id identifier title description priority url createdAt updatedAt
+FIELDS = '''id identifier title description priority url dueDate createdAt updatedAt
   team { id } state { id name color type } project { id name }
   assignee { id name email }'''
 

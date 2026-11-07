@@ -21,6 +21,9 @@ const row={id:'issue',identifier:'BS-1',title:'<Private title>',account:'<Custom
   state:{id:'done',name:'Done'},project:{name:'Project'},createdAt:'2026-10-08T10:00:00Z',updatedAt:'old',
   capabilities:{can_edit:false,can_change_status:false,buttons:[{id:'pass',label:'Test olundu',require_reason:false}]}};
 async function fetch(url,options={}){requests.push(url);if(url.endsWith('/me'))return reply(profile);
+  if(url.endsWith('/api/platform/risks/dry-run'))return reply({success:true,tenant_id:profile.member.tenant_id,user_id:20,mode:'dry_run',deliveries_enabled:false,
+    checked_at:'2026-11-07T12:00:00Z',findings:[{severity:'P2',confidence:'low',source:'Linear',source_id:'BS-2',rule_id:'access_control_claim',source_title:'<Injected>',
+      facts:['Task text reports a permission issue.'],assessment:'Runtime rights are unverified.',recommended_step:'Check ACL.',source_updated_at:'v1',checked_at:'2026-11-07T12:00:00Z',source_url:'https://linear.app/team/issue/BS-2'}]});
   if(options.body){posts.push(JSON.parse(options.body));return reply(fail?{success:false,error:'Uncertain'}:{success:true,issue_id:'issue'},fail?503:200);}
   if(deferred){const saved=deferred;deferred=null;return saved;}
   return reply({success:true,issues:[row],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:true,endCursor:'cursor'}});
@@ -44,5 +47,9 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   profile=person('company-b');events['tenant-profile']({detail:profile});resolve(reply({success:true,issues:[row],tenant_id:'company-a',user_id:20,config_version:'cfg',capabilities:{},pageInfo:{}}));await loading;await flush();
   assert(!$('tlBoard').innerHTML.includes('Private'));assert.equal($('tlRefresh').disabled,false);
   profile=person('company-b','master');profile.capabilities.modules.linear=false;events['tenant-profile']({detail:profile});assert.equal($('tlNav').hidden,true);
-  console.log('PASS: tenant Linear board scopes late responses, escapes cards, restricts actions and retries exact persisted commands.');
+  profile=person('company-b','owner');events['tenant-profile']({detail:profile});await $('tlRefresh').click();await flush();await flush();
+  assert.equal($('tlRiskReview').hidden,false);assert($('tlRiskStatus').textContent.includes('Göndərişlər bağlıdır'));
+  assert($('tlRiskFindings').innerHTML.includes('&lt;Injected&gt;'));assert(!requests.some(url=>url.includes('risks/dry-run')&&profile.member.role!=='owner'));
+  profile=person('company-b','master');profile.capabilities.modules.linear=false;events['tenant-profile']({detail:profile});assert.equal($('tlNav').hidden,true);assert.equal($('tlRiskReview').hidden,true);
+  console.log('PASS: tenant Linear board scopes late responses, escapes cards, restricts actions, retries exact commands and exposes dry-run risks to owners only.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
