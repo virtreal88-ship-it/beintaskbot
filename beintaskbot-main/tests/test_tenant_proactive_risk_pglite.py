@@ -97,6 +97,21 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
             database.execute('''INSERT INTO saas_tenant_integrations
               VALUES($1,'kommo','connected','{}'::jsonb,NULL,'crm-current',$2)''', (tenant,connected_at))
 
+            other_tenant = 'tenant-2'
+            other_updated_at = updated_at - timedelta(hours=2)
+            other_metadata = {'settings': {'team_id': 'team-other', 'done_state_ids': ['done'],
+                'workflow': {'enabled': True, 'sync_enabled': True}}}
+            database.execute('''INSERT INTO saas_tenant_integrations
+              VALUES($1,'linear','connected',$2::jsonb,$3,NULL,NULL)''',
+              (other_tenant,json.dumps(other_metadata),other_updated_at))
+            safe_tenant = 'tenant-3'
+            safe_updated_at = updated_at - timedelta(hours=4)
+            safe_metadata = {'settings': {'team_id': 'team-safe', 'done_state_ids': ['done'],
+                'workflow': {'enabled': True, 'sync_enabled': True}}}
+            database.execute('''INSERT INTO saas_tenant_integrations
+              VALUES($1,'linear','connected',$2::jsonb,$3,NULL,NULL)''',
+              (safe_tenant,json.dumps(safe_metadata),safe_updated_at))
+
             old = datetime.now(timezone.utc) - timedelta(days=100)
             current_linear = linear_scope(updated_at, 'team-current')
             old_linear_config = linear_scope(updated_at - timedelta(days=1), 'team-current')
@@ -115,7 +130,9 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
                                  (tenant,kind,source_id,'risk',scope,old))
 
             stale_open = datetime.now(timezone.utc) - timedelta(days=100)
-            old_risk_snapshot = {'team': {'id': 'team-current'}, 'title': 'Stale task', 'dueDate': '2026-11-10'}
+            old_risk_snapshot = {'title': 'Stale task', 'dueDate': '2026-11-10'}
+            legacy_full_snapshot = {**old_risk_snapshot,'id':'external-id','team':{'id':'team-current'},
+                'state':{'id':'open'},'labels':{'nodes':[{'name':'private-label'}]}}
             database.execute('''INSERT INTO saas_linear_snapshots
               VALUES($1,'open-current',$2,$4::jsonb,'open',$3,$5::jsonb)''',
               (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
@@ -124,7 +141,7 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
               (tenant,stale_open,old_linear_config,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
             database.execute('''INSERT INTO saas_linear_snapshots
               VALUES($1,'open-legacy-risk-snapshot',$2,$4::jsonb,'open',$3,'{}'::jsonb)''',
-              (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot)))
+              (tenant,stale_open,current_linear,json.dumps(legacy_full_snapshot)))
             database.execute('''INSERT INTO saas_linear_snapshots
               VALUES($1,'done-current',$2,$4::jsonb,'done',$3,$5::jsonb)''',
               (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
@@ -146,13 +163,41 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
             retained_risk_snapshots = {row['issue_id']: row['risk_snapshot'] for row in database.query(
                 'SELECT issue_id,risk_snapshot FROM saas_linear_snapshots')}
             self.assertEqual(retained_risk_snapshots['open-current'], old_risk_snapshot)
-            self.assertEqual(retained_risk_snapshots['open-old-config'], old_risk_snapshot)
+            self.assertEqual(retained_risk_snapshots['open-old-config'], {})
             self.assertEqual(retained_risk_snapshots['open-legacy-risk-snapshot'], old_risk_snapshot)
             self.assertEqual(retained_risk_snapshots['done-current'], {})
             eligible = {row['issue_id'] for row in database.query('''SELECT issue_id FROM saas_linear_snapshots
               WHERE source_scope=$1 AND risk_snapshot<>'{}'::jsonb
-                AND risk_snapshot->'team'->>'id'='team-current' AND state_id<>'done' ''', (current_linear,))}
+                AND state_id<>'done' ''', (current_linear,))}
             self.assertEqual(eligible, {'open-current', 'open-legacy-risk-snapshot'})
+
+            other_scope = linear_scope(other_updated_at, 'team-other')
+            safe_scope = linear_scope(safe_updated_at, 'team-safe')
+            database.execute('''INSERT INTO saas_linear_snapshots VALUES
+              ($1,'disconnect-after-first-pass',$2,$3::jsonb,'open',$4,$5::jsonb),
+              ($6,'config-change-after-first-pass',$2,$3::jsonb,'open',$7,$5::jsonb),
+              ($8,'other-tenant-control',$2,$3::jsonb,'open',$9,$5::jsonb)''',
+              (tenant,stale_open,json.dumps(old_risk_snapshot),current_linear,json.dumps(old_risk_snapshot),
+               other_tenant,other_scope,safe_tenant,safe_scope))
+            with patch.object(cleanup_module, '_connect', return_value=database), \
+                 patch.object(cleanup_module, 'ensure_observer_schema'), \
+                 patch.object(cleanup_module, 'ensure_risk_schema'):
+                cleanup_module.cleanup()
+            database.execute("UPDATE saas_tenant_integrations SET status='disconnected' WHERE tenant_id=$1 AND provider='linear'", (tenant,))
+            changed_metadata = {'settings': {'team_id': 'team-new', 'done_state_ids': ['done'],
+                'workflow': {'enabled': True, 'sync_enabled': True}}}
+            database.execute("UPDATE saas_tenant_integrations SET metadata=$1::jsonb WHERE tenant_id=$2 AND provider='linear'",
+                (json.dumps(changed_metadata),other_tenant))
+            with patch.object(cleanup_module, '_connect', return_value=database), \
+                 patch.object(cleanup_module, 'ensure_observer_schema'), \
+                 patch.object(cleanup_module, 'ensure_risk_schema'):
+                cleanup_module.cleanup()
+            second_pass = {row['issue_id']: row['risk_snapshot'] for row in database.query(
+                "SELECT issue_id,risk_snapshot FROM saas_linear_snapshots WHERE issue_id IN "
+                "('disconnect-after-first-pass','config-change-after-first-pass','other-tenant-control')")}
+            self.assertEqual(second_pass['disconnect-after-first-pass'], {})
+            self.assertEqual(second_pass['config-change-after-first-pass'], {})
+            self.assertEqual(second_pass['other-tenant-control'], old_risk_snapshot)
         finally:
             database.close()
 

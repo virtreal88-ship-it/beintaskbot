@@ -17,8 +17,24 @@ def cleanup() -> None:
               ORDER BY source_version LIMIT 100 FOR UPDATE SKIP LOCKED)
               UPDATE saas_linear_snapshots n SET risk_snapshot=(
                 SELECT COALESCE(jsonb_object_agg(k,v),'{}'::jsonb) FROM jsonb_each(p.snapshot) AS fields(k,v)
-                WHERE k=ANY(ARRAY['id','team','title','description','priority','assignee','dueDate','updatedAt','url','state'])
+                WHERE k=ANY(ARRAY['title','description','priority','assignee','dueDate','updatedAt','url'])
               ) FROM pending p WHERE n.tenant_id=p.tenant_id AND n.issue_id=p.issue_id''')
+            # Risk-only payloads expire as soon as their exact source scope stops
+            # being active. This is independent from the full-snapshot retention pass.
+            cur.execute('''WITH stale AS (
+              SELECT n.tenant_id,n.issue_id FROM saas_linear_snapshots n
+              WHERE n.risk_snapshot<>'{}'::jsonb AND NOT EXISTS (
+                SELECT 1 FROM saas_tenant_integrations i
+                WHERE i.tenant_id=n.tenant_id AND i.provider='linear' AND i.status='connected'
+                  AND i.metadata->'settings'->'workflow'->'enabled'='true'::jsonb
+                  AND i.metadata->'settings'->'workflow'->'sync_enabled'='true'::jsonb
+                  AND n.source_scope=floor(extract(epoch from i.updated_at)*1000000)::bigint::text||':'||
+                    (i.metadata->'settings'->>'team_id')
+                  AND n.state_id<>ALL(ARRAY(SELECT jsonb_array_elements_text(
+                    COALESCE(i.metadata->'settings'->'done_state_ids','[]'::jsonb))))
+              ) ORDER BY n.source_version LIMIT 100 FOR UPDATE SKIP LOCKED)
+              UPDATE saas_linear_snapshots n SET risk_snapshot='{}'::jsonb FROM stale s
+              WHERE n.tenant_id=s.tenant_id AND n.issue_id=s.issue_id''')
             cur.execute('''WITH expired AS (
               SELECT tenant_id,id FROM saas_linear_news
               WHERE COALESCE(published_at,created_at)<now()-interval '90 days'
@@ -37,7 +53,8 @@ def cleanup() -> None:
                   WHERE i.tenant_id=saas_linear_snapshots.tenant_id AND i.provider='linear' AND i.status='connected'
                     AND i.metadata->'settings'->'workflow'->'enabled'='true'::jsonb
                     AND i.metadata->'settings'->'workflow'->'sync_enabled'='true'::jsonb
-                    AND saas_linear_snapshots.snapshot->'team'->>'id'=i.metadata->'settings'->>'team_id'
+                    AND saas_linear_snapshots.source_scope=floor(extract(epoch from i.updated_at)*1000000)::bigint::text||':'||
+                      (i.metadata->'settings'->>'team_id')
                     AND saas_linear_snapshots.state_id<>ALL(ARRAY(SELECT jsonb_array_elements_text(
                       COALESCE(i.metadata->'settings'->'done_state_ids','[]'::jsonb))))
                 ))
@@ -48,7 +65,8 @@ def cleanup() -> None:
                   WHERE i.tenant_id=n.tenant_id AND i.provider='linear' AND i.status='connected'
                     AND i.metadata->'settings'->'workflow'->'enabled'='true'::jsonb
                     AND i.metadata->'settings'->'workflow'->'sync_enabled'='true'::jsonb
-                    AND n.risk_snapshot->'team'->>'id'=i.metadata->'settings'->>'team_id'
+                    AND n.source_scope=floor(extract(epoch from i.updated_at)*1000000)::bigint::text||':'||
+                      (i.metadata->'settings'->>'team_id')
                     AND n.state_id<>ALL(ARRAY(SELECT jsonb_array_elements_text(
                       COALESCE(i.metadata->'settings'->'done_state_ids','[]'::jsonb))))
                 ) THEN n.risk_snapshot ELSE '{}'::jsonb END

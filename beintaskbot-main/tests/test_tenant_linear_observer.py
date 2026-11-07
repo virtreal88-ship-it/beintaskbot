@@ -198,14 +198,17 @@ class Storage(unittest.TestCase):
         service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock(),
             'ensure_risk_schema':Mock()}, {'tenant_platform','tenant_linear_observer_schema','tenant_proactive_risk_schema'})
         service.cleanup();calls=self.cur.execute.call_args_list
-        self.assertEqual(len(calls),5)
-        self.assertIn('LIMIT 100',calls[0].args[0])
-        for call in calls[1:]:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
+        self.assertEqual(len(calls),6)
+        for call in calls[:2]:self.assertIn('LIMIT 100',call.args[0])
+        for call in calls[2:]:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
         risk_cleanup=next(call.args[0] for call in calls if 'DELETE FROM saas_proactive_risk_findings' in call.args[0])
         self.assertIn("source_kind='linear' AND NOT EXISTS",risk_cleanup)
         self.assertIn('floor(extract(epoch from i.updated_at)*1000000)',risk_cleanup)
         self.assertIn("source_kind='crm_task' AND NOT EXISTS",risk_cleanup)
         self.assertIn('i.account_domain||\':\'||floor(extract(epoch from i.connected_at)*1000000)',risk_cleanup)
+        stale_risk_cleanup=next(call.args[0] for call in calls if "SET risk_snapshot='{}'::jsonb" in call.args[0])
+        self.assertIn('NOT EXISTS',stale_risk_cleanup)
+        self.assertIn("LIMIT 100 FOR UPDATE SKIP LOCKED",stale_risk_cleanup)
         self.assertNotIn('saas_linear_news_seen',str(calls))
 
 

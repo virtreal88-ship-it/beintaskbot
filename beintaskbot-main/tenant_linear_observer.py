@@ -17,7 +17,7 @@ from tenant_proactive_risk_store import replace_source_findings, mark_checked
 RISK_SCAN_VERSION = 'v3'
 RISK_REEVALUATE_INTERVAL = '15 minutes'
 RISK_REEVALUATE_LIMIT = 30
-RISK_SNAPSHOT_FIELDS = ('id', 'team', 'title', 'description', 'priority', 'assignee', 'dueDate', 'updatedAt', 'url', 'state')
+RISK_SNAPSHOT_FIELDS = ('title', 'description', 'priority', 'assignee', 'dueDate', 'updatedAt', 'url')
 
 
 def risk_snapshot(issue: dict) -> dict:
@@ -155,7 +155,7 @@ def reevaluate_saved_snapshots(cur, tenant: str, config: dict, *, source_scope: 
     safe_limit = max(1, min(int(limit), RISK_REEVALUATE_LIMIT))
     cur.execute('''SELECT issue_id,source_version,state_id,risk_snapshot,observed_at
       FROM saas_linear_snapshots
-      WHERE tenant_id=%s::uuid AND source_scope=%s AND risk_snapshot->'team'->>'id'=%s
+      WHERE tenant_id=%s::uuid AND source_scope=%s
         AND risk_snapshot<>'{}'::jsonb
         AND state_id<>ALL(%s)
         AND (risk_checked_at IS NULL OR risk_checked_at<=%s::timestamptz-%s::interval)
