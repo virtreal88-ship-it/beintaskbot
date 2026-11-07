@@ -86,8 +86,9 @@ class PilotSessionTests(unittest.IsolatedAsyncioTestCase):
         await session.start()
         self.assertEqual(sum(event['type']=='response.create' for event in provider.events),0)
         for n in range(3):
-            await session.receive_provider({'type':'input_audio_buffer.speech_started'})
-            await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            await session.receive_client({'type':'talk_end'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
             await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
             await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})
