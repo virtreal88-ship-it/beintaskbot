@@ -38,6 +38,15 @@ class PayloadTests(unittest.TestCase):
         for event in [None, '', 'unknown', 'task_completion_requested', 'task_assignment_requested']:
             self.assertEqual(payload_for(event), expected)
 
+    def test_risk_alert_target_is_exact_and_neutral(self):
+        alert='01a1b1af-4d2c-71f2-aaeb-f01eccac0031'
+        target='/app?view=linear&risk_alert_id='+alert
+        value=payload_for('proactive_risk',target)
+        self.assertEqual(value['url'],target)
+        self.assertNotIn(alert,str(value).replace(value['url'],''))
+        self.assertEqual(payload_for('proactive_risk','https://evil.test/?x='+alert)['url'],'/app?view=linear')
+        self.assertEqual(payload_for('proactive_risk','/app?view=linear&risk_alert_id='+alert+'&tenant=secret')['url'],'/app?view=linear')
+
     def test_each_call_returns_independent_copy_including_alias(self):
         first = payload_for('linear_done')
         first['body'] = 'PRIVATE'

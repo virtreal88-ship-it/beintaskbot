@@ -1,4 +1,4 @@
-"""Owner-only read path and tenant-scoped dry-run storage contracts."""
+"""Owner-only read path and tenant-scoped risk storage contracts."""
 import unittest
 from unittest.mock import MagicMock, Mock
 from datetime import datetime, timezone
@@ -29,10 +29,12 @@ class RiskStore(unittest.TestCase):
         self.assertEqual(error.exception.status,403)
         self.assertEqual(self.cur.execute.call_count,1)
 
-    def test_owner_preview_is_tenant_scoped_and_explicitly_dry_run(self):
+    def test_owner_view_is_tenant_scoped_and_reports_alert_opt_in_state(self):
         checked=datetime(2026,11,7,12,tzinfo=timezone.utc)
         member={'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,'tenant_status':'active',
             'modules':{},'notification_rules':{}}
+        self.service._read_tenant_workflow.return_value={'policies':{'members':{'20':{'notifications':{
+            'proactive_risk':{'internal':True,'push':True}}}}}}
         row={'source_kind':'linear','source_id':'issue-1','rule_id':'access_price_claim','source_scope':'cfg1:team-a','source_version':'v1',
             'severity':'P1','confidence':'medium','source_title':'Price permission','source_url':'https://linear.app/a/issue/BS-1',
             'facts':['reported issue'],'assessment':'Not verified','recommended_step':'Check ACL','fingerprint':'f',
@@ -43,8 +45,8 @@ class RiskStore(unittest.TestCase):
         result=self.service.list_findings({'tenant_id':TENANT,'telegram_id':20,'role':'owner','active':True,
             'tenant_status':'active'})
         self.assertEqual(result['tenant_id'],TENANT)
-        self.assertEqual(result['mode'],'dry_run')
-        self.assertFalse(result['deliveries_enabled'])
+        self.assertEqual(result['mode'],'owner_review')
+        self.assertEqual(result['alert_opt_in_channels'],['internal','push'])
         self.assertEqual(len(result['findings']),1)
         self.assertEqual(result['findings'][0]['source_url'],row['source_url'])
         self.assertEqual(result['findings'][0]['source_scope'],'cfg1:team-a')

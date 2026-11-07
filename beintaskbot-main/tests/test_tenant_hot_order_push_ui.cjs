@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const events={},notices=[],opened=[];let pending;
-vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../docs/tenant-push-sw.js'),'utf8'),{
-  self:{addEventListener:(name,callback)=>events[name]=callback,registration:{showNotification:async(title,data)=>notices.push(data)},clients:{openWindow:async url=>opened.push(url)}}
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../docs/tenant-push-sw.js'),'utf8'),{URL,
+  self:{location:{origin:'https://crm.pro.az'},addEventListener:(name,callback)=>events[name]=callback,registration:{showNotification:async(title,data)=>notices.push(data)},clients:{openWindow:async url=>opened.push(url)}}
 });
 (async()=>{
   events.push({data:{json:()=>({kind:'hot_order',body:'PRIVATE CLIENT',url:'https://evil.invalid'})},waitUntil:p=>pending=p});await pending;

@@ -20,6 +20,10 @@ _PAYLOADS = {
         'title': 'CRM Smart Assistant',
         'body': 'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.',
         'url': '/app?view=linear', 'tag': 'crm-linear', 'kind': 'linear'},
+    'proactive_risk': {
+        'title': 'CRM Smart Assistant',
+        'body': 'Tapşırıq üzrə yoxlanmalı siqnal var. Kabinetdə yoxlayın.',
+        'url': '/app?view=linear', 'tag': 'crm-proactive-risk', 'kind': 'risk_alert'},
     'hot_order_available': {
         'title': 'CRM Smart Assistant',
         'body': 'Yeni isti sifariş var. Kabinetdə yoxlayın.',
@@ -55,6 +59,20 @@ def _safe_dialog_target(value: object) -> str:
                 or query.get('provider')!=['connect'] or not re.fullmatch(r'[0-9a-f-]{36}',channel,re.I)
                 or not re.fullmatch(r'\d{1,20}',lead) or not conversation or len(conversation)>220
                 or re.search(r'[\x00-\x1f\x7f]',conversation)):
+            return ''
+    except (TypeError,ValueError):
+        return ''
+    return target
+
+
+def _safe_risk_target(value: object) -> str:
+    target=str(value or '')
+    try:
+        parts=urlsplit(target);query=parse_qs(parts.query,keep_blank_values=True)
+        if (parts.path!='/app' or parts.scheme or parts.netloc or parts.fragment
+                or query.get('view')!=['linear'] or set(query)!={'view','risk_alert_id'}
+                or not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',
+                                    query.get('risk_alert_id',[''])[0],re.I)):
             return ''
     except (TypeError,ValueError):
         return ''
@@ -112,6 +130,9 @@ def _incoming_copy(context: object) -> tuple[str, str]:
 def payload_for(event: str | None, target_url: str = '', notification_context: object = None) -> dict[str, str]:
     """Return an independent copy; unknown events retain the old default."""
     payload=dict(_PAYLOADS.get(event, _DEFAULT))
+    if event=='proactive_risk':
+        safe_target=_safe_risk_target(target_url)
+        if safe_target:payload['url']=safe_target
     if event=='incoming_message':
         safe_target=_safe_dialog_target(target_url)
         if safe_target:payload['url']=safe_target
