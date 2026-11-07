@@ -1,10 +1,22 @@
 """Deterministic candidate rules: facts stay separate from unverified claims."""
 import unittest
 from datetime import datetime, timezone, timedelta
-from tenant_proactive_risk_policy import analyze_linear, analyze_crm_task, fingerprint
+from tenant_proactive_risk_policy import analyze_linear, analyze_crm_task, fingerprint, source_timestamp
 
 
 class LinearRiskRules(unittest.TestCase):
+    def test_plain_service_outage_phrases_are_candidates_without_extra_action_words(self):
+        for title in ('Service unavailable', 'Service outage', 'Сервис не работает'):
+            with self.subTest(title=title):
+                finding=next(item for item in analyze_linear({'title':title})
+                             if item['rule_id']=='service_failure_claim')
+                self.assertIn('current service health was not checked',finding['assessment'])
+
+    def test_cashier_changes_price_is_recognized_as_report(self):
+        finding=next(item for item in analyze_linear({'title':'Cashier changes price'})
+                     if item['rule_id']=='price_control_claim')
+        self.assertIn('No loss is established',finding['assessment'])
+
     def test_price_and_permission_report_is_not_claimed_as_verified(self):
         findings = analyze_linear({'id':'issue-1','identifier':'BS-1513','title':'Urgent price permission issue',
             'description':'Cashier can change price while permission is disabled.', 'priority':1,
@@ -63,6 +75,12 @@ class LinearRiskRules(unittest.TestCase):
 
 
 class CrmRiskRules(unittest.TestCase):
+    def test_source_check_timestamp_rejects_naive_and_parses_utc(self):
+        self.assertIsNone(source_timestamp('2026-11-07T12:00:00'))
+        self.assertIsNone(source_timestamp('not-a-time'))
+        self.assertEqual(source_timestamp('2026-11-07T12:00:00Z'),
+                         datetime(2026,11,7,12,tzinfo=timezone.utc))
+
     def test_crm_price_issue_is_a_low_confidence_report(self):
         findings=analyze_crm_task({'kommo_task_id':17,'text':'Can cashier change price without permission?',
             'responsible_id':None,'completed':False})
@@ -79,7 +97,11 @@ class CrmRiskRules(unittest.TestCase):
         finding=analyze_crm_task(task,checked_at=now)[0]
         self.assertIn('in the past',str(finding['facts']))
         task['completed']=True
-        self.assertNotIn('in the past',str(analyze_crm_task(task,checked_at=now)[0]['facts']))
+        self.assertEqual(analyze_crm_task(task,checked_at=now),[])
+
+    def test_completed_crm_issue_is_not_reported_as_current(self):
+        task={'kommo_task_id':17,'text':'Service outage reported','completed':True,'responsible_id':None}
+        self.assertEqual(analyze_crm_task(task),[])
 
     def test_naive_due_date_is_not_interpreted(self):
         task={'kommo_task_id':17,'text':'Service outage failure','responsible_id':None,

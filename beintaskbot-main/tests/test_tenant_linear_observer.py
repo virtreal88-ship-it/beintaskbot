@@ -102,15 +102,16 @@ class Storage(unittest.TestCase):
         self.service.analyze_linear.return_value=[candidate]
         issue=row(state={'id':OTHER},title='Cashier can change price without permission',priority=2)
         self.cur.fetchone.return_value=None
-        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False)
+        self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False,source_scope='v1:'+TENANT)
         self.service.analyze_linear.assert_called_once_with(issue)
         self.service.replace_source_findings.assert_called_once_with(self.cur,TENANT,'linear',OTHER,
-            source_time(STAMP).isoformat(),issue['title'],[candidate])
+            source_time(STAMP).isoformat(),issue['title'],[candidate],
+            source_scope='v1:'+TENANT,source_checked_at=None)
         self.assertNotIn('saas_linear_notice_deliveries',str(self.cur.execute.call_args_list))
 
     def test_fixed_page_and_durable_window(self):
         end=datetime(2026,10,8,12,tzinfo=timezone.utc);start=datetime(2026,10,8,11,tzinfo=timezone.utc)
-        state={'tenant_id':TENANT,'config_version':'v1','cursor':'next','since_at':start,'until_at':end}
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v1','cursor':'next','since_at':start,'until_at':end}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.query.return_value['issues']['pageInfo']={'hasNextPage':True,'endCursor':'next-2'}
         result=self.service.sync_one();self.assertTrue(result['has_next'])
@@ -118,13 +119,35 @@ class Storage(unittest.TestCase):
         self.assertEqual(key,'private-key');self.assertIn('first:30',query);self.assertIn('parent { id }',query)
         self.assertEqual(variables['filter']['team']['id']['eq'],TENANT);self.assertEqual(variables['after'],'next')
         update=self.cur.execute.call_args_list[-1].args[1]
-        self.assertEqual(update,('v1','next-2',start,end,TENANT));self.assertEqual(self.conn.commit.call_count,2)
+        self.assertEqual(update,('v1','next-2',start,end,'v1',TENANT));self.assertEqual(self.conn.commit.call_count,2)
 
     def test_config_change_resets_scan_without_history_alarms(self):
         state={'tenant_id':TENANT,'config_version':'old','cursor':'old-cursor','since_at':source_time(STAMP),'until_at':None}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.service.sync_one();variables=self.query.call_args.args[2]
         self.assertIsNone(variables['after']);self.assertNotIn('gte',variables['filter']['updatedAt'])
+
+    def test_risk_rollout_backfills_unchanged_issues_even_with_existing_watermark(self):
+        start=source_time(STAMP)
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'','cursor':'old-page',
+               'since_at':start,'until_at':None}
+        self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
+        result=self.service.sync_one()
+        variables=self.query.call_args.args[2]
+        self.assertIsNone(variables['after'])
+        self.assertNotIn('gte',variables['filter']['updatedAt'])
+        self.assertFalse(result['has_next'])
+        update=self.cur.execute.call_args_list[-1].args[1]
+        self.assertEqual(update[-2:],('v1',TENANT))
+        self.assertIn("source_checked_at=now()",str(self.cur.execute.call_args_list))
+
+    def test_successful_incremental_check_marks_unchanged_findings_source_fresh(self):
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v1','cursor':None,
+               'since_at':source_time(STAMP),'until_at':None}
+        self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
+        self.service.sync_one()
+        self.assertTrue(any('UPDATE saas_proactive_risk_findings SET source_checked_at=now()' in call.args[0]
+                            for call in self.cur.execute.call_args_list))
 
     def test_provider_failure_keeps_committed_backoff(self):
         state={'tenant_id':TENANT,'config_version':'v1','cursor':None,'since_at':None,'until_at':None}

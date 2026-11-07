@@ -49,6 +49,7 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   profile=person('company-b','master');profile.capabilities.modules.linear=false;events['tenant-profile']({detail:profile});assert.equal($('tlNav').hidden,true);
   profile=person('company-b','owner');events['tenant-profile']({detail:profile});await $('tlRefresh').click();await flush();await flush();
   assert.equal($('tlRiskReview').hidden,false);assert($('tlRiskStatus').textContent.includes('Göndərişlər bağlıdır'));
+  assert(fs.readFileSync(path.join(__dirname,'../docs/tenant-linear-board.js'),'utf8').includes('pozuntunu və ya hadisəni sübut etmir'));
   assert($('tlRiskFindings').innerHTML.includes('&lt;Injected&gt;'));assert(!requests.some(url=>url.includes('risks/dry-run')&&profile.member.role!=='owner'));
   profile=person('company-b','master');profile.capabilities.modules.linear=false;events['tenant-profile']({detail:profile});assert.equal($('tlNav').hidden,true);assert.equal($('tlRiskReview').hidden,true);
   console.log('PASS: tenant Linear board scopes late responses, escapes cards, restricts actions, retries exact commands and exposes dry-run risks to owners only.');

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from tenant_platform import _connect, _read_tenant_workflow
 from tenant_crm_notice_schema import ensure_schema
 from tenant_crm_notice_policy import eligible, transitions, task_route
-from tenant_proactive_risk_policy import analyze_crm_task
+from tenant_proactive_risk_policy import analyze_crm_task, source_timestamp
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
@@ -156,8 +156,10 @@ def observe() -> int:
                     if kind == 'task':
                         raw = row.get('raw') or {}
                         source_version = str(raw.get('updated_at') or row.get('synced_at') or row.get('due_at') or '')
+                        findings = [] if row.get('completed') is True else analyze_crm_task(row)
                         replace_source_findings(cur, tenant, 'crm_task', key, source_version,
-                            'CRM task ' + key, analyze_crm_task(row))
+                            'CRM task ' + key, findings, source_scope=connection,
+                            source_checked_at=source_timestamp(row.get('synced_at')))
                     observations.append((tenant, kind, key, json.dumps(state)))
                     count += 1
                 if observations:

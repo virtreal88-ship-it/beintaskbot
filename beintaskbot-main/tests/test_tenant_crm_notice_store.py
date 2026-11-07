@@ -12,7 +12,7 @@ class StoreTests(unittest.TestCase):
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.module=load('tenant_crm_notice_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(),'ensure_schema':Mock(),
             'ensure_risk_schema':Mock(),'replace_source_findings':Mock(),'mark_checked':Mock(),
-            'analyze_crm_task':Mock(return_value=[])},
+            'analyze_crm_task':Mock(return_value=[]),'source_timestamp':Mock(side_effect=lambda value:value)},
             {'tenant_platform','tenant_crm_notice_schema','tenant_proactive_risk_policy','tenant_proactive_risk_schema','tenant_proactive_risk_store'})
     def test_round_robin_scans_one_company_with_fixed_page_sizes(self):
         baseline=datetime.fromtimestamp(100,timezone.utc)
@@ -41,10 +41,24 @@ class StoreTests(unittest.TestCase):
                 'connection_id':Mock(return_value='x:2026')}):
             self.assertEqual(self.module.observe(),1)
         self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v1',
-            'CRM task 9',[candidate])
+            'CRM task 9',[candidate],source_scope='x:2026',source_checked_at=baseline)
         self.module.mark_checked.assert_called_once_with(self.cur,'company-a','crm_task')
         self.assertNotIn('INSERT INTO saas_crm_notice_deliveries',str(self.cur.execute.call_args_list))
         self.conn.commit.assert_called_once()
+
+    def test_completed_crm_task_clears_old_risk_finding(self):
+        baseline=datetime.now(timezone.utc)
+        self.cur.fetchone.return_value={'tenant_id':'company-a','positions':{},'baseline':baseline,'connection_id':'x:2026'}
+        task={'tenant_id':'company-a','kommo_task_id':9,'source_key':'9','kommo_lead_id':None,
+            'text':'Service outage reported','completed':True,'responsible_id':None,'due_at':None,
+            'synced_at':baseline,'raw':{'updated_at':'source-v2'}}
+        self.cur.fetchall.side_effect=[[],[],[task],[],[],[],[],[]]
+        with patch.dict(self.module.observe.__globals__,{'profiles':Mock(return_value=[]),
+                'connection_id':Mock(return_value='x:2026')}):
+            self.module.observe()
+        self.module.analyze_crm_task.assert_not_called()
+        self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v2',
+            'CRM task 9',[],source_scope='x:2026',source_checked_at=baseline)
     def test_plan_is_unique_and_preferences_do_not_catch_up_later(self):
         self.cur.fetchone.return_value={'id':'event'}
         opted=member();off=member(identity=21);off['workflow']['policies']={}

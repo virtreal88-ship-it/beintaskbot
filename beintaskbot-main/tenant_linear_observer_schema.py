@@ -19,8 +19,10 @@ def ensure_observer_schema(conn) -> None:
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_linear_sync (
               tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
               config_version TEXT NOT NULL DEFAULT '', cursor TEXT NULL, since_at TIMESTAMPTZ NULL,
-              until_at TIMESTAMPTZ NULL, due_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              until_at TIMESTAMPTZ NULL, due_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              risk_scan_version TEXT NOT NULL DEFAULT ''
             )''')
+            cur.execute("ALTER TABLE saas_linear_sync ADD COLUMN IF NOT EXISTS risk_scan_version TEXT NOT NULL DEFAULT ''")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_linear_snapshots (
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, issue_id UUID NOT NULL,
               source_version TIMESTAMPTZ NOT NULL, state_id TEXT NOT NULL, snapshot JSONB NOT NULL,

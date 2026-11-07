@@ -9,7 +9,7 @@ _SIGNALS = {
     'access': re.compile(r'\b(permission|permissions|access|acl|unauthori[sz]ed|bypass|role|right|rights)\b|icaz[əe]|səlahiyyət|hüquq|icazəsiz|\b(прав\w*|доступ|обход|разрешен\w*)\b', re.I),
     'price': re.compile(r'\b(price|pricing|discount|payment|edit price|change price|modify price)\b|qiymət|ödəniş|endirim|\b(цен\w*|стоимост\w*|скидк\w*|оплат\w*)\b', re.I),
     'outage': re.compile(r'\b(outage|service down|system down|unavailable|incident|crash|failure|downtime)\b|işləmir|dayanıb|nasazlıq|\b(сбой|недоступ|не работает|падени)\b', re.I),
-    'action': re.compile(r'\b(can|could|allow|allows|edit|change|modify|override|bypass|disable|without|despite|issue|risk|fail|failed|failure|blocked)\b|dəyiş|edə bilər|olmadan|baxmayaraq|mümkün|problem|\b(может|измен|обойти|без права|несмотря|проблем)\b', re.I),
+    'action': re.compile(r'\b(can|could|allow|allows|edit|change|changes|changing|modify|modifies|modifying|override|bypass|disable|without|despite|issue|risk|fail|failed|failure|blocked)\b|dəyiş|edə bilər|olmadan|baxmayaraq|mümkün|problem|\b(может|измен|обойти|без права|несмотря|проблем)\b', re.I),
     'urgent_text': re.compile(r'\b(urgent|asap|critical|immediately)\b|təcili|dərhal|kritik|\b(срочно|немедленно|критич)\b', re.I),
 }
 
@@ -17,6 +17,19 @@ _SIGNALS = {
 def _priority(value):
     # Linear uses 0 for "no priority"; 1 is urgent and 2 is high.
     return value if type(value) is int and value in {1, 2, 3, 4} else None
+
+
+def source_timestamp(value) -> datetime | None:
+    """Parse a cache timestamp only when its timezone is explicit."""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+        except ValueError:
+            return None
+    return None
 
 
 def _finding(rule_id, severity, confidence, facts, assessment, recommendation, source_url=''):
@@ -69,7 +82,7 @@ def analyze_linear(issue: dict) -> list[dict]:
             'Task text mentions a price or payment change.'
         ], 'The task reports a possible price-control issue; current prices and any actual transaction were not checked. No loss is established.',
             'Check the pricing rules and audit log; assign an owner if missing.', issue.get('url', '')))
-    if outage and action:
+    if outage:
         result.append(_finding('service_failure_claim', severity, 'low', facts + [
             'Task text mentions a service failure or outage.'
         ], 'The task text reports a possible service issue; current service health was not checked.',
@@ -85,6 +98,8 @@ def analyze_linear(issue: dict) -> list[dict]:
 
 def analyze_crm_task(task: dict, *, checked_at: datetime | None = None) -> list[dict]:
     """Analyze tenant-owned cached CRM tasks; no provider calls or message content."""
+    if task.get('completed') is True:
+        return []
     text = str(task.get('text') or '')
     access, price, outage, action = (_SIGNALS[key].search(text) is not None
                                     for key in ('access', 'price', 'outage', 'action'))

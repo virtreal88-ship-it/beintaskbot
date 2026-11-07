@@ -13,8 +13,11 @@ from tenant_proactive_risk_policy import analyze_linear
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
+RISK_SCAN_VERSION = 'v1'
 
-def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool) -> None:
+
+def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
+                source_scope: str = '', source_checked_at=None) -> None:
     if (issue.get('team') or {}).get('id') != config['team_id']:
         return
     version = source_time(issue['updatedAt'])
@@ -30,7 +33,8 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool) 
     # Dry-run only. Findings are generated from the same already-authorized issue
     # page; this path has no delivery/outbox or external model calls.
     findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(issue)
-    replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings)
+    replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings,
+                            source_scope=source_scope, source_checked_at=source_checked_at)
     if kind:
         cur.execute('''INSERT INTO saas_linear_notice_events(tenant_id,id,issue_id,source_version,event)
           VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s) ON CONFLICT DO NOTHING''', (tenant, event_id(tenant, issue), issue['id'], version, kind))
@@ -77,7 +81,8 @@ def sync_one() -> dict | None:
                 _, config, key, config_version = context(cur, {'tenant_id': tenant, 'telegram_id': state_owner(state, tenant, cur)})
                 if not config['workflow'].get('sync_enabled'):
                     return None
-                if state['config_version'] != config_version:
+                risk_backfill = state.get('risk_scan_version', '') != RISK_SCAN_VERSION
+                if state['config_version'] != config_version or risk_backfill:
                     state = {**state, 'cursor': None, 'since_at': None, 'until_at': None}
                 until = state['until_at'] or datetime.now(timezone.utc)
                 since = state['since_at']
@@ -88,15 +93,20 @@ def sync_one() -> dict | None:
                     + FIELDS + ' parent { id } labels(first:50) { nodes { name } } } pageInfo { hasNextPage endCursor } } }',
                     {'filter': issue_filter, 'after': state['cursor']})['issues']
                 for row in page['nodes']:
-                    store_issue(cur, tenant, config, row, baseline=since is None)
+                    store_issue(cur, tenant, config, row, baseline=since is None,
+                                source_scope=f'{config_version}:{config["team_id"]}')
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
                 if not more:
                     mark_checked(cur, tenant, 'linear')
+                    cur.execute('''UPDATE saas_proactive_risk_findings SET source_checked_at=now()
+                      WHERE tenant_id=%s::uuid AND source_kind='linear' AND source_scope=%s''',
+                      (tenant, f'{config_version}:{config["team_id"]}'))
                 cur.execute('''UPDATE saas_linear_sync SET config_version=%s,cursor=%s,since_at=%s,until_at=%s,
-                  due_at=now()+interval '1 minute',updated_at=now() WHERE tenant_id=%s::uuid''',
-                  (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None, tenant))
+                  due_at=now()+interval '1 minute',updated_at=now(),risk_scan_version=%s WHERE tenant_id=%s::uuid''',
+                  (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None,
+                   RISK_SCAN_VERSION, tenant))
             conn.commit()
             return {'tenant_id': tenant, 'count': len(page['nodes']), 'has_next': more}
         except Exception:
