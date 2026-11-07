@@ -7,6 +7,7 @@ on:
       - 'beintaskbot-main/docs/tenant-linear-board.js'
       - 'beintaskbot-main/docs/tenant-horizontal-scroll.js'
       - 'beintaskbot-main/tests/test_horizontal_scroll_control.cjs'
+      - 'beintaskbot-main/tests/test_chakra_scroll_targets.cjs'
       - 'beintaskbot-main/ui/src/app-theme.css'
       - 'beintaskbot-main/ui/src/main.jsx'
       - 'beintaskbot-main/docs/tenant-chakra-ui.js'
@@ -30,6 +31,8 @@ jobs:
         run: npm install --prefix beintaskbot-main/.support-test-deps --no-save jsdom@26
       - name: Verify compact scroll control behavior
         run: node beintaskbot-main/tests/test_horizontal_scroll_control.cjs
+      - name: Verify shipped Chakra scroll targets
+        run: node beintaskbot-main/tests/test_chakra_scroll_targets.cjs
       - name: Verify desktop and narrow-screen geometry with synthetic data
         env:
           CHROMIUM: google-chrome
