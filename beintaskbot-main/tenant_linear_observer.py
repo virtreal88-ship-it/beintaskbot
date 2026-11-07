@@ -14,7 +14,9 @@ from tenant_proactive_risk_policy import analyze_linear, linear_scope
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
-RISK_SCAN_VERSION = 'v1'
+RISK_SCAN_VERSION = 'v2'
+RISK_REEVALUATE_INTERVAL = '15 minutes'
+RISK_REEVALUATE_LIMIT = 30
 
 
 def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
@@ -31,16 +33,19 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
     if previous and version < previous['source_version']:
         return
     kind = event_kind(config, previous, issue, baseline=baseline)
-    cur.execute('''INSERT INTO saas_linear_snapshots(tenant_id,issue_id,source_version,state_id,snapshot)
-      VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,issue_id) DO UPDATE
-      SET source_version=EXCLUDED.source_version,state_id=EXCLUDED.state_id,snapshot=EXCLUDED.snapshot''',
-      (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue)))
+    cur.execute('''INSERT INTO saas_linear_snapshots(tenant_id,issue_id,source_version,state_id,snapshot,source_scope,observed_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s,%s) ON CONFLICT(tenant_id,issue_id) DO UPDATE
+      SET source_version=EXCLUDED.source_version,state_id=EXCLUDED.state_id,snapshot=EXCLUDED.snapshot,
+          source_scope=EXCLUDED.source_scope,observed_at=EXCLUDED.observed_at''',
+      (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue), source_scope, source_checked_at))
     # Dry-run only. Findings are generated from the same already-authorized issue
     # page; this path has no delivery/outbox or external model calls.
     findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(
         issue, tenant_timezone=tenant_timezone, checked_at=source_checked_at)
     replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings,
                             source_scope=source_scope, source_checked_at=source_checked_at)
+    cur.execute('UPDATE saas_linear_snapshots SET risk_checked_at=%s WHERE tenant_id=%s::uuid AND issue_id=%s::uuid',
+                (source_checked_at, tenant, issue['id']))
     if kind:
         cur.execute('''INSERT INTO saas_linear_notice_events(tenant_id,id,issue_id,source_version,event)
           VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s) ON CONFLICT DO NOTHING''', (tenant, event_id(tenant, issue), issue['id'], version, kind))
@@ -104,6 +109,9 @@ def sync_one() -> dict | None:
                     store_issue(cur, tenant, config, row, baseline=since is None,
                                 source_scope=linear_scope(config_version, config['team_id']),
                                 source_checked_at=source_checked_at,tenant_timezone=tenant_timezone)
+                reevaluated = reevaluate_saved_snapshots(cur, tenant, config,
+                    source_scope=linear_scope(config_version, config['team_id']),
+                    tenant_timezone=tenant_timezone, checked_at=source_checked_at)
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
@@ -114,7 +122,7 @@ def sync_one() -> dict | None:
                   (config_version, page['pageInfo']['endCursor'] if more else None, since if more else until, until if more else None,
                    RISK_SCAN_VERSION, tenant))
             conn.commit()
-            return {'tenant_id': tenant, 'count': len(page['nodes']), 'has_next': more}
+            return {'tenant_id': tenant, 'count': len(page['nodes']), 'reevaluated': reevaluated, 'has_next': more}
         except Exception:
             conn.rollback()
             raise
@@ -130,3 +138,29 @@ def state_owner(state: dict, tenant: str, cur) -> tuple[int, str | None]:
     except (ZoneInfoNotFoundError, ValueError, TypeError):
         zone = None
     return int(row['owner_telegram_id']), zone
+
+
+def reevaluate_saved_snapshots(cur, tenant: str, config: dict, *, source_scope: str,
+                               tenant_timezone: str | None, checked_at: datetime,
+                               limit: int = RISK_REEVALUATE_LIMIT) -> int:
+    """Re-evaluate cached issues on a timer without claiming a fresh source read."""
+    safe_limit = max(1, min(int(limit), RISK_REEVALUATE_LIMIT))
+    cur.execute('''SELECT issue_id,source_version,state_id,snapshot,observed_at
+      FROM saas_linear_snapshots
+      WHERE tenant_id=%s::uuid AND source_scope=%s AND snapshot->'team'->>'id'=%s
+        AND state_id<>ALL(%s)
+        AND (risk_checked_at IS NULL OR risk_checked_at<=%s::timestamptz-%s::interval)
+      ORDER BY risk_checked_at NULLS FIRST,source_version,issue_id
+      LIMIT %s FOR UPDATE SKIP LOCKED''',
+      (tenant, source_scope, config['team_id'], config.get('done_state_ids', []), checked_at,
+       RISK_REEVALUATE_INTERVAL, safe_limit))
+    rows = cur.fetchall()
+    for row in rows:
+        issue = row['snapshot']
+        findings = [] if row['state_id'] in config.get('done_state_ids', []) else analyze_linear(
+            issue, tenant_timezone=tenant_timezone, checked_at=checked_at)
+        replace_source_findings(cur, tenant, 'linear', row['issue_id'], row['source_version'].isoformat(),
+            issue.get('title', ''), findings, source_scope=source_scope, source_checked_at=row.get('observed_at'))
+        cur.execute('UPDATE saas_linear_snapshots SET risk_checked_at=%s WHERE tenant_id=%s::uuid AND issue_id=%s::uuid',
+                    (checked_at, tenant, row['issue_id']))
+    return len(rows)
