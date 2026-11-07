@@ -20,7 +20,7 @@ function installCaseTabsFixture(){
   if(p.endsWith('/consult-one/dispatch')){f.dispatched.push(body);f.consultations[0].state='pending';f.consultations[0].can_dispatch=false;return response({state:'pending'});}
   if(p.endsWith('/chat/attachment')){f.mediaCalls.push(Object.fromEntries(url.searchParams));return new Response(Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII='),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png'}});}
   const result=await base(input,options);
-  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.messages=[f.material];data.result.scope={message_count:1,media_count:0,has_earlier_source:true};}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
+  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.messages=f.caseMessages||[f.material];data.result.scope={message_count:data.result.messages.length,media_count:data.result.messages.filter(row=>row.message_type!=='text').length,has_earlier_source:true};}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
   return result;
  };
 }
@@ -35,7 +35,53 @@ function installCaseTabsFixture(){
   await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installCaseTabsFixture);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view=support&lang=ru'+query);await page.locator('[data-support-id]').first().waitFor();return {context,page,errors};
  }
+ async function assertTabOrder(page,selectors,label){
+  await page.locator(selectors[0]).focus();
+  for(const [key,direction] of [['Tab',1],['Shift+Tab',-1]]){
+   for(let step=1;step<=selectors.length;step++){
+    await page.keyboard.press(key);const selector=selectors[(direction*step+selectors.length)%selectors.length];
+    const actual=await page.evaluate(()=>document.activeElement.outerHTML.slice(0,240));
+    assert.equal(await page.locator(selector).evaluate(node=>node===document.activeElement),true,label+' '+key+' reaches '+selector+', got '+actual);
+    assert.equal(await page.locator(selector).isVisible(),true,label+' never focuses a hidden control');
+    assert.equal(await page.evaluate(()=>!document.querySelector('#supportDetail').hidden&&document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,label+' keeps focus in the active modal');
+   }
+  }
+ }
  try{
+  for(const width of [390,1280]){
+   const focused=await mount(width);try{const {page}=focused;
+    await page.evaluate(()=>{const f=notificationCaseFixture;f.caseMessages=[f.material,...['image','document'].map((kind,index)=>({...f.material,id:'20000000-0000-4000-8000-00000000060'+(index+2),external_id:'connect:case-'+kind,message_type:kind,media_filename:'case.'+(index?'pdf':'png')}))]});
+    await page.locator('[data-support-id]').first().click();await page.locator('#supportDialogueHistory [data-message-id=outside-case]').waitFor();await page.locator('#supportTab-details').click();
+    const summary=page.locator('#supportCaseMaterials>summary'),close=page.locator('#supportClose');
+    assert.equal(await page.locator('#supportHistory [data-ticket-media-open]').count(),2);
+    assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
+    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportSuggestions','#supportNextSteps','#supportEditStatus','#supportEditAssignee','#supportTake','#supportTakeover','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
+    const photo='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000602"]',documentMessage='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000603"]';
+    const opened=[...closed,'#caseMediaLoad',photo+' [data-ticket-media-open]',documentMessage+' [data-ticket-media-open]'];
+    await assertTabOrder(page,closed,'closed Materials '+width);
+    assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls.length),0,'keyboard traversal never downloads attachments');
+    await summary.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),true);
+    await assertTabOrder(page,opened,'open Materials '+width);
+    await page.locator(photo+' [data-ticket-media-open]').click();await page.locator(photo+' .support-media-preview button').waitFor();
+    await page.locator(documentMessage+' [data-ticket-media-open]').click();await page.locator(documentMessage+' .support-media-preview a[download]').waitFor();
+    const previews=[...closed,'#caseMediaLoad',photo+' [data-ticket-media-open]',photo+' .support-media-preview button',documentMessage+' [data-ticket-media-open]',documentMessage+' .support-media-preview a:not([download])',documentMessage+' .support-media-preview a[download]'];
+    await assertTabOrder(page,previews,'open Materials with nested preview controls '+width);
+    await summary.focus();await page.keyboard.press('Space');assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
+    await assertTabOrder(page,closed,'collapsed loaded Materials '+width);
+    await summary.focus();await page.keyboard.press('Enter');await page.locator(photo+' [data-ticket-media-open]').click();
+    await assertTabOrder(page,previews.filter(selector=>selector!==photo+' .support-media-preview button'),'hidden image preview '+width);
+    await page.locator('#supportTab-details').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'developer');await page.locator('#consultCreate').waitFor();
+    await close.focus();await page.keyboard.press('Shift+Tab');assert.equal(await page.locator('#supportConsultations>details>summary').evaluate(node=>node===document.activeElement),true,'hidden Details controls never become the Developer tab boundary: '+await page.evaluate(()=>document.activeElement.outerHTML));
+    await page.keyboard.press('Tab');assert.equal(await close.evaluate(node=>node===document.activeElement),true);
+    await page.keyboard.press('Tab');assert.equal(await page.locator('#supportTab-developer').evaluate(node=>node===document.activeElement),true,'only the active tab is in sequential focus order');
+    assert.deepEqual(await page.locator('#supportDetail [role=tab]').evaluateAll(tabs=>tabs.map(tab=>[tab.getAttribute('aria-selected'),tab.tabIndex])),[['false',-1],['false',-1],['true',0]]);
+    await page.keyboard.press('Home');assert.equal(await active(page),'history');await page.keyboard.press('ArrowRight');assert.equal(await active(page),'details');
+    assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),true,'tab changes preserve Materials expansion');
+    await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});await page.waitForURL(url=>!url.searchParams.has('support_ticket_id'));
+    assert.equal(await page.locator('#supportDetail').evaluate(node=>node.contains(document.activeElement)),false,'Escape never leaves focus in the closed modal');
+    assert.deepEqual(focused.errors,[]);console.log('PASS case focus Chrome '+width+': complete Tab/Shift+Tab cycles, closed/open Materials, nested and hidden previews, hidden tabs, ARIA, summary Enter/Space, Escape');
+   }finally{await focused.context.close();}
+  }
   for(const width of [320,390,1280]){
    const {context,page,errors}=await mount(width);
    try{

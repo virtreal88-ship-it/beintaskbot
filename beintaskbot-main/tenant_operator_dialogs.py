@@ -840,6 +840,7 @@ def mark_all_read(profile, payload=None):
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):
     lead_id=int(lead_id)
+    requested_route={'provider':provider,'lead_id':lead_id,'channel_id':str(channel),'conversation_id':str(conversation)}
     with _connect() as conn:
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
@@ -860,6 +861,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
             dialog=decorate(row)
+            # This server-produced binding is emitted only after the requested
+            # route passes assert_route and the canonical route is visible.
+            # Historical cases keep their original route and material scope.
+            history_scope={'tenant_id':str(tenant),'requested_route':requested_route,
+                           'canonical_route':{key:dialog[key] for key in requested_route}}
             if provider=='connect':_attach_verified_phone(cur,tenant,dialog)
             from tenant_ai_group_coordination import group_jid, view as group_view
             if provider=='connect' and group_jid(conversation):
@@ -988,7 +994,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     eligible.extend(captured_group)
     read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible else None
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
-    return {'dialog':dialog,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}

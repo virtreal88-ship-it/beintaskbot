@@ -57,6 +57,7 @@ on:
       - 'beintaskbot-main/tests/test_support_consultation_flow_ui.cjs'
       - 'beintaskbot-main/tests/test_support_ticket_modal_browser.cjs'
       - 'beintaskbot-main/tests/test_case_card_tabs_browser.cjs'
+      - 'beintaskbot-main/tests/test_case_history*'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
       - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_dialog_audio*.py'
@@ -210,6 +211,8 @@ jobs:
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_case_history_scope.py \
+            tests/test_case_history_scope_postgres.py \
             tests/test_tenant_chat_attachments.py \
             tests/test_message_delivery_projection.py \
             tests/test_connect_media_backpressure.py \
@@ -300,6 +303,7 @@ jobs:
           node tests/test_developer_media_reply_ui.cjs
           node tests/test_support_ticket_modal_browser.cjs
           node tests/test_case_card_tabs_browser.cjs
+          node tests/test_case_history_alias_browser.cjs
           node tests/test_tenant_support_inbox_ui.cjs
           node tests/test_operator_case_submission_ui.cjs
           node tests/test_operator_case_recovery_ui.cjs

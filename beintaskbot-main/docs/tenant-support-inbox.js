@@ -59,10 +59,13 @@
       const query=new URLSearchParams({provider:route.provider,lead_id:String(route.lead_id),channel_id:route.channel_id,conversation_id:route.conversation_id,...(earlier?{before:state.historyBefore}:{})});
       const page=await apiAt(endpoint.replace(/support-tickets$/,'dialogs/history'),'?'+query);
       if(!current())return;
-      if(!page.dialog||['provider','channel_id','conversation_id','lead_id'].some(key=>String(page.dialog[key]||'')!==String(route[key]||'')))throw Error(t('error'));
-      const items=earlier?[...(page.messages||[]),...(state.historyMessages||[])]:page.messages||[];state.historyMessages=[...new Map(items.map(item=>[String(item.id||item.external_id),item])).values()];state.historyBefore=page.next_before;state.historyLoaded=true;
+      const sameRoute=(left,right)=>!!left&&!!right&&['provider','channel_id','conversation_id','lead_id'].every(key=>String(left[key]??'')===String(right[key]??''));
+      const scope=page.history_scope,provedRoute=scope&&String(scope.tenant_id)===String(member.tenant_id)&&sameRoute(scope.requested_route,route)&&sameRoute(scope.canonical_route,page.dialog)&&page.dialog.provider===route.provider&&String(page.dialog.channel_id)===String(route.channel_id);
+      // Only the authorized history endpoint can bind an old case alias to its canonical route.
+      if((!sameRoute(page.dialog,route)&&!provedRoute)||(scope&&!provedRoute)||(earlier&&state.historyRoute&&!sameRoute(page.dialog,state.historyRoute)))throw Error(t('error'));
+      const items=earlier?[...(page.messages||[]),...(state.historyMessages||[])]:page.messages||[];state.historyMessages=[...new Map(items.map(item=>[String(item.id||item.external_id),item])).values()];state.historyBefore=page.next_before;state.historyLoaded=true;state.historyRoute=page.dialog;
       // Display data never enters detailData.messages: case sharing stays pinned to the case material scope.
-      target.innerHTML=operator.messageMarkup(state.historyMessages,route,{readOnly:true})||esc(t('emptyHistory'));
+      target.innerHTML=operator.messageMarkup(state.historyMessages,page.dialog,{readOnly:true})||esc(t('emptyHistory'));
       operator.bindHistoryMessages?.(target,state.historyMessages,current);
       document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));status.textContent='';$('supportDialogueEarlier').hidden=!state.historyBefore;
     }catch(error){if(current())status.textContent=error.message||t('error');}
@@ -281,7 +284,23 @@
   function saveDraft(id){const content=$('supportDetailContent');if(!id||!content)return;const values={};content.querySelectorAll('input,textarea,select').forEach((node,index)=>{const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index);const serverField=({supportDescription:'description',supportSuggestions:'suggestions',supportNextSteps:'next_steps',supportEditStatus:'status',supportEditAssignee:'assigned_to'})[key];if(serverField&&detailData?.ticket?.id===id&&String(node.value)===String(detailData.ticket[serverField]??''))return;values[key]={value:node.value,checked:!!node.checked};});if(Object.keys(values).length)drafts.set(id,values);}
   function restoreDraft(id){const values=drafts.get(id),content=$('supportDetailContent');if(!values||!content)return;content.querySelectorAll('input,textarea,select').forEach((node,index)=>{const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index),value=values[key];if(value){node.value=value.value;if('checked'in node)node.checked=value.checked;}});}
   function closeTicketModal(fromHistory=false){if(!modalOpen)return;const closedId=selected;saveDraft(closedId);detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;detailRevision++;selected=null;modalOpen=false;$('supportDialogueHistory')?.replaceChildren();document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));const modal=$('supportDetail');if(modal)modal.hidden=true;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');if(!fromHistory){if(history.state?.supportTicketModal)history.back();else{routeChange=true;const url=ticketUrl();history.replaceState({...history.state,supportTicketModal:false,supportTicketId:null},'',url.pathname+url.search+url.hash);}}const fallback=[...document.querySelectorAll('[data-support-id]')].find(node=>node.dataset.supportId===closedId);if(returnFocus?.isConnected&&returnFocus!==document.body)returnFocus.focus();else fallback?.focus();returnFocus=null;}
-  function trapTicketFocus(event){if(!modalOpen)return;if(event.key==='Escape'){event.preventDefault();closeTicketModal();return;}if(event.key!=='Tab')return;const nodes=[...$('supportDetailContent').querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])')].filter(node=>!node.closest('[hidden]')&&node.tabIndex!==-1);if(!nodes.length){event.preventDefault();$('supportDetailContent').focus();return;}const first=nodes[0],last=nodes[nodes.length-1],container=$('supportDetailContent');if(event.shiftKey&&(document.activeElement===first||document.activeElement===container)){event.preventDefault();last.focus();}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===container)){event.preventDefault();first.focus();}}
+  function trapTicketFocus(event){
+    if(!modalOpen)return;
+    if(event.key==='Escape'){event.preventDefault();closeTicketModal();return;}
+    if(event.key!=='Tab')return;
+    const container=$('supportDetailContent'),nodes=[...container.querySelectorAll('button,a[href],input,select,textarea,summary,[tabindex]')].filter(node=>{
+      if(node.tabIndex<0||node.matches(':disabled')||node.closest('[hidden],[inert]'))return false;
+      // A closed details keeps only its first summary (and that summary's controls) in the tab order.
+      for(let parent=node.parentElement;parent&&parent!==container;parent=parent.parentElement){
+        if(parent.tagName==='DETAILS'&&!parent.open&&![...parent.children].find(child=>child.tagName==='SUMMARY')?.contains(node))return false;
+      }
+      return node.checkVisibility?.({visibilityProperty:true})!==false;
+    });
+    if(!nodes.length){event.preventDefault();container.focus();return;}
+    const first=nodes[0],last=nodes[nodes.length-1];
+    if(event.shiftKey&&(document.activeElement===first||document.activeElement===container)){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===container)){event.preventDefault();first.focus();}
+  }
   async function open(id,focus='',fromHistory=false,pushRoute=false,options={}){
     if(selected)saveDraft(selected);if(selected!==id)clearTicketMedia();const revision=++detailRevision,version=epoch;selected=id;showTicketModal();
     if(pushRoute){writeTicketRoute(id,focus);directTicketKey=epoch+':'+id+':'+focus;}
