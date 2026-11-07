@@ -78,10 +78,12 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_start'&&x.item_id==='assistant-1'));
  assert.deepEqual(await page.evaluate(()=>window.voiceEvents.findLast(x=>x.type==='talk_start')),
    {type:'talk_start',item_id:'assistant-1',audio_end_ms:120},'the interruption carries the exact assistant item and conservative playback offset');
- await page.evaluate(()=>window.emitPcm(new Uint8Array(480)));
- assert.equal(await page.evaluate(()=>{const start=window.voiceEvents.findLastIndex(x=>x.type==='talk_start'&&x.item_id==='assistant-1');return window.voiceEvents.findIndex((x,i)=>i>start&&x.type==='audio'&&x.bytes===480)===-1;}),true,'microphone frames wait for server acknowledgement before uplink');
+ await page.evaluate(()=>{for(let i=0;i<120;i++)window.emitPcm(new Uint8Array(2048));});
+ assert.equal(await page.evaluate(()=>{const start=window.voiceEvents.findLastIndex(x=>x.type==='talk_start'&&x.item_id==='assistant-1');return window.voiceEvents.findIndex((x,i)=>i>start&&x.type==='audio'&&x.bytes===2048)===-1;}),true,'microphone frames wait for server acknowledgement before uplink');
+ assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='end')),false,'a five-second server acknowledgement delay does not terminate the active voice session');
  await page.evaluate(()=>{window.deferTalkReady=false;window.releaseTalkReady?.();});
  await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] button[aria-pressed="true"]')!==null);
+ assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio'&&x.bytes===2048).length),120,'all bounded speech captured while waiting for talk_ready is forwarded');
  assert.equal(await page.evaluate(()=>window.voiceEvents.findLastIndex(x=>x.type==='audio')>window.voiceEvents.findLastIndex(x=>x.type==='talk_start'&&x.item_id==='assistant-1')),true,'queued follow-up audio is sent after talk_ready');
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  assert.equal(await page.evaluate(()=>window.interruptCalls>=2),true,'late assistant audio is discarded while the user is speaking');
