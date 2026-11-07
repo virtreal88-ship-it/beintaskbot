@@ -2121,11 +2121,6 @@ function SettingsHub() {
       email: "",
     }),
     [sessions, setSessions] = useState([]),
-    [notificationData, setNotificationData] = useState({
-      events: [],
-      preferences: {},
-      channels_available: [],
-    }),
     [actionError, setActionError] = useState(""),
     [workspace, setWorkspace] = useState("");
   const load = async () => {
@@ -2137,12 +2132,8 @@ function SettingsHub() {
       setWorkspace(me.member.tenant_id);
       setAccount({ ...account, ...(me.account || {}) });
       try {
-        const [s, n] = await Promise.all([
-          api("/api/platform/sessions"),
-          api("/api/platform/notification-preferences"),
-        ]);
+        const s = await api("/api/platform/sessions");
         setSessions(s.sessions || []);
-        setNotificationData(n);
       } catch (_e) {}
     } catch (e) {
       setError(e.message);
@@ -2173,18 +2164,6 @@ function SettingsHub() {
         body: JSON.stringify(account),
       });
       setAccount({ ...account, ...result.account });
-    } catch (e) {
-      setActionError(e.message);
-    }
-  };
-  const saveNotifications = async () => {
-    setActionError("");
-    try {
-      const result = await api("/api/platform/notification-preferences", {
-        method: "POST",
-        body: JSON.stringify({ preferences: notificationData.preferences }),
-      });
-      setNotificationData(result);
     } catch (e) {
       setActionError(e.message);
     }
@@ -2327,79 +2306,6 @@ function SettingsHub() {
       )}
       <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
         <Card.Header>
-          <Card.Title>Bildirişlər</Card.Title>
-          <Card.Description>
-            Yalnız hazırda dəstəklənən hadisələr göstərilir
-          </Card.Description>
-        </Card.Header>
-        <Card.Body>
-          <Stack gap="3">
-            {notificationData.events.map((event) => (
-              <Flex
-                key={event.key}
-                justify="space-between"
-                align="center"
-                gap="3"
-                wrap="wrap"
-              >
-                <Text fontSize="sm">{event.label}</Text>
-                <Flex gap="4">
-                  {notificationData.channels_available
-                    .filter((channel) =>
-                      (event.channels || notificationData.channels_available).includes(
-                        channel,
-                      ),
-                    )
-                    .map((channel) => (
-                    <PermissionCheckbox
-                      key={`${event.key}:${channel}`}
-                      value={channel}
-                      label={
-                        channel === "push"
-                          ? "Web Push"
-                          : channel === "internal"
-                            ? "Tətbiq daxilində"
-                            : "Telegram"
-                      }
-                      checked={
-                        notificationData.preferences?.[event.key]?.[channel] ===
-                        true
-                      }
-                      onChange={(key, checked) =>
-                        setNotificationData({
-                          ...notificationData,
-                          preferences: {
-                            ...notificationData.preferences,
-                            [event.key]: {
-                              ...(notificationData.preferences?.[event.key] ||
-                                {}),
-                              [key]: checked,
-                            },
-                          },
-                        })
-                      }
-                    />
-                  ))}
-                </Flex>
-              </Flex>
-            ))}
-            {!notificationData.events.length && (
-              <Text fontSize="sm" color="app.muted">
-                Bu rola uyğun bildiriş yoxdur.
-              </Text>
-            )}
-            <Button
-              alignSelf="start"
-              colorPalette="brand"
-              onClick={saveNotifications}
-            >
-              Bildirişləri saxla
-            </Button>
-          </Stack>
-        </Card.Body>
-      </Card.Root>
-      <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
-        <Card.Header>
           <Card.Title>Aktiv sessiyalar</Card.Title>
           <Card.Description>
             İstifadə edilməyən girişləri bağlayın
@@ -2447,6 +2353,132 @@ function SettingsHub() {
   );
 }
 
+function NotificationPreferencesHub() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await api("/api/platform/notification-preferences"));
+    } catch (e) {
+      setError(e.message || "Bildiriş ayarları yüklənmədi.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+  const save = async () => {
+    if (!data || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      setData(await api("/api/platform/notification-preferences", {
+        method: "POST",
+        body: JSON.stringify({ preferences: data.preferences || {} }),
+      }));
+    } catch (e) {
+      setError(e.message || "Bildiriş ayarları saxlanmadı.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
+      <Card.Header>
+        <Card.Title>Bildirişlər</Card.Title>
+        <Card.Description>
+          Yalnız hazırda dəstəklənən hadisələr göstərilir
+        </Card.Description>
+      </Card.Header>
+      <Card.Body>
+        {loading ? (
+          <Flex py="6" justify="center">
+            <Spinner color="brand.500" />
+          </Flex>
+        ) : (
+          <Stack gap="3">
+            {(data?.events || []).map((event) => (
+              <Flex
+                key={event.key}
+                justify="space-between"
+                align="center"
+                gap="3"
+                wrap="wrap"
+              >
+                <Text fontSize="sm">{event.label}</Text>
+                <Flex gap="4">
+                  {(data?.channels_available || [])
+                    .filter((channel) =>
+                      (event.channels || data?.channels_available || []).includes(channel),
+                    )
+                    .map((channel) => (
+                      <PermissionCheckbox
+                        key={`${event.key}:${channel}`}
+                        value={channel}
+                        label={
+                          channel === "push"
+                            ? "Web Push"
+                            : channel === "internal"
+                              ? "Tətbiq daxilində"
+                              : "Telegram"
+                        }
+                        checked={data?.preferences?.[event.key]?.[channel] === true}
+                        disabled={saving}
+                        onChange={(key, checked) =>
+                          setData((previous) => ({
+                            ...previous,
+                            preferences: {
+                              ...(previous?.preferences || {}),
+                              [event.key]: {
+                                ...(previous?.preferences?.[event.key] || {}),
+                                [key]: checked,
+                              },
+                            },
+                          }))
+                        }
+                      />
+                    ))}
+                </Flex>
+              </Flex>
+            ))}
+            {!data?.events?.length && (
+              <Text fontSize="sm" color="app.muted">
+                Bu rola uyğun bildiriş yoxdur.
+              </Text>
+            )}
+            {error && (
+              <Text role="alert" color="red.500" fontSize="sm">
+                {error}
+              </Text>
+            )}
+            <Flex gap="2" align="center" wrap="wrap">
+              <Button
+                alignSelf="start"
+                colorPalette="brand"
+                onClick={save}
+                loading={saving}
+                disabled={!data || saving}
+              >
+                Bildirişləri saxla
+              </Button>
+              {error && (
+                <Button variant="outline" onClick={() => void load()} disabled={loading || saving}>
+                  Yenidən yoxla
+                </Button>
+              )}
+            </Flex>
+          </Stack>
+        )}
+      </Card.Body>
+    </Card.Root>
+  );
+}
+
 window.tenantChakraCRM = {
   renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksTable rows={rows} settings={settings} />),
   renderDeals: (target, rows, customer, onOpen) =>
@@ -2457,11 +2489,12 @@ window.tenantChakraCRM = {
 };
 mount("aiDashboard", <AIDashboard />);
 for (const [view, host, component] of [
+  ["settings", "chakra-notification-settings-root", <NotificationPreferencesHub />],
   ["settings", "chakra-settings-root", <SettingsHub />],
   ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
 ]) {
   window.tenantViewDemand.watch({
-    view, host, editable: view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    view, host, editable: view === "notifications" ? "#chakra-notification-settings-root" : view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
     excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
     reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
