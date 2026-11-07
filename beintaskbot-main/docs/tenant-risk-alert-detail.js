@@ -18,7 +18,11 @@
     addText(dialog,'h3','Возможный смысл');addText(dialog,'p',alert.assessment||'');
     addText(dialog,'h3','Предлагаемый шаг');addText(dialog,'p',alert.recommended_step||'');
     addText(dialog,'small',`Проверено: ${alert.checked_at||'только что'}`);
-    if(typeof alert.source_url==='string'&&alert.source_url.startsWith('https://linear.app/')){const a=addText(dialog,'a','Открыть задачу Linear');a.href=alert.source_url;a.target='_blank';a.rel='noopener noreferrer';a.style.display='block';}
+    if(alert.source_kind==='crm_task'&&alert.source_url==='/app?view=tasks'){
+      const a=addText(dialog,'a','Открыть задачи CRM');a.href='/app?view=tasks';a.style.display='block';
+    }else if(alert.source_kind==='linear'&&typeof alert.source_url==='string'&&alert.source_url.startsWith('https://linear.app/')){
+      const a=addText(dialog,'a','Открыть задачу Linear');a.href=alert.source_url;a.target='_blank';a.rel='noopener noreferrer';a.style.display='block';
+    }
     shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true);});shade.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close(true);}});document.body.append(shade);overlay=shade;closeButton.focus();
   }
   function showMessage(message){showAlert({source_title:'Уведомление о риске',source:'',severity:'',confidence:'',facts:[message],assessment:'',recommended_step:'',checked_at:''});}

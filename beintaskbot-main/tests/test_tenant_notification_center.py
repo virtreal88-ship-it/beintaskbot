@@ -74,6 +74,25 @@ def test_current_module_access_and_invalid_targets_filter_list_and_count(ledger)
     assert [n['event_key'] for n in result['notifications']] == ['personal:saved']
 
 
+@pytest.mark.parametrize('tenant_modules', [
+    {'tasks': True, 'linear': False},
+    {'tasks': False, 'linear': True},
+])
+def test_active_owner_can_see_risk_alert_for_either_source_configuration(ledger, tenant_modules):
+    """Owners retain the notification target even when only one source module is configured."""
+    ledger.execute('UPDATE saas_tenants SET modules=%s::jsonb WHERE id=%s::uuid',
+                   (json.dumps(tenant_modules), A))
+    alert_id=str(uuid.uuid4())
+    target='/app?view=linear&risk_alert_id='+alert_id
+    notification_id=notice(ledger,event='proactive_risk:'+alert_id,target=target)
+    result=center.listing(PROFILE)
+    assert result['unread_count']==1
+    assert len(result['notifications'])==1
+    assert result['notifications'][0]['id']==notification_id
+    assert result['notifications'][0]['target_url']==target
+    assert center.mark_read(PROFILE,notification_id)['unread_count']==0
+
+
 def test_dialog_targets_match_the_exact_decoded_conversation_for_list_count_and_read(ledger):
     conversation = '120363411822115409@g.us'
     ledger.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id)
