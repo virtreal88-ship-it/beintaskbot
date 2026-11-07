@@ -81,14 +81,17 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
               updated_at TIMESTAMPTZ, account_domain TEXT, connected_at TIMESTAMPTZ)''')
             database.execute('CREATE TABLE saas_linear_news (tenant_id TEXT,id TEXT,published_at TIMESTAMPTZ,created_at TIMESTAMPTZ)')
             database.execute('CREATE TABLE saas_linear_notice_events (tenant_id TEXT,id TEXT,created_at TIMESTAMPTZ)')
-            database.execute('CREATE TABLE saas_linear_snapshots (tenant_id TEXT,issue_id TEXT,source_version TIMESTAMPTZ,snapshot JSONB)')
+            database.execute('''CREATE TABLE saas_linear_snapshots (
+              tenant_id TEXT,issue_id TEXT,source_version TIMESTAMPTZ,snapshot JSONB,state_id TEXT,
+              source_scope TEXT,risk_snapshot JSONB)''')
             database.execute('''CREATE TABLE saas_proactive_risk_findings (
               tenant_id TEXT,source_kind TEXT,source_id TEXT,rule_id TEXT,source_scope TEXT,checked_at TIMESTAMPTZ)''')
 
             tenant = 'tenant-1'
             updated_at = datetime(2026, 11, 1, 12, 0, 0, 123456, tzinfo=timezone.utc)
             connected_at = datetime(2026, 10, 5, 8, 30, 0, 654321, tzinfo=timezone.utc)
-            metadata = {'settings': {'team_id': 'team-current', 'workflow': {'enabled': True, 'sync_enabled': True}}}
+            metadata = {'settings': {'team_id': 'team-current', 'done_state_ids': ['done'],
+                'workflow': {'enabled': True, 'sync_enabled': True}}}
             database.execute('''INSERT INTO saas_tenant_integrations
               VALUES($1,'linear','connected',$2::jsonb,$3,NULL,NULL)''', (tenant,json.dumps(metadata),updated_at))
             database.execute('''INSERT INTO saas_tenant_integrations
@@ -111,6 +114,21 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
                 database.execute('INSERT INTO saas_proactive_risk_findings VALUES($1,$2,$3,$4,$5,$6)',
                                  (tenant,kind,source_id,'risk',scope,old))
 
+            stale_open = datetime.now(timezone.utc) - timedelta(days=100)
+            old_risk_snapshot = {'team': {'id': 'team-current'}, 'title': 'Stale task', 'dueDate': '2026-11-10'}
+            database.execute('''INSERT INTO saas_linear_snapshots
+              VALUES($1,'open-current',$2,$4::jsonb,'open',$3,$5::jsonb)''',
+              (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
+            database.execute('''INSERT INTO saas_linear_snapshots
+              VALUES($1,'open-old-config',$2,$4::jsonb,'open',$3,$5::jsonb)''',
+              (tenant,stale_open,old_linear_config,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
+            database.execute('''INSERT INTO saas_linear_snapshots
+              VALUES($1,'open-legacy-risk-snapshot',$2,$4::jsonb,'open',$3,'{}'::jsonb)''',
+              (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot)))
+            database.execute('''INSERT INTO saas_linear_snapshots
+              VALUES($1,'done-current',$2,$4::jsonb,'done',$3,$5::jsonb)''',
+              (tenant,stale_open,current_linear,json.dumps(old_risk_snapshot),json.dumps(old_risk_snapshot)))
+
             with database.cursor() as cursor:
                 crm_notice_store.cleanup_expired_risk_findings(cursor)
             retained_crm = {row['source_id'] for row in database.query(
@@ -125,6 +143,16 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
             retained = {row['source_id'] for row in database.query(
                 'SELECT source_id FROM saas_proactive_risk_findings')}
             self.assertEqual(retained, {'linear-current', 'crm-current'})
+            retained_risk_snapshots = {row['issue_id']: row['risk_snapshot'] for row in database.query(
+                'SELECT issue_id,risk_snapshot FROM saas_linear_snapshots')}
+            self.assertEqual(retained_risk_snapshots['open-current'], old_risk_snapshot)
+            self.assertEqual(retained_risk_snapshots['open-old-config'], old_risk_snapshot)
+            self.assertEqual(retained_risk_snapshots['open-legacy-risk-snapshot'], old_risk_snapshot)
+            self.assertEqual(retained_risk_snapshots['done-current'], {})
+            eligible = {row['issue_id'] for row in database.query('''SELECT issue_id FROM saas_linear_snapshots
+              WHERE source_scope=$1 AND risk_snapshot<>'{}'::jsonb
+                AND risk_snapshot->'team'->>'id'='team-current' AND state_id<>'done' ''', (current_linear,))}
+            self.assertEqual(eligible, {'open-current', 'open-legacy-risk-snapshot'})
         finally:
             database.close()
 

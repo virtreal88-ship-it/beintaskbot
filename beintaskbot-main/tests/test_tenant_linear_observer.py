@@ -117,7 +117,7 @@ class Storage(unittest.TestCase):
 
     def test_fixed_page_and_durable_window(self):
         end=datetime(2026,10,8,12,tzinfo=timezone.utc);start=datetime(2026,10,8,11,tzinfo=timezone.utc)
-        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v2','cursor':'next','since_at':start,'until_at':end}
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v3','cursor':'next','since_at':start,'until_at':end}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.query.return_value['issues']['pageInfo']={'hasNextPage':True,'endCursor':'next-2'}
         result=self.service.sync_one();self.assertTrue(result['has_next'])
@@ -125,7 +125,7 @@ class Storage(unittest.TestCase):
         self.assertEqual(key,'private-key');self.assertIn('first:30',query);self.assertIn('parent { id }',query)
         self.assertEqual(variables['filter']['team']['id']['eq'],TENANT);self.assertEqual(variables['after'],'next')
         update=self.cur.execute.call_args_list[-1].args[1]
-        self.assertEqual(update,('v1','next-2',start,end,'v2',TENANT));self.assertEqual(self.conn.commit.call_count,2)
+        self.assertEqual(update,('v1','next-2',start,end,'v3',TENANT));self.assertEqual(self.conn.commit.call_count,2)
 
     def test_config_change_resets_scan_without_history_alarms(self):
         state={'tenant_id':TENANT,'config_version':'old','cursor':'old-cursor','since_at':source_time(STAMP),'until_at':None}
@@ -144,10 +144,10 @@ class Storage(unittest.TestCase):
         self.assertNotIn('gte',variables['filter']['updatedAt'])
         self.assertFalse(result['has_next'])
         update=self.cur.execute.call_args_list[-1].args[1]
-        self.assertEqual(update[-2:],('v2',TENANT))
+        self.assertEqual(update[-2:],('v3',TENANT))
 
     def test_successful_incremental_check_does_not_claim_unobserved_findings_fresh(self):
-        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v2','cursor':None,
+        state={'tenant_id':TENANT,'config_version':'v1','risk_scan_version':'v3','cursor':None,
                'since_at':source_time(STAMP),'until_at':None}
         self.cur.fetchone.side_effect=[state,state,{'owner_telegram_id':20}]
         self.service.sync_one()
@@ -159,7 +159,7 @@ class Storage(unittest.TestCase):
         version=datetime(2026,11,5,9,tzinfo=timezone.utc)
         issue={'id':OTHER,'team':{'id':TENANT},'title':'Routine task','dueDate':'2026-11-07',
                'updatedAt':'2026-11-05T09:00:00Z','state':{'id':BEFORE}}
-        saved={'issue_id':OTHER,'source_version':version,'state_id':BEFORE,'snapshot':issue,'observed_at':observed}
+        saved={'issue_id':OTHER,'source_version':version,'state_id':BEFORE,'risk_snapshot':issue,'observed_at':observed}
         self.cur.fetchall.return_value=[saved]
         self.service.analyze_linear.side_effect=analyze_linear
         scope=linear_scope('v1',TENANT)
@@ -198,8 +198,9 @@ class Storage(unittest.TestCase):
         service=loaders.load('tenant_linear_observer_cleanup',{'_connect':self.connect,'ensure_observer_schema':Mock(),
             'ensure_risk_schema':Mock()}, {'tenant_platform','tenant_linear_observer_schema','tenant_proactive_risk_schema'})
         service.cleanup();calls=self.cur.execute.call_args_list
-        self.assertEqual(len(calls),4)
-        for call in calls:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
+        self.assertEqual(len(calls),5)
+        self.assertIn('LIMIT 100',calls[0].args[0])
+        for call in calls[1:]:self.assertIn('LIMIT 100',call.args[0]);self.assertIn('90 days',call.args[0])
         risk_cleanup=next(call.args[0] for call in calls if 'DELETE FROM saas_proactive_risk_findings' in call.args[0])
         self.assertIn("source_kind='linear' AND NOT EXISTS",risk_cleanup)
         self.assertIn('floor(extract(epoch from i.updated_at)*1000000)',risk_cleanup)

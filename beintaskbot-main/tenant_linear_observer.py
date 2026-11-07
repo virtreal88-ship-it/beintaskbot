@@ -14,9 +14,15 @@ from tenant_proactive_risk_policy import analyze_linear, linear_scope
 from tenant_proactive_risk_schema import ensure_schema as ensure_risk_schema
 from tenant_proactive_risk_store import replace_source_findings, mark_checked
 
-RISK_SCAN_VERSION = 'v2'
+RISK_SCAN_VERSION = 'v3'
 RISK_REEVALUATE_INTERVAL = '15 minutes'
 RISK_REEVALUATE_LIMIT = 30
+RISK_SNAPSHOT_FIELDS = ('id', 'team', 'title', 'description', 'priority', 'assignee', 'dueDate', 'updatedAt', 'url', 'state')
+
+
+def risk_snapshot(issue: dict) -> dict:
+    """Keep only source fields consumed by the deterministic risk policy."""
+    return {field: issue[field] for field in RISK_SNAPSHOT_FIELDS if field in issue}
 
 
 def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
@@ -33,11 +39,13 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
     if previous and version < previous['source_version']:
         return
     kind = event_kind(config, previous, issue, baseline=baseline)
-    cur.execute('''INSERT INTO saas_linear_snapshots(tenant_id,issue_id,source_version,state_id,snapshot,source_scope,observed_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s,%s) ON CONFLICT(tenant_id,issue_id) DO UPDATE
+    cur.execute('''INSERT INTO saas_linear_snapshots(tenant_id,issue_id,source_version,state_id,snapshot,source_scope,observed_at,risk_snapshot)
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,issue_id) DO UPDATE
       SET source_version=EXCLUDED.source_version,state_id=EXCLUDED.state_id,snapshot=EXCLUDED.snapshot,
+          risk_snapshot=EXCLUDED.risk_snapshot,
           source_scope=EXCLUDED.source_scope,observed_at=EXCLUDED.observed_at''',
-      (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue), source_scope, source_checked_at))
+      (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue), source_scope,
+       source_checked_at, json.dumps(risk_snapshot(issue))))
     # Dry-run only. Findings are generated from the same already-authorized issue
     # page; this path has no delivery/outbox or external model calls.
     findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(
@@ -145,9 +153,10 @@ def reevaluate_saved_snapshots(cur, tenant: str, config: dict, *, source_scope: 
                                limit: int = RISK_REEVALUATE_LIMIT) -> int:
     """Re-evaluate cached issues on a timer without claiming a fresh source read."""
     safe_limit = max(1, min(int(limit), RISK_REEVALUATE_LIMIT))
-    cur.execute('''SELECT issue_id,source_version,state_id,snapshot,observed_at
+    cur.execute('''SELECT issue_id,source_version,state_id,risk_snapshot,observed_at
       FROM saas_linear_snapshots
-      WHERE tenant_id=%s::uuid AND source_scope=%s AND snapshot->'team'->>'id'=%s
+      WHERE tenant_id=%s::uuid AND source_scope=%s AND risk_snapshot->'team'->>'id'=%s
+        AND risk_snapshot<>'{}'::jsonb
         AND state_id<>ALL(%s)
         AND (risk_checked_at IS NULL OR risk_checked_at<=%s::timestamptz-%s::interval)
       ORDER BY risk_checked_at NULLS FIRST,source_version,issue_id
@@ -156,7 +165,7 @@ def reevaluate_saved_snapshots(cur, tenant: str, config: dict, *, source_scope: 
        RISK_REEVALUATE_INTERVAL, safe_limit))
     rows = cur.fetchall()
     for row in rows:
-        issue = row['snapshot']
+        issue = row['risk_snapshot']
         findings = [] if row['state_id'] in config.get('done_state_ids', []) else analyze_linear(
             issue, tenant_timezone=tenant_timezone, checked_at=checked_at)
         replace_source_findings(cur, tenant, 'linear', row['issue_id'], row['source_version'].isoformat(),
