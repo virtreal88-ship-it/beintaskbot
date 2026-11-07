@@ -407,13 +407,19 @@ def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:
     return current_finding(cur, event, owner_profile) is not None
 
 
-def _authorize_event(cur, event: dict, *, channel: str | None = None) -> tuple[dict | None, bool]:
+def _authorize_event(cur, event: dict, *, channel: str | None = None,
+                     allow_channel_opt_out: bool = False) -> tuple[dict | None, bool]:
     tenant = str(event['tenant_id'])
     owner = _owner_profile(cur, tenant, int(event['recipient_id']))
     if not owner:
         return None, False
     channels = _channels(owner, tenant)
-    if (not channels or (channel and channel not in channels)
+    # A delivery preference controls whether a channel may send. It does not
+    # resolve an alert episode. Push claims still validate owner and live
+    # source when every channel is opted out, so they can skip push without
+    # cancelling a bell already delivered for this episode.
+    if ((not allow_channel_opt_out and not channels)
+            or (channel and channel not in channels)
             or not _finding_is_current(cur, event, owner)):
         return owner, False
     return owner, True
@@ -518,7 +524,7 @@ def claim_push() -> dict | None:
                     return None
                 item['tenant_id'] = str(item['tenant_id'])
                 try:
-                    owner, event_allowed = _authorize_event(cur, item)
+                    owner, event_allowed = _authorize_event(cur, item, allow_channel_opt_out=True)
                 except Exception as error:
                     if not _transient_source_error(error):
                         raise

@@ -349,8 +349,8 @@ class TestRiskAlertPostgres:
         assert delivery.expand_events() == 1
         authorize = delivery._authorize_event
 
-        def revoke_after_source_check(cur, event, *, channel=None):
-            result = authorize(cur, event, channel=channel)
+        def revoke_after_source_check(cur, event, **kwargs):
+            result = authorize(cur, event, **kwargs)
             cur.execute('''UPDATE saas_member_push_devices SET active=FALSE
               WHERE tenant_id=%s::uuid AND telegram_id=%s AND endpoint_hash=%s''',
               (TENANT, OWNER, self.endpoint_hash(TENANT, SOURCE_ID)))
@@ -391,6 +391,34 @@ class TestRiskAlertPostgres:
         self.record()
         assert self.query('SELECT count(*) AS n FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]['n']==1
         assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key=%s',('proactive_risk:'+str(alert['id']),))[0]['n']==1
+
+    def test_all_channels_off_then_on_preserves_delivered_bell_episode(self):
+        self.preferences[OWNER]={'internal':True,'push':True}
+        self.record()
+        assert delivery.expand_events()==1
+        alert=self.query('SELECT id,state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]
+        assert alert['state']=='expanded'
+        assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key=%s',
+            ('proactive_risk:'+str(alert['id']),))[0]['n']==1
+
+        # Opting out suppresses the pending push delivery, but does not mark
+        # the still-current risk episode resolved or erase its delivered bell.
+        self.preferences[OWNER]={}
+        item=delivery.claim_push()
+        assert item and item['send'] is False
+        assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE id=%s::uuid',
+            (alert['id'],))[0]['state']=='expanded'
+        assert self.query("SELECT status FROM saas_proactive_risk_alert_deliveries WHERE channel='push'")[0]['status']=='skipped'
+
+        # Re-enabling and observing the unchanged finding must not create a
+        # second bell for the same unresolved episode.
+        self.preferences[OWNER]={'internal':True,'push':True}
+        self.record()
+        assert delivery.expand_events()==0
+        assert self.query('SELECT count(*) AS n FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',
+            (TENANT,))[0]['n']==1
+        assert self.query('SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key=%s',
+            ('proactive_risk:'+str(alert['id']),))[0]['n']==1
 
     def test_transient_push_source_failure_defers_item_and_claims_other_tenant(self,monkeypatch):
         from tenant_linear_policy import TenantLinearError
