@@ -61,6 +61,15 @@ class StoreTests(unittest.TestCase):
         self.module.analyze_crm_task.assert_not_called()
         self.module.replace_source_findings.assert_called_once_with(self.cur,'company-a','crm_task','9','source-v2',
             'CRM task 9',[],source_scope='x:2026',source_checked_at=baseline)
+
+    def test_crm_retention_compares_the_exact_active_connection_scope(self):
+        self.module.cleanup_expired_risk_findings(self.cur)
+        sql=self.cur.execute.call_args.args[0]
+        self.assertIn("source_kind='crm_task'",sql)
+        self.assertIn("i.provider='kommo' AND i.status='connected'",sql)
+        self.assertIn("f.source_scope=i.account_domain||':'||floor(extract(epoch from i.connected_at)*1000000)",sql)
+        self.assertIn('LIMIT 100 FOR UPDATE SKIP LOCKED',sql)
+
     def test_plan_is_unique_and_preferences_do_not_catch_up_later(self):
         self.cur.fetchone.return_value={'id':'event'}
         opted=member();off=member(identity=21);off['workflow']['policies']={}

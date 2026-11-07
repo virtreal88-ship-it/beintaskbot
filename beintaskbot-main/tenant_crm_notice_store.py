@@ -103,18 +103,27 @@ def plan_connect_message(cur, tenant: str, channel_id: str, conversation_id: str
          profiles(cur,str(tenant)),connection_id(cur,str(tenant)),channels=('push',))
 
 
+def cleanup_expired_risk_findings(cur) -> None:
+    """Expire old CRM findings only after their exact connection scope is inactive."""
+    cur.execute('''WITH expired AS (
+      SELECT tenant_id,source_kind,source_id,rule_id FROM saas_proactive_risk_findings f
+      WHERE source_kind='crm_task' AND checked_at<now()-interval '90 days'
+        AND NOT EXISTS (
+          SELECT 1 FROM saas_tenant_integrations i
+          WHERE i.tenant_id=f.tenant_id AND i.provider='kommo' AND i.status='connected'
+            AND f.source_scope=i.account_domain||':'||floor(extract(epoch from i.connected_at)*1000000)::bigint::text)
+      ORDER BY checked_at LIMIT 100 FOR UPDATE SKIP LOCKED)
+      DELETE FROM saas_proactive_risk_findings f USING expired e
+      WHERE f.tenant_id=e.tenant_id AND f.source_kind=e.source_kind
+        AND f.source_id=e.source_id AND f.rule_id=e.rule_id''')
+
+
 def observe() -> int:
     with _connect() as conn:
         ensure_schema(conn)
         ensure_risk_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''WITH expired AS (
-              SELECT tenant_id,source_kind,source_id,rule_id FROM saas_proactive_risk_findings
-              WHERE source_kind='crm_task' AND checked_at<now()-interval '90 days'
-              ORDER BY checked_at LIMIT 100 FOR UPDATE SKIP LOCKED)
-              DELETE FROM saas_proactive_risk_findings f USING expired e
-              WHERE f.tenant_id=e.tenant_id AND f.source_kind=e.source_kind
-                AND f.source_id=e.source_id AND f.rule_id=e.rule_id''')
+            cleanup_expired_risk_findings(cur)
             cur.execute("INSERT INTO saas_crm_notice_scan(tenant_id) SELECT id FROM saas_tenants WHERE status='active' ON CONFLICT DO NOTHING")
             cur.execute('''SELECT s.* FROM saas_crm_notice_scan s JOIN saas_tenants t ON t.id=s.tenant_id
               WHERE t.status='active' AND s.next_scan<=now()

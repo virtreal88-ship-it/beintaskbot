@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from tenant_proactive_risk_policy import linear_scope, crm_scope
 import tenant_linear_observer_cleanup as cleanup_module
+import tenant_crm_notice_store as crm_notice_store
 
 ROOT = Path(__file__).resolve().parents[1]
 PGLITE = ROOT / '.support-test-deps/node_modules/@electric-sql/pglite'
@@ -109,6 +110,12 @@ class ProactiveRiskRetentionPGlite(unittest.TestCase):
             for source_id, kind, scope in scopes:
                 database.execute('INSERT INTO saas_proactive_risk_findings VALUES($1,$2,$3,$4,$5,$6)',
                                  (tenant,kind,source_id,'risk',scope,old))
+
+            with database.cursor() as cursor:
+                crm_notice_store.cleanup_expired_risk_findings(cursor)
+            retained_crm = {row['source_id'] for row in database.query(
+                "SELECT source_id FROM saas_proactive_risk_findings WHERE source_kind='crm_task'")}
+            self.assertEqual(retained_crm, {'crm-current'})
 
             with patch.object(cleanup_module, '_connect', return_value=database), \
                  patch.object(cleanup_module, 'ensure_observer_schema'), \
