@@ -56,7 +56,30 @@ class LinearRiskRules(unittest.TestCase):
     def test_due_date_is_reported_without_guessing_timezone_or_overdue_status(self):
         findings=analyze_linear({'title':'Price control issue','description':'Can change price', 'priority':2,
             'assignee':{'id':'u1'},'dueDate':'2026-11-08'})
-        self.assertIn('timezone/overdue status not evaluated',str(findings[0]['facts']))
+        self.assertIn('timezone was unavailable; due-date status was not evaluated',str(findings[0]['facts']))
+
+    def test_linear_due_date_uses_configured_company_timezone_and_local_calendar_day(self):
+        now=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        issue={'title':'Routine task','dueDate':'2026-11-07','updatedAt':'2026-11-07T10:00:00Z'}
+        findings=analyze_linear(issue,tenant_timezone='Pacific/Auckland',checked_at=now)
+        overdue=next(item for item in findings if item['rule_id']=='overdue_task')
+        self.assertIn('Tenant timezone: Pacific/Auckland; local date at check: 2026-11-08.',str(overdue['facts']))
+        self.assertIn('Linear dueDate field: 2026-11-07',str(overdue['facts']))
+        same_day=analyze_linear({**issue,'dueDate':'2026-11-08'},tenant_timezone='Pacific/Auckland',checked_at=now)
+        self.assertNotIn('overdue_task',[item['rule_id'] for item in same_day])
+
+    def test_linear_due_date_without_valid_company_timezone_is_not_called_overdue(self):
+        issue={'title':'High priority price access control task','dueDate':'2026-11-06','updatedAt':'2026-11-07T10:00:00Z','priority':2,'assignee':{'id':'u1'}}
+        for zone in (None,'No/Such_Zone'):
+            findings=analyze_linear(issue,tenant_timezone=zone,checked_at=datetime(2026,11,7,12,tzinfo=timezone.utc))
+            self.assertNotIn('overdue_task',[item['rule_id'] for item in findings])
+
+    def test_linear_old_source_update_is_not_claimed_as_work_activity(self):
+        now=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        findings=analyze_linear({'title':'Routine task','updatedAt':'2026-10-23T12:00:00Z'},checked_at=now)
+        stale=next(item for item in findings if item['rule_id']=='stale_source_update')
+        self.assertIn('not a work-activity timestamp',str(stale['facts']))
+        self.assertIn('does not establish whether work is or is not happening',stale['assessment'])
 
     def test_russian_and_azerbaijani_access_price_signals(self):
         for title in ('Кассир может менять цену при отключённом праве',
@@ -90,6 +113,21 @@ class CrmRiskRules(unittest.TestCase):
             with self.subTest(text=text):
                 finding=analyze_crm_task({'kommo_task_id':17,'text':text,'completed':False})[0]
                 self.assertIn('service failure concern',finding['assessment'])
+
+    def test_stale_crm_record_metadata_is_not_described_as_work_activity(self):
+        now=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        old_update=int((now-timedelta(days=15)).timestamp())
+        findings=analyze_crm_task({'kommo_task_id':17,'text':'Routine follow up','completed':False,
+            'raw':{'updated_at':old_update}},checked_at=now)
+        stale=next(item for item in findings if item['rule_id']=='crm_task_stale_source_update')
+        self.assertIn('not a work-activity timestamp',str(stale['facts']))
+        self.assertIn('does not establish whether work is or is not happening',stale['assessment'])
+
+    def test_crm_overdue_task_is_left_to_existing_task_overdue_notifications(self):
+        now=datetime(2026,11,7,12,tzinfo=timezone.utc)
+        findings=analyze_crm_task({'kommo_task_id':17,'text':'Routine follow up','completed':False,
+            'due_at':now-timedelta(days=1),'raw':{'updated_at':int((now-timedelta(days=20)).timestamp())}},checked_at=now)
+        self.assertEqual(findings,[])
 
     def test_source_check_timestamp_rejects_naive_and_parses_utc(self):
         self.assertIsNone(source_timestamp('2026-11-07T12:00:00'))

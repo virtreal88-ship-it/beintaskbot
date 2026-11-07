@@ -2,6 +2,7 @@
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from tenant_platform import _connect
 from tenant_linear_context import context
 from tenant_linear_provider import query
@@ -17,7 +18,8 @@ RISK_SCAN_VERSION = 'v1'
 
 
 def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
-                source_scope: str = '', source_checked_at=None) -> None:
+                source_scope: str = '', source_checked_at=None,
+                tenant_timezone: str | None = None) -> None:
     if (issue.get('team') or {}).get('id') != config['team_id']:
         cur.execute('''DELETE FROM saas_proactive_risk_findings
           WHERE tenant_id=%s::uuid AND source_kind='linear' AND source_id=%s''',
@@ -35,7 +37,8 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
       (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue)))
     # Dry-run only. Findings are generated from the same already-authorized issue
     # page; this path has no delivery/outbox or external model calls.
-    findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(issue)
+    findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(
+        issue, tenant_timezone=tenant_timezone, checked_at=source_checked_at)
     replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings,
                             source_scope=source_scope, source_checked_at=source_checked_at)
     if kind:
@@ -81,7 +84,8 @@ def sync_one() -> dict | None:
                 cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('linear-sync:' + tenant,))
                 cur.execute('SELECT * FROM saas_linear_sync WHERE tenant_id=%s::uuid FOR UPDATE', (tenant,))
                 state = cur.fetchone()
-                _, config, key, config_version = context(cur, {'tenant_id': tenant, 'telegram_id': state_owner(state, tenant, cur)})
+                owner_id, tenant_timezone = state_owner(state, tenant, cur)
+                _, config, key, config_version = context(cur, {'tenant_id': tenant, 'telegram_id': owner_id})
                 if not config['workflow'].get('sync_enabled'):
                     return None
                 risk_backfill = state.get('risk_scan_version', '') != RISK_SCAN_VERSION
@@ -99,7 +103,7 @@ def sync_one() -> dict | None:
                 for row in page['nodes']:
                     store_issue(cur, tenant, config, row, baseline=since is None,
                                 source_scope=linear_scope(config_version, config['team_id']),
-                                source_checked_at=source_checked_at)
+                                source_checked_at=source_checked_at,tenant_timezone=tenant_timezone)
                 more = page['pageInfo']['hasNextPage']
                 if more and not page['pageInfo'].get('endCursor'):
                     raise ValueError('Missing page cursor')
@@ -116,6 +120,13 @@ def sync_one() -> dict | None:
             raise
 
 
-def state_owner(state: dict, tenant: str, cur) -> int:
-    cur.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid', (tenant,))
-    return int(cur.fetchone()['owner_telegram_id'])
+def state_owner(state: dict, tenant: str, cur) -> tuple[int, str | None]:
+    cur.execute('SELECT owner_telegram_id,onboarding FROM saas_tenants WHERE id=%s::uuid', (tenant,))
+    row = cur.fetchone()
+    onboarding = row.get('onboarding') or {}
+    zone = onboarding.get('timezone') or (onboarding.get('company') or {}).get('timezone')
+    try:
+        zone = ZoneInfo(str(zone)).key if zone else None
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        zone = None
+    return int(row['owner_telegram_id']), zone

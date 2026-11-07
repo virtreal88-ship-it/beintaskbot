@@ -109,7 +109,7 @@ class Storage(unittest.TestCase):
         checked=source_time('2026-11-07T12:00:00Z')
         self.service.store_issue(self.cur,TENANT,config(),issue,baseline=False,
                                  source_scope='v1:'+TENANT,source_checked_at=checked)
-        self.service.analyze_linear.assert_called_once_with(issue)
+        self.service.analyze_linear.assert_called_once_with(issue,tenant_timezone=None,checked_at=checked)
         self.service.replace_source_findings.assert_called_once_with(self.cur,TENANT,'linear',OTHER,
             source_time(STAMP).isoformat(),issue['title'],[candidate],
             source_scope='v1:'+TENANT,source_checked_at=checked)
