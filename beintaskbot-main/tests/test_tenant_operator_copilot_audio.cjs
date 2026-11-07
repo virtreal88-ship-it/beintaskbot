@@ -70,3 +70,34 @@ test('stale interrupt item stops current audio without throwing or ending the se
   await audio.close();
   assert.equal(trackStops,1,'interrupt recovery does not leak the microphone');
 });
+
+test('local barge-in pauses queued assistant audio on sustained speech, not quiet or high-frequency noise', async () => {
+  let processor, stopped=0, speechStarts=0;
+  class FakeAudioContext {
+    constructor(options){this.sampleRate=options.sampleRate;this.state='running';this.destination={};this.currentTime=1;}
+    async resume(){}
+    createMediaStreamSource(){return{connect(){},disconnect(){}};}
+    createScriptProcessor(){processor={connect(){},disconnect(){},onaudioprocess:null};return processor;}
+    createGain(){return{gain:{value:1},connect(){},disconnect(){}};}
+    createBuffer(_channels,length){return{getChannelData:()=>new Float32Array(length)};}
+    createBufferSource(){return{buffer:null,connect(){},start(){},stop(){stopped++;},disconnect(){}};}
+    async close(){this.state='closed';}
+  }
+  const deps={AudioContext:FakeAudioContext,navigator:{mediaDevices:{getUserMedia:async()=>({
+    getTracks:()=>[{stop(){}}],getAudioTracks:()=>[],
+  })}}};
+  const audio=await openAudio(()=>{},deps,()=>{speechStarts++;});
+  audio.play('assistant-item',new Uint8Array([0,0,0,0]));
+  const frame=samples=>processor.onaudioprocess({inputBuffer:{getChannelData:()=>samples}});
+  const lowTone=Float32Array.from({length:1024},(_,i)=>0.015*Math.sin(2*Math.PI*220*i/24000));
+  const hiss=Float32Array.from({length:1024},(_,i)=>i%2?0.12:-0.12);
+  frame(lowTone);frame(lowTone);frame(hiss);frame(hiss);
+  assert.equal(stopped,0,'quiet speech and high zero-crossing noise do not stop playback');
+  const speech=Float32Array.from({length:1024},(_,i)=>0.12*Math.sin(2*Math.PI*220*i/24000));
+  frame(speech);assert.equal(stopped,0,'one isolated loud frame is insufficient');
+  frame(speech);
+  assert.equal(stopped,1,'sustained speech stops already queued output locally');
+  assert.equal(speechStarts,1,'the controller is notified once for the local interruption');
+  assert.equal(audio.interrupt('assistant-item'),0,'the later server VAD interrupt remains safe and idempotent');
+  await audio.close();
+});

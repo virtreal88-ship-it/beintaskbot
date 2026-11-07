@@ -75,7 +75,7 @@
          typeof win.connectExperimentalCopilotVoice!=='function'||typeof win.acquireTenantMicrophone!=='function')return null;
       controls?.replaceChildren();
       controller=win.mountExperimentalCopilotVoice(controls,{
-        acquireMicrophone:()=>win.acquireTenantMicrophone(),openAudio:callback=>win.openExperimentalCopilotAudio(callback),
+        acquireMicrophone:()=>win.acquireTenantMicrophone(),openAudio:(callback,onSpeechStart)=>win.openExperimentalCopilotAudio(callback,undefined,onSpeechStart),
         connect:callback=>win.connectExperimentalCopilotVoice(options.socketPath,callback),
         lifecycle:document,language:options.language,onState:setVoiceState,
         onIdle:()=>{setVoiceState('idle');if(!disposed)options.onIdle?.();},

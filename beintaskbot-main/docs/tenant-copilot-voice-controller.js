@@ -85,7 +85,10 @@
       if(version!==generation){if(held)held();return;}
       if(typeof held!=='function')throw new Error('microphone_busy');
       release=held;
-      const currentOpening=opening=Promise.resolve(openAudio(bytes=>{if(channel && inputEnabled && !muted)send({type:'audio',pcm:bytes});}));
+      const currentOpening=opening=Promise.resolve(openAudio(
+        bytes=>{if(channel && inputEnabled && !muted)send({type:'audio',pcm:bytes});},
+        ()=>{if(version===generation&&!ending&&!muted){setVoiceState('listening');status.textContent=labels.listening;}}
+      ));
       const engine=await currentOpening;
       if(opening===currentOpening)opening=null;
       if(version!==generation){await engine.close();return;}
