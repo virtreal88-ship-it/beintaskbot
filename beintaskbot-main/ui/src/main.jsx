@@ -2363,6 +2363,7 @@ function NotificationPreferencesHub() {
     setError("");
     try {
       setData(await api("/api/platform/notification-preferences"));
+      window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
       setError(e.message || "Bildiriş ayarları yüklənmədi.");
     } finally {
@@ -2381,6 +2382,7 @@ function NotificationPreferencesHub() {
         method: "POST",
         body: JSON.stringify({ preferences: data.preferences || {} }),
       }));
+      window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
       setError(e.message || "Bildiriş ayarları saxlanmadı.");
     } finally {
@@ -2494,7 +2496,7 @@ for (const [view, host, component] of [
   ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
 ]) {
   window.tenantViewDemand.watch({
-    view, host, editable: view === "notifications" ? "#chakra-notification-settings-root" : view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
     excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
     reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
