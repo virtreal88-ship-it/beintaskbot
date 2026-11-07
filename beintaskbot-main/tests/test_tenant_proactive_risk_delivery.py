@@ -209,6 +209,41 @@ class TestRiskAlertPostgres:
         assert delivery._event_exists(self.db.cursor(),TENANT,'crm_task',SOURCE_ID,finding['rule_id'],
             crm_scope('example.kommo.com',CONNECTED),signature)
 
+    def test_resolved_then_reappearing_delivered_risk_starts_new_episode(self):
+        finding=self.candidate()[0]
+        self.record(findings=[finding])
+        assert delivery.expand_events()==1
+        first=self.query('SELECT id,state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]
+        assert first['state']=='expanded'
+        self.record(findings=[])
+        assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE id=%s::uuid',(first['id'],))[0]['state']=='cancelled'
+        self.record(findings=[finding])
+        events=self.query('SELECT id,state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))
+        assert len(events)==2
+        second=next(event for event in events if event['id']!=first['id'])
+        assert second['state']=='pending'
+
+    def test_transient_linear_failure_defers_one_event_and_processes_other_tenant(self,monkeypatch):
+        from tenant_linear_policy import TenantLinearError
+        self.preferences[OWNER]={'internal':True}
+        self.preferences[303]={'internal':True}
+        self.record(source_id='510')
+        self.seed_source(OTHER_TENANT,303,'520')
+        self.record(tenant=OTHER_TENANT,source_id='520')
+        original=delivery._authorize_event
+        def authorize(cur,event,**kwargs):
+            if event['tenant_id']==TENANT:
+                raise TenantLinearError('Linear temporarily unavailable',503)
+            return original(cur,event,**kwargs)
+        monkeypatch.setattr(delivery,'_authorize_event',authorize)
+        assert delivery.expand_events()==1
+        deferred=self.query('SELECT state,retry_after FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(TENANT,))[0]
+        assert deferred['state']=='pending' and deferred['retry_after'] is not None
+        other=self.query('SELECT state,retry_after FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid',(OTHER_TENANT,))[0]
+        assert other['state']=='expanded' and other['retry_after'] is None
+        assert self.query('SELECT tenant_id,telegram_id FROM saas_tenant_notifications')==[
+            {'tenant_id':OTHER_TENANT,'telegram_id':303}]
+
     def test_baseline_quota_defers_cursor_instead_of_losing_finding(self):
         for source_id in range(700,710):
             self.seed_source(TENANT,OWNER,str(source_id));self.record(source_id=str(source_id))
@@ -332,12 +367,14 @@ class TestRiskAlertPostgres:
             self.record(source_id=str(source_id))
         states = self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE tenant_id=%s::uuid', (TENANT,))
         assert sum(row['state'] == 'pending' for row in states) == 10
-        assert len(states) == 10, 'quota pressure does not create a permanent suppressed tombstone'
+        assert sum(row['state'] == 'deferred' for row in states) == 1
         self.query('''UPDATE saas_proactive_risk_alert_events SET created_at=now()-interval '2 days'
           WHERE id=(SELECT id FROM saas_proactive_risk_alert_events ORDER BY created_at LIMIT 1)''')
-        self.record(source_id='610')
+        self.query("UPDATE saas_proactive_risk_alert_events SET retry_after=now()-interval '1 minute' WHERE source_id='610'")
+        assert delivery.promote_deferred_events(limit=1)==1
         assert self.query('''SELECT count(*) AS n FROM saas_proactive_risk_alert_events
-          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day' AND state<>'suppressed' ''',
+          WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+            AND state NOT IN ('suppressed','deferred') ''',
           (TENANT,))[0]['n'] == 10
 
     def test_provider_acceptance_is_not_reported_as_read_receipt(self):

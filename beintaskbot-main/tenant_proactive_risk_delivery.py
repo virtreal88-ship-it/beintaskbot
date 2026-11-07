@@ -44,6 +44,11 @@ def _advisory_lock(cur, namespace: str, identity: str) -> None:
     cur.execute("SELECT pg_advisory_xact_lock(('x' || %s)::bit(64)::bigint)", (key,))
 
 
+def lock_daily_quota_transition(cur, tenant: str) -> None:
+    """Take the tenant quota lock before any source lock in a risk transaction."""
+    _advisory_lock(cur, 'risk-daily-quota', str(tenant))
+
+
 def lock_source_transition(cur, tenant: str, source_kind: str, source_id: str) -> None:
     """Call before reading/replacing source findings to serialize first scans too."""
     _advisory_lock(cur, 'risk-source', f'{tenant}:{source_kind}:{source_id}')
@@ -79,21 +84,23 @@ def _queue_new_finding(cur, tenant: str, source_kind: str, source_id: str,
         return None
     # The daily quota spans all source locks, so serialize the count and insert
     # for this tenant to prevent parallel scans of different tasks exceeding it.
-    _advisory_lock(cur, 'risk-daily-quota', tenant)
+    lock_daily_quota_transition(cur, tenant)
     cur.execute('''SELECT count(*) AS count FROM saas_proactive_risk_alert_events
-      WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day' AND state<>'suppressed' ''', (tenant,))
+      WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+        AND state NOT IN ('suppressed','deferred') ''', (tenant,))
     limited = int((cur.fetchone() or {}).get('count') or 0) >= MAX_RISK_ALERTS_PER_DAY
-    if limited:
-        # Do not create a tombstone for quota pressure. The source scan or the
-        # persistent backfill cursor can retry after the rolling window clears.
-        return DEFERRED_FOR_QUOTA
     event_id = uuid.uuid4()
     cur.execute('''INSERT INTO saas_proactive_risk_alert_events
-      (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
-      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING id''',
+      (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state,retry_after)
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,
+        CASE WHEN %s THEN now()+interval '15 minutes' ELSE NULL END)
+      ON CONFLICT DO NOTHING RETURNING id''',
       (event_id, tenant, recipient, source_kind, str(source_id), finding['rule_id'], str(source_scope),
-       str(source_version), alert_fingerprint(finding), 'pending'))
-    return str(event_id) if cur.fetchone() else None
+       str(source_version), alert_fingerprint(finding), 'deferred' if limited else 'pending', limited))
+    inserted = cur.fetchone()
+    if limited:
+        return DEFERRED_FOR_QUOTA if inserted else None
+    return str(event_id) if inserted else None
 
 
 def _event_exists(cur, tenant: str, source_kind: str, source_id: str,
@@ -102,10 +109,7 @@ def _event_exists(cur, tenant: str, source_kind: str, source_id: str,
       JOIN saas_tenants t ON t.id=e.tenant_id AND t.owner_telegram_id=e.recipient_id
       WHERE e.tenant_id=%s::uuid AND e.source_kind=%s AND e.source_id=%s AND e.rule_id=%s
         AND e.source_scope=%s AND e.alert_fingerprint=%s
-        AND (e.state IN ('pending','expanded') OR (e.state='cancelled' AND EXISTS(
-          SELECT 1 FROM saas_proactive_risk_alert_deliveries d
-          WHERE d.tenant_id=e.tenant_id AND d.event_id=e.id
-            AND d.status IN ('delivered','sending','accepted','unknown','expired')))) LIMIT 1''',
+        AND e.state IN ('pending','expanded','deferred') LIMIT 1''',
       (tenant, source_kind, str(source_id), rule_id, str(source_scope), signature))
     return cur.fetchone() is not None
 
@@ -166,6 +170,10 @@ def _seed_one_baseline_alert(cur) -> tuple[int, bool]:
         return 0, True
 
     row_key = (str(row['source_kind']), str(row['source_id']), str(row['rule_id']))
+    # All paths use quota -> source ordering. CRM may process many sources in
+    # one transaction, so acquiring quota after a source here can deadlock with
+    # the observer when it advances to another source.
+    lock_daily_quota_transition(cur, tenant)
     lock_source_transition(cur, tenant, row_key[0], row_key[1])
     cur.execute('''SELECT source_kind,source_id,rule_id,source_scope,source_version,
                           severity,confidence,source_title
@@ -238,9 +246,50 @@ def seed_baseline_alerts(limit: int = MAX_BASELINE_FINDINGS_PER_TICK) -> int:
     return queued
 
 
+def promote_deferred_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
+    """Promote deferred alerts only after their tenant's rolling quota clears."""
+    safe_limit = max(1, min(int(limit), MAX_RISK_EVENTS_PER_TICK))
+    promoted = 0
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT id,tenant_id FROM saas_proactive_risk_alert_events
+              WHERE state='deferred' AND (retry_after IS NULL OR retry_after<=now())
+              ORDER BY retry_after,created_at,id LIMIT %s''', (safe_limit,))
+            candidates=cur.fetchall()
+            for event in candidates:
+                tenant=str(event['tenant_id'])
+                # Match observers/backfill: acquire quota before locking the
+                # event row, otherwise a promoter can hold an event while
+                # waiting on an observer that is cancelling that same event.
+                lock_daily_quota_transition(cur,tenant)
+                cur.execute('''SELECT id FROM saas_proactive_risk_alert_events
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='deferred'
+                    AND (retry_after IS NULL OR retry_after<=now())
+                  FOR UPDATE SKIP LOCKED''',(tenant,event['id']))
+                if not cur.fetchone():
+                    continue
+                cur.execute('''SELECT count(*) AS count FROM saas_proactive_risk_alert_events
+                  WHERE tenant_id=%s::uuid AND created_at>=now()-interval '1 day'
+                    AND state NOT IN ('suppressed','deferred')''',(tenant,))
+                used=int((cur.fetchone() or {}).get('count') or 0)
+                if used >= MAX_RISK_ALERTS_PER_DAY:
+                    cur.execute('''UPDATE saas_proactive_risk_alert_events
+                      SET retry_after=now()+interval '15 minutes'
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='deferred' ''',
+                      (tenant,event['id']))
+                    continue
+                cur.execute('''UPDATE saas_proactive_risk_alert_events SET state='pending',retry_after=NULL
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='deferred' RETURNING id''',
+                  (tenant,event['id']))
+                promoted += int(cur.fetchone() is not None)
+        conn.commit()
+    return promoted
+
+
 def _cancel_event(cur, tenant: str, event_id) -> None:
     cur.execute("""UPDATE saas_proactive_risk_alert_events SET state='cancelled'
-      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state IN ('pending','expanded')""", (tenant, event_id))
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state IN ('pending','expanded','deferred')""", (tenant, event_id))
     cur.execute("""UPDATE saas_proactive_risk_alert_deliveries SET status='skipped',updated_at=now()
       WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND status='pending' """, (tenant, event_id))
 
@@ -261,7 +310,7 @@ def record_finding_transitions(cur, tenant: str, source_kind: str, source_id: st
     cur.execute('''SELECT id,rule_id,alert_fingerprint,source_scope
       FROM saas_proactive_risk_alert_events
       WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s
-        AND state IN ('pending','expanded') FOR UPDATE''', (tenant, source_kind, str(source_id)))
+        AND state IN ('pending','expanded','deferred') FOR UPDATE''', (tenant, source_kind, str(source_id)))
     for event in cur.fetchall():
         identity = (str(event['source_scope']), str(event['rule_id']), str(event['alert_fingerprint']))
         if identity not in current:
@@ -367,19 +416,37 @@ def _authorize_event(cur, event: dict, *, channel: str | None = None) -> tuple[d
     return owner, True
 
 
+def _transient_source_error(error: Exception) -> bool:
+    from tenant_linear_policy import TenantLinearError
+    if isinstance(error, TenantLinearError):
+        return error.status in {408, 429, 500, 502, 503, 504}
+    return isinstance(error, (TimeoutError, ConnectionError, OSError))
+
+
 def expand_events(limit: int = MAX_RISK_EVENTS_PER_TICK) -> int:
     """Add bell entries and freeze only currently bound owner devices."""
     safe_limit = max(1, min(int(limit), MAX_RISK_EVENTS_PER_TICK))
     expanded = 0
     seed_baseline_alerts()
+    promote_deferred_events()
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT * FROM saas_proactive_risk_alert_events
-              WHERE state='pending' ORDER BY created_at,id LIMIT %s FOR UPDATE SKIP LOCKED''', (safe_limit,))
+              WHERE state='pending' AND (retry_after IS NULL OR retry_after<=now())
+              ORDER BY created_at,id LIMIT %s FOR UPDATE SKIP LOCKED''', (safe_limit,))
             for event in cur.fetchall():
                 event['tenant_id'] = str(event['tenant_id'])
-                owner, allowed = _authorize_event(cur, event)
+                try:
+                    owner, allowed = _authorize_event(cur, event)
+                except Exception as error:
+                    if not _transient_source_error(error):
+                        raise
+                    cur.execute('''UPDATE saas_proactive_risk_alert_events
+                      SET retry_after=now()+interval '15 minutes'
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' ''',
+                      (event['tenant_id'], event['id']))
+                    continue
                 if not allowed:
                     _cancel_event(cur, event['tenant_id'], event['id'])
                     continue

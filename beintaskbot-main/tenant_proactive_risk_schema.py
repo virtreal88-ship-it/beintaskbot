@@ -58,12 +58,33 @@ def ensure_schema(conn) -> None:
               source_id TEXT NOT NULL, rule_id TEXT NOT NULL, source_scope TEXT NOT NULL,
               source_version TEXT NOT NULL, alert_fingerprint TEXT NOT NULL,
               state TEXT NOT NULL DEFAULT 'pending'
-                CHECK(state IN ('pending','expanded','cancelled','suppressed')),
+                CONSTRAINT saas_proactive_risk_alert_events_state_check
+                CHECK(state IN ('pending','expanded','deferred','cancelled','suppressed')),
+              retry_after TIMESTAMPTZ NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               UNIQUE(tenant_id,id)
             )''')
+            cur.execute('''DO $$ BEGIN
+              IF EXISTS (SELECT 1 FROM pg_constraint
+                WHERE conrelid='saas_proactive_risk_alert_events'::regclass
+                  AND conname='saas_proactive_risk_alert_events_state_check'
+                  AND position('deferred' in pg_get_constraintdef(oid))=0) THEN
+                ALTER TABLE saas_proactive_risk_alert_events
+                  DROP CONSTRAINT saas_proactive_risk_alert_events_state_check;
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                WHERE conrelid='saas_proactive_risk_alert_events'::regclass
+                  AND conname='saas_proactive_risk_alert_events_state_check') THEN
+                ALTER TABLE saas_proactive_risk_alert_events
+                  ADD CONSTRAINT saas_proactive_risk_alert_events_state_check
+                  CHECK(state IN ('pending','expanded','deferred','cancelled','suppressed'));
+              END IF;
+            END $$''')
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ NULL")
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_pending_idx
               ON saas_proactive_risk_alert_events(created_at,tenant_id) WHERE state='pending' ''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_retry_pending_idx
+              ON saas_proactive_risk_alert_events(retry_after,created_at,tenant_id) WHERE state='pending' ''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_proactive_risk_alert_deliveries (
               tenant_id UUID NOT NULL,
               event_id UUID NOT NULL,

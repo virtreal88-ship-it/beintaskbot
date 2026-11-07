@@ -15,7 +15,13 @@ def replace_source_findings(cur, tenant_id: str, source_kind: str, source_id: st
     """Replace the current risk view atomically when a source is observed."""
     if source_kind not in {'linear', 'crm_task'}:
         raise ValueError('Invalid risk source')
-    from tenant_proactive_risk_delivery import lock_source_transition, record_finding_transitions
+    from tenant_proactive_risk_delivery import (
+        lock_daily_quota_transition, lock_source_transition, record_finding_transitions,
+    )
+    # CRM observation can update many sources in one transaction. Keep the
+    # lock order consistent with the baseline backfill before taking a source
+    # lock, otherwise each side can hold one lock while waiting for the other.
+    lock_daily_quota_transition(cur, str(tenant_id))
     lock_source_transition(cur, str(tenant_id), source_kind, str(source_id))
     cur.execute('DELETE FROM saas_proactive_risk_findings WHERE tenant_id=%s::uuid AND source_kind=%s AND source_id=%s',
                 (tenant_id, source_kind, str(source_id)))
