@@ -13,7 +13,7 @@ async function setup(kind,{language='en',versions=true,agent=true}={}){
  w.tenantI18n={language,date:value=>String(value)};w.tenantOperator={member,currentDialog:route,hasRight:()=>true};w.tenantProfileSnapshot={member};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body});
-  if(path===base+'/preview')return ok({messages:state.preview});
+  if(path===base+'/preview')return ok({public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:state.preview});
   if(path===base+'/destinations')return ok({destinations:[{channel_id:'dev-channel',conversation_id:'developer-a',customer_name:'Developer A'},{channel_id:'dev-channel',conversation_id:'developer-b',customer_name:'Developer B'}]});
   if(path===base+'/question-draft'){
    if(state.hold)await state.hold;

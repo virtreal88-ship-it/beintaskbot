@@ -35,7 +35,7 @@ def implicit_case(cur, tenant, channel, conversation, selected):
     return proven[0]['id']
 
 
-def existing(cur, tenant, channel, conversation, selected, case_id, destination, dest_conversation, summary, media, include_identity, versions, auto=None, reuse_allowed=False):
+def existing(cur, tenant, channel, conversation, selected, case_id, destination, dest_conversation, summary, media, include_identity, versions, auto=None, reuse_allowed=False, public_header=None, public_header_hash=None):
     # JSON message IDs are the immutable, explicitly selected source evidence.
     # A shared dialogue alone never merges two questions. Unknown stays fenced
     # even if an unrelated developer message changed the consultation status.
@@ -79,7 +79,8 @@ def existing(cur, tenant, channel, conversation, selected, case_id, destination,
     if row.get('case_id')!=case_id:
         raise TenantLinearError('По этому фрагменту уже есть консультация в другом контексте. Откройте её в исходном диалоге; новая отправка отключена.',409)
     if (row['reason']!=summary or sorted(row.get('selected_media_ids') or [])!=sorted(media)
-        or bool(row.get('public_identity'))!=include_identity
+        or ((row.get('public_identity')!=public_header or (row.get('evidence') or {}).get('public_header_hash')!=public_header_hash) if public_header is not None
+            else bool(row.get('public_identity'))!=include_identity or (row.get('public_identity') or {}).get('version')==1)
         or row.get('source_versions')!=versions or row.get('revoked_at') or not row.get('share_current')):
         raise TenantLinearError('Этот фрагмент уже подготовлен или отправлен с другим вопросом или материалами. Изменённый вопрос не отправлен; проверьте существующую консультацию.',409)
     if not reuse_allowed and not auto:
