@@ -20,7 +20,7 @@ const base='/api/platform/ai/dialog-consultations';
   await page.evaluate(()=>{window.tenantI18n={language:'en',date:value=>value};window.tenantOperator={hasRight:()=>true};});
   await page.addScriptTag({path:'docs/tenant-support-consultations.js'});
   await page.evaluate(()=>window.controller=window.tenantCaseConsultations.mount({host:document.getElementById('host'),member:{tenant_id:'tenant',telegram_id:1,role:'owner'},ticket:{id:'case',channel_id:'source',conversation_id:'customer',agent_id:'agent',status:'new'},getMessages:()=>[],isCurrent:()=>true}));
-  await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('A question for the developer.');
+  await page.locator('#consultCreate').click();await page.locator('[data-send-disabled-reason]').waitFor({state:'visible'});assert.match(await page.locator('[data-send-disabled-reason]').textContent(),/Write a message/);await page.locator('#consultReason').fill('A question for the developer.');
   assert.equal(await page.locator('#caseDeveloperForm input[type=checkbox]').count(),0);
   assert.equal(await page.locator('[data-case-media-check][aria-pressed=true]').count(),1);
   assert.match(await page.locator('[data-case-preview-files]').textContent(),/voice-3/);
