@@ -18,6 +18,7 @@ on:
       - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
       - 'beintaskbot-main/tests/test_manual_case_saved_media.py'
       - 'beintaskbot-main/tests/test_pr465_followup_worker.py'
+      - 'beintaskbot-main/tests/test_case_followup_intent_fencing.py'
       - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
       - 'beintaskbot-main/tests/test_operator_case_recovery*'
       - 'beintaskbot-main/tests/test_case_developer_settings_ui.cjs'
@@ -219,6 +220,18 @@ jobs:
           assert all(case.find('skipped') is None for case in cases), 'Native race tests must not skip'
           print('Verified: all 9 native developer question races executed without skips')
           PY
+      - name: Verify automatic intent fences without skips
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+        run: |
+          python -m pytest -q -rs tests/test_case_followup_intent_fencing.py --junitxml=/tmp/consultation-intent-fences.xml
+          python - <<'PYTEST'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('/tmp/consultation-intent-fences.xml').getroot().findall('.//testcase')
+          assert len(cases) == 7, 'Expected all seven native automatic-intent tests'
+          assert all(case.find('skipped') is None for case in cases), 'Automatic-intent tests must not skip'
+          print('Verified: all 7 automatic-intent fences executed without skips')
+          PYTEST
       - name: Exercise independent consultations and real PostgreSQL races
         env:
           PYTHONPATH: tests/isolated_database_guard:.:tests

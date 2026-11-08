@@ -936,14 +936,14 @@ def active_case_developer_context(job,source_external_id,limit=10):
              'case_status':'open'} for row in reversed(rows)]
 
 
-def case_developer_followup_current(cur,tenant,payload):
+def case_developer_followup_current(cur,tenant,payload,*,require_automatic_intent=False):
     """Fail closed unless the exact queued provider reply still has authority."""
     if not isinstance(payload,dict):return False
     bindings=payload.get('developer_reply_bindings')
     if bindings is not None:
         if not isinstance(bindings,list) or not bindings:return False
         if any(not isinstance(item,dict) or item.get('case_id')!=payload.get('case_id') for item in bindings):return False
-        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None}) for item in bindings)
+        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None},require_automatic_intent=require_automatic_intent) for item in bindings)
     try:
         case_id=str(uuid.UUID(str(payload.get('case_id') or '')))
         reply_id=str(uuid.UUID(str(payload.get('developer_reply_message_id') or '')))
@@ -954,7 +954,7 @@ def case_developer_followup_current(cur,tenant,payload):
     if not conversation or not quote:return False
     cur.execute('''SELECT t.status,t.assigned_developer_channel_id::text AS assigned_channel,
         t.assigned_developer_conversation_id,
-        cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,
+        cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,a.version AS agent_version,
         s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,
         a.scopes,tn.status AS tenant_status,tn.owner_telegram_id,r.source_actor,r.source_external_id,
         t.channel_id::text AS client_channel,cs.agent_assignment_id::text AS assignment_id
@@ -982,13 +982,23 @@ def case_developer_followup_current(cur,tenant,payload):
       LIMIT 1 FOR UPDATE OF t,cs FOR SHARE OF a,s,tn,ch,source_ch,marker''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
     row=cur.fetchone()
     if not row:return False
-    cur.execute('''SELECT m.id FROM saas_crm_messages m JOIN saas_connect_conversations v
+    cur.execute('''SELECT m.id,m.raw->'_case_followup_intent' AS followup_intent FROM saas_crm_messages m JOIN saas_connect_conversations v
       ON v.tenant_id=m.tenant_id AND v.connect_channel_id=%s::uuid AND v.conversation_id=%s
         AND v.lead_id=m.kommo_lead_id
       WHERE m.tenant_id=%s::uuid AND m.external_id=%s AND m.direction='incoming'
         AND m.channel='connect:'||%s::uuid::text AND m.raw->>'quotedExternalMessageId'=%s
       FOR SHARE OF m FOR KEY SHARE OF v''',(channel,conversation,tenant,row['source_external_id'],channel,quote))
-    if not cur.fetchone():return False
+    source=cur.fetchone()
+    if not source:return False
+    if require_automatic_intent:
+        # Reuse the immutable ingress generation, not the worker's newer
+        # reservation. A mode cycle before claim must not revive old intent.
+        intents=source.get('followup_intent')
+        intent=intents.get(case_id) if isinstance(intents,dict) else None
+        expected={'agent_id':row.get('agent_id'),
+          'assignment_id':str(row.get('assignment_id') or ''),
+          'version':row.get('agent_version'),'owner_id':row.get('owner_telegram_id')}
+        if row.get('mode')!='automatic' or not isinstance(intent,dict) or intent!=expected:return False
     if str(conversation).endswith('@g.us') and not _verified_group_reply_author(
         cur,tenant,channel,conversation,row.get('source_external_id'),row.get('source_actor')):return False
     if payload.get('developer_expected_agent_id') and str(row.get('agent_id') or '')!=str(payload['developer_expected_agent_id']):return False
@@ -1033,7 +1043,7 @@ def case_developer_followup_current(cur,tenant,payload):
 def case_developer_followup_is_current(tenant,payload):
     with _connect() as conn:
         with conn.cursor() as cur:
-            return case_developer_followup_current(cur,tenant,payload)
+            return case_developer_followup_current(cur,tenant,payload,require_automatic_intent=True)
 
 
 def _case_reply_binding(cur,tenant,reply_id):
