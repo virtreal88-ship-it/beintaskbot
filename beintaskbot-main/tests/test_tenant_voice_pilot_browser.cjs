@@ -61,6 +61,9 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='talk_end')),false,'shorter than two seconds does not submit');
  await page.evaluate(()=>window.emitSilence(20));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_end'));
+ // The fake server delivers thinking on a timer, after the outgoing commit.
+ // Wait for that acknowledgement before injecting its response audio.
+ await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===1);
  assert.equal(await page.evaluate(()=>window.voiceEvents.findIndex(x=>x.type==='talk_start')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'automatic capture starts before submitting');
  assert.equal(await page.evaluate(()=>window.voiceEvents.findLastIndex(x=>x.type==='audio')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'last audio precedes commit');
  await voice.getByRole('button',{name:'Стоп',exact:true}).waitFor({state:'visible'});
@@ -83,6 +86,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  // A second turn starts with speech, without a new click.
  await page.evaluate(()=>{window.emitSpeech();window.emitSilence(2000);});
  await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===2);
+ await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===2);
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>window.playCount===2);
  await page.evaluate(()=>{window.deferTalkReady=true;window.interruptItem='assistant-2';});
@@ -100,6 +104,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length),2,'Stop resumes idle waiting, not an empty answer');
  await page.evaluate(()=>{window.emitSpeech();window.emitSilence(2000);});
  await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===3);
+ await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===3);
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-3',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>window.playCount===3);
  const closeButton=voice.getByRole('button',{name:'Завершить сессию'});
