@@ -16,6 +16,7 @@ from tenant_policy import TenantPolicy
 from tenant_notifications import notification_channels
 from tenant_proactive_risk_policy import analyze_crm_task, analyze_linear, crm_scope, fingerprint
 from tenant_proactive_risk_schema import ensure_schema
+from tenant_proactive_risk_explanation import detail_context
 
 MAX_RISK_ALERTS_PER_DAY = 10
 MAX_RISK_EVENTS_PER_TICK = 5
@@ -352,12 +353,14 @@ def current_finding(cur, event: dict, owner_profile: dict) -> dict | None:
                 return None
         if not synced or synced.tzinfo is None or now - synced.astimezone(timezone.utc) > CRM_SOURCE_MAX_AGE:
             return None
-        finding = next((item for item in analyze_crm_task(task, checked_at=now)
+        fresh_findings = analyze_crm_task(task, checked_at=now)
+        finding = next((item for item in fresh_findings
                         if alertable(item) and item.get('rule_id') == event['rule_id']
                         and alert_fingerprint(item) == event['alert_fingerprint']), None)
         return ({**finding, 'source_kind':'crm_task', 'source_id':str(event['source_id']),
                  'source_title':str(stored.get('source_title') or f"CRM task {event['source_id']}")[:200],
-                 'source_url':'/app?view=tasks', 'source':'CRM task'} if finding else None)
+                 'source_url':'/app?view=tasks', 'source':'CRM task',
+                 'context':detail_context(task, 'crm_task', fresh_findings)} if finding else None)
 
     # Linear authorization is re-read from the current owner membership and
     # encrypted tenant connection, then the exact issue is fetched live.
@@ -394,13 +397,14 @@ def current_finding(cur, event: dict, owner_profile: dict) -> dict | None:
         return None
     onboarding = owner_profile.get('onboarding') or {}
     timezone_name = onboarding.get('timezone') or (onboarding.get('company') or {}).get('timezone')
-    finding = next((item for item in analyze_linear(current, tenant_timezone=timezone_name, checked_at=now)
+    fresh_findings = analyze_linear(current, tenant_timezone=timezone_name, checked_at=now)
+    finding = next((item for item in fresh_findings
                     if alertable(item) and item.get('rule_id') == event['rule_id']
                     and alert_fingerprint(item) == event['alert_fingerprint']), None)
     return ({**finding, 'source_kind':'linear', 'source_id':str(event['source_id']),
              'source_title':str(current.get('title') or stored.get('source_title') or '')[:200],
              'source_url':str(current.get('url') or ''),
-             'source':'Linear'} if finding else None)
+             'source':'Linear', 'context':detail_context(current, 'linear', fresh_findings)} if finding else None)
 
 
 def _finding_is_current(cur, event: dict, owner_profile: dict) -> bool:

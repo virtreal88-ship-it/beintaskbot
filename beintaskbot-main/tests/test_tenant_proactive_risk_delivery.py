@@ -487,12 +487,13 @@ class TestRiskAlertPostgres:
         finding={'source_kind':'crm_task','source_id':SOURCE_ID,'source':'CRM task','source_title':'CRM task 509',
                  'source_url':'/app?view=tasks','rule_id':'service_unavailable','severity':'P1',
                  'confidence':'high','facts':['Task is overdue'],'assessment':'Needs review',
-                 'recommended_step':'Assign an owner'}
+                 'recommended_step':'Assign an owner','context':{'title':'Fresh source text','assigned':False}}
         monkeypatch.setattr(delivery,'current_finding',lambda *_args:finding)
         owner={'tenant_id':TENANT,'telegram_id':OWNER,'role':'owner','active':True,'tenant_status':'active'}
         detail=risk_store.alert_detail(owner,alert_id)
         assert detail['source_title']=='CRM task 509'
         assert detail['facts']==['Task is overdue']
+        assert detail['context']=={'title':'Fresh source text','assigned':False}
         assert detail['source_url']=='/app?view=tasks'
         read=self.query('SELECT event_key,read_at FROM saas_tenant_notifications ORDER BY event_key')
         assert next(row for row in read if row['event_key']==alert_key)['read_at'] is not None
@@ -570,6 +571,13 @@ def test_linear_delivery_rechecks_exact_team_and_live_issue(monkeypatch):
     assert detail['source_title']=='Access problem'
     assert detail['source_url']=='https://linear.app/acme/issue/issue-1'
     assert detail['rule_id']=='access_control_claim'
+    assert detail['context']['excerpt']=='permission change'
+    assert detail['context']['topic']=='access'
+    issue['description']='Updated source description'
+    assert delivery.current_finding(cur,event,owner)['context']['excerpt']=='Updated source description'
+    config['done_state_ids']=['todo']
+    assert delivery.current_finding(cur,event,owner) is None
+    config['done_state_ids']=[]
     issue['team']={'id':'other-team'}
     assert delivery._finding_is_current(cur,event,owner) is False
     assert delivery.current_finding(cur,event,owner) is None
