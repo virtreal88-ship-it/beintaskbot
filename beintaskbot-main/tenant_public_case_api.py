@@ -9,7 +9,7 @@ import tenant_public_case as cases
 
 _PUBLIC_HEADERS={'Cache-Control':'no-store, private, max-age=0','Pragma':'no-cache',
  'X-Robots-Tag':'noindex, nofollow, noarchive','Referrer-Policy':'no-referrer',
- 'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}
+ 'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src 'self' blob:; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}
 
 
 def owner_handler(member_from_request,origin):
