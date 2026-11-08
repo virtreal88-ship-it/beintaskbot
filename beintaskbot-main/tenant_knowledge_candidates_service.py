@@ -473,7 +473,8 @@ def prepare(profile,data,review=None,training=None):
                 cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=2648 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
             store._audit(cur,tenant,item['actor'],'knowledge_extraction_requested','knowledge_extraction',request_id)
         conn.commit()
-    return {**item,'id':request_id,'key':key,'photo_api_key':photo_api_key,'model':model,'agent_id':str(agent['id']),'review':review,'credential_source':source,'config':meta,'api_key':key,'media_spend':media_spend,'agent_prompt_context':agent_prompt,'dialog_context':{k:context.get(k) for k in ('agent_id','model','language','style')}}
+    # psycopg returns native UUIDs; keep the provider snapshot JSON-safe.
+    return {**item,'id':request_id,'key':key,'photo_api_key':photo_api_key,'model':model,'agent_id':str(agent['id']),'review':review,'credential_source':source,'config':meta,'api_key':key,'media_spend':media_spend,'agent_prompt_context':agent_prompt,'dialog_context':{**{k:context.get(k) for k in ('model','language','style')},'agent_id':str(context['agent_id'])}}
 
 
 def parse(raw,item):
