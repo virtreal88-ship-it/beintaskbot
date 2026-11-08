@@ -6,8 +6,13 @@ are required; all other users remain unavailable. The current company Chat AI
 credential is decrypted server-side and is never sent to `/app`.
 
 The pilot uses `gpt-realtime-2.1-mini` and has no fixed dollar ceiling. Each
-session is limited to 120 seconds, 30 seconds idle time, 5,760,000 bytes of
-incoming PCM audio, 4,800,000 bytes of generated audio, and 4,096 output tokens.
+session is limited to 600 seconds and 28,800,000 bytes of incoming PCM audio.
+Idle silence does not end a session or submit an empty turn. The existing
+9,600-byte frame cap, 4,800,000-byte generated-audio cap per response, and
+4,096 output-token cap per response remain unchanged. A longer session may
+use more paid model input/output; this duration limit is not a dollar ceiling.
+The legacy monetary-ledger path retains its 120-second maximum and existing
+reservations; its transcript pricing bounds are unchanged.
 PostgreSQL fencing permits one session per tenant/user and keeps an uncertain
 session blocked until a confirmed provider close. Voice audio and conversation
 turns are not persisted. No CRM tools or customer-send actions are available.

@@ -93,7 +93,10 @@ class Session:
             raise Refused('provider_claim_binding_required')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
             raise Refused('invalid_scope')
-        if not 0 < idle_seconds <= max_seconds <= 120 or not 0 < poll_seconds <= 1:
+        # Only the exact, scope-bound owner pilot admits a longer session.
+        # The general ledger path retains its original reservation/time bound.
+        maximum_seconds = 600 if pilot_policy is not None else 120
+        if not 0 < idle_seconds <= max_seconds <= maximum_seconds or not 0 < poll_seconds <= 1:
             raise Refused('invalid_limits')
         self.scope = scope  # (tenant, actor, channel, conversation), server-derived
         self.authority, self.ledger, self.lease = authority, ledger, lease
