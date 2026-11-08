@@ -1818,3 +1818,38 @@ def test_training_oversize_mandatory_context_rejected_before_reservation(ready,m
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_extractions')[0]['n']==0
     assert db.execute('SELECT instructions FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['instructions']==instructions
     assert db.execute('SELECT company_instructions FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(A,))[0]['company_instructions']==company
+
+
+@pytest.mark.parametrize('training', [True, False])
+def test_extraction_serializes_native_postgres_agent_uuid(ready, monkeypatch, training):
+    """PGlite returns strings; production psycopg returns native UUID values."""
+    import tenant_dialog_ai_context as context
+    import tenant_operator_case_submission as submission
+    from tenant_chat_ai_provider import request_payload
+    db, generation, data = ready
+    monkeypatch.setattr(submission, '_connect', lambda: db)
+    original_resolve = context.resolve
+    def native_uuid(*args, **kwargs):
+        value = original_resolve(*args, **kwargs)
+        return {**value, 'agent_id': uuid.UUID(str(value['agent_id']))}
+    monkeypatch.setattr(context, 'resolve', native_uuid)
+    expected = generation.return_value
+    def serialize_only(key, model, mode, lines, draft, **kwargs):
+        assert kwargs['extra_context']['assigned_agent']['agent_id'] == AGENT
+        request_payload(model, mode, lines, draft, **{k: kwargs[k] for k in
+            ('instructions', 'extra_context', 'images', 'max_output_tokens')})
+        return expected
+    generation.side_effect = serialize_only
+    if training:
+        preview = submission.preview(PROFILE, {'channel_id': CA, 'conversation_id': 'client'})
+        result = submission.submit(PROFILE, {
+            'channel_id': CA, 'conversation_id': 'client',
+            'message_ids': [m['id'] for m in preview['messages']],
+            **{k: preview['agent'][k] for k in ('agent_id', 'agent_version', 'assignment_revision')},
+        })
+    else:
+        result = service.analyze(PROFILE, data)
+    assert result['request']['execution_status'] == 'completed'
+    assert result['request']['error_code'] == ''
+    assert len(result['candidates']) == 1
+    assert generation.call_count == 1
