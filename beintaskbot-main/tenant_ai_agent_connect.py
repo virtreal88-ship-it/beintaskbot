@@ -848,7 +848,7 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
       'developer_expected_assignment_id':str(row.get('assignment_id') or ''),
       'expected_conversation_revision':int(row['dialog_revision'])}
     from tenant_dialog_consultations import case_developer_followup_current
-    if not case_developer_followup_current(cur,tenant,payload):return False
+    if not case_developer_followup_current(cur,tenant,payload,require_automatic_intent=True):return False
     # A case follow-up in a client group may reuse only the exact original
     # admitted customer event. Never mint a fresh group fence from a developer
     # reply or resume group authority implicitly.
@@ -885,6 +885,10 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
       if key.startswith('developer_') and key not in {'developer_case_followup','developer_reply_bindings'}} | {'case_id':prior_payload.get('case_id')}]
       if prior_payload.get('developer_reply_message_id') else [])
     if prior_payload.get('case_id')!=payload['case_id']:bindings=[]
+    # Historical intents stay recorded, but must not poison a genuinely fresh
+    # reply or acquire its newer authority after an agent-mode/settings cycle.
+    bindings=[item for item in bindings if case_developer_followup_current(
+      cur,tenant,item,require_automatic_intent=True)]
     payload['developer_reply_bindings']=[*bindings,binding]
     cur.execute('''INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
       VALUES(%s::uuid,%s,'connect',%s,'developer_case_reply',%s::jsonb,'queued',now())

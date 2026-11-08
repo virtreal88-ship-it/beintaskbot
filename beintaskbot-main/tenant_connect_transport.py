@@ -1405,7 +1405,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
             if case_followup_binding is not None:
                 from tenant_dialog_consultations import case_developer_followup_current
-                if not case_developer_followup_current(cur,tenant,case_followup_binding):
+                if not case_developer_followup_current(cur,tenant,case_followup_binding,require_automatic_intent=True):
                     conn.rollback()
                     return None
             if coordinated:
