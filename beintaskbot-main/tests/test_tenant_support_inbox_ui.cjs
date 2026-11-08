@@ -124,7 +124,7 @@ function setup(fetch,url='https://crm.test/app',rights=true,realOperator=false){
    if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
    if(url.startsWith(base+'/replies?'))return response({consultations:delivery?[delivery]:[],replies:[]});
    if(url===base+'/destinations')return response({destinations:[{channel_id:'developer-channel',conversation_id:gid,customer_name:'Developer group'}]});
-   if(url===base+'/preview')return response({messages:caseMessages,has_earlier:false});
+   if(url===base+'/preview')return response({public_header:{version:1,customer_name:'Synthetic customer',phone_status:'unknown',company_name:'Synthetic client',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:caseMessages.map(m=>({...m,source_version:'synthetic-v1'})),has_earlier:false});
    if(url===base&&init.method==='POST'){delivery={id:cid,case_id:ticket.id,request_id:body.request_id,state:'ready',destination_channel:body.destination_channel_id,destination_conversation:body.destination_conversation_id,recipient:'Developer group',reason:body.summary,can_dispatch:true,can_manual_reply:true};return response({id:cid,state:'ready'});}
    if(url===base+'/'+cid+'/dispatch'){delivery.state='pending';delivery.can_dispatch=false;return response({state:'pending'});}
    if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket:{...ticket,channel_id:'channel-a'},messages:caseMessages,expert_results:[],next_before:null});

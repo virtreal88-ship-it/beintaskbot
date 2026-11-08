@@ -4,7 +4,7 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmedi
 const source=fs.readFileSync('docs/tenant-support-consultations.js','utf8');
 const base='/api/platform/ai/dialog-consultations',ok=result=>({ok:true,json:async()=>({success:true,result})});
 const ticket={id:'case-a',lead_id:41,channel_id:'source-channel',conversation_id:'customer',status:'new',agent_id:'assigned-agent'};
-const messages=['text','audio','video'].map((kind,index)=>({id:'message-'+index,external_id:'connect:'+index,message_type:kind,direction:'incoming',public_speaker:'Müştəri',public_text:kind==='text'?'Printer problem':'',media_shareable:kind!=='text',body:kind==='text'?'Printer problem':'',happened_at:'2026-11-01T12:0'+index+':00Z'}));
+const messages=['text','audio','video'].map((kind,index)=>({id:'message-'+index,source_version:'v'+index,external_id:'connect:'+index,message_type:kind,direction:'incoming',public_speaker:'Müştəri',public_text:kind==='text'?'Printer problem':'',media_shareable:kind!=='text',body:kind==='text'?'Printer problem':'',happened_at:'2026-11-01T12:0'+index+':00Z'}));
 async function setup({dialogs=true,agent=true}={}){
  const dom=new JSDOM('<div id="host"></div><p id="notice"></p>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'company-a',telegram_id:11,role:dialogs?'owner':'operator'};
@@ -12,7 +12,7 @@ async function setup({dialogs=true,agent=true}={}){
  const state={autoDispatches:[],consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body,options});
-  if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false,customer_identity_preview:{name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified'}});
+  if(path===base+'/preview')return ok({public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages,case_id:ticket.id,has_earlier:false,customer_identity_preview:{name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified'}});
   if(path===base+'/destinations')return ok({destinations:[{channel_id:'developer-channel',conversation_id:'developers@g.us',customer_name:'Developers',channel_name:'Support WhatsApp'}]});
   if(path===base+'/replies')return ok({auto_dispatches:state.autoDispatches,consultations:state.consultations,replies:state.replies});
   if(path===base&&options.method==='POST'){
@@ -37,7 +37,7 @@ function fill(ctx,node){const summary=node.querySelector('#consultReason');summa
 (async()=>{
  const ctx=await setup();
  assert.equal(ctx.calls.filter(call=>call.options.method==='POST').length,0,'reading does not send or run AI');
- const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');assert.equal(request.querySelector('#caseConsultIdentityConsent'),null,'public identity control is removed');assert.match(request.textContent,/не будут опубликованы/);
+ const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');assert.equal(request.querySelector('#caseConsultIdentityConsent'),null,'public identity control is removed');assert.match(request.textContent,/включая участников группы разработчиков/);
  assert.equal(request.querySelector('#caseConsultFirst').value,'message-2','a public fragment starts with only the last message selected');
  assert.equal(request.querySelectorAll('input[type=checkbox]').length,0,'no redundant checkboxes');assert.equal(request.querySelectorAll('[data-case-media-check][aria-pressed=true]').length,1,'only the exact initial fragment file is included');
  assert.equal(request.querySelector('#caseConsultRecipientConfirm'),null,'Send is the explicit confirmation');assert.equal(request.querySelector('#caseConsultSend').disabled,true,'preselected or single recipient cannot send without explicit confirmation');
