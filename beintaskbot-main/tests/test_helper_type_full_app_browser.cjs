@@ -34,15 +34,15 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await page.locator('#operatorCopilot').isVisible(),false,'type lives inside the initially closed assistant panel');
     assert.ok(calls.some(call=>call.path==='/assets/tenant-operator-dialogs.js'));
     assert.ok(calls.some(call=>call.path==='/assets/tenant-dialog-consultations.js'));
-    const ask=page.locator('#dialogDeveloperAsk');await ask.waitFor({state:'visible'});
+    const ask=page.locator('#dialogDeveloperAsk');assert.equal(await ask.isVisible(),false);await page.locator('#operatorMoreActions > summary').click();await ask.waitFor({state:'visible'});
     const geometry=await ask.evaluate(node=>{const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth,clickable:hit===node||node.contains(hit)};});
     assert.equal(geometry.overflow,false,`direct action must not overflow at ${width}: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.left>=0&&geometry.right<=width&&geometry.top>=0&&geometry.bottom<=height,`direct action fits viewport: ${JSON.stringify(geometry)}`);
     assert.equal(geometry.clickable,true,'direct action is unobscured with helper closed');
-    await ask.dblclick();await page.locator('.dialog-consultation-form textarea').waitFor();
+    await ask.click();await page.locator('.dialog-consultation-form textarea').waitFor();
     assert.equal(await page.locator('.dialog-consultation-overlay').count(),1,'double click opens one modal');
     await page.locator('.dialog-consultation-form button[type=button]:not([data-question-draft])').click();assert.equal(await page.locator('.dialog-consultation-overlay').count(),0);
-    await ask.click();await page.locator('.dialog-consultation-form textarea').waitFor();
+    await page.locator('#operatorMoreActions > summary').click();await ask.click();await page.locator('.dialog-consultation-form textarea').waitFor();
     await page.evaluate(()=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,conversation_id:'another-synthetic-dialog'}));
     await page.waitForFunction(()=>!document.querySelector('.dialog-consultation-overlay'));
     assert.equal(calls.some(call=>/\/dispatch$/.test(call.path)),false,'cancel and source switch never send');

@@ -36,7 +36,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
   await page.locator('#dialogDeveloperMarker').click();await page.waitForFunction(()=>!document.getElementById('dialogDeveloperBadge'));assert.equal(markers.size,0);
   tenant='b';await page.evaluate(()=>{window.tenantOperator.member={tenant_id:'b',telegram_id:44};document.dispatchEvent(new CustomEvent('tenant-profile',{detail:{member:window.tenantOperator.member}}));});
   await page.waitForFunction(()=>document.getElementById('dialogDeveloperMarker').dataset.scope.startsWith('b:44:')&&!document.getElementById('dialogDeveloperMarker').disabled);
-  await page.locator('#dialogConsultationStart').click();await page.locator('[data-developer-empty]').waitFor();assert.equal(await page.locator('form select').first().locator('option').count(),0);
+  await page.locator('#dialogConsultationStart').click();await page.locator('[data-developer-empty]').waitFor();assert.equal(await page.locator('form select').first().locator('option').count(),1);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.equal(calls.some(x=>/dispatch|support-tickets|messages\/send/.test(x.path)),false);
   await page.close();

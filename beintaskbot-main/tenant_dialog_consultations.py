@@ -215,6 +215,13 @@ def selection(cur,tenant,source,message_ids):
     return rows[start:end+1]
 
 
+def public_preview_fields(row):
+    """Use the same safe projection for employee review and the public snapshot."""
+    return {'public_text':_public_text(row.get('body')),
+            'public_speaker':'Müştəri' if row.get('direction')=='incoming' else 'Əməkdaş',
+            'media_shareable':row.get('message_type') in _MEDIA_TYPES and not bool(_MEDIA_SECRET_MARKER.search(str(row.get('body') or '')))}
+
+
 def preview(profile,data):
     if not isinstance(data,dict) or set(data) not in ({'channel_id','conversation_id'},{'channel_id','conversation_id','case_id'}):raise TenantLinearError('Некорректный запрос.',400)
     with _connect() as conn:
@@ -246,12 +253,12 @@ def preview(profile,data):
                 if not author and isinstance(raw,dict):
                     author=next((raw.get(k) for k in ('participantName','senderName','pushName')
                                  if _human_preview_name(raw.get(k),source.get('conversation_id'))),'')
-                value.update(source_version=version(row),happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
+                value.update(**public_preview_fields(row),source_version=version(row),happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
                   customer_name=customer_name,customer_phone=phone,
                   author_name=_human_preview_name(author,source.get('conversation_id')))
                 for private in ('raw','media_url','channel','ordered_at','external_id'):value.pop(private,None)
                 messages.append(value)
-            return {'messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+            return {'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
                     'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
                         'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
