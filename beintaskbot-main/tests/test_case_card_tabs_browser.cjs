@@ -107,7 +107,7 @@ function installCaseTabsFixture(){
     }
     await page.locator('#supportTab-history').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'details');await page.keyboard.press('End');assert.equal(await active(page),'developer');await page.keyboard.press('Home');assert.equal(await active(page),'history');
     await page.locator('#supportTab-details').click();await page.locator('#supportDescription').fill('Private unsaved case draft');await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Printer remains offline');
-    assert.equal(await page.locator('#caseConsultRecipientConfirm,#caseConsultIdentityConsent').count(),0);assert.match(await page.locator('#caseConsultSend').textContent(),/Rauf/);
+    assert.equal(await page.locator('#caseConsultRecipientConfirm,#caseConsultIdentityConsent').count(),0);assert.match(await page.locator('[data-case-send-recipient]').textContent(),/Rauf/);
     assert.deepEqual(await page.locator('#caseConsultFirst option').evaluateAll(nodes=>nodes.map(n=>n.value)),[await page.evaluate(()=>notificationCaseFixture.material.id)]);
     assert.equal(await page.evaluate(()=>notificationCaseFixture.prepared.length),0);
     await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Private unsaved case draft');await page.locator('#supportTab-developer').click();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
