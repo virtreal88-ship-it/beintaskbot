@@ -1,6 +1,15 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));};
+// Check every locale, including the label shared by persisted cards and dispatch results.
+const consultationSource=fs.readFileSync('docs/tenant-dialog-consultations.js','utf8');
+const receiptCopy=require('node:vm').runInNewContext('('+consultationSource.match(/const copy=(.*?);\n/s)[1]+')');
+for(const [language,label] of Object.entries({ru:'Передано провайдеру; доставка не подтверждена.',az:'Provayderə ötürülüb; çatdırılma təsdiqlənməyib.',en:'Submitted to provider; delivery unconfirmed.'})){
+ assert.equal(receiptCopy[language].sent,label);
+ assert.notEqual(receiptCopy[language].pendingSend,label);
+ assert.notEqual(receiptCopy[language].unknown,label);
+}
+assert.equal(receiptCopy.en.pendingSend,'Connect queued the message; awaiting provider submission.');
 (async()=>{
  const dom=new JSDOM('<html><head></head><body><section id="view-dialogs" class="active"></section><div><select data-app-language></select></div><details id="operatorMoreActions"><summary>More</summary><div id="operatorMenuExtra"></div></details><aside id="operatorCopilot" hidden></aside><button id="operatorCopilotToggle"></button><textarea id="chatText"></textarea></body></html>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'tenant',telegram_id:33},route={provider:'connect',agent_id:'assigned-agent',channel_id:'channel',conversation_id:'source',lead_id:41,customer_name:'Customer'};
