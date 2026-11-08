@@ -142,12 +142,25 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_client({'type':'talk_end'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':f'input-{n}'})
             await session.receive_provider({'type':'response.created','response':{'id':f'response-{n}'}})
+            await session.receive_provider({'type':'response.output_item.added','response_id':f'response-{n}',
+                                            'item':{'id':f'assistant-{n}','type':'message','role':'assistant'}})
+            await session.receive_provider({'type':'response.output_audio.delta','response_id':f'response-{n}',
+                                            'item_id':f'assistant-{n}','content_index':0,'delta':'AQA='})
+            await session.receive_provider({'type':'response.output_audio.done','response_id':f'response-{n}',
+                                            'item_id':f'assistant-{n}','content_index':0})
             await session.receive_provider({'type':'response.done','response':{'id':f'response-{n}','output':[]}})
+            before=copy.deepcopy(wire.socket.sent)
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            self.assertEqual(wire.socket.sent,before,'generated audio still playing cannot be interrupted by speech')
+            self.assertIsNone(session.input_turn)
+            await session.receive_client({'type':'played_all','item_id':f'assistant-{n}'})
+            self.assertIsNone(session.item)
         self.assertEqual(sum(event['type']=='response.create' for event in wire.socket.sent),3)
         self.assertTrue(await session.end('test'))
         self.assertFalse(lease.held);self.assertTrue(wire.socket.closed)
 
-    async def test_click_interrupt_stops_exact_item_and_dispatches_followup_after_truncate(self):
+    async def test_explicit_stop_interrupts_exact_item_and_dispatches_followup_after_truncate(self):
         class Authority:
             async def check(self,scope,stage):return True
         class Lease:
@@ -175,6 +188,12 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_client({'type':'audio','pcm':bytes(480)})
             await session.receive_client({'type':'talk_end'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-0'})
+            # Model thinking is also uninterruptible from ambient speech.
+            before=copy.deepcopy(wire.socket.sent)
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            self.assertEqual(wire.socket.sent,before)
+            self.assertFalse(session.cancel_requested)
             await session.receive_provider({'type':'response.created','response':{'id':'response-0'}})
             await session.receive_provider({'type':'response.output_item.added','response_id':'response-0',
                                             'item':{'id':'assistant-0','type':'message','role':'assistant'}})
@@ -182,13 +201,23 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
                                             'item_id':'assistant-0','content_index':0,'delta':'AQA='})
             self.assertEqual(client.events[-1]['type'],'audio')
 
-            # The Talk button is usable while audio is still being generated.
-            await session.receive_client({'type':'talk_start','item_id':'assistant-0','audio_end_ms':0})
+            # Automatic turn requests and residual mic audio cannot interrupt.
+            before=copy.deepcopy(wire.socket.sent)
+            await session.receive_client({'type':'talk_start'})
+            await session.receive_client({'type':'audio','pcm':bytes(480)})
+            self.assertEqual(wire.socket.sent,before)
+            self.assertIsNone(session.input_turn)
+            self.assertFalse(session.cancel_requested)
+            # Only the explicit Stop button cancels and truncates the answer.
+            await session.receive_client({'type':'stop_response','item_id':'assistant-0','audio_end_ms':0})
             self.assertEqual(client.events[-1],{'type':'talk_ready'})
             self.assertEqual(wire.socket.sent[-2:],[
                 {'type':'response.cancel'},
                 {'type':'conversation.item.truncate','item_id':'assistant-0','content_index':0,'audio_end_ms':0},
             ])
+            before=copy.deepcopy(wire.socket.sent)
+            await session.receive_client({'type':'stop_response','item_id':'assistant-0','audio_end_ms':0})
+            self.assertEqual(wire.socket.sent,before,'duplicate Stop must not cancel twice')
             await session.receive_client({'type':'audio','pcm':bytes(480)})
             await session.receive_client({'type':'talk_end'})
             await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})

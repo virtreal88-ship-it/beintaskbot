@@ -43,5 +43,25 @@ const snapshot={snapshot_at:'2026-11-01T10:00:00Z',snapshot_revision:2,is_partia
  await page.route('**/*',route=>{calls.push(route.request().url());assert.equal(new URL(route.request().url()).pathname,'/public/case/header');return route.fulfill({headers:{'Content-Security-Policy':csp},contentType:'text/html',body:template.replace('__CASE_DATA__',JSON.stringify({...snapshot,public_identity:identity}).replace(/</g,'\\u003c'))});});
  await page.goto('https://fixture.invalid/public/case/header');assert.equal(calls.length,1);assert.equal(await page.locator('#description').isVisible(),false);assert.equal(await page.locator('#snapshot').isVisible(),false);assert.equal(await page.locator('.identity span').count(),5);assert.equal(await page.locator('.identity img,.identity script,.identity b').count(),0);for(const key of ['customer_name','verified_phone','company_name','operator_name'])assert.ok((await page.locator('.identity').textContent()).includes(identity[key]));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  if(process.env.PUBLIC_CHAT_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.PUBLIC_CHAT_SCREENSHOT_DIR,`public-header-${width}.png`),fullPage:true});await page.close();}
+ for(const width of [320,390,1280]){
+ const page=await browser.newPage({viewport:{width,height:850}});
+ const named={public_messages:[
+  {id:'a',direction:'incoming',speaker:'Synthetic Customer',text:'Customer on the left'},
+  {id:'b',direction:'outgoing',speaker:'Actual Employee',text:'Employee on the right'},
+  {id:'c',direction:'outgoing',speaker:'Əməkdaş',text:'No invented name'},
+  {id:'d',direction:'incoming',speaker:'BeinSystems',text:'Direction beats display name'},
+  {id:'e',speaker:'Əməkdaş',text:'Legacy known staff role'},
+  {id:'f',direction:'unknown',speaker:'BeinSystems',text:'Unknown is not inferred'}]};
+ await page.route('**/*',route=>route.fulfill({headers:{'Content-Security-Policy':csp},contentType:'text/html',body:template.replace('__CASE_DATA__',JSON.stringify(named))}));
+ await page.goto('https://fixture.invalid/public/case/named');
+ assert.equal(await page.locator('.bubble.team').count(),3);
+ const positions=await page.locator('.bubble').evaluateAll(nodes=>nodes.map(n=>({left:n.getBoundingClientRect().left,right:n.getBoundingClientRect().right,side:getComputedStyle(n).alignSelf})));
+ assert.deepEqual(positions.map(p=>p.side),['flex-start','flex-end','flex-end','flex-start','flex-end','flex-start']);
+ assert.ok(positions[1].right>positions[0].right);
+ assert.equal(await page.locator('.bubble.team .who').first().textContent(),'Actual Employee');
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ if(process.env.PUBLIC_CHAT_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.PUBLIC_CHAT_SCREENSHOT_DIR,`public-named-${width}.png`),fullPage:true});
+ await page.close();
+ }
  const page=await browser.newPage();await page.setContent(template.replace('__CASE_DATA__','{}'));assert.match(await page.locator('.empty').textContent(),/mesaj yoxdur/);await page.close();console.log('Public case chat: desktop/mobile, snapshot safety, empty state, media retry and keyboard zoom passed.');
 }finally{await browser.close()}})().catch(error=>{console.error(error);process.exit(1)});

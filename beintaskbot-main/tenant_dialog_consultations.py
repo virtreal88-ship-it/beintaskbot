@@ -203,7 +203,7 @@ def selection(cur,tenant,source,message_ids):
     from tenant_public_case import _valid_ids
     ids=_valid_ids(message_ids,required=True)
     # Only the latest bounded episode available to the employee is selectable.
-    cur.execute('''SELECT id::text,external_id,body,message_type,direction,raw,
+    cur.execute('''SELECT id::text,external_id,body,message_type,direction,author_name,raw,
       COALESCE(happened_at,created_at) AS happened_at FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
       ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 80''',
@@ -213,6 +213,31 @@ def selection(cur,tenant,source,message_ids):
     except ValueError:raise TenantLinearError('Обновите выбранный фрагмент.',409) from None
     if keys[start:end+1]!=ids:raise TenantLinearError('Выберите непрерывный фрагмент текущего обращения.',409)
     return rows[start:end+1]
+
+
+def public_sender_version(row):
+    """Separate name proof so existing frozen media hashes remain valid."""
+    return hashlib.sha256(json.dumps({'author_name':row.get('author_name')},sort_keys=True,default=str).encode()).hexdigest()
+
+
+def public_dialog_message(row,source,identity,allowed):
+    """Freeze source identity, never attribute historic sends to the share creator."""
+    direction=row.get('direction') if row.get('direction') in {'incoming','outgoing'} else 'unknown'
+    group=source.get('conversation_kind')=='group' or str(source.get('conversation_id') or '').endswith('@g.us')
+    author=_human_preview_name(row.get('author_name'),source.get('conversation_id'))
+    if not author and direction=='incoming' and isinstance(row.get('raw'),dict):
+        author=next((_human_preview_name(row['raw'].get(key),source.get('conversation_id'))
+            for key in ('participantName','senderName','pushName')
+            if _human_preview_name(row['raw'].get(key),source.get('conversation_id'))),'')
+    if author.casefold() in {'unknown sender','me','you','self','system'} or _MEDIA_SECRET_MARKER.search(author):author=''
+    if direction=='incoming':
+        name=author if group else _human_preview_name(identity.get('customer_name')) or author
+        fallback='İştirakçı' if group else 'Müştəri'
+    elif direction=='outgoing':name=author;fallback='Əməkdaş'
+    else:name=author;fallback='Göndərən göstərilməyib'
+    return {'id':row['id'],'speaker':name or fallback,'direction':direction,
+        'text':_public_text(row.get('body')),'type':row['message_type'] if row['id'] in allowed else 'text',
+        'at':str(row['happened_at'])}
 
 
 def public_preview_fields(row):
@@ -254,7 +279,7 @@ def preview(profile,data):
                 if not author and isinstance(raw,dict):
                     author=next((raw.get(k) for k in ('participantName','senderName','pushName')
                                  if _human_preview_name(raw.get(k),source.get('conversation_id'))),'')
-                value.update(**public_preview_fields(row),source_version=version(row),happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
+                value.update(**public_preview_fields(row),source_version=version(row),public_sender_version=public_sender_version(row),happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
                   customer_name=customer_name,customer_phone=phone,
                   author_name=_human_preview_name(author,source.get('conversation_id')))
                 for private in ('raw','media_url','channel','ordered_at','external_id'):value.pop(private,None)
@@ -329,7 +354,7 @@ def _selected_last_message_at(rows):
 
 def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions','public_header_version','public_header_hash','public_header_source_versions'}
+    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions','public_header_version','public_header_hash','public_header_source_versions','public_dialog_version','public_sender_versions'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
     if ('question_draft_request_id' in data) != ('source_versions' in data):
@@ -342,6 +367,11 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     if header_requested and (type(data.get('public_header_version')) is not int or data.get('public_header_version')!=1
             or not isinstance(data.get('public_header_hash'),str) or not re.fullmatch(r'[0-9a-f]{64}',data['public_header_hash']) or include_identity):
         raise TenantLinearError('Обновите предварительный просмотр публичных данных.',400)
+    named_dialog='public_dialog_version' in data
+    if named_dialog and (type(data['public_dialog_version']) is not int or data['public_dialog_version']!=1 or not header_requested):
+        raise TenantLinearError('Обновите форму публичного диалога.',400)
+    if ('public_sender_versions' in data)!=named_dialog:
+        raise TenantLinearError('Обновите форму публичного диалога.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
     case_id=identifier(data['case_id']) if data.get('case_id') else None
     summary=data['summary']
@@ -391,6 +421,12 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 from tenant_support_case_context import selection as case_selection
                 rows=case_selection(cur,tenant,case_id,channel,data['conversation_id'],selected)
             else:rows=selection(cur,tenant,source,selected)
+            if named_dialog:
+                expected_media={row['id'] for row in rows if public_preview_fields(row)['media_shareable']}
+                if set(media)!=expected_media:
+                    raise TenantLinearError('Обновите файлы выбранного фрагмента.',409)
+                if data['public_sender_versions']!={row['id']:public_sender_version(row) for row in rows}:
+                    raise TenantLinearError('Имена отправителей изменились. Обновите форму.',409)
             identity=None
             if header_requested:
                 if data['public_header_source_versions']!={row['id']:version(row) for row in rows}:
@@ -399,10 +435,14 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 if not secrets.compare_digest(header_hash,data['public_header_hash']):
                     raise TenantLinearError('Публичные данные изменились. Обновите предварительный просмотр.',409)
                 identity={**header,'last_message_at':_selected_last_message_at(rows)}
+                if named_dialog:identity['dialog_version']=1
+            snapshot_header_hash=data.get('public_header_hash')
+            if named_dialog:
+                snapshot_header_hash=hashlib.sha256((snapshot_header_hash+json.dumps(data['public_sender_versions'],sort_keys=True)).encode()).hexdigest()
             auto=auto_intent(cur,tenant,case_id,request,auto_dispatch_id,dest,data['destination_conversation_id'])
             admitted_media=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
             pending=existing(cur,tenant,channel,data['conversation_id'],selected,case_id,dest,data['destination_conversation_id'],
-                summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True,public_header=identity,public_header_hash=data.get('public_header_hash'))
+                summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True,public_header=identity,public_header_hash=snapshot_header_hash)
             if pending:
                 return {'id':pending['id'],'case_id':pending.get('case_id'),'request_id':pending['request_id'],
                         'state':pending['state'],'created':False,'reused':True}
@@ -452,6 +492,8 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
+            if named_dialog:
+                public=[public_dialog_message(row,source,identity or {},allowed) for row in rows]
             identity=identity or {}
             if include_identity:
                 name=_human_preview_name(source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),source.get('conversation_id'))
@@ -469,7 +511,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             fragment=COPY[ai_summary['selection']['language']]['fragment'] if ai_summary else 'Фрагмент переписки (ссылка действует 7 дней)'
             body=summary.strip()+'\n\n'+fragment+':\n'+url
             consultation_evidence={'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}
-            if header_requested:consultation_evidence['public_header_hash']=data['public_header_hash']
+            if header_requested:consultation_evidence['public_header_hash']=snapshot_header_hash
             if ai_summary is not None:consultation_evidence['ai_summary']=ai_summary
             if data.get('question_draft_request_id'):
                 consultation_evidence['question_draft']={k:data[k] for k in ('question_draft_request_id','channel_id','conversation_id','message_ids','media_ids','source_versions')}
@@ -480,7 +522,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,
               group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial,public_identity)
               VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s,%s::jsonb)''',
-              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),len(allowed)!=len(media),_json(identity)))
+              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),(len(allowed)!=len(media) or (named_dialog and any(row['message_type'] in _MEDIA_TYPES and row['id'] not in allowed for row in rows))),_json(identity)))
             cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s)''',
               (tenant,ident,request,case_id,dest,target['conversation_id'],body,hashlib.sha256(body.encode()).hexdigest(),actor))
@@ -1428,7 +1470,23 @@ def public_media(token,message_id,client='',connection_factory=None):
                 raise TenantLinearError('Файл недоступен.',404)
             external=str(row['external_id']).removeprefix('connect:');kind={'voice':'audio'}.get(row['message_type'],row['message_type'])
         conn.commit()
-    result=download_connect_message_media(current,external,kind,share['conversation_id'])
+    if (share.get('public_identity') or {}).get('dialog_version')==1:
+        # Same bounded, MIME-checked, response-bound Connect reader as Dialogs.
+        # Token and immutable source checks above replace authenticated UI access,
+        # but never relax the exact route/message or post-download fences.
+        from tenant_connect_media import download_media
+        import asyncio
+        import base64
+        try:reference=str(uuid.UUID(external))
+        except (ValueError,TypeError):raise TenantLinearError('Файл недоступен.',404) from None
+        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+        if raw.get('conversationId') and raw['conversationId']!=current['conversation_id']:
+            raise TenantLinearError('Файл недоступен.',404)
+        content,mime=asyncio.run(download_media({'provider':'connect','route':current,
+            'message_id':reference,'row':dict(row)},preview_documents=True))
+        result={'base64':base64.b64encode(content).decode('ascii'),'mimeType':mime}
+    else:
+        result=download_connect_message_media(current,external,kind,share['conversation_id'])
     # Expiry/revoke may have changed while provider download was in flight.
     with (connection_factory or _connect)() as conn:
         with conn.cursor() as cur:
@@ -1482,7 +1540,7 @@ def original_evidence(cur,tenant,reply_id,channel,conversation,lead):
       WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s''',
       (tenant,reply_id,channel,conversation));snapshot=cur.fetchone()
     if not snapshot:raise TenantLinearError('Исходный снимок консультации недоступен.',409)
-    cur.execute('''SELECT id::text,external_id,body,message_type,direction,raw,channel,
+    cur.execute('''SELECT id::text,external_id,body,message_type,direction,author_name,raw,channel,
       COALESCE(happened_at,created_at) AS happened_at FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=ANY(%s::uuid[])''',
       (tenant,lead,'connect:'+channel,snapshot['selected_message_ids']))
