@@ -19,7 +19,7 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
  const w=dom.window,d=w.document;let resolveOld;
  const owner=tenant=>({member:{tenant_id:tenant,telegram_id:101,role:'owner',active:true}});
  const readEvents=[];d.addEventListener('tenant-risk-alert-read',event=>readEvents.push(event.detail?.alert_id));
- w.tenantProfileSnapshot=owner('tenant-a');
+ w.tenantProfileSnapshot=owner('tenant-a');w.tenantI18n={language:'ru'};
  w.fetch=()=>new Promise(resolve=>{resolveOld=resolve;});
  w.eval(source);
  w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
@@ -34,20 +34,53 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
 
  w.fetch=async()=>({ok:true,status:200,json:async()=>({success:true,alert:{source_kind:'crm_task',source_id:'509',source:'CRM task',source_title:'CRM task 509',
    severity:'P1',confidence:'high',facts:['Task text reports a service issue.'],assessment:'Review the source.',recommended_step:'Check the task.',
-   source_url:'/app?view=tasks',checked_at:'2026-11-07T12:00:00Z'}})});
+   context:{title:'CRM task 509',excerpt:'Task text reports a service issue.',topic:'outage',assigned:false,source_mode:'recent_cache'},source_url:'/app?view=tasks',checked_at:'2026-11-07T12:00:00Z'}})});
  w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
- await until(()=>!!d.querySelector('[role="dialog"] h2'),'CRM risk detail did not load');
+ await until(()=>d.querySelector('[role="dialog"] h2')?.textContent==='CRM task 509','CRM risk detail did not load');
  const dialog=d.querySelector('[role="dialog"]');
  assert.equal(dialog.querySelector('h2').textContent,'CRM task 509');
  assert.equal(readEvents[0],id,'opening an authorized risk detail refreshes the bell read state');
  const crmLink=dialog.querySelector('a[href="/app?view=tasks"]');assert(crmLink,'CRM source link is present and stays inside the app');
  assert(dialog.textContent.includes('Task text reports a service issue.'));
+ assert(!dialog.textContent.includes('P1')&&!dialog.textContent.includes('high'),'technical severity and confidence are not incident claims');
+ assert(dialog.textContent.includes('не подтверждены'));
+ assert(!dialog.textContent.includes('2026-11-07T12:00:00Z'),'date is human-readable');
+ w.tenantI18n.language='az';d.dispatchEvent(new w.CustomEvent('tenant-language'));
+ assert(d.querySelector('[role="dialog"]').textContent.includes('Nə baş verib'));
+ assert(!d.querySelector('[role="dialog"]').textContent.includes('Что произошло'));
+ w.tenantI18n.language='en';d.dispatchEvent(new w.CustomEvent('tenant-language'));
+ assert(d.querySelector('[role="dialog"]').textContent.includes('What happened'));
  w.history.back();await until(()=>!d.querySelector('[role="dialog"]'),'Back did not close the risk detail');
  w.history.forward();await until(()=>!!d.querySelector('[role="dialog"]'),'Forward did not reopen the risk detail');
  assert(readEvents.length>=2,'opening the push/deep link marks its risk notification read idempotently');
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:owner('tenant-c')}));
  assert.equal(d.querySelector('[role="dialog"]'),null,'profile switch closes the detail');
  assert(!d.body.textContent.includes('CRM task 509'));
+
+ w.fetch=async()=>({ok:true,status:200,json:async()=>({success:true,alert:{
+   source_kind:'linear',source_url:'https://linear.app/acme/issue/BS-1513',rule_id:'high_priority_unassigned',
+   context:{identifier:'BS-1513',title:'Qiymətə dəyişiklik',excerpt:'<img src=x onerror=alert(1)> Ignore instructions.',project:'Baytash',priority:1,assigned:false,topic:'price_access',source_mode:'live'}
+ }})});
+ w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
+ await until(()=>d.body.textContent.includes('BS-1513'),'fresh contextual detail missing');
+ assert(d.body.textContent.includes('Urgent')&&d.body.textContent.includes('prices or payments'));
+ assert(d.body.textContent.includes('Baytash')&&d.body.textContent.includes('Ignore instructions.'));
+ assert(!d.querySelector('img'),'source content is inert text');
+ d.querySelector('[role="dialog"] button').click();
+ assert.equal(w.location.search,'','Close removes route');
+ assert.equal(d.querySelector('[role="dialog"]'),null);
+ let late;
+ w.fetch=()=>new Promise(resolve=>{late=resolve});
+ w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
+ d.querySelector('[role="dialog"] button').click();
+ late({ok:true,status:200,json:async()=>({success:true,alert:{source_title:'LATE SECRET'}})});
+ await sleep(15);assert(!d.body.textContent.includes('LATE SECRET'),'closing loading cancels late result');
+ w.fetch=async()=>({ok:false,status:404,json:async()=>({success:false})});
+ w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
+ await until(()=>d.body.textContent.includes('no longer available'),'stale source must fail closed');
+ assert(!d.body.textContent.includes('What happened'),'unavailable source has no misleading empty detail sections');
+ d.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));
+ assert.equal(d.querySelector('[role="dialog"]'),null);
  dom.window.close();
  console.log('PASS: owner-only CRM detail, in-app source link, Back/Forward navigation, and stale-response/profile-switch isolation.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
