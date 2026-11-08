@@ -48,6 +48,7 @@ jobs:
           python -m pytest -q
           tests/test_tenant_operator_voice_lease.py
           tests/test_tenant_operator_voice_live_admission.py
+          tests/test_tenant_operator_voice_duration.py
           tests/test_tenant_operator_realtime_wire.py
           tests/test_tenant_operator_realtime_aiohttp.py
       - name: Test bounded browser microphone batching
