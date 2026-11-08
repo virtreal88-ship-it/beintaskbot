@@ -613,9 +613,14 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                   WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",
                   (receipt['message_id'],receipt['external_message_id'],tenant,request))
                 if not cur.fetchone():raise TenantLinearError('Квитанция требует проверки.',409)
+                # Native Reply reads the provider ID from this CRM row, not
+                # the delivery ledger. Preserve the confirmed synchronous receipt
+                # without waiting for an optional signed outbound webhook echo.
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,raw)
                   VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'Operator',%s,'text',%s::jsonb) ON CONFLICT DO NOTHING''',
-                  (uuid.uuid4(),tenant,target['lead_id'],'connect:'+receipt['message_id'],'connect:'+str(delivery['channel_id']),delivery['body'],_json({'source':'connect','consultation_outbound':True})))
+                  (uuid.uuid4(),tenant,target['lead_id'],'connect:'+receipt['message_id'],'connect:'+str(delivery['channel_id']),delivery['body'],_json({'source':'connect','consultation_outbound':True,
+                    'id':receipt['message_id'],'externalMessageId':receipt['external_message_id'],
+                    'originClientMessageId':request,'status':'sent'})))
                 # Reply correlation is derived, optional work. Its failure
                 # cannot discard a positive provider receipt already obtained.
                 cur.execute('SAVEPOINT consultation_reply_reconcile')

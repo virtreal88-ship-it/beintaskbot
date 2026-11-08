@@ -592,3 +592,23 @@ def test_public_preview_fields_match_snapshot_redaction():
     assert result['public_speaker']=='Müştəri'
     assert result['media_shareable'] is False
     assert flow.public_preview_fields({'body':'Normal caption','direction':'outgoing','message_type':'image'})=={'public_text':'Normal caption','public_speaker':'Əməkdaş','media_shareable':True}
+
+
+def test_sync_consultation_receipt_is_immediately_available_for_native_quote(ready):
+    from tenant_chat_send_store import quote_target
+    db,data,sender=ready;result,_=prepared(ready)
+    assert flow.dispatch(PROFILE,result['id'],data['request_id'])['state']=='sent'
+    stored=db.execute("SELECT id::text,raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:connect-id'",(A,))[0]
+    assert stored['raw']['externalMessageId']=='PROVIDER_123'
+    assert stored['raw']['id']=='connect-id'
+    assert stored['raw']['originClientMessageId']==data['request_id']
+    assert stored['raw']['status']=='sent'
+    assert '_crm_signed_outbound_receipt' not in stored['raw']
+    command={'quote_message_id':stored['id'],'quote_channel_id':CA,'quote_conversation_id':TARGET,'lead_id':99}
+    with db.cursor() as cur:
+        assert quote_target(cur,A,command,['connect',CA,TARGET])=='PROVIDER_123'
+        with pytest.raises(TenantLinearError):quote_target(cur,B,command,['connect',CA,TARGET])
+    db.commit()
+    assert reply(db,result,text='Sabah',quoted=None) is None
+    assert flow.inbox(PROFILE)['replies']==[]
+    assert sender.call_count==1
