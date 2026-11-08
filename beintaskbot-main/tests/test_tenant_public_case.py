@@ -159,7 +159,16 @@ def test_public_page_renders_media_kinds_read_only_and_never_uses_old_deal_endpo
         assert f"createElement('{tag}')" in page
     assert "createElement('a')" in page  # document fallback
     assert "textContent" in page and 'api/deal/file' not in page and 'api/deal/public' not in page
-    assert 'form' not in page.lower() and "button.onclick=async()=>" in page
+    # Match actual write controls, not harmless CSS such as text-transform.
+    from html.parser import HTMLParser
+    import re
+    class Tags(HTMLParser):
+        def __init__(self):super().__init__();self.tags=[]
+        def handle_starttag(self,tag,attrs):self.tags.append(tag)
+    parsed=Tags();parsed.feed(page)
+    assert not ({'form','input','textarea','select'} & set(parsed.tags))
+    assert not re.search(r"createElement\(\s*['\"](?:form|input|textarea|select)['\"]",page,re.I)
+    assert "button.onclick=async()=>" in page
     assert "credentials:'omit',cache:'no-store'" in page
     from tenant_public_case_api import _PUBLIC_HEADERS
     assert _PUBLIC_HEADERS['Cache-Control']=='no-store, private, max-age=0'
