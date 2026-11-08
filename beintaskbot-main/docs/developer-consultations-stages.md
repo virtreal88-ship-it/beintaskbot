@@ -12,7 +12,7 @@
 
 ## Remaining implementation stages
 
-1. Generate an editable developer question from exactly the selected message interval and selected attachments. Bind the generation to source versions, current employee/agent permissions and a durable idempotent request. Do not treat an unrelated prior Copilot answer or an unverified attachment as this question.
+1. The editable initial developer question is implemented in Stage 2 below; further media processing remains a separate explicit action.
 2. Extend the existing case-bound continuation into a complete short developer/customer exchange. Every clarification and answer must remain bound to one consultation and original case, with current source/destination rights and assignment checks before each external send.
 3. Make automatic client answers follow the configured agent instructions and verified developer evidence. Switching to manual must invalidate outstanding automatic sends at the final dispatch boundary, including delayed worker results.
 4. Suppress routine bell notices only for a proven successful automatic path. Blocked, failed, uncertain or unprocessable replies must reliably reach a human; manual developer replies remain actionable. Reading stays separate from handling.
@@ -57,3 +57,38 @@ An automatic worker that encounters an employee consultation records a blocked
 review-needed result, never copies its receipt state or sends its prepared body.
 Native PostgreSQL cross-entry races run through the disposable CI fixture; no
 production messaging or database is used.
+
+
+## Stage 2: employee-reviewed AI question
+
+Both existing consultation forms have one explicit AI question action. It fills the
+editable question field and resets review. Generating never prepares or dispatches a
+consultation, creates a public share, or sends a message. Existing explicit send and
+cross-entry admission remain authoritative; no automatic reserve or customer reply
+is added. Public identity remains off by default.
+
+`POST /api/platform/ai/dialog-consultations/question-draft` accepts the exact selected
+message UUIDs, checked media UUIDs, preview `source_version` hashes, optional case UUID
+and employee notes. Only this bounded interval is read. There is no latest-history,
+knowledge search, or private Copilot thread fallback. Saved evidence is reused only
+for checked files with exact source provenance and complete coverage. Missing,
+partial, oversized, unselected and unsupported evidence is explicitly unavailable;
+this action never downloads or analyzes attachments and never transmits binary media.
+
+The existing Copilot ledger retains tenant/actor, assignment, consent, model and daily
+call limits. A deterministic request identity covers employee, route, case, selection,
+source versions, files and notes. Reopening or rotating browser UUIDs cannot repay an
+identical uncertain call. If only agent settings or saved evidence changes, identical
+input fails closed rather than silently retrying; a deliberately changed question or
+selection is needed. No additional ledger or schema is introduced.
+
+Current access, case status, message versions and saved evidence are rechecked before
+paid text I/O, after generation, on cache reuse, on preparation and again on dispatch.
+Employee edits are retained, but they cannot be sent against stale selected evidence.
+The AI proof is private consultation evidence, never part of the public fragment.
+In-flight results cannot overwrite later edits, switched selections or another route,
+case or identity. Dismissal does not send, and repeated clicks share the same attempt.
+
+All tests use synthetic local fixtures and mocked providers. Native concurrent UUID,
+unknown-result and source-edit tests run under the existing disposable PostgreSQL CI
+job. A local run without `BEINTASKBOT_TEST_POSTGRES_DSN` skips those tests explicitly.

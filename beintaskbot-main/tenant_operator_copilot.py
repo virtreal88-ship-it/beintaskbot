@@ -506,12 +506,14 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
             'images':images,'context_usage':context_usage,'knowledge':knowledge,'turns':turns}
 
 
-def run(profile, data, *, consultation_reply_id=None):
+def run(profile, data, *, consultation_reply_id=None, developer_question=None):
     if isinstance(data,dict) and 'saved_only' in data and data['saved_only'] is not True:raise TenantLinearError('Invalid saved-only mode.',400)
     if isinstance(data,dict) and data.get('saved_only') is True:
         if consultation_reply_id is not None:raise TenantLinearError('Saved-only mode cannot replace consultation evidence.',409)
         from tenant_saved_only_copilot import execute
         return execute(profile,data)
+    if developer_question is not None and (consultation_reply_id is not None or data.get('saved_only') or data.get('mode') != 'instruction'):
+        raise TenantLinearError('Некорректный режим вопроса разработчику.', 400)
     command = _clean(data)
     with _connect() as conn:
         ensure_schema(conn)
@@ -521,6 +523,12 @@ def run(profile, data, *, consultation_reply_id=None):
             if int(route.get('lead_id') or 0) != command['lead_id']:
                 raise TenantLinearError('Диалог изменился. Обновите его.', 409)
             consultation_evidence=None
+            question_state=None
+            if developer_question is not None:
+                from tenant_developer_question_draft import load as load_question
+                question_state=load_question(cur,profile,developer_question)
+                command['_developer_question']=developer_question
+                command['_question_fingerprint']=question_state['fingerprint']
             if consultation_reply_id is not None:
                 # Internal worker argument; never accepted from a browser's JSON.
                 # Fetch evidence by its actual source mapping, not caller text.
@@ -570,6 +578,10 @@ def run(profile, data, *, consultation_reply_id=None):
             cur.execute('SELECT requested_by,input_hash,status,result,config_version FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE', (tenant, command['request_id']))
             existing = cur.fetchone()
             if existing:
+                if (developer_question is not None and int(existing['requested_by']) == actor
+                        and existing['status'] == 'completed'
+                        and (existing['input_hash'] != digest or str(existing['config_version']) != str(connection['updated_at']))):
+                    raise TenantLinearError('AI-черновик устарел. Измените описание вопроса или выбранный фрагмент и создайте новый черновик. Повтор без изменений не запускает AI заново.', 409)
                 if (int(existing['requested_by'])==actor and command['mode']=='reply'
                     and existing['input_hash']!=digest and any(existing['input_hash']==_hash(command,media_selection_version=version)
                         for version in ('latest-customer-request-v3-audio-evidence','current-episode-v4-complete-audio','current-episode-v5-complete-audio-photos'))):
@@ -630,14 +642,18 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
-            rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
+            if question_state is not None:rows,turns=question_state['rows'],[]
+            else:rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
             cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid", (tenant,))
 
         conn.commit()
-    context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
+    if question_state is not None:
+        from tenant_developer_question_draft import context as question_context
+        context=question_context(tenant,actor,command,config,connection,secret,model,agent_context,rows)
+    else:context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
     execution=context['execution'];lines=context['lines'];request=context['request'];prompt=context['instructions']
     extra=context['extra_context'];images=context['images'];context_usage=context['context_usage'];knowledge=context['knowledge'];turns=context['turns']
     text = None
@@ -659,10 +675,13 @@ def run(profile, data, *, consultation_reply_id=None):
                                instructions=prompt, extra_context=extra,
                                images=images,
                                with_usage=True, max_output_tokens=900,
-                               **({'before_dispatch':coverage_guard} if manifest else {}))
+                               **({'before_dispatch':coverage_guard} if manifest else
+                                  {'before_dispatch':lambda wire:execution.check()} if question_state is not None else {}))
         if manifest:manifest.check(lines)
         if not text or not text.strip():
             raise ValueError('empty copilot response')
+        if question_state is not None and len(text)>2600:
+            raise ValueError('developer question is too long')
     except Exception as error:
         if isinstance(error, ChatAIProviderError):
             # Safe operational metadata only: never log tenant/user identifiers,
@@ -677,9 +696,13 @@ def run(profile, data, *, consultation_reply_id=None):
         raise failure from None
     result = {'text': text, 'mode': command['mode'], 'usage': usage,
         'source_versions':command.get('_source_versions',[]),
-        'context_usage': context_usage if command['mode']=='reply' else None,
+        'context_usage': context_usage if command['mode']=='reply' or question_state is not None else None,
         'knowledge_sources': [{'title': item['title']} for item in knowledge]}
     if consultation_evidence is not None:result['consultation_agent_binding']=command['_agent_binding']
+    if question_state is not None:
+        result.update(developer_question_draft=True,customer_message_sent=False,request_id=command['request_id'],
+                      question_binding={'selection':developer_question,'fingerprint':command['_question_fingerprint'],
+                                        'agent_binding':command['_agent_binding']})
     try:
         _finish(tenant, command, actor, result, turns, request, text,**({'coverage_manifest':manifest,'coverage_lines':lines} if manifest else {}))
     except CoverageError:
@@ -701,6 +724,9 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
                 if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)
                 if coverage_manifest is not None:coverage_manifest.validate(cur,tenant,command['channel_id'],command['lead_id'],lines=coverage_lines)
+                if command.get('_developer_question'):
+                    from tenant_developer_question_draft import validate
+                    validate(cur,{'tenant_id':tenant,'telegram_id':actor},command)
                 if command.get('_consultation_evidence'):
                     from tenant_dialog_consultations import original_evidence
                     original_evidence(cur,tenant,command['_consultation_evidence']['id'],command['channel_id'],command['conversation_id'],command['lead_id'])
@@ -723,7 +749,7 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
             if result is None and command.get('_media_failure'):stored={'media_failure':command['_media_failure']}
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))
-            if status == 'completed' and not command.get('_consultation_evidence'):
+            if status == 'completed' and not command.get('_consultation_evidence') and not command.get('_developer_question'):
                 new_turns = (turns + [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']}, {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}])[-20:]
                 cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)
                   VALUES(%s::uuid,%s,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)

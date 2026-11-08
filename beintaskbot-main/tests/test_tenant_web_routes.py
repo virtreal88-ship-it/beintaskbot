@@ -44,6 +44,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
     ('dialog-consultations/destinations', ('GET',)),
     ('dialog-consultations/preview', ('POST',)),
+    ('dialog-consultations/question-draft', ('POST',)),
     ('dialog-consultations', ('POST',)),
     ('dialog-consultations/replies', ('GET',)),
     ('dialog-consultations/{id}/dispatch', ('POST',)),
