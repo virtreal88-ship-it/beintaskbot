@@ -9,6 +9,7 @@ on:
       - 'beintaskbot-main/tests/test_developer_question_clarity_browser.cjs'
       - 'beintaskbot-main/tests/test_case_consultation_clarity_browser.cjs'
       - 'beintaskbot-main/tests/test_consultation_range_browser.cjs'
+      - 'beintaskbot-main/tests/test_consultation_twenty_messages.py'
       - 'beintaskbot-main/tests/test_public_header*'
       - 'beintaskbot-main/tests/test_public_consultation_header.py'
       - 'beintaskbot-main/tenant_support_inbox*.py'
@@ -235,6 +236,9 @@ jobs:
           assert all(case.find('skipped') is None for case in cases), 'Automatic-intent tests must not skip'
           print('Verified: all 7 automatic-intent fences executed without skips')
           PYTEST
+      - name: Verify consultation range changes in Chromium
+        run: |
+          node tests/test_consultation_range_browser.cjs
       - name: Exercise independent consultations and real PostgreSQL races
         env:
           PYTHONPATH: tests/isolated_database_guard:.:tests
@@ -243,6 +247,7 @@ jobs:
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_consultation_twenty_messages.py \
             tests/test_public_consultation_header.py \
             tests/test_developer_question_draft.py \
             tests/test_case_history_scope.py \
@@ -333,7 +338,6 @@ jobs:
           node tests/test_developer_question_draft_browser.cjs
           node tests/test_developer_question_clarity_browser.cjs
           node tests/test_case_consultation_clarity_browser.cjs
-          node tests/test_consultation_range_browser.cjs
           node tests/test_public_header_ui.cjs
           node tests/test_tenant_notification_center_ui.cjs
           node tests/test_tenant_notification_bell_ux_browser.cjs

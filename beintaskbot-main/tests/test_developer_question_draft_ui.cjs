@@ -65,7 +65,8 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   change(range,rf.first,rangeValue(79));assert.equal(rf.last.value,rangeValue(79));assert.equal(rf.draft.disabled,false);
   change(range,rf.first,rangeValue(50));assert.equal(rf.last.value,rangeValue(79));assert.equal(rangeNotice.hidden,true,'exactly 30 needs no automatic adjustment');
   assert.equal(rf.summary.value,'Manually written question');assertNoSend(range);assert.equal(questionCalls(range).length,0);
-  rf.draft.click();await settle();assert.equal(rf.send.disabled,false);
+  change(range,rf.first,rangeValue(60));assert.equal(rf.last.value,rangeValue(79));assert.equal(rf.send.disabled,false);assert.equal(rf.draft.disabled,false);assert.equal(rangeNotice.hidden,true);
+  rf.draft.click();await settle();assert.equal(rf.send.disabled,false);assert.equal(questionCalls(range).at(-1).body.message_ids.length,20);
   change(range,rf.first,rangeValue(0));assert.equal(rf.last.value,rangeValue(29));assert.equal(rf.send.disabled,true,'new range invalidates old AI provenance');assert.equal(rf.draft.disabled,false,'stale AI can be regenerated on the adjusted range');
   change(range,rf.summary,'Manually edited old AI text','input');assert.equal(rf.send.disabled,true,'manual edits never clear stale source guards');
   rf.draft.click();await settle();assert.equal(rf.send.disabled,false);
@@ -121,6 +122,15 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
 
   const noVersions=await setup(kind,{versions:false}),nv=controls(noVersions,await noVersions.open());assert.equal(nv.draft.disabled,true,'AI fails closed without explicit preview versions');noVersions.close();
   for(const [language,label] of [['ru','Сформулировать вопрос с AI'],['az','Sualı AI ilə tərtib et'],['en','Draft question with AI']]){const localized=await setup(kind,{language}),lf=controls(localized,await localized.open());assert.equal(lf.draft.textContent,label);assert.match(lf.form.querySelector('[data-send-disabled-reason]').textContent,language==='ru'?/Выберите разработчика/:language==='az'?/tərtibatçı seçin/:/Choose a developer/);localized.close();}
+ }
+ for(const [language,fallback] of [['ru','Отправитель не указан'],['az','Göndərən göstərilməyib'],['en','Sender not specified']]){
+  const names=await setup('dialog',{language});names.state.preview=[
+   {...messages[0],conversation_kind:'group',author_name:'Unknown sender'},
+   {...messages[1],direction:'outgoing',author_name:'Verified employee'},
+   {...messages[0],id:'unknown-direct',customer_name:'Unknown sender'}
+  ];const form=await names.open(),select=form.querySelectorAll('select')[1];
+  assert.match(select.options[0].textContent,new RegExp(fallback));assert.match(select.options[1].textContent,/Verified employee/);assert.match(select.options[2].textContent,new RegExp(fallback));
+  assert.doesNotMatch(select.textContent,/Unknown sender/);assertNoSend(names);names.close();
  }
  const noAgent=await setup('case',{agent:false}),c=controls(noAgent,await noAgent.open());assert.equal(c.draft.disabled,true);noAgent.close();
  console.log('PASS: dialog/case question drafts, RU/AZ/EN, bounded saved evidence, stale response guards, duplicate clicks, durable retries, close/reopen and separate reviewed send');
