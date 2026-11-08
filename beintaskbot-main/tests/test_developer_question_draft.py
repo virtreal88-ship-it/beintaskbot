@@ -217,3 +217,20 @@ def test_generic_media_publication_uses_dispatch_lock_order(monkeypatch):
     receipts = [{'id': key, 'status': 'processed', 'observation': 'Saved image evidence'} for key in ('B', 'A')]
     evidence.persist(Mock(), A, refs, receipts)
     assert [call.args[3] for call in lock.call_args_list] == ['A', 'B']
+
+
+def test_group_question_without_case_uses_current_manual_assignment(setup):
+    local, _, generate = setup
+    group = '120363499999000001@g.us'
+    local.execute("UPDATE saas_connect_conversations SET conversation_id=%s,conversation_kind='group' WHERE tenant_id=%s::uuid AND lead_id=41", (group,A))
+    local.execute("UPDATE saas_ai_conversation_state SET conversation_id=%s WHERE tenant_id=%s::uuid", (group,A))
+    local.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid', (json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    local.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments) VALUES(%s::uuid,%s,'human',%s::jsonb)", (A,group,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])))
+    local.commit()
+    rows = flow.preview(PROFILE, {'channel_id':CA,'conversation_id':group})['messages']
+    data = {'request_id':str(uuid.uuid4()),'channel_id':CA,'conversation_id':group,'message_ids':[row['id'] for row in rows],
+            'media_ids':[],'source_versions':{row['id']:row['source_version'] for row in rows},'summary':'Group issue'}
+    result = question.question(PROFILE,data)
+    assert result['developer_question_draft'] is True
+    assert result['question_binding']['selection']['case_id'] is None
+    assert generate.call_count == 1

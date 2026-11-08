@@ -441,12 +441,60 @@ def _consult(cur,profile,key,*,manual=False,sending=False):
     return tenant,actor,policy,item,source
 
 
+
+def _lock_dispatch_routes(cur,tenant,routes):
+    """One route order for both phases of question-bound dispatch."""
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_ai_group_coordination import group_jid,lock_group
+    for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
+        lock_group(cur,tenant,group)
+    for channel,conversation in sorted(routes):
+        lock_dialog(cur,tenant,'connect',channel,conversation)
+
+
+def _question_dispatch_projection(cur,tenant,key,request,*,locked=False):
+    # This minimal row read must not resolve a route or acquire a group lock.
+    cur.execute("""SELECT c.evidence->'question_draft' AS question_draft,c.case_id::text AS case_id,
+      c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,
+      d.case_id::text AS delivery_case_id,d.channel_id::text AS destination_channel,
+      d.conversation_id AS destination_conversation
+      FROM saas_internal_consultations c JOIN saas_consultation_group_deliveries d
+        ON d.tenant_id=c.tenant_id AND d.consultation_id=c.id
+      WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND d.request_id=%s::uuid"""
+      + (' FOR UPDATE OF c,d' if locked else ''), (tenant,identifier(key),request))
+    row=cur.fetchone()
+    return dict(row) if row else None
+
+
+def _check_locked_question_dispatch(cur,tenant,key,request,expected):
+    current=_question_dispatch_projection(cur,tenant,key,request,locked=True)
+    if not current or not current.get('question_draft') or current!=expected:
+        raise TenantLinearError('Маршрут или привязка консультации изменились. Обновите запрос.',409)
+
+
+def _question_dispatch_route_peek(cur,profile,key,request):
+    # This nonlocking, tenant/request-scoped peek grants no authority. It only
+    # determines which route locks must precede the consultation/delivery rows.
+    tenant=identifier(profile.get('tenant_id'))
+    row=_question_dispatch_projection(cur,tenant,key,request)
+    if not row:
+        raise TenantLinearError('Отправка недоступна.',404)
+    if not row.get('question_draft'):
+        return None
+    routes={(row['source_channel'],row['source_conversation']),
+            (row['destination_channel'],row['destination_conversation'])}
+    _lock_dispatch_routes(cur,tenant,routes)
+    _check_locked_question_dispatch(cur,tenant,key,request,row)
+    return row
+
+
 def dispatch(profile,key,request,*,auto_dispatch_id=None):
     from tenant_connect_transport import connect_route,send_consultation_with_receipt
     request=identifier(request)
     with _connect() as conn:
         require_schema(conn)
         with conn.cursor() as cur:
+            question_guard=_question_dispatch_route_peek(cur,profile,key,request)
             tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request));delivery=cur.fetchone()
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
@@ -459,20 +507,17 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                question_bound=bool((item.get('evidence') or {}).get('question_draft'))
+                question_bound=question_guard is not None
                 # Preserve existing automatic/fanout admission order. Only the
                 # new question-bound path needs source locks before its reads.
                 if not question_bound:
                     tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
-                from tenant_ai_dialog_scope import lock_dialog
                 routes={(str(delivery['channel_id']),delivery['conversation_id'])}
                 if auto_dispatch_id or (item.get('evidence') or {}).get('question_draft'):
                     routes.add((str(item['channel_id']),item['conversation_id']))
-                from tenant_ai_group_coordination import group_jid,lock_group
-                for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
-                    lock_group(cur,tenant,group)
-                for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
+                _lock_dispatch_routes(cur,tenant,routes)
                 if question_bound:
+                    _check_locked_question_dispatch(cur,tenant,key,request,question_guard)
                     tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 if auto_dispatch_id:
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
