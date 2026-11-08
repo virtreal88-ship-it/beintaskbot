@@ -30,6 +30,9 @@ def handler(member,origin,logger,resource):
                 payload={k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
                 key=request.match_info.get('id')
                 if resource=='developer_marker':result=await asyncio.to_thread(flow.developer_marker,profile,payload)
+                elif resource=='question_draft':
+                    from tenant_developer_question_draft import question
+                    result=await asyncio.to_thread(question,profile,payload)
                 elif resource=='prepare':result=await asyncio.to_thread(flow.prepare,profile,payload,origin)
                 elif resource=='preview':result=await asyncio.to_thread(flow.preview,profile,payload)
                 elif resource=='dispatch':

@@ -42,3 +42,26 @@ def test_reply_inbox_checks_identity_and_preserves_forbidden(monkeypatch):
             inbox.side_effect=TenantLinearError('No access',403)
             response=await client.get('/replies');assert response.status==403
     asyncio.run(scenario())
+
+
+def test_question_draft_has_origin_identity_and_post_only_fences(monkeypatch):
+    import tenant_developer_question_draft as questions
+    generate=Mock(return_value={'text':'Question?', 'developer_question_draft':True,'customer_message_sent':False})
+    monkeypatch.setattr(questions,'question',generate)
+    async def scenario():
+        current={'profile':PROFILE}
+        app=web.Application()
+        app.router.add_post('/question-draft',handler(lambda _:current['profile'],'https://crm.test',logging.getLogger(__name__),'question_draft'))
+        async with TestClient(TestServer(app)) as client:
+            payload={'expected_tenant_id':'tenant-a','expected_user_id':33,'request_id':'uuid'}
+            assert (await client.get('/question-draft')).status==405
+            assert (await client.post('/question-draft',json=payload)).status==403
+            assert (await client.post('/question-draft',json={**payload,'expected_user_id':44},headers={'Origin':'https://crm.test'})).status==409
+            generate.assert_not_called()
+            response=await client.post('/question-draft',json=payload,headers={'Origin':'https://crm.test'})
+            assert response.status==200 and response.headers['Cache-Control']=='no-store'
+            assert (await response.json())['result']['customer_message_sent'] is False
+            generate.assert_called_once_with(PROFILE,{'request_id':'uuid'})
+            current['profile']=None
+            assert (await client.post('/question-draft',json=payload,headers={'Origin':'https://crm.test'})).status==403
+    asyncio.run(scenario())

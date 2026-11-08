@@ -446,7 +446,10 @@ class ManualExecution(Execution):
                 if (str(current.get('updated_at'))!=self.version or metadata.get('enabled') is not True
                     or metadata.get('consent') is not True or metadata.get('copilot_enabled',True) is not True):
                     raise TenantLinearError('AI settings changed.',409)
-                if self.command.get('_consultation_evidence'):
+                if self.command.get('_developer_question'):
+                    from tenant_developer_question_draft import validate
+                    validate(cur,{'tenant_id':self.tenant,'telegram_id':self.actor},self.command)
+                elif self.command.get('_consultation_evidence'):
                     # An explicit consultation reviews its original frozen
                     # fragment, not an unrelated newer customer incident.
                     from tenant_dialog_consultations import original_evidence

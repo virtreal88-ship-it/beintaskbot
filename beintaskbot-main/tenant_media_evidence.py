@@ -130,7 +130,12 @@ def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=(), proce
     """
     by_id = {str(ref.get('id')): ref for ref in refs or []}
     skip_unverified_source_ids={str(value) for value in skip_unverified_source_ids}
-    for receipt in receipts or []:
+    # Match dispatch's per-source lock order across multi-media batches.
+    # Stable sorting retains the original order for repeated source receipts.
+    def source_order(receipt):
+        ref = by_id.get(str(receipt.get('id'))) or {}
+        return str(ref.get('channel_id') or ''), str(ref.get('external_id') or '')
+    for receipt in sorted(receipts or [], key=source_order):
         ref = by_id.get(str(receipt.get('id')))
         if ref and str(receipt.get('id')) in skip_unverified_source_ids:
             # The artifact cache may retain the actual downloaded-byte hash,
@@ -173,6 +178,10 @@ def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=(), proce
         # permanently prevent a later separately-authorized analysis.
         if status in {'processed', 'partial'} and not result:
             continue
+        # Coordinate publication with source-bound developer draft dispatch.
+        # This also fences the first receipt insertion, which row locks cannot.
+        from tenant_dialog_audio_store import lock_source
+        lock_source(cur, tenant, str(ref['channel_id']), str(ref['external_id']))
         provenance = {'processor': processor if processor in {'knowledge_extraction','conversation_episode'} else 'knowledge_extraction', 'source_version': source_hash(ref),
                       'untrusted': True}
         cur.execute("""INSERT INTO saas_media_evidence_receipts
