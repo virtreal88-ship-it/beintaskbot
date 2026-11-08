@@ -120,7 +120,7 @@ jobs:
             tests/test_knowledge_media.py \
             tests/test_tenant_operator_assignment.py \
             tests/test_media_spend_grant_postgres.py
-          node tests/test_operator_case_submission_ui.cjs
+          SUPPORT_CASES_JSDOM="$PWD/.support-test-deps/node_modules/jsdom" node tests/test_operator_case_submission_ui.cjs
           node tests/test_support_cases_integration_ui.cjs
           node tests/test_support_cases_modal_ui.cjs
           node tests/test_support_cases_locale_ui.cjs
