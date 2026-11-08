@@ -6,6 +6,9 @@ on:
       - 'beintaskbot-main/tenant_proactive_risk_*.py'
       - 'beintaskbot-main/tenant_proactive_risk_store.py'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_*.py'
+      - 'beintaskbot-main/docs/tenant-risk-alert-detail.js'
+      - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_ui.cjs'
+      - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_browser.cjs'
   workflow_dispatch:
 permissions:
   contents: read
@@ -39,9 +42,16 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements.txt pytest pytest-asyncio
-      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
       - name: PostgreSQL concurrency, outbox, and source regressions
         run: >-
           python -m pytest -q -rs
           tests/test_tenant_proactive_risk_concurrency_postgres.py
           tests/test_tenant_proactive_risk_delivery.py
+          tests/test_tenant_proactive_risk_policy.py
+          tests/test_tenant_proactive_risk_explanation.py
+      - name: Risk detail localization and navigation
+        run: node tests/test_tenant_proactive_risk_detail_ui.cjs
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Mobile risk detail
+        run: node tests/test_tenant_proactive_risk_detail_browser.cjs

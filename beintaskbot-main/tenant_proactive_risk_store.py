@@ -182,4 +182,4 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             return {key: finding.get(key) for key in (
                 'source_kind', 'source_id', 'source', 'source_title', 'source_url',
                 'rule_id', 'severity', 'confidence', 'facts', 'assessment',
-                'recommended_step', 'checked_at')}
+                'recommended_step', 'checked_at', 'context')}
