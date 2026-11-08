@@ -10,6 +10,8 @@ on:
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
       - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
+      - 'beintaskbot-main/tests/test_tenant_operator_voice_greeting.cjs'
+      - 'beintaskbot-main/docs/tenant-copilot-voice-channel.js'
       - 'beintaskbot-main/tests/test_tenant_voice_pilot_browser.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/migrations/voice_lease_provider_open.sql'
@@ -34,7 +36,7 @@ jobs:
         working-directory: beintaskbot-main
         run: |
           python -m pip install -r requirements.txt pytest
-          npm install --prefix .support-test-deps --no-save playwright@1.62.1
+          npm install --prefix .support-test-deps --no-save playwright@1.62.1 jsdom@26.1.0
       - name: Install Chromium for voice interruption browser test
         working-directory: beintaskbot-main
         run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
@@ -50,8 +52,8 @@ jobs:
           tests/test_tenant_operator_realtime_aiohttp.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
-        run: node --test tests/test_tenant_operator_copilot_audio.cjs
-      - name: Test live voice interruption reaches browser audio player
+        run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs
+      - name: Test automatic voice turns and explicit Stop in browser
         working-directory: beintaskbot-main
         env:
           PLAYWRIGHT_MODULE: ${{ github.workspace }}/beintaskbot-main/.support-test-deps/node_modules/playwright
