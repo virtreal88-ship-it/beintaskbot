@@ -13,49 +13,66 @@
   const memberOf=data=>data?.member||null;
   const scopeOf=data=>{const m=memberOf(data);return m?`${m.tenant_id||''}:${m.telegram_id||''}:${m.role||''}:${m.active===true}`:'';};
   function close(removeParam=false){epoch++;overlay?.remove();overlay=null;display=null;if(removeParam){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}}
-  function addText(parent,tag,value){const node=document.createElement(tag);node.textContent=String(value??'');parent.append(node);return node;}
+  function addText(parent,tag,value,cls){const node=document.createElement(tag);node.textContent=String(value??'');if(cls)node.className=cls;parent.append(node);return node;}
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
-    display=alert;overlay?.remove();const shade=document.createElement('div');shade.className='tenant-risk-alert-shade';shade.setAttribute('role','presentation');shade.style.cssText='position:fixed;inset:0;z-index:10050;background:#0008;display:grid;place-items:center;padding:16px';
-    const dialog=document.createElement('section');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-labelledby','riskAlertTitle');dialog.style.cssText='box-sizing:border-box;width:min(620px,100%);max-height:85vh;overflow:auto;overflow-wrap:anywhere;background:var(--chakra-colors-white,#fff);color:var(--chakra-colors-gray-800,#222);border-radius:14px;padding:22px;box-shadow:0 16px 60px #0004;line-height:1.5';
-    const head=document.createElement('header');head.style.cssText='display:flex;align-items:start;justify-content:space-between;gap:12px';
-    const c=alert.context||{},title=addText(head,'h2',c.title||alert.source_title||t('title'));title.id='riskAlertTitle';title.style.margin='0';
-    const closeButton=addText(head,'button',t('close'));closeButton.type='button';closeButton.onclick=()=>close(true);dialog.append(head);
-    if(alert.messageKey){addText(dialog,'p',t(alert.messageKey));}
+    display=alert;overlay?.remove();
+    const shade=document.createElement('div');shade.className='tenant-risk-alert-shade';shade.setAttribute('role','presentation');
+    const dialog=document.createElement('section');dialog.className='tenant-risk-alert-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-labelledby','riskAlertTitle');
+    const head=document.createElement('header');head.className='risk-alert-head';
+    const heading=document.createElement('div');heading.className='risk-alert-heading';head.append(heading);
+    addText(heading,'p',t('title'),'risk-alert-eyebrow');
+    const c=alert.context||{},title=addText(heading,'h2',c.title||alert.source_title||t('title'));title.id='riskAlertTitle';
+    const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true);dialog.append(head);
+    const body=document.createElement('div');body.className='risk-alert-body';body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-labelledby','riskAlertTitle');dialog.append(body);
+    const section=(label,cls='')=>{const node=document.createElement('section');node.className='risk-alert-section '+cls;addText(node,'h3',t(label));body.append(node);return node;};
+    if(alert.messageKey){const message=addText(body,'p',t(alert.messageKey));message.setAttribute('role','status');}
     else {
-      addText(dialog,'p',[alert.source_kind==='linear'?'Linear':'CRM',c.identifier,c.project?`${t('project')}: ${c.project}`:''].filter(Boolean).join(' · '));
-      addText(dialog,'h3',t('what'));
-      addText(dialog,'p',t('quote'));
-      if(c.title)addText(dialog,'p',c.title);
-      addText(dialog,'p',c.excerpt||t('missingText'));
-      addText(dialog,'small',t('original')+(c.excerpt_truncated?' '+t('truncated'):''));
-      if(c.priority)addText(dialog,'p',`${t('priority')}: ${t('priorities')[c.priority]||t('priorities')[0]}`);
-      if(c.due_date)addText(dialog,'p',`${t('due')}: ${c.due_date}`);
-      const updated=stamp(c.source_updated_at);if(c.stale_record&&updated)addText(dialog,'p',`${t('updated')}: ${updated}`);
-      if(c.status)addText(dialog,'p',`${t('status')}: ${c.status}`);
-      if(typeof c.assigned==='boolean')addText(dialog,'p',t(c.assigned?'assigned':'unassigned'));
-      addText(dialog,'h3',t('why'));
+      const context=document.createElement('div');context.className='risk-alert-context';body.append(context);
+      addText(context,'span',alert.source_kind==='linear'?'Linear':'CRM','risk-alert-tag');
+      if(c.identifier)addText(context,'span',c.identifier,'risk-alert-tag');
+      if(c.project)addText(context,'span',t('project')+': '+c.project);
+      const what=section('what');
+      addText(what,'p',t('quote'),'risk-alert-caption');
+      const quote=document.createElement('div');quote.className='risk-alert-quote';what.append(quote);
+      if(c.title)addText(quote,'p',c.title,'risk-alert-source-title');
+      addText(quote,'p',c.excerpt||t('missingText'));
+      addText(what,'small',t('original')+(c.excerpt_truncated?' '+t('truncated'):''),'risk-alert-note');
+      const facts=document.createElement('dl');facts.className='risk-alert-facts';
+      const fact=(label,value)=>{const field=document.createElement('div');field.className='risk-alert-fact';addText(field,'dt',t(label));addText(field,'dd',value);facts.append(field);};
+      if(c.priority)fact('priority',t('priorities')[c.priority]||t('priorities')[0]);
+      if(c.due_date)fact('due',c.due_date);
+      const updated=stamp(c.source_updated_at);if(c.stale_record&&updated)fact('updated',updated);
+      if(c.status)fact('status',c.status);
+      if(facts.childElementCount)what.append(facts);
+      if(typeof c.assigned==='boolean')addText(what,'p',t(c.assigned?'assigned':'unassigned'),'risk-alert-assignment');
+      const why=section('why');
       const reasons=[];
       if(['price_access','access','price','outage'].includes(c.topic))reasons.push(c.topic);
       if(alert.rule_id==='high_priority_unassigned'||(c.priority<=2&&c.priority>=1&&c.assigned===false))reasons.push('unassignedWhy');
       if(c.overdue)reasons.push('overdueWhy');
       if(c.stale_record)reasons.push('staleWhy');
-      (reasons.length?reasons:['genericWhy']).forEach(key=>addText(dialog,'p',t(key)));
-      addText(dialog,'h3',t('unknown'));addText(dialog,'p',t('limits'));
-      addText(dialog,'h3',t('next'));addText(dialog,'p',t('steps'));
-      const checked=stamp(alert.checked_at);if(checked)addText(dialog,'small',`${t('checked')}: ${checked}`);
-      if(c.source_mode){addText(dialog,'p',t(c.source_mode==='live'?'live':'cache'));const synced=stamp(c.source_checked_at);if(synced)addText(dialog,'small',`${t('synced')}: ${synced}`);}
+      (reasons.length?reasons:['genericWhy']).forEach(key=>addText(why,'p',t(key)));
+      addText(section('unknown','risk-alert-unknown'),'p',t('limits'));
+      addText(section('next','risk-alert-next'),'p',t('steps'));
+      const verification=document.createElement('div');verification.className='risk-alert-verification';
+      const checked=stamp(alert.checked_at);if(checked)addText(verification,'small',t('checked')+': '+checked);
+      if(c.source_mode){addText(verification,'p',t(c.source_mode==='live'?'live':'cache'));const synced=stamp(c.source_checked_at);if(synced)addText(verification,'small',t('synced')+': '+synced);}
+      if(verification.childElementCount)body.append(verification);
+      let link=null;
       if(alert.source_kind==='crm_task'&&alert.source_url==='/app?view=tasks'){
-        const a=addText(dialog,'a',t('crm'));a.href='/app?view=tasks';a.style.display='block';
+        link=document.createElement('a');link.textContent=t('crm');link.href='/app?view=tasks';
       }else if(alert.source_kind==='linear'&&typeof alert.source_url==='string'&&alert.source_url.startsWith('https://linear.app/')){
-        const a=addText(dialog,'a',t('linear'));a.href=alert.source_url;a.target='_blank';a.rel='noopener noreferrer';a.style.display='block';
+        link=document.createElement('a');link.textContent=t('linear');link.href=alert.source_url;link.target='_blank';link.rel='noopener noreferrer';
       }
+      if(link){const footer=document.createElement('footer');footer.className='risk-alert-footer';link.className='risk-alert-source-link';const arrow=addText(link,'span',alert.source_kind==='linear'?'↗':'→');arrow.setAttribute('aria-hidden','true');footer.append(link);dialog.append(footer);}
     }
     shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true);});shade.addEventListener('keydown',event=>{
       if(event.key==='Escape'){event.preventDefault();close(true);}
-      if(event.key==='Tab'){const controls=[...dialog.querySelectorAll('button,a[href]')],first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+      if(event.key==='Tab'){const controls=[...dialog.querySelectorAll('button,a[href],[tabindex="0"]')],first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
     });document.body.append(shade);overlay=shade;closeButton.focus();
   }
+
   function showMessage(messageKey){showAlert({messageKey});}
   async function route(){
     const id=new URL(location.href).searchParams.get('risk_alert_id');if(!id){if(overlay)close(false);return;}

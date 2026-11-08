@@ -1,0 +1,107 @@
+/* Scoped risk-detail hierarchy, independent of app heading/link resets. */
+.tenant-risk-alert-shade{
+  --risk-top:max(16px,env(safe-area-inset-top));--risk-bottom:max(16px,env(safe-area-inset-bottom));
+  position:fixed;inset:0;z-index:10050;display:grid;place-items:center;
+  padding:var(--risk-top) max(16px,env(safe-area-inset-right)) var(--risk-bottom) max(16px,env(safe-area-inset-left));
+  background:rgb(15 23 42 / 58%);box-sizing:border-box;
+}
+.tenant-risk-alert-dialog{
+  --risk-bg:#fff;--risk-ink:#172b26;--risk-muted:#52645e;--risk-line:#dbe5e0;
+  --risk-soft:#f3f7f5;--risk-accent:#08765b;--risk-accent-soft:#ecf7f2;
+  --risk-action:#087158;--risk-action-text:#fff;
+  box-sizing:border-box;width:min(720px,100%);max-height:calc(100vh - var(--risk-top) - var(--risk-bottom));max-height:calc(100dvh - var(--risk-top) - var(--risk-bottom));
+  display:flex;flex-direction:column;overflow:hidden;overflow-wrap:anywhere;
+  background:var(--risk-bg);color:var(--risk-ink);border:1px solid var(--risk-line);border-radius:20px;
+  box-shadow:0 24px 80px rgb(0 0 0 / 24%);font-family:inherit;font-size:15px;line-height:1.65;
+}
+html[data-app-theme=dark] .tenant-risk-alert-dialog{
+  --risk-bg:#191e23;--risk-ink:#edf3f0;--risk-muted:#b2c0ba;--risk-line:#3b4842;
+  --risk-soft:#222b29;--risk-accent:#80dcb9;--risk-accent-soft:#193a2d;
+  --risk-action:#91e4c5;--risk-action-text:#102e22;
+}
+.tenant-risk-alert-dialog *{box-sizing:border-box}
+.tenant-risk-alert-dialog .risk-alert-head{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:20px;
+  flex-shrink:0;padding:24px 28px 20px;border-bottom:1px solid var(--risk-line);
+}
+.tenant-risk-alert-dialog .risk-alert-heading{min-width:0}
+.tenant-risk-alert-dialog .risk-alert-eyebrow{
+  margin:0 0 5px;color:var(--risk-muted);font-size:12px;font-weight:600;line-height:1.5;letter-spacing:.03em;
+}
+.tenant-risk-alert-dialog h2{
+  /* The full source title is repeated in the scrollable quote. */
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;
+  margin:0;color:var(--risk-ink);font-size:24px;font-weight:750;line-height:1.25;letter-spacing:-.025em;
+}
+.tenant-risk-alert-dialog .risk-alert-close{
+  flex-shrink:0;min-height:44px;padding:9px 13px;border:1px solid var(--risk-line);border-radius:10px;
+  background:var(--risk-bg);color:var(--risk-ink);font:inherit;font-size:13px;font-weight:650;cursor:pointer;
+}
+.tenant-risk-alert-dialog .risk-alert-close:hover{background:var(--risk-soft)}
+.tenant-risk-alert-dialog .risk-alert-body{
+  min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;
+  padding:24px 28px;scroll-padding-block:16px;outline-offset:-4px;
+}
+.tenant-risk-alert-dialog .risk-alert-context{
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 22px;font-size:13px;color:var(--risk-muted);
+}
+.tenant-risk-alert-dialog .risk-alert-tag{
+  display:inline-flex;padding:3px 9px;border:1px solid var(--risk-line);border-radius:7px;background:var(--risk-soft);
+  color:var(--risk-ink);font-size:12px;font-weight:650;line-height:1.5;
+}
+.tenant-risk-alert-dialog .risk-alert-section{margin:0 0 24px}
+.tenant-risk-alert-dialog .risk-alert-section:last-child{margin-bottom:0}
+.tenant-risk-alert-dialog h3{
+  margin:0 0 10px;color:var(--risk-ink);font-size:16px;font-weight:750;line-height:1.4;letter-spacing:-.01em;
+}
+.tenant-risk-alert-dialog p{margin:0 0 10px;font-size:15px;line-height:1.65}
+.tenant-risk-alert-dialog p:last-child{margin-bottom:0}
+.tenant-risk-alert-dialog .risk-alert-caption{
+  color:var(--risk-muted);font-size:13px;line-height:1.55;margin:0 0 12px;
+}
+.tenant-risk-alert-dialog .risk-alert-quote{
+  border-left:3px solid var(--risk-accent);border-radius:0 12px 12px 0;background:var(--risk-soft);padding:16px 18px;margin:0;
+}
+.tenant-risk-alert-dialog .risk-alert-source-title{font-size:14px;font-weight:650;line-height:1.5}
+.tenant-risk-alert-dialog .risk-alert-note{display:block;color:var(--risk-muted);font-size:12px;line-height:1.6;margin-top:10px}
+.tenant-risk-alert-dialog .risk-alert-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0 12px}
+.tenant-risk-alert-dialog .risk-alert-fact{margin:0;padding:12px;border:1px solid var(--risk-line);border-radius:10px}
+.tenant-risk-alert-dialog dt{margin:0 0 4px;color:var(--risk-muted);font-size:12px;font-weight:500;line-height:1.5}
+.tenant-risk-alert-dialog dd{margin:0;color:var(--risk-ink);font-size:14px;font-weight:650;line-height:1.5}
+.tenant-risk-alert-dialog .risk-alert-assignment{font-size:14px;color:var(--risk-muted);line-height:1.6}
+.tenant-risk-alert-dialog .risk-alert-unknown{padding-top:20px;border-top:1px solid var(--risk-line)}
+.tenant-risk-alert-dialog .risk-alert-unknown p{color:var(--risk-muted);font-size:14px}
+.tenant-risk-alert-dialog .risk-alert-next{padding:18px;border:1px solid var(--risk-line);border-radius:12px;background:var(--risk-accent-soft)}
+.tenant-risk-alert-dialog .risk-alert-verification{margin-top:22px;padding-top:16px;border-top:1px solid var(--risk-line)}
+.tenant-risk-alert-dialog .risk-alert-verification p,.tenant-risk-alert-dialog .risk-alert-verification small{display:block;color:var(--risk-muted);font-size:12px;line-height:1.6;margin:0 0 5px}
+.tenant-risk-alert-dialog .risk-alert-footer{flex-shrink:0;padding:16px 28px;border-top:1px solid var(--risk-line);background:var(--risk-bg)}
+.tenant-risk-alert-dialog .risk-alert-source-link{
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;max-width:100%;min-height:44px;padding:10px 16px;
+  border:1px solid transparent;border-radius:10px;background:var(--risk-action);color:var(--risk-action-text);
+  font-size:14px;font-weight:650;line-height:1.5;text-decoration:underline;text-underline-offset:3px;text-align:center;
+}
+.tenant-risk-alert-dialog .risk-alert-source-link:hover{text-decoration-thickness:2px}
+.tenant-risk-alert-dialog :is(button,a,[tabindex]):focus-visible{outline:3px solid var(--risk-accent);outline-offset:3px}
+.tenant-risk-alert-dialog .risk-alert-body:focus-visible{outline-offset:-4px}
+@media(max-width:520px){
+  .tenant-risk-alert-dialog{border-radius:16px}
+  .tenant-risk-alert-dialog .risk-alert-head{padding:18px;gap:12px}
+  .tenant-risk-alert-dialog h2{font-size:21px}
+  .tenant-risk-alert-dialog .risk-alert-close{font-size:12px;padding:8px 10px}
+  .tenant-risk-alert-dialog .risk-alert-body{padding:20px 18px}
+  .tenant-risk-alert-dialog .risk-alert-footer{padding:12px 18px}
+  .tenant-risk-alert-dialog .risk-alert-source-link{width:100%}
+  .tenant-risk-alert-dialog .risk-alert-quote{padding:14px}
+  .tenant-risk-alert-dialog .risk-alert-next{padding:14px}
+}
+@media(max-width:359px){.tenant-risk-alert-dialog .risk-alert-facts{grid-template-columns:1fr}}
+@media(max-height:540px){
+  .tenant-risk-alert-dialog .risk-alert-head{padding:10px 16px}
+  .tenant-risk-alert-dialog .risk-alert-eyebrow{display:none}
+  .tenant-risk-alert-dialog h2{font-size:18px}
+  .tenant-risk-alert-dialog .risk-alert-footer{padding:8px 16px}
+}
+@media(forced-colors:active){
+  .tenant-risk-alert-dialog .risk-alert-source-link,.tenant-risk-alert-dialog .risk-alert-close{border:1px solid ButtonText}
+  .tenant-risk-alert-dialog :is(button,a,[tabindex]):focus-visible{outline-color:Highlight}
+}

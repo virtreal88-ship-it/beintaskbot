@@ -9,6 +9,8 @@ assert.match(source,/response\.status===404/);
 assert.match(source,/textContent/);
 assert.doesNotMatch(source,/\.innerHTML\s*=/);
 assert.match(fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8'),/tenant-risk-alert-detail\.js/);
+assert.match(fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8'),/tenant-risk-alert-detail\.css/);
+assert.match(fs.readFileSync(path.join(root,'tenant_web_assets.py'),'utf8'),/tenant-risk-alert-detail\.css/);
 const board=fs.readFileSync(path.join(root,'docs/tenant-linear-board.js'),'utf8');
 assert.doesNotMatch(board,/risks\/dry-run|riskFindings|risk-findings|proactive-risk/);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));

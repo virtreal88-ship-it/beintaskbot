@@ -29,7 +29,7 @@ EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowled
 
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
-EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js']
+EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-alert-detail.css']
 EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
 EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
