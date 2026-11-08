@@ -1,0 +1,34 @@
+name: Public case chat regression
+on:
+  pull_request:
+    paths:
+      - 'docs/public-case.html'
+      - 'beintaskbot-main/tenant_public_case_api.py'
+      - 'beintaskbot-main/tests/test_public_case_chat_browser.cjs'
+      - '.github/workflows/public-case-chat.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install test browser
+        run: |
+          npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.58.2
+          beintaskbot-main/.support-test-deps/node_modules/.bin/playwright install --with-deps chromium
+      - name: Test synthetic public snapshots
+        run: |
+          mkdir -p /tmp/public-chat-qa
+          export CHROMIUM_EXECUTABLE_PATH=$(node -p "require('./beintaskbot-main/.support-test-deps/node_modules/playwright').chromium.executablePath()")
+          PUBLIC_CHAT_SCREENSHOT_DIR=/tmp/public-chat-qa node beintaskbot-main/tests/test_public_case_chat_browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-public-chat-screenshots
+          path: /tmp/public-chat-qa
