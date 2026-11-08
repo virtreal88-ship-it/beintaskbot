@@ -580,3 +580,15 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
             assert process.returncode==0,output.decode()
             assert not ai.called and not learning.called
     asyncio.run(scenario())
+
+
+def test_public_preview_fields_match_snapshot_redaction():
+    row={'body':'Normal caption\npassword: hidden\nhttps://private.test/path\n'+'x'*2500,'direction':'incoming','message_type':'audio'}
+    result=flow.public_preview_fields(row)
+    assert result['public_text']==public._public_text(row['body'])
+    assert 'password' not in result['public_text']
+    assert 'private.test' not in result['public_text']
+    assert len(result['public_text'])<=2000
+    assert result['public_speaker']=='Müştəri'
+    assert result['media_shareable'] is False
+    assert flow.public_preview_fields({'body':'Normal caption','direction':'outgoing','message_type':'image'})=={'public_text':'Normal caption','public_speaker':'Əməkdaş','media_shareable':True}

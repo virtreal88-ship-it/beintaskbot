@@ -215,6 +215,13 @@ def selection(cur,tenant,source,message_ids):
     return rows[start:end+1]
 
 
+def public_preview_fields(row):
+    """Use the same safe projection for employee review and the public snapshot."""
+    return {'public_text':_public_text(row.get('body')),
+            'public_speaker':'Müştəri' if row.get('direction')=='incoming' else 'Əməkdaş',
+            'media_shareable':row.get('message_type') in _MEDIA_TYPES and not bool(_MEDIA_SECRET_MARKER.search(str(row.get('body') or '')))}
+
+
 def preview(profile,data):
     if not isinstance(data,dict) or set(data) not in ({'channel_id','conversation_id'},{'channel_id','conversation_id','case_id'}):raise TenantLinearError('Некорректный запрос.',400)
     with _connect() as conn:
@@ -226,7 +233,7 @@ def preview(profile,data):
             if case_id:
                 rows,has_earlier,case_scope=_case_rows(cur,tenant,case_id,data['channel_id'],data['conversation_id'])
             else:
-                cur.execute('''SELECT id::text,body,message_type,direction,author_name,raw,COALESCE(happened_at,created_at) AS happened_at
+                cur.execute('''SELECT id::text,external_id,body,message_type,direction,author_name,raw,COALESCE(happened_at,created_at) AS happened_at
                   FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
                   ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 80''',
                   (tenant,source['lead_id'],'connect:'+data['channel_id']))
@@ -246,12 +253,12 @@ def preview(profile,data):
                 if not author and isinstance(raw,dict):
                     author=next((raw.get(k) for k in ('participantName','senderName','pushName')
                                  if _human_preview_name(raw.get(k),source.get('conversation_id'))),'')
-                value.update(happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
+                value.update(**public_preview_fields(row),source_version=version(row),happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
                   customer_name=customer_name,customer_phone=phone,
                   author_name=_human_preview_name(author,source.get('conversation_id')))
-                for private in ('raw','media_url','channel','ordered_at'):value.pop(private,None)
+                for private in ('raw','media_url','channel','ordered_at','external_id'):value.pop(private,None)
                 messages.append(value)
-            return {'messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+            return {'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
                     'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
                         'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
@@ -283,9 +290,11 @@ def _verified_contact_phone(cur,tenant,channel,conversation):
 
 def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    optional={'case_id','include_customer_identity','reuse_existing'}
+    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
+    if ('question_draft_request_id' in data) != ('source_versions' in data):
+        raise TenantLinearError('Требуется привязка AI-черновика к выбранному фрагменту.',400)
     if 'reuse_existing' in data and type(data['reuse_existing']) is not bool:
         raise TenantLinearError('Некорректный режим повторного запроса.',400)
     include_identity=data.get('include_customer_identity',False)
@@ -301,6 +310,8 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
         'message_ids':selected,'media_ids':sorted(media),'summary':summary.strip(),
         'include_customer_identity':include_identity}
     normalized.pop('reuse_existing',None)  # Admission preference is not outgoing content or request identity.
+    normalized.pop('question_draft_request_id',None)
+    normalized.pop('source_versions',None)
     if case_id:normalized['case_id']=case_id
     else:normalized.pop('case_id',None)
     digest=hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
@@ -308,6 +319,9 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
         require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy,source=_scope(cur,profile,channel,data['conversation_id'],manual=True,case_id=case_id,sending=True)
+            if data.get('question_draft_request_id'):
+                from tenant_developer_question_draft import validate_for_prepare
+                validate_for_prepare(cur,profile,data)
             from tenant_consultation_episode import lock_source,implicit_case,existing,queued,auto_intent
             lock_source(cur,tenant,channel,data['conversation_id'])
             target=developer_target(cur,tenant,policy,dest,data['destination_conversation_id'])
@@ -400,6 +414,9 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             body=summary.strip()+'\n\n'+fragment+':\n'+url
             consultation_evidence={'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}
             if ai_summary is not None:consultation_evidence['ai_summary']=ai_summary
+            if data.get('question_draft_request_id'):
+                consultation_evidence['question_draft']={k:data[k] for k in ('question_draft_request_id','channel_id','conversation_id','message_ids','media_ids','source_versions')}
+                consultation_evidence['question_draft']['case_id']=data.get('case_id') or None
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,'waiting_specialist',%s)''',
               (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json(consultation_evidence),actor))
@@ -425,7 +442,57 @@ def _consult(cur,profile,key,*,manual=False,sending=False):
         _case_access(cur,profile,str(item['case_id']),str(item['channel_id']),item['conversation_id'],sending=sending)
     source=route(cur,tenant,policy,str(item['channel_id']),item['conversation_id'],
       manual=manual and not item.get('case_id'))
+    if sending and (item.get('evidence') or {}).get('question_draft'):
+        from tenant_developer_question_draft import validate_for_prepare
+        validate_for_prepare(cur,profile,item['evidence']['question_draft'])
     return tenant,actor,policy,item,source
+
+
+
+def _lock_dispatch_routes(cur,tenant,routes):
+    """One route order for both phases of question-bound dispatch."""
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_ai_group_coordination import group_jid,lock_group
+    for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
+        lock_group(cur,tenant,group)
+    for channel,conversation in sorted(routes):
+        lock_dialog(cur,tenant,'connect',channel,conversation)
+
+
+def _question_dispatch_projection(cur,tenant,key,request,*,locked=False):
+    # This minimal row read must not resolve a route or acquire a group lock.
+    cur.execute("""SELECT c.evidence->'question_draft' AS question_draft,c.case_id::text AS case_id,
+      c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,
+      d.case_id::text AS delivery_case_id,d.channel_id::text AS destination_channel,
+      d.conversation_id AS destination_conversation
+      FROM saas_internal_consultations c JOIN saas_consultation_group_deliveries d
+        ON d.tenant_id=c.tenant_id AND d.consultation_id=c.id
+      WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND d.request_id=%s::uuid"""
+      + (' FOR UPDATE OF c,d' if locked else ''), (tenant,identifier(key),request))
+    row=cur.fetchone()
+    return dict(row) if row else None
+
+
+def _check_locked_question_dispatch(cur,tenant,key,request,expected):
+    current=_question_dispatch_projection(cur,tenant,key,request,locked=True)
+    if not current or not current.get('question_draft') or current!=expected:
+        raise TenantLinearError('Маршрут или привязка консультации изменились. Обновите запрос.',409)
+
+
+def _question_dispatch_route_peek(cur,profile,key,request):
+    # This nonlocking, tenant/request-scoped peek grants no authority. It only
+    # determines which route locks must precede the consultation/delivery rows.
+    tenant=identifier(profile.get('tenant_id'))
+    row=_question_dispatch_projection(cur,tenant,key,request)
+    if not row:
+        raise TenantLinearError('Отправка недоступна.',404)
+    if not row.get('question_draft'):
+        return None
+    routes={(row['source_channel'],row['source_conversation']),
+            (row['destination_channel'],row['destination_conversation'])}
+    _lock_dispatch_routes(cur,tenant,routes)
+    _check_locked_question_dispatch(cur,tenant,key,request,row)
+    return row
 
 
 def dispatch(profile,key,request,*,auto_dispatch_id=None):
@@ -434,6 +501,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     with _connect() as conn:
         require_schema(conn)
         with conn.cursor() as cur:
+            question_guard=_question_dispatch_route_peek(cur,profile,key,request)
             tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request));delivery=cur.fetchone()
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
@@ -446,14 +514,18 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
-                from tenant_ai_dialog_scope import lock_dialog
+                question_bound=question_guard is not None
+                # Preserve existing automatic/fanout admission order. Only the
+                # new question-bound path needs source locks before its reads.
+                if not question_bound:
+                    tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 routes={(str(delivery['channel_id']),delivery['conversation_id'])}
-                if auto_dispatch_id:routes.add((str(item['channel_id']),item['conversation_id']))
-                from tenant_ai_group_coordination import group_jid,lock_group
-                for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
-                    lock_group(cur,tenant,group)
-                for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
+                if auto_dispatch_id or (item.get('evidence') or {}).get('question_draft'):
+                    routes.add((str(item['channel_id']),item['conversation_id']))
+                _lock_dispatch_routes(cur,tenant,routes)
+                if question_bound:
+                    _check_locked_question_dispatch(cur,tenant,key,request,question_guard)
+                    tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 if auto_dispatch_id:
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
                       s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
@@ -523,6 +595,12 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                 current=connect_route(cur,tenant,int(target['lead_id']))
                 if not current or current['channel_id']!=str(delivery['channel_id']) or current['conversation_id']!=delivery['conversation_id']:
                     raise TenantLinearError('Получатель изменился.',409)
+                if (item.get('evidence') or {}).get('question_draft'):
+                    from tenant_developer_question_draft import lock_for_dispatch
+                    lock_for_dispatch(cur,profile,item['evidence']['question_draft'])
+                    # Re-read scope/permissions only after all final locks. They
+                    # remain held through the provider call and receipt commit.
+                    _consult(cur,profile,key,manual=True,sending=True)
                 attempted=True;receipt=send_consultation_with_receipt(current,delivery['body'],request)
                 if receipt.get('state')=='pending':
                     cur.execute('''UPDATE saas_consultation_group_deliveries SET state='pending',connect_message_id=%s,updated_at=now()
