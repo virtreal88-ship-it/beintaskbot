@@ -7,6 +7,7 @@ on:
       - 'beintaskbot-main/tenant_proactive_risk_store.py'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_*.py'
       - 'beintaskbot-main/docs/tenant-risk-alert-detail.js'
+      - 'beintaskbot-main/docs/tenant-risk-alert-detail.css'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_ui.cjs'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_browser.cjs'
   workflow_dispatch:
