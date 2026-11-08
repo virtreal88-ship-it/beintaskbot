@@ -9,3 +9,9 @@ The employee capability now uses a 30-message window and divides the existing ch
 No media downloads, paid ASR or vision are enabled by this action. Existing tenant/route permissions, assigned-agent revision checks, idempotency, daily/spend reservations and publication review gates are unchanged. No background queue, model tariff or consent setting changes.
 
 Validation uses synthetic SQL fixtures and mocked provider calls: 10/30 long messages, 30 large attachment metadata records, 31 rejection, tenant isolation, repeat-submit idempotency, preserved final provider references, and UI selection/close/reopen checks. Real AI calls and existing submissions are not replayed.
+
+## Reference context pressure
+
+Optional knowledge excerpts are shortened or omitted in reverse search-rank order before any further selected-message shortening, both at admission and final model preflight. The top-ranked references remain longest. Agent/company instructions and extraction safety instructions are not changed by this budget fitting. If the mandatory context itself is too large, the request still fails closed with an explicit agent-context error and no larger reservation.
+
+Quality tradeoff: selected source IDs remain complete, but long message bodies are excerpts, not full-text analysis; background knowledge may be incomplete or absent. The UI states this limitation, and the provider receives explicit truncation/omission markers. Missing portions must not be inferred. No additional model calls are used to summarize omitted content.

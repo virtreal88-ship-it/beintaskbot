@@ -240,7 +240,13 @@ def snapshot(cur,profile,data):
     for row in rows:
         kind=row.get('message_type') or 'text'
         marker='\n[Attachment pending_processing: contents not read]' if kind!='text' else ''
-        body=redact(row.get('body'),names)[:max(0,min(excerpt_limit,remaining)-(len(marker) if employee_submission else 0))]
+        body_limit=max(0,min(excerpt_limit,remaining)-(len(marker) if employee_submission else 0))
+        body=redact(row.get('body'),names)
+        if employee_submission and len(body)>body_limit:
+            truncation=' [Truncated; do not infer omitted contents]'
+            body=body[:max(0,body_limit-len(truncation))]+truncation
+        else:
+            body=body[:body_limit]
         customer_language_text=body if kind not in {'voice','audio'} else ''
         if not body.strip() and kind=='text': continue
         if kind!='text': body=(body+marker).strip()
