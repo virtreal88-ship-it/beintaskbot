@@ -12,7 +12,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    const req=route.request(),body=req.postDataJSON(),url=new URL(req.url());calls.push({path:url.pathname,body});let result={};
    if(url.pathname.endsWith('/developer-marker')){const key=body.expected_tenant_id+':'+body.conversation_id;if('enabled' in body){if(body.enabled)markers.add(key);else markers.delete(key);}result={enabled:markers.has(key)};}
    else if(url.pathname.endsWith('/destinations'))result={destinations:tenant==='a'&&markers.has('a:target')?[{channel_id:'channel',conversation_id:'target',customer_name:'Developers',channel_name:'Test'}]:[]};
-   else if(url.pathname.endsWith('/preview'))result={public_header:{version:1,customer_name:'Synthetic customer',phone_status:'unknown',company_name:'Synthetic client',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:[{id:'m1',source_version:'synthetic-v1',body:'Customer problem',happened_at:'12:00',message_type:'text'}]};
+   else if(url.pathname.endsWith('/preview'))result={public_header:{version:1,customer_name:'Synthetic customer',phone_status:'unknown',company_name:'Synthetic client',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:[{id:'m1',public_sender_version:'b'.repeat(64),source_version:'synthetic-v1',body:'Customer problem',happened_at:'12:00',message_type:'text'}]};
    else if(url.pathname.endsWith('/replies'))result={replies:[]};
    await route.fulfill({json:{success:true,result}});
   });

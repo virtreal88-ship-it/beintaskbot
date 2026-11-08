@@ -6,7 +6,7 @@ const base='/api/platform/ai/dialog-consultations',hash='a'.repeat(64);
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{for(const kind of ['dialog','case'])for(const language of ['ru','az','en']){
   const page=await browser.newPage({viewport:{width:390,height:740}}),calls=[];
-  const messages=Array.from({length:80},(_,i)=>({id:'m'+i,message_type:i===79?'audio':'text',body:'PRIVATE RAW '+i,public_text:'PUBLIC '+i,public_speaker:'Customer',source_version:'v'+i,direction:'incoming',happened_at:new Date(Date.UTC(2026,10,8,10,i)).toISOString(),media_shareable:true,file_name:i===79?'voice.ogg':undefined}));
+  const messages=Array.from({length:80},(_,i)=>({id:'m'+i,message_type:i===79?'audio':'text',body:'PRIVATE RAW '+i,public_text:'PUBLIC '+i,public_speaker:'Customer',public_sender_version:'b'.repeat(64),source_version:'v'+i,direction:'incoming',happened_at:new Date(Date.UTC(2026,10,8,10,i)).toISOString(),media_shareable:i===79,file_name:i===79?'voice.ogg':undefined}));
   await page.route('**/*',async r=>{
    const path=new URL(r.request().url()).pathname;
    if(path==='/')return r.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="host"></div><select data-app-language></select><details id="operatorMoreActions"><summary>Menu</summary><div id="operatorMenuExtra"></div></details><aside id="operatorCopilot"></aside></body></html>'});
@@ -28,7 +28,7 @@ const base='/api/platform/ai/dialog-consultations',hash='a'.repeat(64);
   const form=page.locator(kind==='case'?'#caseDeveloperForm':'.dialog-consultation-form'),selects=form.locator('select'),first=selects.nth(1),last=selects.nth(2),send=form.locator('button[type=submit]'),draft=form.locator('[data-question-draft]'),notice=form.locator('[data-range-adjustment]'),value=i=>kind==='dialog'?String(i):'m'+i;
   await form.locator('textarea').fill('Manual developer question');assert.equal(await send.isDisabled(),false);assert.equal(await draft.isDisabled(),false);
   await first.selectOption(value(0));assert.equal(await first.inputValue(),value(0));assert.equal(await last.inputValue(),value(29));assert.equal(await send.isDisabled(),false);assert.equal(await draft.isDisabled(),false);assert.equal(await notice.isVisible(),true);assert.match(await notice.textContent(),/30/);
-  const preview=form.locator(kind==='case'?'[data-case-preview-messages]':'.consultation-fragment');assert.equal(await preview.locator(kind==='case'?':scope > p':'article').count(),30);assert.match(await preview.textContent(),/PUBLIC 0/);assert.doesNotMatch(await preview.textContent(),/PRIVATE RAW|PUBLIC 79/);assert.match(await form.locator('[data-public-header-preview]').textContent(),/Company/);
+  assert.equal(await form.locator('[data-case-preview-messages],.consultation-fragment,[data-public-header-preview]').count(),0);assert.equal(await form.locator('[data-public-scope]').count(),1);
   await last.selectOption(value(79));assert.equal(await first.inputValue(),value(50));assert.equal(await last.inputValue(),value(79));
   await last.selectOption(value(1));assert.equal(await first.inputValue(),value(1));assert.equal(await send.isDisabled(),false);
   await first.selectOption(value(79));assert.equal(await last.inputValue(),value(79));assert.equal(await draft.isDisabled(),false);
