@@ -8,6 +8,9 @@ on:
       - 'beintaskbot-main/tests/test_developer_question_draft*'
       - 'beintaskbot-main/tests/test_developer_question_clarity_browser.cjs'
       - 'beintaskbot-main/tests/test_case_consultation_clarity_browser.cjs'
+      - 'beintaskbot-main/tests/test_consultation_range_browser.cjs'
+      - 'beintaskbot-main/tests/test_public_header*'
+      - 'beintaskbot-main/tests/test_public_consultation_header.py'
       - 'beintaskbot-main/tenant_support_inbox*.py'
       - 'beintaskbot-main/tenant_support_case_context.py'
       - 'beintaskbot-main/docs/tenant-support-inbox.js'
@@ -18,6 +21,7 @@ on:
       - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
       - 'beintaskbot-main/tests/test_manual_case_saved_media.py'
       - 'beintaskbot-main/tests/test_pr465_followup_worker.py'
+      - 'beintaskbot-main/tests/test_case_followup_intent_fencing.py'
       - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
       - 'beintaskbot-main/tests/test_operator_case_recovery*'
       - 'beintaskbot-main/tests/test_case_developer_settings_ui.cjs'
@@ -219,6 +223,18 @@ jobs:
           assert all(case.find('skipped') is None for case in cases), 'Native race tests must not skip'
           print('Verified: all 9 native developer question races executed without skips')
           PY
+      - name: Verify automatic intent fences without skips
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+        run: |
+          python -m pytest -q -rs tests/test_case_followup_intent_fencing.py --junitxml=/tmp/consultation-intent-fences.xml
+          python - <<'PYTEST'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('/tmp/consultation-intent-fences.xml').getroot().findall('.//testcase')
+          assert len(cases) == 7, 'Expected all seven native automatic-intent tests'
+          assert all(case.find('skipped') is None for case in cases), 'Automatic-intent tests must not skip'
+          print('Verified: all 7 automatic-intent fences executed without skips')
+          PYTEST
       - name: Exercise independent consultations and real PostgreSQL races
         env:
           PYTHONPATH: tests/isolated_database_guard:.:tests
@@ -227,6 +243,7 @@ jobs:
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_public_consultation_header.py \
             tests/test_developer_question_draft.py \
             tests/test_case_history_scope.py \
             tests/test_case_history_scope_postgres.py \
@@ -316,6 +333,8 @@ jobs:
           node tests/test_developer_question_draft_browser.cjs
           node tests/test_developer_question_clarity_browser.cjs
           node tests/test_case_consultation_clarity_browser.cjs
+          node tests/test_consultation_range_browser.cjs
+          node tests/test_public_header_ui.cjs
           node tests/test_tenant_notification_center_ui.cjs
           node tests/test_tenant_notification_bell_ux_browser.cjs
           node tests/test_support_notification_bridge_ui.cjs

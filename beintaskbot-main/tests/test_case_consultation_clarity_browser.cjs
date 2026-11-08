@@ -9,7 +9,7 @@ const base='/api/platform/ai/dialog-consultations';
   const messages=Array.from({length:4},(_,i)=>({id:'message-'+i,body:i===0?'RAW PRIVATE SOURCE URL https://private.invalid':'',public_text:i===0?'First selected customer message':'',public_speaker:'Müştəri',media_shareable:i!==2,message_type:i===0?'text':'audio',file_name:'voice-'+i+'.ogg',direction:'incoming',happened_at:'2026-11-01T12:00:00Z',source_version:'v'+i}));
   await page.route('https://crm.test/',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:8px;font:16px Arial;--line:#ddd;--brand:#3159c8;--panel:#fff}#host{max-width:650px}button{font:inherit}textarea{width:100%}.support-edit{display:grid;gap:10px}h3{margin:0}</style></head><body><div id="host"></div></body></html>'}));
   await page.route('**/api/**',async route=>{const request=route.request(),path=new URL(request.url()).pathname,body=request.postDataJSON();calls.push({path,body});let result={};
-   if(path===base+'/preview')result={messages,outgoing_link_label:'Exact outgoing link label'};
+   if(path===base+'/preview')result={public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages,outgoing_link_label:'Exact outgoing link label'};
    else if(path===base+'/destinations')result={destinations:[{channel_id:'dev',conversation_id:'developer-group',customer_name:'Developer group',channel_name:'Support WhatsApp'}]};
    else if(path===base+'/replies')result={consultations:[],replies:[]};
    else if(path===base+'/question-draft')result={text:'Please check this audio report.',request_id:'draft-1',developer_question_draft:true,customer_message_sent:false};
@@ -47,7 +47,7 @@ const base='/api/platform/ai/dialog-consultations';
   await page.evaluate(()=>document.querySelector('#caseDeveloperForm').dispatchEvent(new Event('submit',{cancelable:true})));
   assert.equal(calls.filter(c=>c.path===base).length,0,'implicit submit is inert');
   await page.locator('#caseConsultSend').click();await page.waitForFunction(()=>!document.querySelector('#caseDeveloperForm'));
-  const sent=calls.find(c=>c.path===base).body;assert.deepEqual(sent.media_ids,['message-1']);assert.equal(sent.include_customer_identity,false);assert.equal(sent.confirm,true);assert.equal(calls.filter(c=>c.path.endsWith('/dispatch')).length,1);
+  const sent=calls.find(c=>c.path===base).body;assert.deepEqual(sent.media_ids,['message-1']);assert.equal(sent.include_customer_identity,false);assert.equal(sent.public_header_version,1);assert.equal(sent.public_header_hash,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.deepEqual(Object.keys(sent.public_header_source_versions),sent.message_ids);assert.equal(sent.confirm,true);assert.equal(calls.filter(c=>c.path.endsWith('/dispatch')).length,1);
   await page.close();console.log('PASS: case form preview, bounded media, explicit Send, mobile footer '+width);
  }}finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

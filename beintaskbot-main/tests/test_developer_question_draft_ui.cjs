@@ -13,7 +13,7 @@ async function setup(kind,{language='en',versions=true,agent=true,targets=true}=
  w.tenantI18n={language,date:value=>String(value)};w.tenantOperator={member,currentDialog:route,hasRight:()=>true};w.tenantProfileSnapshot={member};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body});
-  if(path===base+'/preview')return ok({messages:state.preview});
+  if(path===base+'/preview')return ok({public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:state.preview});
   if(path===base+'/destinations')return ok({destinations:!targets?[]:[{channel_id:'dev-channel',conversation_id:'developer-a',customer_name:'Developer A'},{channel_id:'dev-channel',conversation_id:'developer-b',customer_name:'Developer B'}]});
   if(path===base+'/question-draft'){
    if(state.hold)await state.hold;
@@ -48,6 +48,33 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
  unselectedForm.querySelector('textarea').value='Saved question';unselectedForm.querySelector('textarea').dispatchEvent(new unselected.w.Event('input'));
  assert.equal(unselectedForm.querySelector('select').value,'');unselected.closeForm();const reopenedUnselected=await unselected.open();assert.equal(reopenedUnselected.querySelector('select').value,'','dismissal must not silently choose the first recipient');assert.equal(reopenedUnselected.querySelector('button[type=submit]').disabled,true);assertNoSend(unselected);unselected.close();
  for(const kind of ['dialog','case']){
+  const range=await setup(kind);
+  range.state.preview=Array.from({length:80},(_,index)=>({id:'range-'+index,message_type:'text',body:'Saved message '+index,direction:'incoming',happened_at:'2026-11-01T12:00:00Z',source_version:'range-version-'+index,public_text:'Public message '+index}));
+  const rf=controls(range,await range.open()),rangeValue=index=>kind==='dialog'?String(index):'range-'+index;
+  change(range,rf.recipient,'0');change(range,rf.summary,'Manually written question','input');
+  assert.equal(rf.send.disabled,false);assert.equal(rf.draft.disabled,false);
+  change(range,rf.first,rangeValue(0));
+  assert.equal(rf.send.disabled,false,'moving first into older messages should preserve a valid bounded range');
+  assert.equal(rf.draft.disabled,false,'a valid new range can generate a new question');
+  assert.equal(rf.first.value,rangeValue(0));assert.equal(rf.last.value,rangeValue(29));
+  assert.match(rf.form.querySelector('[data-range-adjustment]').textContent,/30/);
+  const rangeNotice=rf.form.querySelector('[data-range-adjustment]');assert.match(rangeNotice.textContent,/last message/);
+  change(range,rf.first,rangeValue(10));assert.equal(rf.last.value,rangeValue(29));assert.equal(rangeNotice.hidden,true);
+  change(range,rf.last,rangeValue(79));assert.equal(rf.first.value,rangeValue(50));assert.match(rangeNotice.textContent,/first message/);
+  change(range,rf.last,rangeValue(1));assert.equal(rf.first.value,rangeValue(1));assert.equal(rf.send.disabled,false);
+  change(range,rf.first,rangeValue(79));assert.equal(rf.last.value,rangeValue(79));assert.equal(rf.draft.disabled,false);
+  change(range,rf.first,rangeValue(50));assert.equal(rf.last.value,rangeValue(79));assert.equal(rangeNotice.hidden,true,'exactly 30 needs no automatic adjustment');
+  assert.equal(rf.summary.value,'Manually written question');assertNoSend(range);assert.equal(questionCalls(range).length,0);
+  rf.draft.click();await settle();assert.equal(rf.send.disabled,false);
+  change(range,rf.first,rangeValue(0));assert.equal(rf.last.value,rangeValue(29));assert.equal(rf.send.disabled,true,'new range invalidates old AI provenance');assert.equal(rf.draft.disabled,false,'stale AI can be regenerated on the adjusted range');
+  change(range,rf.summary,'Manually edited old AI text','input');assert.equal(rf.send.disabled,true,'manual edits never clear stale source guards');
+  rf.draft.click();await settle();assert.equal(rf.send.disabled,false);
+  assert.equal(questionCalls(range).at(-1).body.message_ids.length,30);assert.equal(questionCalls(range).at(-1).body.message_ids[0],'range-0');
+  assertNoSend(range);rf.send.click();await settle();const rangePayload=prepareCalls(range)[0].body;
+  assert.deepEqual(rangePayload.message_ids,Array.from({length:30},(_,i)=>'range-'+i));assert.deepEqual(Object.keys(rangePayload.public_header_source_versions),rangePayload.message_ids);
+  assert.equal(rangePayload.public_header_hash,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(rangePayload.public_header_version,1);assert.deepEqual(rangePayload.media_ids,[]);range.close();
+
+
   const availability=await setup(kind),aform=controls(availability,await availability.open());
   const reason=()=>aform.form.querySelector('[data-send-disabled-reason]');
   assert.match(reason().textContent,/Choose a developer/);assert.equal(aform.send.disabled,true);
@@ -55,7 +82,7 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   change(availability,aform.recipient,'0');assert.match(reason().textContent,/Write a message/);
   change(availability,aform.summary,'   ','input');assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/Write a message/);
   change(availability,aform.summary,'Explicit manual question','input');assert.equal(aform.send.disabled,false);assert.equal(reason().hidden,true);
-  change(availability,aform.last,kind==='dialog'?'0':ids[0]);assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/1 to 30/);
+  aform.last.value=kind==='dialog'?'0':ids[0];change(availability,aform.summary,'Still manual','input');assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/1 to 30/);
   change(availability,aform.first,kind==='dialog'?'0':ids[0]);assert.equal(aform.send.disabled,false);assert.equal(reason().textContent,'');
   assertNoSend(availability);assert.equal(questionCalls(availability).length,0);availability.close();
   const noTargets=await setup(kind,{targets:false}),nt=controls(noTargets,await noTargets.open());assert.equal(nt.send.disabled,true);assert.match(nt.form.querySelector('[data-send-disabled-reason]').textContent,/No accessible Developers|No accessible dialogues/);assertNoSend(noTargets);noTargets.close();

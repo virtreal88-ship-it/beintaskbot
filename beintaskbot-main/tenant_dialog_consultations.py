@@ -228,7 +228,7 @@ def preview(profile,data):
         require_schema(conn)
         with conn.cursor() as cur:
             case_id=identifier(data['case_id']) if data.get('case_id') else ''
-            tenant,_,_,source=_scope(cur,profile,data['channel_id'],data['conversation_id'],manual=True,case_id=case_id)
+            tenant,actor,_,source=_scope(cur,profile,data['channel_id'],data['conversation_id'],manual=True,case_id=case_id)
             has_earlier=False;case_scope=None
             if case_id:
                 rows,has_earlier,case_scope=_case_rows(cur,tenant,case_id,data['channel_id'],data['conversation_id'])
@@ -247,6 +247,7 @@ def preview(profile,data):
                 suffix=next((suffix for suffix in ('@s.whatsapp.net','@c.us') if conversation.endswith(suffix)),'')
                 if suffix:phone=_preview_phone(conversation[:-len(suffix)])
             verified_phone=_verified_contact_phone(cur,tenant,data['channel_id'],source.get('conversation_id'))
+            header,header_hash=_public_header(cur,tenant,actor,data['channel_id'],source)
             messages=[]
             for row in rows:
                 value={key:str(item) if isinstance(item,uuid.UUID) or hasattr(item,'isoformat') else item for key,item in dict(row).items()};author=value.get('author_name') or '';raw=value.get('raw') or {}
@@ -258,7 +259,7 @@ def preview(profile,data):
                   author_name=_human_preview_name(author,source.get('conversation_id')))
                 for private in ('raw','media_url','channel','ordered_at','external_id'):value.pop(private,None)
                 messages.append(value)
-            return {'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+            return {'public_header':header,'public_header_hash':header_hash,'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
                     'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
                         'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
@@ -288,9 +289,47 @@ def _verified_contact_phone(cur,tenant,channel,conversation):
     return '+'+jid.split('@',1)[0] if jid else ''
 
 
+def _public_header(cur,tenant,actor,channel,source):
+    """Safe, exact-route metadata for a new frozen share, never a public live join."""
+    conversation=source['conversation_id']
+    header={'version':1,'customer_name':'','verified_phone':'','phone_status':'unknown',
+            'company_name':'','operator_name':''}
+    cur.execute("SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant,actor))
+    header['operator_name']=_human_preview_name((cur.fetchone() or {}).get('display_name'))
+    from tenant_ai_group_coordination import group_jid
+    if not group_jid(conversation) and source.get('conversation_kind')!='group':
+        cur.execute("SELECT to_regclass('saas_crm_native_contact_conversations') AS bindings,to_regclass('saas_crm_native_contacts') AS contacts,to_regclass('saas_crm_native_companies') AS companies")
+        ready=cur.fetchone() or {};contact={}
+        if all(ready.get(key) for key in ('bindings','contacts','companies')):
+            cur.execute("""SELECT c.display_name,co.name AS company_name
+              FROM saas_crm_native_contact_conversations b
+              JOIN saas_crm_native_contacts c ON c.tenant_id=b.tenant_id AND c.id=b.contact_id AND c.archived_at IS NULL
+              LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id AND co.archived_at IS NULL
+              WHERE b.tenant_id=%s::uuid AND b.provider='connect' AND b.channel_id=%s::uuid AND b.conversation_id=%s""",(tenant,channel,conversation))
+            contacts=cur.fetchall()
+            if len(contacts)==1:contact=contacts[0]
+        header['customer_name']=_human_preview_name(contact.get('display_name') or source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),conversation)
+        header['company_name']=_human_preview_name(contact.get('company_name'))
+        header['verified_phone']=_verified_contact_phone(cur,tenant,channel,conversation)
+        if header['verified_phone']:header['phone_status']='verified'
+    proof={'tenant_id':tenant,'actor':actor,'channel_id':channel,'conversation_id':conversation,'header':header}
+    return header,hashlib.sha256(json.dumps(proof,sort_keys=True).encode()).hexdigest()
+
+
+def _selected_last_message_at(rows):
+    from datetime import datetime,timezone
+    dates=[]
+    for row in rows:
+        try:
+            value=datetime.fromisoformat(str(row.get('happened_at') or '').replace('Z','+00:00'))
+            dates.append(value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value)
+        except (ValueError,TypeError):continue
+    return max(dates).isoformat() if dates else ''
+
+
 def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions'}
+    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions','public_header_version','public_header_hash','public_header_source_versions'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
     if ('question_draft_request_id' in data) != ('source_versions' in data):
@@ -299,12 +338,21 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
         raise TenantLinearError('Некорректный режим повторного запроса.',400)
     include_identity=data.get('include_customer_identity',False)
     if type(include_identity) is not bool:raise TenantLinearError('Параметр публикации личности некорректен.',400)
+    header_requested=any(key in data for key in ('public_header_version','public_header_hash','public_header_source_versions'))
+    if header_requested and (type(data.get('public_header_version')) is not int or data.get('public_header_version')!=1
+            or not isinstance(data.get('public_header_hash'),str) or not re.fullmatch(r'[0-9a-f]{64}',data['public_header_hash']) or include_identity):
+        raise TenantLinearError('Обновите предварительный просмотр публичных данных.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
     case_id=identifier(data['case_id']) if data.get('case_id') else None
     summary=data['summary']
     if not isinstance(summary,str) or not summary.strip() or len(summary)>2600:raise TenantLinearError('Укажите краткую суть проблемы.',400)
     from tenant_public_case import _valid_ids
     media=_valid_ids(data['media_ids']);selected=_valid_ids(data['message_ids'],required=True)
+    if header_requested:
+        proof=data.get('public_header_source_versions')
+        if not isinstance(proof,dict) or set(proof)!=set(selected) or any(
+                not isinstance(value,str) or not re.fullmatch(r'[0-9a-f]{64}',value) for value in proof.values()):
+            raise TenantLinearError('Обновите предварительный просмотр выбранного фрагмента.',400)
     if not set(media)<=set(selected):raise TenantLinearError('Файлы должны входить в выбранный фрагмент.',400)
     normalized={**data,'request_id':request,'channel_id':channel,'destination_channel_id':dest,
         'message_ids':selected,'media_ids':sorted(media),'summary':summary.strip(),
@@ -343,10 +391,18 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 from tenant_support_case_context import selection as case_selection
                 rows=case_selection(cur,tenant,case_id,channel,data['conversation_id'],selected)
             else:rows=selection(cur,tenant,source,selected)
+            identity=None
+            if header_requested:
+                if data['public_header_source_versions']!={row['id']:version(row) for row in rows}:
+                    raise TenantLinearError('Выбранный фрагмент изменился. Обновите предварительный просмотр.',409)
+                header,header_hash=_public_header(cur,tenant,actor,channel,source)
+                if not secrets.compare_digest(header_hash,data['public_header_hash']):
+                    raise TenantLinearError('Публичные данные изменились. Обновите предварительный просмотр.',409)
+                identity={**header,'last_message_at':_selected_last_message_at(rows)}
             auto=auto_intent(cur,tenant,case_id,request,auto_dispatch_id,dest,data['destination_conversation_id'])
             admitted_media=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
             pending=existing(cur,tenant,channel,data['conversation_id'],selected,case_id,dest,data['destination_conversation_id'],
-                summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True)
+                summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True,public_header=identity,public_header_hash=data.get('public_header_hash'))
             if pending:
                 return {'id':pending['id'],'case_id':pending.get('case_id'),'request_id':pending['request_id'],
                         'state':pending['state'],'created':False,'reused':True}
@@ -396,7 +452,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
-            identity={}
+            identity=identity or {}
             if include_identity:
                 name=_human_preview_name(source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),source.get('conversation_id'))
                 phone=_verified_contact_phone(cur,tenant,channel,source['conversation_id'])
@@ -413,6 +469,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             fragment=COPY[ai_summary['selection']['language']]['fragment'] if ai_summary else 'Фрагмент переписки (ссылка действует 7 дней)'
             body=summary.strip()+'\n\n'+fragment+':\n'+url
             consultation_evidence={'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}
+            if header_requested:consultation_evidence['public_header_hash']=data['public_header_hash']
             if ai_summary is not None:consultation_evidence['ai_summary']=ai_summary
             if data.get('question_draft_request_id'):
                 consultation_evidence['question_draft']={k:data[k] for k in ('question_draft_request_id','channel_id','conversation_id','message_ids','media_ids','source_versions')}
@@ -428,7 +485,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s)''',
               (tenant,ident,request,case_id,dest,target['conversation_id'],body,hashlib.sha256(body.encode()).hexdigest(),actor))
             from tenant_ai_agents_store import _audit
-            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share,'customer_identity_published':include_identity})
+            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share,'customer_identity_published':include_identity or header_requested})
         conn.commit()
     return {'id':ident,'case_id':case_id,'request_id':request,'state':'ready','created':True,'recipient':target['customer_name'],'message_count':len(selected),'expires_in_days':7}
 
@@ -613,9 +670,14 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                   WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",
                   (receipt['message_id'],receipt['external_message_id'],tenant,request))
                 if not cur.fetchone():raise TenantLinearError('Квитанция требует проверки.',409)
+                # Native Reply reads the provider ID from this CRM row, not
+                # the delivery ledger. Preserve the confirmed synchronous receipt
+                # without waiting for an optional signed outbound webhook echo.
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,raw)
                   VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'Operator',%s,'text',%s::jsonb) ON CONFLICT DO NOTHING''',
-                  (uuid.uuid4(),tenant,target['lead_id'],'connect:'+receipt['message_id'],'connect:'+str(delivery['channel_id']),delivery['body'],_json({'source':'connect','consultation_outbound':True})))
+                  (uuid.uuid4(),tenant,target['lead_id'],'connect:'+receipt['message_id'],'connect:'+str(delivery['channel_id']),delivery['body'],_json({'source':'connect','consultation_outbound':True,
+                    'id':receipt['message_id'],'externalMessageId':receipt['external_message_id'],
+                    'originClientMessageId':request,'status':'sent'})))
                 # Reply correlation is derived, optional work. Its failure
                 # cannot discard a positive provider receipt already obtained.
                 cur.execute('SAVEPOINT consultation_reply_reconcile')
@@ -936,14 +998,14 @@ def active_case_developer_context(job,source_external_id,limit=10):
              'case_status':'open'} for row in reversed(rows)]
 
 
-def case_developer_followup_current(cur,tenant,payload):
+def case_developer_followup_current(cur,tenant,payload,*,require_automatic_intent=False):
     """Fail closed unless the exact queued provider reply still has authority."""
     if not isinstance(payload,dict):return False
     bindings=payload.get('developer_reply_bindings')
     if bindings is not None:
         if not isinstance(bindings,list) or not bindings:return False
         if any(not isinstance(item,dict) or item.get('case_id')!=payload.get('case_id') for item in bindings):return False
-        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None}) for item in bindings)
+        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None},require_automatic_intent=require_automatic_intent) for item in bindings)
     try:
         case_id=str(uuid.UUID(str(payload.get('case_id') or '')))
         reply_id=str(uuid.UUID(str(payload.get('developer_reply_message_id') or '')))
@@ -954,7 +1016,7 @@ def case_developer_followup_current(cur,tenant,payload):
     if not conversation or not quote:return False
     cur.execute('''SELECT t.status,t.assigned_developer_channel_id::text AS assigned_channel,
         t.assigned_developer_conversation_id,
-        cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,
+        cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,a.version AS agent_version,
         s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,
         a.scopes,tn.status AS tenant_status,tn.owner_telegram_id,r.source_actor,r.source_external_id,
         t.channel_id::text AS client_channel,cs.agent_assignment_id::text AS assignment_id
@@ -982,13 +1044,23 @@ def case_developer_followup_current(cur,tenant,payload):
       LIMIT 1 FOR UPDATE OF t,cs FOR SHARE OF a,s,tn,ch,source_ch,marker''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
     row=cur.fetchone()
     if not row:return False
-    cur.execute('''SELECT m.id FROM saas_crm_messages m JOIN saas_connect_conversations v
+    cur.execute('''SELECT m.id,m.raw->'_case_followup_intent' AS followup_intent FROM saas_crm_messages m JOIN saas_connect_conversations v
       ON v.tenant_id=m.tenant_id AND v.connect_channel_id=%s::uuid AND v.conversation_id=%s
         AND v.lead_id=m.kommo_lead_id
       WHERE m.tenant_id=%s::uuid AND m.external_id=%s AND m.direction='incoming'
         AND m.channel='connect:'||%s::uuid::text AND m.raw->>'quotedExternalMessageId'=%s
       FOR SHARE OF m FOR KEY SHARE OF v''',(channel,conversation,tenant,row['source_external_id'],channel,quote))
-    if not cur.fetchone():return False
+    source=cur.fetchone()
+    if not source:return False
+    if require_automatic_intent:
+        # Reuse the immutable ingress generation, not the worker's newer
+        # reservation. A mode cycle before claim must not revive old intent.
+        intents=source.get('followup_intent')
+        intent=intents.get(case_id) if isinstance(intents,dict) else None
+        expected={'agent_id':row.get('agent_id'),
+          'assignment_id':str(row.get('assignment_id') or ''),
+          'version':row.get('agent_version'),'owner_id':row.get('owner_telegram_id')}
+        if row.get('mode')!='automatic' or not isinstance(intent,dict) or intent!=expected:return False
     if str(conversation).endswith('@g.us') and not _verified_group_reply_author(
         cur,tenant,channel,conversation,row.get('source_external_id'),row.get('source_actor')):return False
     if payload.get('developer_expected_agent_id') and str(row.get('agent_id') or '')!=str(payload['developer_expected_agent_id']):return False
@@ -1033,7 +1105,7 @@ def case_developer_followup_current(cur,tenant,payload):
 def case_developer_followup_is_current(tenant,payload):
     with _connect() as conn:
         with conn.cursor() as cur:
-            return case_developer_followup_current(cur,tenant,payload)
+            return case_developer_followup_current(cur,tenant,payload,require_automatic_intent=True)
 
 
 def _case_reply_binding(cur,tenant,reply_id):

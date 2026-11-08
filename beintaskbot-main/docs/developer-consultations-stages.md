@@ -92,3 +92,19 @@ case or identity. Dismissal does not send, and repeated clicks share the same at
 All tests use synthetic local fixtures and mocked providers. Native concurrent UUID,
 unknown-result and source-edit tests run under the existing disposable PostgreSQL CI
 job. A local run without `BEINTASKBOT_TEST_POSTGRES_DSN` skips those tests explicitly.
+
+
+## Automatic continuation groundwork: ingress-generation fence
+
+The existing signed ingress `_case_followup_intent` is revalidated for automatic
+case replies at enqueue, before generation, and under the final transport lock.
+Every coalesced reply must still match its admitted agent, assignment, agent
+version and tenant owner. An automatic → manual → automatic mode cycle cannot
+revive an older intent by acquiring a fresh worker reservation. Missing legacy
+stamps fail closed for automatic continuation; manual evidence and explicit
+resolution retain their existing authority checks.
+
+This slice adds no schema, sender, routing setting, reserve escalation or bell
+suppression. The older scoped pilot is not enabled or generalized. Synthetic
+PostgreSQL tests cover delayed enqueue/claim, generation and dispatch boundaries,
+mixed-generation coalescing, missing stamps and unchanged successful operation.
