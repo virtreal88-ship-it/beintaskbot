@@ -5,6 +5,7 @@ on:
       - 'docs/public-case.html'
       - 'beintaskbot-main/tenant_public_case_api.py'
       - 'beintaskbot-main/tests/test_public_case_chat_browser.cjs'
+      - 'beintaskbot-main/tests/test_public_header_style_*.cjs'
       - '.github/workflows/public-case-chat.yml'
   workflow_dispatch:
 permissions:
@@ -20,13 +21,15 @@ jobs:
           node-version: '20'
       - name: Install test browser
         run: |
-          npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.58.2
+          npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.58.2 jsdom@26.1.0
           beintaskbot-main/.support-test-deps/node_modules/.bin/playwright install --with-deps chromium
       - name: Test synthetic public snapshots
         run: |
           mkdir -p /tmp/public-chat-qa
           export CHROMIUM_EXECUTABLE_PATH=$(node -p "require('./beintaskbot-main/.support-test-deps/node_modules/playwright').chromium.executablePath()")
+          node beintaskbot-main/tests/test_public_header_style_ui.cjs
           PUBLIC_CHAT_SCREENSHOT_DIR=/tmp/public-chat-qa node beintaskbot-main/tests/test_public_case_chat_browser.cjs
+          PUBLIC_CHAT_SCREENSHOT_DIR=/tmp/public-chat-qa node beintaskbot-main/tests/test_public_header_style_browser.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
