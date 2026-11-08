@@ -11,6 +11,10 @@ on:
       - 'beintaskbot-main/tenant_ai_learning_mcp.py'
       - 'beintaskbot-main/tenant_ai_agents_store.py'
       - 'beintaskbot-main/tenant_knowledge_*.py'
+      - 'beintaskbot-main/tenant_operator_learning_retry.py'
+      - 'beintaskbot-main/tenant_operator_case_submission.py'
+      - 'beintaskbot-main/tests/test_operator_learning_retry*.py'
+      - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_case_media_admission.py'
       - 'beintaskbot-main/tenant_case_media_recovery.py'
       - 'beintaskbot-main/tenant_connect_documents.py'
@@ -38,6 +42,10 @@ on:
       - 'beintaskbot-main/tenant_ai_learning_mcp.py'
       - 'beintaskbot-main/tenant_ai_agents_store.py'
       - 'beintaskbot-main/tenant_knowledge_*.py'
+      - 'beintaskbot-main/tenant_operator_learning_retry.py'
+      - 'beintaskbot-main/tenant_operator_case_submission.py'
+      - 'beintaskbot-main/tests/test_operator_learning_retry*.py'
+      - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_case_media_admission.py'
       - 'beintaskbot-main/tenant_case_media_recovery.py'
       - 'beintaskbot-main/tenant_connect_documents.py'
@@ -107,9 +115,12 @@ jobs:
             tests/test_knowledge_campaign_multiprocess.py \
             tests/test_knowledge_campaign_unknown_postgres.py \
             tests/test_knowledge_candidates.py \
+            tests/test_operator_learning_retry.py \
+            tests/test_operator_learning_retry_postgres.py \
             tests/test_knowledge_media.py \
             tests/test_tenant_operator_assignment.py \
             tests/test_media_spend_grant_postgres.py
+          node tests/test_operator_case_submission_ui.cjs
           node tests/test_support_cases_integration_ui.cjs
           node tests/test_support_cases_modal_ui.cjs
           node tests/test_support_cases_locale_ui.cjs

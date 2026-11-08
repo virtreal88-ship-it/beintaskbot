@@ -262,9 +262,14 @@ def prepare(profile,data,review=None,training=None):
                 target=validate(cur,profile,data,training)
                 if [ref['id'] for ref in item['refs']]!=data['message_ids']:
                     raise TenantLinearError('Фрагмент слишком большой или изменился. Выберите меньше сообщений.',409)
-                cur.execute("SELECT id FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND route->'training_target'->>'submission_key'=%s LIMIT 1",(tenant,target['submission_key']))
-                previous=cur.fetchone()
-                if previous:return {'existing':str(previous['id']),'training_existing':True}
+                if data.get('retry_of'):
+                    from tenant_operator_learning_retry import admit
+                    successor=admit(cur,profile,tenant,identifier(data['retry_of']),item,target)
+                    if successor:return {'existing':successor,'training_existing':True}
+                else:
+                    cur.execute("SELECT id FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND route->'training_target'->>'submission_key'=%s ORDER BY created_at DESC,id DESC LIMIT 1",(tenant,target['submission_key']))
+                    previous=cur.fetchone()
+                    if previous:return {'existing':str(previous['id']),'training_existing':True}
                 item['route']['training_target']=target
                 item['training']=target
             item['_failed_media_recovery']=failed_media_recovery
