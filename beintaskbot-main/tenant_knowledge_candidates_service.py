@@ -66,6 +66,18 @@ class LiveExtractionDisabled(Exception):
     """A live queue job was safely stopped before its next provider call."""
 
 
+def _shrink_training_excerpt(item):
+    """Preserve selected IDs/roles while staying inside the existing model budget."""
+    index=max(range(len(item['messages'])),key=lambda i:len(item['messages'][i]['text']))
+    message=item['messages'][index]
+    if len(message['text'])<100:
+        raise TenantLinearError('Контекст агента не помещается в лимит.',413)
+    text=message['text'][:len(message['text'])//2]+' [Truncated; do not infer omitted contents]'
+    message['text']=text
+    message['customer_language_text']=str(message.get('customer_language_text') or '')[:len(text)//2]
+    item['refs'][index]['text_limit']=len(text)
+
+
 def prepare(profile,data,review=None,training=None):
     allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','language_explicit','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis','case_source_sha256'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
@@ -225,8 +237,6 @@ def prepare(profile,data,review=None,training=None):
                 cur.execute("SELECT id FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND route->'training_target'->>'submission_key'=%s LIMIT 1",(tenant,target['submission_key']))
                 previous=cur.fetchone()
                 if previous:return {'existing':str(previous['id']),'training_existing':True}
-                if len((_json(item['messages'])+PROMPT+'{}').encode())+512>MAX_TOKENS-2000:
-                    raise TenantLinearError('Фрагмент слишком большой. Выберите меньше сообщений.',413)
                 item['route']['training_target']=target
                 item['training']=target
             item['_failed_media_recovery']=failed_media_recovery
@@ -319,6 +329,9 @@ def prepare(profile,data,review=None,training=None):
                 raise TenantLinearError('Модель компании недоступна.',409)
             while len((_json(item['messages'])+PROMPT+_json(agent_prompt)+_json(review['context'] if review else {})).encode())+512>MAX_TOKENS-2000:
                 if review: raise TenantLinearError('Контекст улучшения не помещается в лимит.',413)
+                if training:
+                    _shrink_training_excerpt(item)
+                    continue
                 if len(item['messages'])<=1: raise TenantLinearError('Контекст не помещается в лимит.',413)
                 item['messages'].pop(0);item['refs'].pop(0)
                 item['next_before']=item['refs'][0]['id']

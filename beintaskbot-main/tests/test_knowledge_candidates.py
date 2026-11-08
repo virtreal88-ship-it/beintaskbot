@@ -1720,3 +1720,56 @@ def test_training_unknown_provider_then_unassignment_keeps_monetary_and_token_ho
     tokens=db.execute('SELECT reserved_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,request))[0]
     assert tokens['reserved_tokens']>=policy.MAX_TOKENS
     generation.assert_called_once()
+
+
+@pytest.mark.parametrize('count,kind',[(10,'text'),(30,'text'),(30,'document')])
+def test_employee_submission_preserves_long_message_window(ready,monkeypatch,count,kind):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))
+    ids=[str(uuid.UUID(int=9000+i)) for i in range(count)]
+    for i,message_id in enumerate(ids):
+        db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming',%s,%s,%s::jsonb,now()+(%s * interval '1 second'))",
+          (A,message_id,'bounded-'+str(i),'connect:'+CA,'Uzun sintetik mətn. '*3000,kind,json.dumps({'fileLength':999999999,'mediaId':'fixture-'+str(i)}),i))
+    db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert preview['max_messages']==30
+    assert [m['id'] for m in preview['messages']]==ids
+    assert sum(len(m['text']) for m in preview['messages'])<=policy.MAX_CONTEXT
+    request={'channel_id':CA,'conversation_id':'client','message_ids':ids,
+      **{k:preview['agent'][k] for k in ('agent_id','agent_version','assignment_revision')}}
+    # Existing media pipeline remains mocked and must not download attachments.
+    result=submission.submit(PROFILE,request)
+    assert generation.call_count==1
+    provider_messages=generation.call_args.args[3]
+    assert [m['ref'] for m in provider_messages]==['m'+str(i+1) for i in range(count)]
+    assert generation.call_args.kwargs['images']==[]
+    assert generation.call_args.kwargs['max_output_tokens']==1800
+    assert policy.MAX_TOKENS==16000
+    extraction=db.execute("SELECT source_refs,route FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid",(A,))[0]
+    assert [ref['id'] for ref in extraction['source_refs']]==ids
+    assert result['candidates'][0]['source_message_ids']==ids
+    assert not any(extraction['route'].get(flag) for flag in ('allow_external_media','allow_paid_asr','allow_vision'))
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid",(A,))[0]['n']==0
+    assert submission.submit(PROFILE,request)['already_submitted'] is True
+    assert generation.call_count==1
+    with pytest.raises(TenantLinearError):
+        submission.submit({'tenant_id':B,'telegram_id':22},request)
+    with pytest.raises(TenantLinearError,match='30'):
+        submission.submit(PROFILE,{**request,'message_ids':[str(uuid.UUID(int=10000+i)) for i in range(31)]})
+    assert generation.call_count==1
+
+
+def test_employee_preview_window_is_capped_at_30_without_global_limit_change(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    for i in range(31):
+        db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','Synthetic short message',now()+(%s * interval '1 second'))",
+          (A,str(uuid.UUID(int=11000+i)),'window-'+str(i),'connect:'+CA,i+10))
+    db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert len(preview['messages'])==30 and preview['has_earlier'] is True
+    with db.cursor() as cur:
+        ordinary=store.snapshot(cur,PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert len(ordinary['refs'])==34 and policy.MAX_MESSAGES==80
+    generation.assert_not_called()

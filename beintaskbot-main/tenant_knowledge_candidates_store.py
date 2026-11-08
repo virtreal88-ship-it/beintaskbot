@@ -191,12 +191,15 @@ def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
 
 def snapshot(cur,profile,data):
     tenant,actor,policy,chosen,binding,ticket=route(cur,profile,data)
+    from tenant_operator_case_submission import is_submission, MAX_SUBMISSION_MESSAGES
+    employee_submission=is_submission(profile)
+    message_limit=MAX_SUBMISSION_MESSAGES if employee_submission else MAX_MESSAGES
     before=identifier(data['before']) if data.get('before') else None
     start,end=period(binding)
     if binding['history_mode']=='unified_group':
         from datetime import timedelta
         through=(moment(end)-timedelta(microseconds=1)).isoformat() if end else None
-        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=81,through=through,
+        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=message_limit+1,through=through,
                         channel_ids=binding.get('approved_channel_ids'))
         if start: rows=[r for r in rows if moment(r.get('happened_at') or r['created_at'])>=moment(start)]
     else:
@@ -207,14 +210,14 @@ def snapshot(cur,profile,data):
           AND (%s::uuid IS NULL OR (COALESCE(m.happened_at,m.created_at),m.id)<(
             SELECT COALESCE(x.happened_at,x.created_at),x.id FROM saas_crm_messages x
             WHERE x.tenant_id=%s::uuid AND x.kommo_lead_id=%s AND x.channel=%s AND x.id=%s::uuid))
-          ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 81''',
-          (binding['channel_id'],tenant,chosen['lead_id'],'connect:'+binding['channel_id'],start,start,end,end,before,tenant,chosen['lead_id'],'connect:'+binding['channel_id'],before))
+          ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT %s''',
+          (binding['channel_id'],tenant,chosen['lead_id'],'connect:'+binding['channel_id'],start,start,end,end,before,tenant,chosen['lead_id'],'connect:'+binding['channel_id'],before,message_limit+1))
         rows=cur.fetchall()
-    next_before=str(rows[79]['id']) if len(rows)>80 else None
-    rows=rows[:MAX_MESSAGES]
+    next_before=str(rows[message_limit-1]['id']) if len(rows)>message_limit else None
+    rows=rows[:message_limit]
     selected=data.get('message_ids')
     if selected is not None:
-        if not isinstance(selected,list) or not 1<=len(selected)<=MAX_MESSAGES: raise TenantLinearError('Выберите от 1 до 80 сообщений.')
+        if not isinstance(selected,list) or not 1<=len(selected)<=message_limit: raise TenantLinearError(f'Выберите от 1 до {message_limit} сообщений.')
         ids={identifier(v) for v in selected}
         if ids-{str(r['id']) for r in rows}: raise TenantLinearError('Выбор вне разрешённого окна истории; используйте before.',404)
         rows=[r for r in rows if str(r['id']) in ids]
@@ -231,12 +234,16 @@ def snapshot(cur,profile,data):
     from tenant_summary_language import customer_evidence
     language_roles={str(row['id']):row['role'] for row in customer_evidence(cur,tenant,rows,binding['channel_id'],binding['conversation_id'])}
     refs=[];messages=[];preview_metadata=[];remaining=MAX_CONTEXT
+    # Bound excerpts, not the selectable message count. Keep every selected
+    # reference without raising the existing total context or media budgets.
+    excerpt_limit=min(1500,MAX_CONTEXT//max(1,len(rows))) if employee_submission else 1500
     for row in rows:
-        body=redact(row.get('body'),names)[:min(1500,remaining)]
         kind=row.get('message_type') or 'text'
+        marker='\n[Attachment pending_processing: contents not read]' if kind!='text' else ''
+        body=redact(row.get('body'),names)[:max(0,min(excerpt_limit,remaining)-(len(marker) if employee_submission else 0))]
         customer_language_text=body if kind not in {'voice','audio'} else ''
         if not body.strip() and kind=='text': continue
-        if kind!='text': body=(body+'\n[Attachment pending_processing: contents not read]').strip()
+        if kind!='text': body=(body+marker).strip()
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         role=author_role(row)
         ref={'id':str(row['id']),'channel_id':str(row.get('source_channel_id') or binding['channel_id']),'lead_id':int(row.get('source_lead_id') or row['kommo_lead_id']),'role':role,'body_hash':digest(str(row.get('body') or '')),'text_limit':len(body)}
