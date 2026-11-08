@@ -134,6 +134,8 @@ def execute(cur,cfg,args):
                 or old.get('source_lead')!=supplied['source_lead_id']):
             raise TenantLinearError('Request id was already used for a different owner assertion.',409)
         return replay
+    from tenant_connect_dialog_equivalence import lock_owner_controls
+    lock_owner_controls(cur,tenant,channel,ids)
     item,tenant,actor,channel,ids,leads,before=_candidate(cur,cfg,supplied)
     if not hmac.compare_digest(item['precondition'],precondition):
         raise TenantLinearError('Owner identity preview changed; preview again.',409)

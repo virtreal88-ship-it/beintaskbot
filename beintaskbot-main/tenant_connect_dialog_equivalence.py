@@ -99,12 +99,61 @@ def snapshot(cur, tenant, channel, ids, leads):
     return result
 
 
+def lock_owner_controls(cur, tenant, channel, ids):
+    """Fence non-dialogue writers (notably archive/transfer) before snapshot.
+
+    Archive locks agents before state rows. Use that order and reject a binding
+    that moved to another agent while we waited, rather than lock out of order.
+    Dialogue locks must already be held by the caller.
+    """
+    cur.execute("SET LOCAL lock_timeout='5s'")
+    cur.execute("""SELECT DISTINCT agent_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+        AND conversation_id=ANY(%s::text[]) AND agent_id IS NOT NULL""", (tenant, channel, ids))
+    agents = [str(r['agent_id']) for r in cur.fetchall()]
+    cur.execute("""SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid
+      AND id=ANY(%s::uuid[]) ORDER BY id FOR SHARE""", (tenant, agents))
+    locked = {str(r['id']) for r in cur.fetchall()}
+    cur.execute("""SELECT agent_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+        AND conversation_id=ANY(%s::text[]) ORDER BY conversation_id FOR UPDATE""", (tenant, channel, ids))
+    if any(r['agent_id'] is not None and str(r['agent_id']) not in locked for r in cur.fetchall()):
+        raise TenantLinearError('Dialogue assignment changed; preview again.', 409)
+
+
+def owner_assignment_compatible(tenant, channel, ids, states):
+    """Operation UUIDs are not agent identities, but only an exact owner pair
+    may reconcile them. Missing bindings/owners never imply compatibility.
+
+    The composite state FK guarantees that the shared agent belongs to tenant.
+    Keep the canonical operation token: it still describes that route's actual
+    assignment and preserves its idempotent assignment retries.
+    """
+    return (len(ids) == len(set(ids)) == len(states) == 2
+            and {r.get('conversation_id') for r in states} == set(ids)
+            and all(str(r.get('tenant_id')) == str(tenant)
+                    and r.get('provider') == 'connect'
+                    and str(r.get('channel_id')) == str(channel)
+                    and r.get('agent_id') is not None
+                    and r.get('agent_assignment_id') is not None
+                    and r.get('state') in {'human', 'paused'} for r in states)
+            and len({str(r['agent_id']) for r in states}) == 1
+            and len({r.get('assigned_to') for r in states}) == 1)
+
+
 def conflicts(cur, tenant, channel, ids, before, *, owner_phone=None):
     reasons = []
     states = before['states']
+    compatible = owner_phone is not None and owner_assignment_compatible(tenant, channel, ids, states)
+    # In the owner path a missing operation token is not permission to copy
+    # the other route's binding. Only two complete compatible bindings qualify.
+    if (owner_phone is not None and not compatible
+            and len({r.get('agent_assignment_id') for r in states}) > 1):
+        reasons.append('conflicting_state_assignment:agent_assignment_id')
     for field in ('agent_id', 'assigned_to', 'agent_assignment_id'):
         if len({str(r[field]) for r in states if r.get(field) is not None}) > 1:
-            reasons.append('conflicting_state_assignment:'+field)
+            if field != 'agent_assignment_id' or not compatible:
+                reasons.append('conflicting_state_assignment:'+field)
     if any(r.get('state') not in {'human','paused'} and r.get('agent_id') for r in states):
         reasons.append('assigned_conversation_not_stopped')
     if any(r.get('state') not in {'drafted','sent','skipped','failed'} or r.get('lease_token')
@@ -165,9 +214,16 @@ def activate(cur, tenant, channel, pair_id, ids, leads, before, *, owner_asserti
     selected = sorted(states, key=lambda r: ({'human':2,'paused':1}.get(r['state'],0), r['conversation_id']==jid), reverse=True)
     if selected:
         chosen = dict(selected[0])
-        for field in ('agent_id','assigned_to','agent_assignment_id'):
-            values = [r[field] for r in states if r.get(field) is not None]
-            if values: chosen[field] = values[0]
+        if owner_assertion_id is not None and owner_assignment_compatible(tenant, channel, ids, states):
+            # Stop precedence and assignment provenance are separate. Never
+            # splice a source operation UUID into the canonical assignment.
+            binding = next(r for r in states if r['conversation_id'] == jid)
+            for field in ('agent_id', 'assigned_to', 'agent_assignment_id'):
+                chosen[field] = binding[field]
+        else:
+            for field in ('agent_id','assigned_to','agent_assignment_id'):
+                values = [r[field] for r in states if r.get(field) is not None]
+                if values: chosen[field] = values[0]
         cur.execute('''INSERT INTO saas_ai_conversation_state
           (tenant_id,provider,channel_id,conversation_id,state,reason,agent_id,assigned_to,agent_assignment_id)
           VALUES(%s::uuid,'connect',%s,%s,%s,%s,%s::uuid,%s,%s::uuid)
@@ -230,6 +286,8 @@ def rollback(cur, tenant, channel, pair_id):
     row = cur.fetchone()
     if not row: raise TenantLinearError('Retained dialogue merge is unavailable.',409)
     s = row['snapshot']; jid = row['canonical_id']; source = row['source_id']
+    if s.get('owner_assertion_id'):
+        lock_owner_controls(cur, tenant, channel, [jid, source])
     cur.execute('''SELECT row_to_json(s) AS row FROM saas_ai_conversation_state s
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''', (tenant,channel,jid))
     if (cur.fetchone() or {}).get('row') != s['canonical_state_after']:
