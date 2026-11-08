@@ -459,6 +459,11 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
+                question_bound=bool((item.get('evidence') or {}).get('question_draft'))
+                # Preserve existing automatic/fanout admission order. Only the
+                # new question-bound path needs source locks before its reads.
+                if not question_bound:
+                    tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 from tenant_ai_dialog_scope import lock_dialog
                 routes={(str(delivery['channel_id']),delivery['conversation_id'])}
                 if auto_dispatch_id or (item.get('evidence') or {}).get('question_draft'):
@@ -467,7 +472,8 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                 for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
                     lock_group(cur,tenant,group)
                 for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
-                tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
+                if question_bound:
+                    tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 if auto_dispatch_id:
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
                       s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
