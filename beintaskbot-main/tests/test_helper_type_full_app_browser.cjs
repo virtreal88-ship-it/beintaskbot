@@ -41,7 +41,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(geometry.clickable,true,'direct action is unobscured with helper closed');
     await ask.dblclick();await page.locator('.dialog-consultation-form textarea').waitFor();
     assert.equal(await page.locator('.dialog-consultation-overlay').count(),1,'double click opens one modal');
-    await page.locator('.dialog-consultation-form button[type=button]').click();assert.equal(await page.locator('.dialog-consultation-overlay').count(),0);
+    await page.locator('.dialog-consultation-form button[type=button]:not([data-question-draft])').click();assert.equal(await page.locator('.dialog-consultation-overlay').count(),0);
     await ask.click();await page.locator('.dialog-consultation-form textarea').waitFor();
     await page.evaluate(()=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,conversation_id:'another-synthetic-dialog'}));
     await page.waitForFunction(()=>!document.querySelector('.dialog-consultation-overlay'));

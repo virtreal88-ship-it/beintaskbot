@@ -213,9 +213,9 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = ET.parse('/tmp/developer-question-races.xml').getroot().findall('.//testcase')
-          assert len(cases) == 3, 'Expected all three native race tests'
+          assert len(cases) == 5, 'Expected all five native race tests'
           assert all(case.find('skipped') is None for case in cases), 'Native race tests must not skip'
-          print('Verified: all 3 native developer question races executed without skips')
+          print('Verified: all 5 native developer question races executed without skips')
           PY
       - name: Exercise independent consultations and real PostgreSQL races
         env:

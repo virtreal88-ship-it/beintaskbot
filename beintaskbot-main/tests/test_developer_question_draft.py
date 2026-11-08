@@ -157,7 +157,7 @@ def test_case_materials_not_full_history_and_closed_case_is_blocked(setup):
     assert generate.call_count==1
 
 
-@pytest.mark.parametrize('stale', [False, True])
+@pytest.mark.parametrize('stale', [False, True, 'late'])
 def test_edited_question_requires_explicit_prepare_and_stale_source_cannot_dispatch(setup,monkeypatch,stale):
     local,_,generate=setup;data=payload();result=question.question(PROFILE,data)
     local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'developer',99,'Developer',now())",(A,CA));local.commit()
@@ -171,7 +171,14 @@ def test_edited_question_requires_explicit_prepare_and_stale_source_cannot_dispa
     sender=Mock(return_value={'message_id':'mock-connect-id','external_message_id':'MOCK_PROVIDER'})
     monkeypatch.setattr('tenant_connect_transport.send_consultation_with_receipt',sender)
     monkeypatch.setattr('tenant_connect_transport.connect_route', lambda cur,tenant,lead,**kw: {'channel_id':CA,'conversation_id':'developer' if lead==99 else 'client','api_key':'synthetic'})
-    if stale:
+    if stale == 'late':
+        def late_route(cur, tenant, lead, **kw):
+            cur.execute("UPDATE saas_crm_messages SET body='LATE EDIT' WHERE tenant_id=%s::uuid", (A,))
+            return {'channel_id': CA, 'conversation_id': 'developer', 'api_key': 'synthetic'}
+        monkeypatch.setattr('tenant_connect_transport.connect_route', late_route)
+        assert flow.dispatch(PROFILE,prepared['id'],send['request_id'])['state'] == 'blocked'
+        sender.assert_not_called()
+    elif stale:
         local.execute("UPDATE saas_crm_messages SET body='EDITED' WHERE tenant_id=%s::uuid",(A,));local.commit()
         with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,prepared['id'],send['request_id'])
         sender.assert_not_called()
@@ -198,3 +205,15 @@ def test_completed_stale_draft_explains_explicit_recovery(setup, change):
     revised = {**data, 'summary': 'Deliberately revised diagnostic question'}
     question.question(PROFILE, revised)
     assert generate.call_count == 2
+
+
+def test_generic_media_publication_uses_dispatch_lock_order(monkeypatch):
+    import tenant_media_evidence as evidence
+    lock = Mock()
+    monkeypatch.setattr('tenant_dialog_audio_store.lock_source', lock)
+    monkeypatch.setattr('tenant_product_identifiers.candidate', lambda *args: None)
+    monkeypatch.setattr(evidence, 'source_hash', lambda ref: 'fixture-hash')
+    refs = [{'id': key, 'channel_id': CA, 'external_id': key, 'media_kind': 'image'} for key in ('B', 'A')]
+    receipts = [{'id': key, 'status': 'processed', 'observation': 'Saved image evidence'} for key in ('B', 'A')]
+    evidence.persist(Mock(), A, refs, receipts)
+    assert [call.args[3] for call in lock.call_args_list] == ['A', 'B']

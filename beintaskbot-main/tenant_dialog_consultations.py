@@ -459,14 +459,15 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 from tenant_ai_dialog_scope import lock_dialog
                 routes={(str(delivery['channel_id']),delivery['conversation_id'])}
-                if auto_dispatch_id:routes.add((str(item['channel_id']),item['conversation_id']))
+                if auto_dispatch_id or (item.get('evidence') or {}).get('question_draft'):
+                    routes.add((str(item['channel_id']),item['conversation_id']))
                 from tenant_ai_group_coordination import group_jid,lock_group
                 for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
                     lock_group(cur,tenant,group)
                 for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
+                tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 if auto_dispatch_id:
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
                       s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
@@ -536,6 +537,12 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                 current=connect_route(cur,tenant,int(target['lead_id']))
                 if not current or current['channel_id']!=str(delivery['channel_id']) or current['conversation_id']!=delivery['conversation_id']:
                     raise TenantLinearError('Получатель изменился.',409)
+                if (item.get('evidence') or {}).get('question_draft'):
+                    from tenant_developer_question_draft import lock_for_dispatch
+                    lock_for_dispatch(cur,profile,item['evidence']['question_draft'])
+                    # Re-read scope/permissions only after all final locks. They
+                    # remain held through the provider call and receipt commit.
+                    _consult(cur,profile,key,manual=True,sending=True)
                 attempted=True;receipt=send_consultation_with_receipt(current,delivery['body'],request)
                 if receipt.get('state')=='pending':
                     cur.execute('''UPDATE saas_consultation_group_deliveries SET state='pending',connect_message_id=%s,updated_at=now()

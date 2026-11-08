@@ -188,3 +188,57 @@ def validate_for_prepare(cur, profile, data):
     connection = cur.fetchone() or {}
     if str(connection.get('updated_at')) != str(saved.get('config_version')):
         raise TenantLinearError('Настройки AI изменились. Измените описание вопроса или выбранный фрагмент и создайте новый черновик.', 409)
+
+def lock_for_dispatch(cur, profile, data):
+    """Freeze selected evidence until dispatch commits, then validate it anew.
+
+    Caller holds both source and destination dialogue locks. Row locks cover
+    source edits which do not participate in those advisory locks. Media uses
+    the same per-source fence as explicit audio publication and receipt writes,
+    including an absent receipt becoming available during a provider call.
+    """
+    tenant = identifier(profile.get('tenant_id'))
+    channel = identifier(data['channel_id'])
+    selected = [identifier(key) for key in data['message_ids']]
+    cur.execute('SELECT request_id FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR SHARE',
+                (tenant, identifier(data['question_draft_request_id'])))
+    cur.fetchall()
+    cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai' FOR SHARE", (tenant,))
+    cur.fetchall()
+    cur.execute('SELECT tenant_id FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid FOR SHARE', (tenant,))
+    cur.fetchall()
+    cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid FOR SHARE', (tenant, channel))
+    cur.fetchall()
+    cur.execute('SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s FOR SHARE',
+                (tenant, channel, data['conversation_id']))
+    cur.fetchall()
+    if data.get('case_id'):
+        cur.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant, identifier(data['case_id'])))
+        cur.fetchall()
+        cur.execute('SELECT message_id FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND message_id=ANY(%s::uuid[]) ORDER BY message_id FOR SHARE',
+                    (tenant, identifier(data['case_id']), selected))
+        cur.fetchall()
+    cur.execute('SELECT id::text,external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) ORDER BY id FOR SHARE', (tenant, selected))
+    rows = cur.fetchall()
+    if {row['id'] for row in rows} != set(selected):
+        raise TenantLinearError('Выбранный фрагмент изменился. Обновите черновик.', 409)
+    from tenant_dialog_audio_store import lock_source
+    media_ids = set(data.get('media_ids') or [])
+    # The selected-dialogue projection can normalize a legacy external ID
+    # with the connect prefix, while case selections retain their channel.
+    # Fence both aliases so either exact reusable receipt remains stable.
+    externals = {str(row['external_id'] or '') for row in rows if row['id'] in media_ids}
+    externals |= {'connect:' + external for external in externals if not external.startswith('connect:')}
+    for external in sorted(externals):
+        lock_source(cur, tenant, channel, external)
+        cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+        if (cur.fetchone() or {}).get('relation'):
+            cur.execute('SELECT external_id FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s FOR SHARE', (tenant, channel, external))
+            cur.fetchall()
+        cur.execute("SELECT to_regclass('public.saas_dialog_audio_attempts') AS relation")
+        if (cur.fetchone() or {}).get('relation'):
+            cur.execute('SELECT message_row_id FROM saas_dialog_audio_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s FOR SHARE', (tenant, channel, external))
+            cur.fetchall()
+            cur.execute('SELECT id FROM saas_dialog_audio_attempts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s FOR SHARE', (tenant, channel, external))
+            cur.fetchall()
+    validate_for_prepare(cur, profile, data)
