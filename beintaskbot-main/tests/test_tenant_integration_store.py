@@ -95,6 +95,16 @@ class KommoManualStoreTests(unittest.TestCase):
         self.assertEqual(kommo["metadata"]["auth_mode"], "manual")
         self.assertNotIn("secrets", kommo)
 
+    def test_manual_disconnect_preserves_official_oauth(self):
+        self.cur.fetchone.return_value = {
+            "provider": "kommo_manual", "status": "not_connected", "account_domain": "",
+            "metadata": {}, "connected_at": None, "updated_at": None}
+        store.disconnect_integration(tenant_id=TENANT, owner_id=20, provider="kommo_manual")
+        self.assertEqual(self.cur.execute.call_count, 1)
+        self.assertIn("provider = %s", self.cur.execute.call_args.args[0])
+        self.assertEqual(self.cur.execute.call_args.args[1], (TENANT, "kommo_manual"))
+        self.conn.commit.assert_called_once()
+
     def test_kommo_disconnect_clears_manual_secret_for_that_tenant(self):
         self.cur.fetchone.return_value = {
             "provider": "kommo", "status": "not_connected", "account_domain": "",
