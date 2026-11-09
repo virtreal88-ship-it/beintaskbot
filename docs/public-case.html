@@ -18,13 +18,93 @@
 .media{display:block;max-width:100%;max-height:50vh;margin-top:9px;border-radius:10px}.media.is-expanded{max-height:85vh}.file{display:inline-block;margin-top:9px}
 .empty{padding:20px;text-align:center;color:#596579}.notice{margin-top:14px}.media-status{display:block;color:#596579;font-size:12px;margin-top:5px}
 @media(max-width:480px){.wrap{margin:0 auto;padding:0}.head{border-radius:0;padding:16px}.thread{border-radius:0;padding:12px 10px;gap:8px}.bubble{max-width:92%}.wrap>.notice{padding:0 14px 16px}.head h1{font-size:18px}}
-</style></head><body><main class="wrap"><header class="head"><h1>Müraciət üzrə yazışma</h1><p id="description">Bu, yalnız bu CASE-ə bağlanmış mesajların snapshot-udur; cavab göndərmir və ümumi yazışmanı açmır.</p><p id="snapshot" class="notice"></p><p id="partial" class="notice" hidden>Bəzi fayllar məxfi məlumat işarəsinə görə açılmır.</p></header><section class="thread" id="thread" aria-label="Müraciət üzrə mesajlar"></section><p class="notice">Əlavə edilmiş faylı açmaq üçün uyğun düyməyə toxunun.</p></main>
+</style></head><body><main class="wrap"><header class="head"><h1>Müraciət üzrə yazışma</h1><p id="description">Bu, yalnız bu CASE-ə bağlanmış mesajların snapshot-udur; cavab göndərmir və ümumi yazışmanı açmır.</p><p id="snapshot" class="notice"></p><p id="partial" class="notice" hidden>Bəzi fayllar məxfi məlumat işarəsinə görə açılmır.</p></header><section class="thread" id="thread" aria-label="Müraciət üzrə mesajlar"></section><p class="notice">Şəkil, səs və videolar avtomatik yüklənir. Səs və video yalnız siz başladanda oynadılır. Sənədlər düymə ilə açılır.</p></main>
 <script>
 (()=>{const data=__CASE_DATA__;const root=document.getElementById('thread');const token=location.pathname.split('/').filter(Boolean).pop();const objectUrls=new Set();const escText=(el,value)=>{el.textContent=String(value||'')};const snapshot=document.getElementById('snapshot');if(data.snapshot_at)escText(snapshot,'Yenilənib: '+new Date(data.snapshot_at).toLocaleString('az-AZ')+' · versiya '+String(data.snapshot_revision||1));document.getElementById('partial').hidden=!data.is_partial;const identity=data.public_identity&&typeof data.public_identity==='object'?data.public_identity:{};if(identity.version===1){document.getElementById('description').hidden=true;snapshot.hidden=true;const box=document.createElement('div');box.className='identity';const at=identity.last_message_at?new Date(identity.last_message_at):null;const fields=[['Müştəri',identity.customer_name],['Təsdiqlənmiş telefon',identity.phone_status==='verified'?identity.verified_phone:null],['Müştərinin şirkəti',identity.company_name],['Sorğunu göndərən əməkdaş',identity.operator_name],['Fraqmentin son mesajı',at&&Number.isFinite(at.getTime())?at.toLocaleString('az-AZ'):null]];for(const [label,value] of fields){const row=document.createElement('span');escText(row,label+': '+(typeof value==='string'&&value.trim()?value:'Göstərilməyib'));box.append(row)}document.querySelector('.head').append(box)}else if(identity.customer_name||identity.phone_status){const box=document.createElement('div');box.className='identity';if(identity.customer_name){const name=document.createElement('strong');escText(name,identity.customer_name);box.append(name)}const phone=document.createElement('span');escText(phone,identity.phone_status==='verified'&&identity.verified_phone?'Телефон подтверждён: '+identity.verified_phone:'Подтверждённый телефон не указан');box.append(phone);document.querySelector('.head').append(box)}
+// Queue all selected visual/audio media on open. Keep network and retained blobs bounded.
+const MB=1024*1024,CACHE_LIMIT=200*MB,MAX_ACTIVE=2,items=[],queue=[];
+let active=0,reserved=0,retained=0,stopped=false,generation=0;
+const mediaLimit=kind=>({image:20,audio:10,voice:10,video:100,document:5}[kind]||5)*MB;
+const visible=item=>{const r=item.box.getBoundingClientRect();return r.bottom>=0&&r.top<=innerHeight;};
+const playing=item=>item.media&&['AUDIO','VIDEO'].includes(item.media.tagName)&&!item.media.paused&&!item.media.ended;
+function release(item){
+ if(item.media){item.media.onerror=null;if(['AUDIO','VIDEO'].includes(item.media.tagName)){item.media.pause();item.media.removeAttribute('src');item.media.load();}item.media.remove();item.media=null;}
+ if(item.url){URL.revokeObjectURL(item.url);objectUrls.delete(item.url);item.url='';retained-=item.bytes;item.bytes=0;}
+ item.button.hidden=false;item.button.disabled=false;item.button.textContent=item.automatic?'Yenidən yüklə':'Sənədi aç';
+}
+function makeRoom(amount){
+ if(retained+reserved+amount<=CACHE_LIMIT)return true;
+ for(const item of items){
+  if(item.state==='loaded'&&!visible(item)&&!playing(item)){
+   release(item);item.state='evicted';item.status.textContent='Yenidən görünəndə avtomatik yüklənəcək.';
+   if(retained+reserved+amount<=CACHE_LIMIT)return true;
+  }
+ }
+ return retained+reserved+amount<=CACHE_LIMIT;
+}
+function enqueue(item,manual=false){
+ if(stopped||['queued','loading','loaded','waiting'].includes(item.state))return;
+ if(manual)item.rateRetries=0;
+ if(item.state==='error'&&!manual)return;
+ item.state='queued';item.button.hidden=true;item.status.textContent='Yükləmə növbəsində…';queue.push(item);pump();
+}
+function pump(){
+ if(stopped)return;
+ while(active<MAX_ACTIVE){
+  const index=queue.findIndex(item=>makeRoom(mediaLimit(item.kind)));
+  if(index<0){for(const item of queue)item.status.textContent='Böyük fayllar üçün yaddaş gözlənilir. Baxılmış fayllardan aşağı sürüşdürün.';return;}
+  const item=queue.splice(index,1)[0];const cap=mediaLimit(item.kind);active++;reserved+=cap;
+  void loadMedia(item,cap).finally(()=>{active--;reserved-=cap;pump();});
+ }
+}
+async function boundedBlob(response,cap,item,current){
+ const length=Number(response.headers?.get('Content-Length'));
+ if(Number.isFinite(length)&&length>cap){await response.body?.cancel();throw Error('Faylın ölçüsü dəstəklənmir.');}
+ if(!response.body?.getReader){const blob=await response.blob();if(!blob.size||blob.size>cap)throw Error('Faylın ölçüsü dəstəklənmir.');return blob;}
+ const reader=response.body.getReader(),chunks=[];let size=0;
+ try{while(true){const part=await reader.read();if(stopped||current!==generation){await reader.cancel();return null;}if(part.done)break;size+=part.value.byteLength;if(size>cap){await reader.cancel();throw Error('Faylın ölçüsü dəstəklənmir.');}chunks.push(part.value);item.status.textContent='Yüklənir… '+(size/MB).toFixed(1)+' MB';}}
+ finally{reader.releaseLock();}
+ if(!size)throw Error('Fayl boşdur.');
+ return new Blob(chunks,{type:response.headers?.get('Content-Type')||'application/octet-stream'});
+}
+async function loadMedia(item,cap){
+ const current=generation,controller=new AbortController();item.controller=controller;item.state='loading';item.status.textContent='Yüklənir…';
+ const timeout=setTimeout(()=>controller.abort(),60000);
+ try{
+  const response=await fetch('/public/case/'+encodeURIComponent(token)+'/media/'+encodeURIComponent(item.id),{credentials:'omit',cache:'no-store',signal:controller.signal});
+  if(stopped||current!==generation){await response.body?.cancel();return;}
+  if(response.status===429&&item.rateRetries<2){
+   const seconds=Math.min(300,Math.max(1,Number(response.headers?.get('Retry-After'))||60));item.rateRetries++;item.state='waiting';item.button.hidden=true;item.status.textContent='Çox sorğu göndərilib. '+seconds+' saniyə sonra avtomatik yenidən yoxlanacaq.';
+   await response.body?.cancel();item.retryTimer=setTimeout(()=>{item.retryTimer=null;if(!stopped&&current===generation){item.state='idle';enqueue(item);}},seconds*1000);return;
+  }
+  if(!response.ok)throw Error([403,404,410].includes(response.status)?'Fayl və ya link artıq əlçatan deyil.':'Fayl yüklənmədi. Yenidən yoxlayın.');
+  const blob=await boundedBlob(response,cap,item,current);if(stopped||current!==generation||!blob)return;
+  const src=URL.createObjectURL(blob);objectUrls.add(src);item.url=src;item.bytes=blob.size;retained+=blob.size;
+  let media;
+  if(item.kind==='image'){media=document.createElement('img');media.alt='Müraciətə əlavə edilmiş şəkil';media.src=src;item.button.textContent='Şəkli böyüt';item.button.setAttribute('aria-expanded','false');item.button.hidden=false;}
+  else if(['audio','voice','video'].includes(item.kind)){media=document.createElement(item.kind==='video'?'video':'audio');media.controls=true;media.preload='metadata';media.autoplay=false;media.src=src;if(item.kind==='video')media.playsInline=true;item.button.hidden=true;media.addEventListener('pause',pump);media.addEventListener('ended',pump);}
+  else{media=document.createElement('a');media.href=src;media.textContent='Əlavə edilmiş sənədi endir';media.rel='noopener noreferrer';media.download='attachment';item.button.hidden=true;}
+  media.className=media.tagName==='A'?'file':'media';item.media=media;
+  if(media.tagName!=='A')media.onerror=()=>{if(item.media!==media)return;release(item);item.state='error';item.button.hidden=false;item.button.textContent='Yenidən yoxla';item.status.textContent='Fayl açıla bilmədi.';pump();};
+  item.box.insertBefore(media,item.status);item.state='loaded';item.status.textContent='';
+ }catch(error){if(!stopped&&current===generation){item.state='error';item.button.hidden=false;item.button.disabled=false;item.button.textContent='Yenidən yoxla';item.status.textContent=error.name==='AbortError'?'Yükləmə vaxtı bitdi. Yenidən yoxlayın.':error.message||'Fayl əlçatan deyil.';}}
+ finally{clearTimeout(timeout);if(item.controller===controller)item.controller=null;}
+}
+function addMedia(card,m){
+ const box=document.createElement('div'),button=document.createElement('button'),status=document.createElement('small');box.className='media-box';button.type='button';button.textContent='Sənədi aç';status.className='media-status';status.setAttribute('role','status');box.append(button,status);card.append(box);
+ const item={id:m.id,kind:m.type,box,button,status,automatic:['image','audio','voice','video'].includes(m.type),state:'idle',url:'',bytes:0,media:null,controller:null,retryTimer:null,rateRetries:0};items.push(item);
+ button.hidden=item.automatic;status.textContent=item.automatic?'Yükləmə növbəsində…':'';
+ button.onclick=()=>{if(item.state==='loaded'){if(item.kind==='image'){const expanded=item.media.classList.toggle('is-expanded');button.textContent=expanded?'Şəkli kiçilt':'Şəkli böyüt';button.setAttribute('aria-expanded',String(expanded));}return;}enqueue(item,true);};
+}
+function resumeVisible(){for(const item of items)if(item.automatic&&item.state==='evicted'&&visible(item))enqueue(item);pump();}
+window.addEventListener('scroll',resumeVisible,{passive:true});window.addEventListener('resize',resumeVisible);
+window.addEventListener('pagehide',()=>{stopped=true;generation++;queue.length=0;for(const item of items){item.controller?.abort();clearTimeout(item.retryTimer);item.retryTimer=null;release(item);item.state='evicted';}});
+window.addEventListener('pageshow',event=>{if(event.persisted){stopped=false;for(const item of items)if(item.automatic)enqueue(item);}});
+
 let previousDay='';
 for(const m of (Array.isArray(data.public_messages)?data.public_messages:[])){const date=m.at?new Date(m.at):null;const validDate=date&&!Number.isNaN(date.getTime());const day=validDate?date.toLocaleDateString('az-AZ',{day:'2-digit',month:'2-digit',year:'numeric'}):'';if(day&&day!==previousDay){const divider=document.createElement('p');divider.className='day';escText(divider,day);root.append(divider)}previousDay=day;const card=document.createElement('article');card.className='bubble '+((m.direction==='outgoing'||(!m.direction&&['Texniki komanda','BeinSystems','Əməkdaş'].includes(m.speaker)))?'team':'');const who=document.createElement('div');who.className='who';escText(who,m.speaker||'Müraciət');card.append(who);const body=document.createElement('div');body.className='text';escText(body,m.text);card.append(body);
-if(data.selected_media_ids&&data.selected_media_ids.includes(m.id)){const kind=m.type;const box=document.createElement('div'),button=document.createElement('button'),status=document.createElement('small');box.className='media-box';button.type='button';button.textContent=kind==='image'?'Şəkli aç':kind==='video'?'Videonu aç':kind==='audio'||kind==='voice'?'Səsə qulaq as':'Sənədi aç';status.className='media-status';status.setAttribute('role','status');box.append(button,status);card.append(box);button.onclick=async()=>{if(button.dataset.url){if(kind==='image'){const expanded=box.querySelector('img')?.classList.toggle('is-expanded');button.textContent=expanded?'Şəkli kiçilt':'Şəkli böyüt';button.setAttribute('aria-expanded',String(!!expanded))}return}button.disabled=true;status.textContent='Yüklənir…';try{const response=await fetch('/public/case/'+encodeURIComponent(token)+'/media/'+encodeURIComponent(m.id),{credentials:'omit',cache:'no-store'});if(!response.ok)throw new Error('Fayl əlçatan deyil. Yenidən yoxlayın.');const blob=await response.blob();if(!blob.size||blob.size>100*1024*1024)throw new Error('Faylın ölçüsü dəstəklənmir.');const src=URL.createObjectURL(blob);objectUrls.add(src);button.dataset.url=src;let media;if(kind==='image'){media=document.createElement('img');media.alt='Müraciətə əlavə edilmiş şəkil';media.className='media';media.src=src;button.setAttribute('aria-expanded','false')}else if(kind==='video'){media=document.createElement('video');media.className='media';media.controls=true;media.preload='none';media.src=src}else if(kind==='audio'||kind==='voice'){media=document.createElement('audio');media.className='media';media.controls=true;media.preload='none';media.src=src}else{media=document.createElement('a');media.className='file';media.href=src;media.textContent='Əlavə edilmiş sənədi endir';media.rel='noopener noreferrer';media.download='attachment'}if(media.tagName!=='A')media.onerror=()=>{media.remove();URL.revokeObjectURL(src);objectUrls.delete(src);delete button.dataset.url;button.hidden=false;button.textContent='Yenidən yoxla';status.textContent='Fayl açıla bilmədi.'};box.insertBefore(media,status);button.textContent=kind==='image'?'Şəkli böyüt':'Yükləndi';if(kind!=='image'&&kind!=='picture')button.hidden=true;status.textContent=''}catch(error){status.textContent=error.message||'Fayl əlçatan deyil.';button.textContent='Yenidən yoxla'}finally{button.disabled=false}}}
+if(Array.isArray(data.selected_media_ids)&&data.selected_media_ids.includes(m.id))addMedia(card,m);
 if(m.at){const time=document.createElement('time');time.className='time';if(validDate){time.dateTime=date.toISOString();time.title=date.toLocaleString('az-AZ');escText(time,date.toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit'}))}else{escText(time,m.at)}card.append(time)}root.append(card)}if(!root.childElementCount){root.innerHTML='<p class="empty">Bu müraciət üçün göstəriləcək mesaj yoxdur.</p>'}
-window.addEventListener('pagehide',()=>{for(const url of objectUrls)URL.revokeObjectURL(url);objectUrls.clear()},{once:true});
+for(const item of items)if(item.automatic)enqueue(item);
 })();
 </script></body></html>
