@@ -28,7 +28,7 @@
   let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null,fromRoute=false,returnFocus=null;
   const memberOf=data=>data?.member||null;
   const scopeOf=data=>{const m=memberOf(data);return m?`${m.tenant_id||''}:${m.telegram_id||''}:${m.role||''}:${m.active===true}`:'';};
-  function close(removeParam=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus;returnFocus=null;if(removeParam&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
+  function close(removeParam=false,restoreFocus=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus;returnFocus=null;if(restoreFocus&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
   function addText(parent,tag,value,cls){const node=document.createElement(tag);node.textContent=String(value??'');if(cls)node.className=cls;parent.append(node);return node;}
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
@@ -40,7 +40,7 @@
     const heading=document.createElement('div');heading.className='risk-alert-heading';head.append(heading);
     addText(heading,'p',alert.event_type==='linear_update'?updateCopy.title:t('title'),'risk-alert-eyebrow');
     const c=alert.context||{},title=addText(heading,'h2',c.title||alert.source_title||t('title'));title.id='riskAlertTitle';
-    const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true);dialog.append(head);
+    const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true,true);dialog.append(head);
     const body=document.createElement('div');body.className='risk-alert-body';body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-labelledby','riskAlertTitle');dialog.append(body);
     const section=(label,cls='')=>{const node=document.createElement('section');node.className='risk-alert-section '+cls;addText(node,'h3',t(label));body.append(node);return node;};
     if(alert.messageKey){const message=addText(body,'p',t(alert.messageKey));message.setAttribute('role','status');}
@@ -90,8 +90,8 @@
       }
       if(link){const footer=document.createElement('footer');footer.className='risk-alert-footer';link.className='risk-alert-source-link';const arrow=addText(link,'span',alert.source_kind==='linear'?'↗':'→');arrow.setAttribute('aria-hidden','true');footer.append(link);dialog.append(footer);}
     }
-    shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true);});shade.addEventListener('keydown',event=>{
-      if(event.key==='Escape'){event.preventDefault();close(true);}
+    shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true,true);});shade.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();close(true,true);}
       if(event.key==='Tab'){const controls=[...dialog.querySelectorAll('button,a[href],[tabindex="0"]')],first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
     });document.body.append(shade);overlay=shade;closeButton.focus();
   }
