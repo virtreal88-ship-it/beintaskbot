@@ -130,5 +130,25 @@ function apiCall(url){return new URL(String(url),'https://crm.pro.az')}
  assert.equal(rd.body.textContent.includes('Company A lesson'),false,'late A lesson response cannot replace tenant B');
  assert.equal(rd.body.textContent.includes('Company B lesson'),true);
  race.window.close();
- console.log('PASS: bounded lesson continuation, tenant-bound search, status mapping, global guide disclosure, and atomic tenant switch');
+
+ let failMe=0;
+ const failedRefresh=mount(null,async url=>{
+  const u=apiCall(url);
+  if(u.pathname==='/api/platform/me'){failMe++;return failMe===1?makeResponse(200,{member:{tenant_id:tenantA,telegram_id:24,role:'employee'}}):makeResponse(503,{error:'temporary failure'})}
+  if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[guide('Old company guide','/ops/old')]});
+  if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No edit'});
+  if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('old-only','Old company lesson')],next_offset:null}});
+  if(u.pathname==='/api/platform/instructions')return makeResponse(403,{success:false,error:'Read only'});
+  throw Error('Unexpected failure request '+u.pathname);
+ });
+ await settle(60);
+ const fd=failedRefresh.window.document;
+ assert(fd.body.textContent.includes('Old company lesson'));
+ failedRefresh.window.document.dispatchEvent(new failedRefresh.window.CustomEvent('tenant-profile',{detail:{tenant_id:tenantB}}));
+ await settle(60);
+ assert.equal(fd.body.textContent.includes('Old company guide'),false,'a failed identity refresh clears the previous global/tenant view');
+ assert.equal(fd.body.textContent.includes('Old company lesson'),false,'a failed identity refresh clears prior tenant lessons');
+ assert.equal(fd.querySelector('#catalogStatus').textContent.includes('clearCatalogData'),false,'error handling does not throw while clearing prior results');
+ failedRefresh.window.close();
+ console.log('PASS: bounded lesson continuation, tenant-bound search, status mapping, global guide disclosure, atomic tenant switch, and failed-refresh clearing');
 })().catch(error=>{console.error(error);process.exitCode=1});

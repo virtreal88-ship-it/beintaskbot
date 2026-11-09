@@ -226,6 +226,7 @@ function render(){
 }
 function warningsText(){const warnings=[];if(guideUnavailable)warnings.push(t('articlesUnavailable'));if(lessonsUnavailable)warnings.push(t('lessonsUnavailable'));return warnings.join(' · ')}
 function resetLessonPagination(){publishedNextOffset=null;managedNextOffset=null;loadingMore=false;loadedQuery='';loadedState='';loadedProfile=''}
+function clearCatalogData(){selected=null;player?.destroy?.();player=null;member=null;canManageGuides=false;canManageLessons=false;guidePublic=[];guideManaged=[];publishedLessons=[];managedLessons=[];guideUnavailable=false;lessonsUnavailable=false;guideFeedLoaded=false;resetLessonPagination();byId('newArticle').hidden=true;byId('manageGuides').hidden=true;byId('newLesson').hidden=true;byId('createAI').hidden=true;byId('catalogState').hidden=true}
 async function refresh(){
  const request=++epoch,q=(byId('catalogSearch')?.value||'').trim(),state=byId('catalogState')?.value||'';
  refreshing=true;loadingMore=false;errorBox(t('loading'));render();
