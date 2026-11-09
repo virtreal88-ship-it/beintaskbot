@@ -16,7 +16,7 @@ const fixture = `<!doctype html><meta charset="utf-8"><style>${styles}\n${theme}
 <html data-chakra-ui="ready"><body data-app-ui="kwid"><div class="shell"><aside><nav class="nav"></nav></aside><main></main></div>
 <script>
 const requests=[];
-const issues=Array.from({length:6},(_,i)=>({id:'i'+i,identifier:'BS-'+i,title:'A long task title '.repeat(15),body:'Details '.repeat(60),state:{id:'s'+i,name:'Status '+i},capabilities:{},priority:2}));
+const issues=Array.from({length:6},(_,i)=>({id:'i'+i,identifier:'BS-'+i,account:'Fixture account',title:'A long task title '.repeat(15),body:'Details '.repeat(60),state:{id:'s'+i,name:'Status '+i},capabilities:{},priority:2}));
 window.fetch=async url=>{requests.push(url);return {ok:true,json:async()=>url.endsWith('/me')?{member:{tenant_id:'fixture',telegram_id:20,role:'owner',permissions:['linear']},capabilities:{modules:{linear:true}}}:{success:true,tenant_id:'fixture',user_id:20,issues,config_version:'1',capabilities:{},pageInfo:{}}}};
 </script><script>${board}</script><script>${scrollControl}</script><script>
 setTimeout(async()=>{
