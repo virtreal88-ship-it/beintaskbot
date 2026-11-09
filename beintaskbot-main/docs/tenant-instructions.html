@@ -21,6 +21,7 @@ body{margin:0;background:#edf4fa;color:var(--ink);font:15px/1.5 "Segoe UI",syste
 .catalog-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .catalog-toolbar input{flex:1 1 360px;min-width:180px}
 .catalog-toolbar input,.catalog-toolbar select{height:46px;padding:10px 13px;border:1px solid #c7dcea;border-radius:10px;background:#fff;color:#153c60;font:inherit}
+.catalog-toolbar select{width:auto;flex:0 1 180px}
 .catalog-toolbar button,.catalog-toolbar a{min-height:44px;padding:10px 14px;border:1px solid #ffffff55;border-radius:9px;background:#ffffff12;color:#fff;font:inherit;font-weight:600;text-decoration:none;cursor:pointer}
 .catalog-toolbar button:hover,.catalog-toolbar a:hover{background:#ffffff25}
 .catalog-toolbar :focus-visible,.catalog-tree-choice:focus-visible,.catalog-card button:focus-visible,.catalog-detail-tools button:focus-visible{outline:3px solid #02a4f2;outline-offset:2px}
@@ -38,6 +39,7 @@ body{margin:0;background:#edf4fa;color:var(--ink);font:15px/1.5 "Segoe UI",syste
 .catalog-main-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .catalog-main-header h2{margin:0 0 8px;font-size:24px;line-height:1.25}
 #catalogCount{color:#69859b;font-size:12px}
+.catalog-detail{grid-column:1/-1;min-width:0}
 .catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}
 .catalog-card{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:17px;border:1px solid #d3e2ef;border-radius:14px;background:#f8fbfe}
 .catalog-card:hover{border-color:#86c7eb;background:#f3faff}
