@@ -25,6 +25,9 @@
     try{
       const msg=JSON.parse(event.data);
       if(!ready){
+        if(opened && msg.type==='error' && msg.code==='voice_session_busy'){
+          fail('voice_session_busy');return;
+        }
         if(!opened || msg.type!=='ready')throw new Error('voice_not_ready');
         ready=true;settled=true;env.clearTimeout(timer);resolveReady();onEvent({type:'ready',greeting_pending:msg.greeting_pending===true});return;
       }

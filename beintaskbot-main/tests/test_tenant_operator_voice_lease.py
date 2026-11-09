@@ -104,7 +104,7 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
     assert conn.commits == 1
 
 
-def test_old_starting_lease_is_never_reclaimed_without_confirmed_provider_open():
+def test_old_starting_lease_is_never_reclaimed_without_confirmed_provider_open(caplog):
     cursor = Cursor([{
         'session_id': str(uuid.uuid4()), 'actor_id': 77, 'owner_id': str(uuid.uuid4()),
         'fence': 4, 'state': 'starting', 'live': False,
@@ -112,9 +112,12 @@ def test_old_starting_lease_is_never_reclaimed_without_confirmed_provider_open()
     }])
     conn = Connection(cursor)
 
-    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+    with patch('tenant_operator_voice_lease._connect', return_value=conn), caplog.at_level('INFO'):
         assert _lease()._transaction('claim') is None
 
     select, _params = cursor.statements[-1]
     assert "provider_opened_at IS NOT NULL" in select
     assert len(cursor.statements) == 2
+    assert 'state=starting lease_live=False provider_lifetime_elapsed=False' in caplog.text
+    assert cursor.rows == []
+    assert 'dialog-1' not in caplog.text

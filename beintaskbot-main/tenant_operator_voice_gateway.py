@@ -159,6 +159,16 @@ def _expected_close_after_session_end(session,exc):
             getattr(exc,'diagnostic_code',None)=='websocket_closed')
 
 
+def _startup_failure_code(exc, session, session_ready):
+    """Expose only a precise pre-open, actor-scoped lease refusal."""
+    from tenant_operator_voice_session import LeaseAlreadyActive
+    if (not session_ready and type(exc) is LeaseAlreadyActive and
+        exc.args == ('session_already_active',) and
+        session is not None and getattr(session,'fence',None) is None):
+        return 'voice_session_busy'
+    return 'voice_unavailable'
+
+
 class SocketClient:
     def __init__(self, ws, activity=None): self.ws=ws; self.activity=activity
     async def send(self, event):
@@ -329,10 +339,13 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         break
                 else:
                     break
-        except Exception:
+        except Exception as exc:
             # Deliberately do not log request content, audio, or exception text.
             if not ws.closed:
-                await ws.send_json({'type':'error','code':'voice_unavailable'})
+                # Report only the server's precise, pre-open lease refusal.  A
+                # generic provider error must never be mistaken for proof that
+                # no other voice session exists or that one has ended.
+                await ws.send_json({'type':'error','code':_startup_failure_code(exc,session,session_ready)})
         finally:
             try:
                 if session is not None:
