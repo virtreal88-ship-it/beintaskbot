@@ -82,6 +82,20 @@ class ListingTests(unittest.TestCase):
         self.assertEqual(self.page.call_args.args[1]['and'][0]['team']['id']['eq'],TEAM)
         self.assertEqual(self.page.call_args.args[2],'cursor')
 
+    def test_status_catalog_is_returned_in_linear_workflow_position_order(self):
+        self.module.team_catalog.return_value={'states':{'nodes':[
+            {'id':TARGET,'name':'Triage','position':20},
+            {'id':STATE,'name':'Testiq','position':10}]}}
+        result=self.module.listing(PERSON)
+        self.assertEqual([state['id'] for state in result['statuses']],[STATE,TARGET])
+        self.assertEqual([state['name'] for state in result['statuses']],['Testiq','Triage'])
+
+    def test_visible_issue_without_account_is_hidden(self):
+        self.page.return_value={'nodes':[issue(),issue(id=TARGET,description='Account: \nOperator: worker@example')],
+            'pageInfo':{'hasNextPage':False,'endCursor':None}}
+        result=self.module.listing(PERSON)
+        self.assertEqual([row['id'] for row in result['issues']],[OTHER])
+
     def test_no_binding_no_provider_request(self):
         rules=config();rules['members']={};self.context.return_value=(PERSON,rules,'secret','v')
         self.assertEqual(self.module.listing(PERSON)['issues'],[]);self.page.assert_not_called()
@@ -128,3 +142,11 @@ class ProviderCommandTests(unittest.TestCase):
         query=Mock(side_effect=[TenantLinearError('Duplicate',502),{'comment':{'id':TARGET,'body':'Reason','issue':{'id':TEAM}}}])
         module=loaders.load('tenant_linear_tasks_provider',{'query':query},{'tenant_linear_provider'})
         with self.assertRaises(TenantLinearError):module.ensure_comment('secret',TARGET,OTHER,'Reason')
+
+    def test_status_mutation_returns_state_for_app_confirmation(self):
+        query=Mock(return_value={'issueUpdate':{'success':True,'issue':{'id':OTHER,'updatedAt':'new','state':{'id':TARGET,'name':'Triage','type':'started'}}}})
+        module=loaders.load('tenant_linear_tasks_provider',{'query':query},{'tenant_linear_provider'})
+        result=module.mutate('secret',OTHER,{'stateId':TARGET})
+        self.assertEqual(result['state']['id'],TARGET)
+        self.assertEqual(query.call_args.args[2]['input']['stateId'],TARGET)
+        self.assertIn('issue { id updatedAt state { id name type } }',query.call_args.args[1])
