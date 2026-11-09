@@ -41,7 +41,7 @@ function makeResponse(status, body) {
 function mount() {
   const dom = new JSDOM(html, {
     url: 'https://crm.pro.az/app/instructions?site_lang=en',
-    runScripts: 'outside-only',
+    runScripts: 'dangerously',
     pretendToBeVisual: true
   });
   const calls = [];
@@ -66,6 +66,15 @@ function mount() {
   };
   dom.window.eval(script);
   return { dom, calls, get mounted() { return mounted; } };
+}
+
+{
+  const direct = new JSDOM(html, {
+    url: 'https://crm.pro.az/app/instructions?lesson=lesson-1',
+    runScripts: 'dangerously'
+  });
+  assert.equal(direct.window.document.documentElement.classList.contains('instruction-editor-mode'), true);
+  direct.window.close();
 }
 
 (async () => {
