@@ -47,7 +47,8 @@
     if(activeId&&dialog?.open)[...container.querySelectorAll('input[data-linear-column-toggle]')].find(input=>input.dataset.linearColumnId===activeId)?.focus({preventScroll:true});}
   function saveHiddenColumns(){const hidden=[...$('tlColumnOptions').querySelectorAll('input[data-linear-column-toggle]')].filter(input=>!input.checked).map(input=>String(input.value));try{localStorage.setItem(columnStorageKey(),JSON.stringify(hidden));}catch{}}
   function openColumnDialog(){const dialog=$('tlColumnDialog');if(!dialog)return;if(!dialog.open){if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');}$('tlColumnsOpen').setAttribute('aria-expanded','true');dialog.querySelector('input[type="checkbox"]')?.focus({preventScroll:true});}
-  function closeColumnDialog(){const dialog=$('tlColumnDialog');if(dialog?.open)dialog.close();else dialog?.removeAttribute('open');}
+  function restoreColumnDialogFocus(){const trigger=$('tlColumnsOpen');if(!trigger)return;trigger.setAttribute('aria-expanded','false');trigger.focus({preventScroll:true});}
+  function closeColumnDialog(){const dialog=$('tlColumnDialog');if(dialog?.open)dialog.close();else dialog?.removeAttribute('open');restoreColumnDialogFocus();}
   function hasAccount(row){const value=String(row.account||'').trim().toLocaleLowerCase('az');return !!value&&!['göstərilməyib','gosterilmeyib','account göstərilməyib','account gosterilmeyib','—','-'].includes(value);}
   function notice(text){$('tlBoardNotice').textContent=text||'';$('tlBoardNotice').classList.toggle('show',!!text);}
   async function api(params='',data){const response=await fetch('/api/platform/linear/tasks'+params,{credentials:'same-origin',cache:'no-store',
@@ -145,7 +146,7 @@
   $('tlRefresh').onclick=()=>load();$('tlFind').onclick=()=>load();$('tlNext').onclick=()=>load(true);$('tlStateFilter').onchange=()=>{selectedState=statuses.find(state=>state.id===$('tlStateFilter').value)||rows.find(row=>row.state?.id===$('tlStateFilter').value)?.state||null;render();};
   $('tlColumnsOpen').onclick=openColumnDialog;$('tlColumnsClose').onclick=closeColumnDialog;$('tlColumnOptions').onchange=event=>{if(event.target?.matches?.('input[data-linear-column-toggle]')){saveHiddenColumns();render();}};
   $('tlColumnsAll').onclick=()=>{try{localStorage.setItem(columnStorageKey(),'[]');}catch{}render();$('tlColumnsAll').focus({preventScroll:true});};
-  $('tlColumnDialog').addEventListener('close',()=>{$('tlColumnsOpen').setAttribute('aria-expanded','false');$('tlColumnsOpen').focus({preventScroll:true});});
+  $('tlColumnDialog').addEventListener('close',restoreColumnDialogFocus);
   $('tlColumnDialog').addEventListener('cancel',event=>{event.preventDefault();closeColumnDialog();});
   $('tlColumnDialog').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeColumnDialog();}});
   $('tlColumnDialog').addEventListener('click',event=>{if(event.target===$('tlColumnDialog'))closeColumnDialog();});
