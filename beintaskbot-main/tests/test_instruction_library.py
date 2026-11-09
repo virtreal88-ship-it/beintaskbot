@@ -26,6 +26,9 @@ def publish_ready(ready):
 def test_employee_published_catalog_is_read_only_and_tenant_scoped(ready):
  db,asset=ready
  published=publish_ready(ready)
+ manager_page=lib.operation(PROFILE,'list',{'q':'warehouse'})
+ assert [item['id'] for item in manager_page['items']]==[published['id']]
+ assert manager_page['items'][0]['operation']=='inventory.warehouse_transfer'
  draft=save(ready)
  db.execute("UPDATE saas_tenant_members SET role='worker' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
  db.commit()
