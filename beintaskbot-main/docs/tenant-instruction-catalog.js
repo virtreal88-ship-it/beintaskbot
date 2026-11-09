@@ -182,8 +182,7 @@ function boot(){
  status?.addEventListener('change',()=>{selected=null;refresh()});
  byId('newArticle')?.addEventListener('click',()=>openEditor('/guide-editor?new=1&parent='+encodeURIComponent(scope.startsWith('g:')?scope.slice(2):''),t('editorTitle')));
  byId('newLesson')?.addEventListener('click',()=>openEditor('/app/instructions?lesson_new=1&site_lang='+encodeURIComponent(lang),t('editorTitle')));
- byId('createAI')?.addEventListener('click',()=>{location.href='/app/ai-instructor?site_lang='+encodeURIComponent(lang)});
- byId('manageGuides')?.addEventListener('click',()=>window.open('/guide-editor','_blank','noopener'));
+ byId('createAI')?.addEventListener('click',event=>{event.preventDefault();location.href='/app/ai-instructor?site_lang='+encodeURIComponent(lang)});
  byId('closeInstructionEditor')?.addEventListener('click',closeEditor);
  byId('instructionEditor')?.addEventListener('close',()=>{const frame=byId('instructionEditorFrame');frame.src='about:blank';refresh()});
  document.addEventListener('tenant-profile',()=>{epoch++;player?.destroy?.();member=null;canManageGuides=false;canManageLessons=false;guidePublic=[];guideManaged=[];publishedLessons=[];managedLessons=[];selected=null;errorBox(t('loading'));render();refresh()});
