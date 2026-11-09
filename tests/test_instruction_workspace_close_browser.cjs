@@ -84,6 +84,7 @@ const server=http.createServer((req,res)=>{
   assert.equal(discard.type(),'confirm');
   await discard.accept();
   await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('instruction-latest:00000000-0000-4000-8000-000000000031:31')),null,'confirmed discard removes the cached draft');
   await page.locator('#newLesson').click();
   await page.frameLocator('#instructionEditorFrame').locator('.il-lesson-settings input').first().waitFor({state:'visible'});
   assert.equal(await page.frameLocator('#instructionEditorFrame').locator('.il-lesson-settings input').first().inputValue(),'','confirmed discard clears the cached unsaved lesson');
