@@ -25,10 +25,10 @@
   };
   const language=()=>{const l=window.tenantI18n?.language||document.documentElement.lang||'az';return copy[l]?l:'az';};
   const t=key=>copy[language()][key];
-  let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null;
+  let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null,fromRoute=false,returnFocus=null;
   const memberOf=data=>data?.member||null;
   const scopeOf=data=>{const m=memberOf(data);return m?`${m.tenant_id||''}:${m.telegram_id||''}:${m.role||''}:${m.active===true}`:'';};
-  function close(removeParam=false){epoch++;overlay?.remove();overlay=null;display=null;if(removeParam){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}}
+  function close(removeParam=false,restoreFocus=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus;returnFocus=null;if(restoreFocus&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
   function addText(parent,tag,value,cls){const node=document.createElement(tag);node.textContent=String(value??'');if(cls)node.className=cls;parent.append(node);return node;}
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
@@ -40,7 +40,7 @@
     const heading=document.createElement('div');heading.className='risk-alert-heading';head.append(heading);
     addText(heading,'p',alert.event_type==='linear_update'?updateCopy.title:t('title'),'risk-alert-eyebrow');
     const c=alert.context||{},title=addText(heading,'h2',c.title||alert.source_title||t('title'));title.id='riskAlertTitle';
-    const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true);dialog.append(head);
+    const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true,true);dialog.append(head);
     const body=document.createElement('div');body.className='risk-alert-body';body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-labelledby','riskAlertTitle');dialog.append(body);
     const section=(label,cls='')=>{const node=document.createElement('section');node.className='risk-alert-section '+cls;addText(node,'h3',t(label));body.append(node);return node;};
     if(alert.messageKey){const message=addText(body,'p',t(alert.messageKey));message.setAttribute('role','status');}
@@ -90,24 +90,33 @@
       }
       if(link){const footer=document.createElement('footer');footer.className='risk-alert-footer';link.className='risk-alert-source-link';const arrow=addText(link,'span',alert.source_kind==='linear'?'↗':'→');arrow.setAttribute('aria-hidden','true');footer.append(link);dialog.append(footer);}
     }
-    shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true);});shade.addEventListener('keydown',event=>{
-      if(event.key==='Escape'){event.preventDefault();close(true);}
+    shade.append(dialog);shade.addEventListener('click',event=>{if(event.target===shade)close(true,true);});shade.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();close(true,true);}
       if(event.key==='Tab'){const controls=[...dialog.querySelectorAll('button,a[href],[tabindex="0"]')],first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
     });document.body.append(shade);overlay=shade;closeButton.focus();
   }
 
   function showMessage(messageKey){showAlert({messageKey});}
-  async function route(){
-    const id=new URL(location.href).searchParams.get('risk_alert_id');if(!id){if(overlay)close(false);return;}
-    const token=++epoch,owner=memberOf(profile),scope=scopeOf(profile);if(!uuid.test(id)||owner?.role!=='owner'||owner.active!==true){close(false);return;}
+  async function loadAlert(id,routeOrigin){
+    const token=++epoch,owner=memberOf(profile),scope=scopeOf(profile);fromRoute=routeOrigin;
     showMessage('loading');
     try{const response=await fetch(`/api/platform/risks/alerts/${encodeURIComponent(id)}`,{credentials:'same-origin',headers:{'Accept':'application/json','X-Tenant-Id':String(owner.tenant_id||''),'X-User-Id':String(owner.telegram_id||'')}});const data=await response.json();if(token!==epoch||scope!==scopeOf(profile)||!overlay?.isConnected)return;if(response.ok||response.status===404)document.dispatchEvent(new CustomEvent('tenant-risk-alert-read',{detail:{alert_id:id}}));if(!response.ok||!data.success||!data.alert){showMessage(response.status===404?'gone':'error');return;}showAlert(data.alert);
     }catch{if(token===epoch&&scope===scopeOf(profile)&&overlay?.isConnected)showMessage('error');}
   }
-  function apply(data){const next=scopeOf(data);if(identity&&identity!==next)close(true);profile=data;identity=next;if(memberOf(data)?.role!=='owner'||memberOf(data)?.active!==true)close(false);else void route();}
+  function open(id,routeOrigin=false,focusTarget=null){
+    const owner=memberOf(profile);if(!uuid.test(id)||owner?.role!=='owner'||owner.active!==true)return false;
+    if(!overlay)returnFocus=focusTarget;
+    void loadAlert(id,routeOrigin);return true;
+  }
+  function route(){
+    const id=new URL(location.href).searchParams.get('risk_alert_id');if(!id){if(overlay)close(false);return;}
+    if(!open(id,true))close(false);
+  }
+  window.tenantRiskAlert={open:(id,focusTarget=null)=>open(id,false,focusTarget)};
+  function apply(data){const next=scopeOf(data);if(identity&&identity!==next)close(true);profile=data;identity=next;if(memberOf(data)?.role!=='owner'||memberOf(data)?.active!==true)close(false);else if(!overlay||fromRoute)void route();}
   document.addEventListener('tenant-profile',event=>apply(event.detail));
   document.addEventListener('tenant-language',()=>{if(display&&overlay?.isConnected)showAlert(display);});
-  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='linear'&&overlay)close(true);});
+  document.addEventListener('tenant-view',event=>{if(overlay&&(!fromRoute||event.detail?.view!=='linear'))close(true);});
   for(const type of ['tenant-auth-invalid','tenant-auth-pending'])document.addEventListener(type,()=>{profile=null;identity='';close(false);});
   window.addEventListener('popstate',()=>void route());
   if(profile)apply(profile);else if(new URL(location.href).searchParams.has('risk_alert_id'))document.addEventListener('tenant-profile',event=>apply(event.detail),{once:true});

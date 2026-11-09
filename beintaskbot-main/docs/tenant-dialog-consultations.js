@@ -127,6 +127,10 @@
         if(owner!==identity()||epoch!==generation||navigation!==notificationNavigationRevision)return;
         if(!receipt||receipt.notification_id!==item.id||receipt.case_id!==item.case_id||typeof receipt.event_key!=='string'||receipt.event_key!==item.event_key)throw Error(notificationCopy('caseUnavailable'));
         if(!item.read_at)await readNotification(item,receipt);if(owner===identity()&&epoch===generation)closeNotificationMenu(false);
+      }else if(String(item.event_key||'').startsWith('proactive_risk:')){
+        const id=target.searchParams.get('risk_alert_id');
+        if(!uuid(id)||item.event_key!=='proactive_risk:'+id||!window.tenantRiskAlert?.open(id,bell))throw Error(notificationCopy('openFailure'));
+        closeNotificationMenu(false);
       }else if(item.reply_id&&target.searchParams.get('view')==='dialogs'){
         await openReply({id:item.reply_id,url:item.target_url},false);
         if(owner!==identity())return;
