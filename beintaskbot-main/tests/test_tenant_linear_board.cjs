@@ -26,14 +26,14 @@ async function fetch(url,options={}){requests.push(url);if(url.endsWith('/me'))r
   if(options.body){posts.push(JSON.parse(options.body));return reply(fail?{success:false,error:'Uncertain'}:{success:true,issue_id:'issue'},fail?503:200);}
   if(pages.length)return pages.shift();
   if(deferred){const saved=deferred;deferred=null;return saved;}
-  return reply({success:true,issues:[row,{...row,id:'accountless',identifier:'BS-2',account:'',state:{id:'testiq',name:'Testiq'}}],statuses:[{id:'testiq',name:'Testiq',position:10},{id:'triage',name:'Triage',position:20},{id:'done',name:'Done',position:30}],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:!url.includes('&after='),endCursor:'cursor'}});
+  return reply({success:true,issues:[row,{...row,id:'accountless',identifier:'BS-2',account:'',state:{id:'testiq',name:'Testiq'}},{...row,id:'account-placeholder',identifier:'BS-3',account:'Account göstərilməyib',state:{id:'testiq',name:'Testiq'}}],statuses:[{id:'testiq',name:'Testiq',position:10},{id:'triage',name:'Triage',position:20},{id:'done',name:'Done',position:30}],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:!url.includes('&after='),endCursor:'cursor'}});
 }
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../docs/tenant-linear-board.js'),'utf8'),{window:{},URLSearchParams,document,fetch,JSON,Date,Map,Set,encodeURIComponent,localStorage:{getItem:key=>local.get(key)||null,setItem:(key,value)=>local.set(key,value)},
   crypto:{randomUUID:()=>`uuid-${++uuid}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
   await flush();assert.equal($('tlNav').hidden,false);await $('tlNav').click();await flush();
-  assert($('tlBoard').innerHTML.includes('&lt;Private title&gt;'));assert($('tlBoard').innerHTML.includes('&lt;Customer&gt;'));assert(!$('tlBoard').innerHTML.includes('accountless'),'accountless tasks are hidden');assert($('tlBoard').innerHTML.includes('href="https://linear.app/acme/BS-1"'),'task links open Linear');assert($('tlBoard').innerHTML.indexOf('data-state-id="testiq"')<$('tlBoard').innerHTML.indexOf('data-state-id="done"'),'columns follow the Linear workflow catalog');
+  assert($('tlBoard').innerHTML.includes('&lt;Private title&gt;'));assert($('tlBoard').innerHTML.includes('&lt;Customer&gt;'));assert(!$('tlBoard').innerHTML.includes('accountless'),'accountless tasks are hidden');assert(!$('tlBoard').innerHTML.includes('account-placeholder'),'account placeholders are hidden');assert($('tlBoard').innerHTML.includes('href="https://linear.app/acme/BS-1"'),'task links open Linear');assert($('tlBoard').innerHTML.indexOf('data-state-id="testiq"')<$('tlBoard').innerHTML.indexOf('data-state-id="done"'),'columns follow the Linear workflow catalog');
   assert(!$('tlBoard').innerHTML.includes('data-edit'));assert(!$('tlBoard').innerHTML.includes('data-status'));
   assert($('tlBoard').innerHTML.includes('data-button-id="pass"'));assert.equal($('tlCreate').hidden,true);
   assert(requests.some(url=>url.includes('&after=cursor')), 'loads remaining pages without a click');
