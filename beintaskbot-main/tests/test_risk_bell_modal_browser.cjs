@@ -5,6 +5,9 @@ const {docs,assets,appHtml,installNotificationCaseFixture}=require('./notificati
 const id='01a1b1af-4d2c-71f2-aaeb-f01eccac0031';
 function installRiskFixture(id){
  const f=window.notificationCaseFixture,base=window.fetch;
+ // The deep-link case must represent an owner authorized for Linear; the
+ // shared consultation fixture deliberately grants only dialogs and support.
+ f.profile.capabilities.modules.linear=true;f.profile.member.permissions.push('linear');
  f.targets=[{id:'10000000-0000-4000-8000-000000000401',event_key:'proactive_risk:'+id,target_state:'legacy',kind:'system',title:'Synthetic risk',body:'Review source',target_url:'/app?view=linear&risk_alert_id='+id,created_at:'2026-11-02T12:00:00Z',read_at:null}];
  f.riskStatus=200;f.riskCalls=0;f.holdRisk=false;f.pendingRisk=[];
  window.fetch=async(input,options={})=>{
