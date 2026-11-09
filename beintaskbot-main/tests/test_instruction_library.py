@@ -15,6 +15,104 @@ def ready(db,monkeypatch):
 def save(ready):
  db,asset=ready;return lib.operation(PROFILE,'save',{'id':uid(),'expected_version':0,'doc':doc(asset)})
 def mutate(row,action,**kw):return lib.operation(PROFILE,action,{'expected_version':row['version'],**kw},row['id'])
+
+def publish_ready(ready):
+ row=save(ready)
+ row=mutate(row,'submit')
+ row=mutate(row,'approve',review_confirmed=True)
+ return mutate(row,'publish',agent_ids=[AGENT])
+
+
+def test_employee_published_catalog_is_read_only_and_tenant_scoped(ready):
+ db,asset=ready
+ published=publish_ready(ready)
+ draft=save(ready)
+ db.execute("UPDATE saas_tenant_members SET role='worker' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+ db.commit()
+ employee_a={'tenant_id':A,'telegram_id':11}
+ employee_b={'tenant_id':B,'telegram_id':22}
+
+ page=lib.published_list(employee_a,{'q':'warehouse','offset':0})
+ assert [item['id'] for item in page['items']]==[published['id']]
+ item=page['items'][0]
+ assert item['operation']=='inventory.warehouse_transfer'
+ assert not {'state','doc','published_doc','public_hash','tenant_id'} & set(item)
+ assert lib.published_read(employee_a,published['id'])['doc']['title']=='Test lesson'
+ assert lib.published_asset(employee_a,published['id'],asset+'.jpg')==b'jpeg'
+ assert lib.published_list(employee_a,{'q':'missing'})['items']==[]
+
+ # The active employee in another company cannot enumerate or fetch this lesson or image.
+ assert lib.published_list(employee_b)['items']==[]
+ with pytest.raises(TenantLinearError) as error:
+  lib.published_read(employee_b,published['id'])
+ assert error.value.status==404
+ with pytest.raises(TenantLinearError) as error:
+  lib.published_asset(employee_b,published['id'],asset+'.jpg')
+ assert error.value.status==404
+
+ # The new read path does not grant any of the existing editing operations.
+ with pytest.raises(TenantLinearError) as error:
+  lib.operation(employee_a,'list')
+ assert error.value.status==403
+ with pytest.raises(TenantLinearError) as error:
+  lib.operation(employee_a,'read',lesson_id=published['id'])
+ assert error.value.status==403
+ assert draft['state']=='draft'
+
+ db.execute("UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+ db.commit()
+ with pytest.raises(TenantLinearError) as error:
+  lib.published_list(employee_a)
+ assert error.value.status==403
+
+
+def test_employee_catalog_hides_unpublished_or_revoked_snapshots(ready):
+ db,asset=ready
+ published=publish_ready(ready)
+ employee={'tenant_id':A,'telegram_id':11}
+ assert [item['id'] for item in lib.published_list(employee)['items']]==[published['id']]
+
+ # Unpublishing removes both the item and its screenshot from member read access.
+ row=lib.operation(PROFILE,'read',lesson_id=published['id'])
+ row=mutate(row,'unpublish')
+ assert lib.published_list(employee)['items']==[]
+ for read in (lambda:lib.published_read(employee,published['id']),
+              lambda:lib.published_asset(employee,published['id'],asset+'.jpg')):
+  with pytest.raises(TenantLinearError) as error:
+   read()
+  assert error.value.status==404
+
+ # Editing a published lesson returns it to draft; its historical snapshot is not listed.
+ republished=publish_ready(ready)
+ edited=lib.operation(PROFILE,'save',{'expected_version':republished['version'],'doc':republished['doc']},republished['id'])
+ assert edited['state']=='draft'
+ assert lib.published_list(employee)['items']==[]
+
+
+def test_published_catalog_http_requires_identity_and_is_get_only(monkeypatch):
+ import asyncio,logging
+ from aiohttp import web
+ from aiohttp.test_utils import TestServer,TestClient
+ from tenant_instruction_library_api import handler
+ from unittest.mock import Mock
+ profile={'tenant_id':A,'telegram_id':11,'role':'worker'}
+ service=Mock(return_value={'items':[],'next_offset':None})
+ monkeypatch.setattr(lib,'published_list',service)
+ async def check():
+  app=web.Application()
+  app.router.add_get('/catalog',handler(lambda _request:profile,'https://app.test',logging.getLogger('test'),resource='catalog'))
+  async with TestClient(TestServer(app)) as client:
+   response=await client.get('/catalog')
+   assert response.status==409
+   service.assert_not_called()
+   response=await client.get('/catalog',params={'expected_tenant_id':A,'expected_user_id':'11'})
+   assert response.status==200
+   assert (await response.json())['result']['items']==[]
+   service.assert_called_once()
+   response=await client.post('/catalog',json={'expected_tenant_id':A,'expected_user_id':'11'})
+   assert response.status==405
+ asyncio.run(check())
+
 def test_complete_workflow_knowledge_public_revocation(ready):
  db,asset=ready;r=save(ready)
  assert r['state']=='draft' and r['doc']['review_status']=='pending_review'
