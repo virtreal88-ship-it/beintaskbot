@@ -94,6 +94,8 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Russian is the default',snapshot['existing_copilot_instructions'])
         self.assertIn('Do not speak first or give a greeting',snapshot['existing_copilot_instructions'])
         self.assertIn('Do not speak Turkish',snapshot['existing_copilot_instructions'])
+        self.assertIn('Azerbaijani is not Turkish',snapshot['existing_copilot_instructions'])
+        self.assertIn('Azerbaijani wording and Latin script',snapshot['existing_copilot_instructions'])
         self.assertIn('Do not infer language from accent, pronunciation, filler, or a short word',snapshot['existing_copilot_instructions'])
         self.assertIn('complete Azerbaijani request, question, or correction',snapshot['existing_copilot_instructions'])
         self.assertTrue(fingerprint)

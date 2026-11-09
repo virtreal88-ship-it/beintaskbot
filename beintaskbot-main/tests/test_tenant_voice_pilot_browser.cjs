@@ -39,7 +39,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await voice.getAttribute('role'),'dialog','voice mode opens as an accessible full-screen conversation');
  const voiceScreen=await voice.boundingBox();assert.ok(voiceScreen.width>=390&&voiceScreen.height>=800,'voice screen fills the mobile viewport');
  assert.ok(await voice.locator('[data-voice-orb]').isVisible(),'animated assistant orb is visible');
- await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 2 секунды AI ответит');
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 1 секунду AI ответит');
  assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'listening');
  assert.equal(await voice.locator('[data-voice-orb]').evaluate(node=>getComputedStyle(node).animationName),'tenantVoiceListenPulse');
  assert.equal(await page.locator('#operatorCopilotVoiceToggle').getAttribute('data-voice-state'),'listening','composer voice icon indicates that the user can speak');
@@ -50,15 +50,15 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.releaseCount),0);
  assert.equal(await voice.isVisible(),true);
  await page.waitForFunction(()=>window.muted===false);
- assert.equal(await voice.locator('.voice-session-talk').isVisible(),false,'there is no manual employee-turn button');
+ assert.equal(await voice.locator('.voice-session-talk').count(),0,'there is no separate manual turn or Stop button');
  await page.evaluate(()=>{
    window.emitSpeech=(ms=120)=>{for(let offset=0;offset<ms;offset+=20){const pcm=new Int16Array(480);for(let i=0;i<pcm.length;i++)pcm[i]=Math.round(2000*Math.sin(i*.2));window.emitPcm(new Uint8Array(pcm.buffer));}};
    window.emitSilence=ms=>{for(let offset=0;offset<ms;offset+=20)window.emitPcm(new Uint8Array(960));};
    window.emitSilence(4000);
  });
  assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio'||x.type==='talk_end').length),0,'idle silence does not upload or generate empty requests');
- await page.evaluate(()=>{window.emitSpeech();window.emitSilence(1980);});
- assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='talk_end')),false,'shorter than two seconds does not submit');
+ await page.evaluate(()=>{window.emitSpeech();window.emitSilence(980);});
+ assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='talk_end')),false,'less than one second of silence does not submit');
  await page.evaluate(()=>window.emitSilence(20));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='talk_end'));
  // The fake server delivers thinking on a timer, after the outgoing commit.
@@ -66,7 +66,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===1);
  assert.equal(await page.evaluate(()=>window.voiceEvents.findIndex(x=>x.type==='talk_start')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'automatic capture starts before submitting');
  assert.equal(await page.evaluate(()=>window.voiceEvents.findLastIndex(x=>x.type==='audio')<window.voiceEvents.findIndex(x=>x.type==='talk_end')),true,'last audio precedes commit');
- await voice.getByRole('button',{name:'Стоп',exact:true}).waitFor({state:'visible'});
+ await voice.getByRole('button',{name:'Перебить ответ и говорить',exact:true}).waitFor({state:'visible'});
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>document.querySelector('#operatorCopilotVoiceToggle')?.dataset.voiceState==='responding');
  assert.equal(await voice.locator('[data-voice-orb]').getAttribute('data-state'),'responding');
@@ -82,7 +82,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'audio_done',item_id:'assistant-1'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played_all'));
  await page.waitForFunction(()=>window.muted===false);
- assert.equal(await voice.locator('.voice-session-talk').isVisible(),false);
+ assert.equal(await voice.locator('.voice-session-talk').count(),0);
  // A second turn starts with speech, without a new click.
  await page.evaluate(()=>{window.emitSpeech();window.emitSilence(2000);});
  await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===2);
@@ -90,23 +90,32 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>window.playCount===2);
  await page.evaluate(()=>{window.deferTalkReady=true;window.interruptItem='assistant-2';});
- await voice.getByRole('button',{name:'Стоп',exact:true}).click();
+ await voice.locator('[data-voice-orb]').click({force:true}); // The active orb is intentionally animated while speaking.
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='stop_response'));
  assert.deepEqual(await page.evaluate(()=>window.voiceEvents.findLast(x=>x.type==='stop_response')),
    {type:'stop_response',item_id:'assistant-2',audio_end_ms:120},'explicit Stop carries exact item and conservative playback offset');
- await page.evaluate(()=>{window.emitSpeech(5000);window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='});});
+ const audioBeforeInterrupt=await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio').length);
+ await page.evaluate(()=>{window.emitSpeech(300);window.sockets[0].emit({type:'audio',item_id:'assistant-2',pcm_base64:'AAA='});});
  assert.equal(await page.evaluate(()=>window.playCount),2,'late cancelled audio is discarded');
- assert.equal(await page.evaluate(()=>window.muted),true,'input stays muted until server confirms Stop');
+ assert.equal(await page.evaluate(()=>window.muted),false,'microphone starts capturing the new turn while it is safely buffered');
+ assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio').length),audioBeforeInterrupt,'the first words stay buffered until the server confirms Stop');
  assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='end')),false,'delayed Stop acknowledgement does not terminate the call');
  await page.evaluate(()=>{window.deferTalkReady=false;window.releaseTalkReady?.();});
  await page.waitForFunction(()=>window.muted===false);
+ await page.waitForFunction(count=>window.voiceEvents.filter(x=>x.type==='audio').length>count,audioBeforeInterrupt);
  await page.evaluate(()=>window.emitSilence(5000));
- assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length),2,'Stop resumes idle waiting, not an empty answer');
- await page.evaluate(()=>{window.emitSpeech();window.emitSilence(2000);});
- await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===3);
+ assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length),3,'speech begun during Stop acknowledgement is preserved and submitted after the pause');
  await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===3);
  await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-3',pcm_base64:'AAA='}));
  await page.waitForFunction(()=>window.playCount===3);
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio_done',item_id:'assistant-3'}));
+ await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played_all'&&x.item_id==='assistant-3'));
+ await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_start').length===3);
+ await page.evaluate(()=>{window.emitSpeech();window.emitSilence(2000);});
+ await page.waitForFunction(()=>window.voiceEvents.filter(x=>x.type==='talk_end').length===4);
+ await page.waitForFunction(()=>window.incomingEvents.filter(x=>x.type==='thinking').length===4);
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio',item_id:'assistant-4',pcm_base64:'AAA='}));
+ await page.waitForFunction(()=>window.playCount===4);
  const closeButton=voice.getByRole('button',{name:'Завершить сессию'});
  assert.equal(await closeButton.locator('svg').count(),1,'session close uses a labelled cross icon');
  await closeButton.focus();
@@ -129,12 +138,12 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  });
  await wrapperPage.evaluate(()=>{window.voiceSection=window.mountTenantCopilotVoice(document.getElementById('root'),{preflight:async()=>({available:true}),isCurrent:()=>true,socketPath:'/api/voice',language:'ru'});window.voiceSection.activateVoice();});
  await wrapperPage.evaluate(()=>window.voiceSection.startVoice());
- await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 2 секунды AI ответит');
+ await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 1 секунду AI ответит');
  await wrapperPage.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
  await wrapperPage.waitForFunction(()=>window.released===1&&window.closedSockets===1);
  assert.equal(await wrapperPage.evaluate(()=>window.voiceEvents.filter(x=>x.type==='end').length),1,'pagehide sends end and waits for server acknowledgement before closing');
  await wrapperPage.evaluate(()=>window.voiceSection.startVoice());
- await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 2 секунды AI ответит');
+ await wrapperPage.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите. После паузы в 1 секунду AI ответит');
  await wrapperPage.evaluate(()=>document.dispatchEvent(new Event('tenant-chat-close')));
  await wrapperPage.waitForFunction(()=>window.released===2&&window.closedSockets===2);
  assert.equal(await wrapperPage.evaluate(()=>window.voiceEvents.filter(x=>x.type==='end').length),2,'dialog disposal also waits for graceful end');

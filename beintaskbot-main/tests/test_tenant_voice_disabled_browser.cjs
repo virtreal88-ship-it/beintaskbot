@@ -18,8 +18,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
   await page.locator('#operatorCopilotToggle').click();
   const section=page.locator('[data-copilot-voice]');assert.equal(await section.count(),1);assert.equal(await section.isHidden(),true);
   assert.equal(await section.locator('button').isDisabled(),true);
-  await page.evaluate(()=>document.querySelector('[data-copilot-voice] button').onclick());
-  assert.match(await section.locator('[role=status]').textContent(),/недоступен/);
+  assert.equal(await section.locator('[data-voice-orb]').count(),1,'the voice screen contains only the real animation button, not a disabled placeholder CTA');
+  assert.equal(await section.locator('[role=status]').count(),0,'an unavailable preflight does not mount session controls');
   assert.equal(await page.locator('#operatorCopilotAsk').isEnabled(),true);assert.equal(await page.locator('#chatText').isEnabled(),true);
   assert.equal(await page.evaluate(()=>window.micCalls),0);assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.url.includes('copilot-voice/preflight')).length),1);
   await page.close();
