@@ -31,10 +31,10 @@ def team_members(key, team):
 def mutate(key, issue_id, fields, *, create=False):
     operation, input_type = ('issueCreate', 'IssueCreateInput!') if create else ('issueUpdate', 'IssueUpdateInput!')
     if create:
-        document = 'mutation($input:' + input_type + ') { issueCreate(input:$input) { success issue { id updatedAt } } }'
+        document = 'mutation($input:' + input_type + ') { issueCreate(input:$input) { success issue { id updatedAt state { id name type } } } }'
         variables = {'input': {'id': issue_id, **fields}}
     else:
-        document = 'mutation($id:String!,$input:' + input_type + ') { issueUpdate(id:$id,input:$input) { success issue { id updatedAt } } }'
+        document = 'mutation($id:String!,$input:' + input_type + ') { issueUpdate(id:$id,input:$input) { success issue { id updatedAt state { id name type } } } }'
         variables = {'id': issue_id, 'input': fields}
     result = query(key, document, variables).get(operation) or {}
     if result.get('success') is not True or not result.get('issue'):
