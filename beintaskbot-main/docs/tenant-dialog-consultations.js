@@ -1,5 +1,21 @@
 /* Explicit employee consultation UI; never interprets conversation text as commands. */
 (()=>{
+  function riskUpdateCopy(data,pending=false){
+    const words={
+      ru:{title:'Обновление задачи',owner:'Ответственный',status:'Статус в Linear',unassigned:'Не назначен',assigned:'Назначен',unknown:'Не указан',pending:'Откройте уведомление, чтобы проверить текущее состояние задачи.',unavailable:'Не удалось подтвердить источник. Проверьте позже.',caution:'Это данные Linear, а не подтверждение решения проблемы.'},
+      az:{title:'Tapşırıq yenilənib',owner:'Məsul şəxs',status:'Linear-da status',unassigned:'Təyin edilməyib',assigned:'Təyin edilib',unknown:'Göstərilməyib',pending:'Tapşırığın cari vəziyyətini yoxlamaq üçün bildirişi açın.',unavailable:'Mənbəni təsdiqləmək mümkün olmadı. Daha sonra yoxlayın.',caution:'Bu, Linear məlumatıdır; problemin həllini təsdiqləmir.'},
+      en:{title:'Task updated',owner:'Assignee',status:'Status in Linear',unassigned:'Unassigned',assigned:'Assigned',unknown:'Not specified',pending:'Open this notification to check the current task details.',unavailable:'Could not verify the source. Check again later.',caution:'This is Linear data, not confirmation that the problem is fixed.'}
+    };
+    const w=words[window.tenantI18n?.language||document.documentElement.lang]||words.az;
+    const text=value=>typeof value==='string'?value:'';
+    if(!data||typeof data!=='object')return {title:w.title,body:pending?w.pending:w.unavailable};
+    const owner=(name,assigned)=>assigned===false?w.unassigned:text(name)||(assigned===true?w.assigned:w.unknown);
+    const parts=[];
+    if(data.owner_changed===true)parts.push(w.owner+': '+owner(data.old_owner,data.old_assigned)+' → '+owner(data.new_owner,data.new_assigned)+'.');
+    if(data.state_changed===true)parts.push(w.status+': '+(text(data.old_state)||w.unknown)+' → '+(text(data.new_state)||w.unknown)+'.');
+    return {title:(text(data.identifier)?text(data.identifier)+': ':'')+w.title,body:parts.length?parts.join(' ')+' '+w.caution:w.unavailable};
+  }
+
   const endpoint=(window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'dialog-consultations';
   const $=id=>document.getElementById(id),el=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
   // Only the server-approved, frozen header is eligible for publication.
@@ -39,6 +55,9 @@
   const notificationCopy=key=>(notificationWords[window.tenantI18n?.language]||notificationWords.en)[key];
   const uuid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value||''));
   function displayBody(item){
+    if(item.risk_update)return riskUpdateCopy(item.risk_update).body;
+    if(item.risk_update_pending)return riskUpdateCopy(null,item.target_state!=='unavailable').body;
+    if(item.target_state==='unavailable'&&String(item.event_key||'').startsWith('proactive_risk:'))return riskUpdateCopy(null).body;
     const raw=String(item.body||''),id=String(item.consultation_id||'');
     if(!uuid(id))return raw;
     return raw.replace(new RegExp('^\\s*(?:CASE|CONSULT):'+id+'(?=\\s|$)\\s*','i'),'');
@@ -50,6 +69,7 @@
     return new Intl.DateTimeFormat(lang,{day:'numeric',month:'short',...(date.getFullYear()!==new Date().getFullYear()?{year:'numeric'}:{}),hour:'2-digit',minute:'2-digit'}).format(date);
   }
   function originalText(item){
+    if(item.risk_update||String(item.event_key||'').startsWith('proactive_risk:'))return null;
     if(displayBody(item)===String(item.body||''))return null;
     const details=el('details');details.className='notification-original';details.append(el('summary',notificationCopy('original')),el('p',String(item.body||'')));return details;
   }
@@ -124,9 +144,9 @@
     const article=el('article');article.className='dialog-consultation-card notification-card';article.dataset.notificationId=item.id;
     const meta=el('div');meta.className='notification-meta';meta.append(el('span',item.reply_id?notificationCopy('answer'):notificationCopy(item.kind==='tasks'?'task':'system')));
     const time=el('time',displayTime(item.created_at));time.dateTime=String(item.created_at||'');meta.append(time);
-    article.append(meta,el('h3',item.target_state==='case'?notificationCopy(item.event_kind)||notificationCopy('openCase'):item.title||notificationCopy('title')));
+    article.append(meta,el('h3',item.target_state==='case'?notificationCopy(item.event_kind)||notificationCopy('openCase'):item.risk_update?riskUpdateCopy(item.risk_update).title:item.risk_update_pending?riskUpdateCopy(null).title:item.target_state==='unavailable'&&String(item.event_key||'').startsWith('proactive_risk:')?riskUpdateCopy(null).title:item.title||notificationCopy('title')));
     if(item.target_state==='case'){let reason='unknownReason';for(const key of ['customer_requested_manager','customer_dissatisfied','unsupported_evidence'])if([key,'ai_no_answer_handoff:'+key,'ai_developer_consultation:'+key].includes(item.reason_code))reason=key;article.append(el('p',notificationCopy(reason)));if(item.event_kind==='ai_consultation'){const body=el('p',String(item.body||''));body.dataset.notificationBody='';body.setAttribute('data-user-content','');article.append(body);}const original=el('details');original.className='notification-original';original.append(el('summary',notificationCopy('original')),el('p',item.title||''),el('p',String(item.body||'')));article.append(original);const technical=el('details');technical.className='notification-original';technical.append(el('summary',notificationCopy('technical')),el('p',item.reason_code||''));article.append(technical);}else article.append(el('p',displayBody(item)));
-    if(item.target_state==='unavailable')article.append(el('p',notificationCopy('caseUnavailable')));
+    if(item.target_state==='unavailable'&&!String(item.event_key||'').startsWith('proactive_risk:'))article.append(el('p',notificationCopy('caseUnavailable')));
     const original=originalText(item);if(original)article.append(original);
     const actions=el('div');actions.className='notification-actions';
     const action=(label,fn,name,primary=false)=>{const node=button(label,async()=>{const owner=identity();node.disabled=true;notificationActionError='';notificationActionCode='';notificationActionTechnical='';try{await fn();}catch(error){if(owner===identity()){if(item.target_state==='case'){notificationActionCode=error.status===403?'caseForbidden':error.status===409?'caseChanged':'caseUnavailable';notificationActionTechnical=error.message;}else notificationActionError=error.message||notificationCopy('openFailure');render();const modalError=$('supportDetail')?.hidden===false?$('supportDetailNotice'):null;if(item.target_state==='case'&&modalError){if(!modalError.textContent||error.status)modalError.textContent=notificationCopy(notificationActionCode);modalError.tabIndex=-1;modalError.focus({preventScroll:true});}else $('notificationActionError')?.focus({preventScroll:true});}}finally{if(owner===identity()&&node.isConnected)node.disabled=false;}});node.className=primary?'primary':'outline';node.dataset.notificationFocus=item.id+':'+name;node.dataset.notificationAction=name;return node;};

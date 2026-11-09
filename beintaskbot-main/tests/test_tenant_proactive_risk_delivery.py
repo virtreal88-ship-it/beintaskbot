@@ -581,3 +581,200 @@ def test_linear_delivery_rechecks_exact_team_and_live_issue(monkeypatch):
     issue['team']={'id':'other-team'}
     assert delivery._finding_is_current(cur,event,owner) is False
     assert delivery.current_finding(cur,event,owner) is None
+
+
+class TestLinearMaterialUpdates(TestRiskAlertPostgres):
+    ISSUE = 'cccccccc-cccc-4ccc-cccc-cccccccccccc'
+    TEAM = 'dddddddd-dddd-4ddd-dddd-dddddddddddd'
+    OLD = '2026-11-08T10:00:00+00:00'
+    NEW = '2026-11-08T10:01:00+00:00'
+
+    def linear_issue(self, *, state='todo', owner='a', stamp=None):
+        return {'id': self.ISSUE, 'identifier': 'BS-1513', 'title': 'Reported issue',
+                'description': 'Task text', 'updatedAt': stamp or self.OLD,
+                'team': {'id': self.TEAM}, 'state': {'id': state, 'name': state.title()},
+                'assignee': {'id': owner, 'name': {'a': 'Ali', 'b': 'Sara'}.get(owner, owner)} if owner else None,
+                'url': 'https://linear.app/team/issue/BS-1513'}
+
+    def delivered_episode(self, tenant=TENANT, owner=OWNER):
+        self.version = NOW - timedelta(days=1)
+        self.scope = delivery.linear_scope(self.version, self.TEAM) if hasattr(delivery, 'linear_scope') else __import__('tenant_proactive_risk_policy').linear_scope(self.version, self.TEAM)
+        event = str(uuid.uuid4())
+        self.query('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s::uuid,%s::uuid,%s,'linear',%s,'access_control_claim',%s,%s,'risk','expanded')''',
+          (event,tenant,owner,self.ISSUE,self.scope,self.OLD))
+        self.query('''INSERT INTO saas_proactive_risk_alert_deliveries
+          (tenant_id,event_id,recipient_id,channel,status) VALUES(%s::uuid,%s::uuid,%s,'internal','delivered')''',
+          (tenant,event,owner))
+        return event
+
+    def queue(self, before, after, tenant=TENANT):
+        with self.db.cursor() as cur:
+            delivery.record_linear_material_update(cur, tenant, self.scope, after['updatedAt'], before, after)
+
+    def updated(self):
+        return self.query("SELECT * FROM saas_proactive_risk_alert_events WHERE event_type='linear_update'")
+
+    def test_change_dedupes_and_uses_shared_quota_and_neutral_push(self, monkeypatch):
+        self.delivered_episode()
+        before=self.linear_issue(); after=self.linear_issue(state='done',owner='b',stamp=self.NEW)
+        self.queue(before,after); self.queue(before,after)
+        # Duplicate observation must not cancel the pending matching update.
+        rows=self.updated(); assert len(rows)==1 and rows[0]['state']=='pending'
+        config={'team_id':self.TEAM,'done_state_ids':['done'],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        monkeypatch.setattr('tenant_linear_tasks_provider.issue',lambda *a,**k:after)
+        assert delivery.expand_events()==1
+        update=self.updated()[0]; assert update['state']=='expanded'
+        bell=self.query("SELECT title,body,target_url FROM saas_tenant_notifications")[0]
+        assert 'Ali' not in str(bell) and 'Sara' not in str(bell) and 'BS-1513' not in str(bell)
+        assert {r['channel'] for r in self.query("SELECT channel FROM saas_proactive_risk_alert_deliveries WHERE event_id=%s::uuid",(update['id'],))}=={'internal','push'}
+        item=delivery.claim_push(); assert item and item['send']
+        payload=str(payload_for('proactive_risk', target_url=item['target_url']))
+        assert all(name not in payload for name in ('Ali','Sara','BS-1513','Todo','Done'))
+        with self.db.cursor() as cur:
+            detail=delivery.material_update_detail(cur,update,delivery._owner_profile(cur,TENANT,OWNER))
+        title,body=delivery.material_update_text(update,detail)
+        assert 'BS-1513' in title and 'Ali → Sara' in body and 'Todo → Done' in body
+        assert 'təsdiqləmir' in body
+
+    def test_requires_delivered_episode_and_current_opt_in(self):
+        self.delivered_episode()
+        before=self.linear_issue(); after=self.linear_issue(owner='b',stamp=self.NEW)
+        self.query("UPDATE saas_proactive_risk_alert_deliveries SET status='pending'")
+        self.queue(before,after); assert self.updated()==[]
+        self.query("UPDATE saas_proactive_risk_alert_deliveries SET status='delivered'")
+        self.preferences[OWNER]={}
+        self.queue(before,after); assert self.updated()==[]
+        self.preferences[OWNER]={'internal':True}
+        self.queue(before,after); assert len(self.updated())==1
+
+    def test_superseded_updates_are_cancelled_and_live_mismatch_hidden(self,monkeypatch):
+        self.delivered_episode()
+        before=self.linear_issue(); middle=self.linear_issue(owner='b',stamp=self.NEW)
+        latest=self.linear_issue(owner='a',stamp='2026-11-08T10:02:00+00:00')
+        self.queue(before,middle); self.queue(middle,latest)
+        assert [r['state'] for r in self.updated()] == ['cancelled']
+        config={'team_id':self.TEAM,'done_state_ids':[],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        monkeypatch.setattr('tenant_linear_tasks_provider.issue',lambda *a,**k:latest)
+        with self.db.cursor() as cur:
+            assert delivery.material_update_detail(cur,self.updated()[0],delivery._owner_profile(cur,TENANT,OWNER)) is None
+
+    def test_no_update_for_same_values_or_wrong_issue(self):
+        self.delivered_episode()
+        before=self.linear_issue(); same=self.linear_issue(stamp=self.NEW)
+        self.queue(before,same)
+        wrong={**self.linear_issue(owner='b',stamp=self.NEW),'id':'wrong'}
+        self.queue(before,wrong)
+        assert self.updated()==[]
+
+    def test_resolved_original_still_delivers_completion_and_neutral_push(self,monkeypatch):
+        original=self.delivered_episode()
+        before=self.linear_issue(owner=''); after=self.linear_issue(owner='b',state='done',stamp=self.NEW)
+        self.queue(before,after)
+        with self.db.cursor() as cur:
+            delivery.record_finding_transitions(cur,TENANT,'linear',self.ISSUE,self.scope,self.NEW,[])
+        assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE id=%s::uuid',(original,))[0]['state']=='cancelled'
+        config={'team_id':self.TEAM,'done_state_ids':['done'],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        monkeypatch.setattr('tenant_linear_tasks_provider.issue',lambda *a,**k: after)
+        assert delivery.expand_events()==1
+        update=self.updated()[0]
+        assert {r['channel'] for r in self.query('SELECT channel FROM saas_proactive_risk_alert_deliveries WHERE event_id=%s::uuid',(update['id'],))}=={'internal','push'}
+        with self.db.cursor() as cur:
+            detail=delivery.material_update_detail(cur,update,delivery._owner_profile(cur,TENANT,OWNER))
+        _,body=delivery.material_update_text(update,detail)
+        assert 'Təyin edilməyib → Sara' in body and 'Todo → Done' in body
+
+    def test_different_team_scope_or_older_live_source_never_hydrates(self,monkeypatch):
+        self.delivered_episode(); before=self.linear_issue(); after=self.linear_issue(owner='b',stamp=self.NEW)
+        self.queue(before,after); update=self.updated()[0]
+        config={'team_id':self.TEAM,'done_state_ids':[],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        current={'value':{**after,'team':{'id':OTHER_TENANT}}}
+        monkeypatch.setattr('tenant_linear_tasks_provider.issue',lambda *a,**k: current['value'])
+        with self.db.cursor() as cur:
+            owner=delivery._owner_profile(cur,TENANT,OWNER)
+            assert delivery.material_update_detail(cur,update,owner) is None
+            current['value']={**after,'updatedAt':self.OLD}
+            assert delivery.material_update_detail(cur,update,owner) is None
+            current['value']=after
+            monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version-timedelta(seconds=1)))
+            assert delivery.material_update_detail(cur,update,owner) is None
+
+    def test_quota_defers_update_without_push_or_quota_bypass(self):
+        self.delivered_episode()
+        for index in range(delivery.MAX_RISK_ALERTS_PER_DAY):
+            self.query('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state,quota_reserved_at)
+              VALUES(%s::uuid,%s::uuid,%s,'linear',%s,'risk',%s,%s,'risk','expanded',now())''',
+              (str(uuid.uuid4()),TENANT,OWNER,'other'+str(index),self.scope,self.OLD))
+        self.queue(self.linear_issue(),self.linear_issue(owner='b',stamp=self.NEW))
+        update=self.updated()[0]; assert update['state']=='deferred' and update['quota_reserved_at'] is None
+        assert self.query('SELECT channel FROM saas_proactive_risk_alert_deliveries WHERE event_id=%s::uuid',(update['id'],))==[]
+
+    def test_resolved_episode_coalesces_pending_changes_before_delivery(self):
+        original=self.delivered_episode()
+        before=self.linear_issue(owner=''); middle=self.linear_issue(owner='b',stamp=self.NEW)
+        latest=self.linear_issue(owner='a',stamp='2026-11-08T10:02:00+00:00')
+        self.queue(before,middle)
+        with self.db.cursor() as cur:
+            delivery.record_finding_transitions(cur,TENANT,'linear',self.ISSUE,self.scope,self.NEW,[])
+        assert self.query('SELECT state FROM saas_proactive_risk_alert_events WHERE id=%s::uuid',(original,))[0]['state']=='cancelled'
+        self.queue(middle,latest)
+        states=sorted(row['state'] for row in self.updated())
+        assert states==['cancelled','pending']
+
+    def test_batch_reads_many_events_once_and_rechecks_each_source(self,monkeypatch):
+        self.delivered_episode()
+        config={'team_id':self.TEAM,'done_state_ids':[],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        events=[]; issues=[]
+        for i in range(25):
+            issue={**self.linear_issue(owner='b',stamp=self.NEW),'id':str(uuid.uuid4())}
+            event={'id':str(uuid.uuid4()),'tenant_id':TENANT,'recipient_id':OWNER,'source_kind':'linear',
+                   'source_id':issue['id'],'event_type':'linear_update','source_scope':self.scope,
+                   'source_version':self.NEW,'update_data':{'state_id':'todo','owner_id':'b'}}
+            events.append(event); issues.append(issue)
+        calls=[]
+        def batch(key,document,variables,*,timeout):
+            calls.append((document,variables,timeout))
+            return {f'n{i}':issue for i,issue in enumerate(issues)}
+        monkeypatch.setattr('tenant_linear_provider.query',batch)
+        with self.db.cursor() as cur:
+            owner=delivery._owner_profile(cur,TENANT,OWNER)
+            first=delivery.material_update_details(cur,events,owner)
+            again=delivery.material_update_details(cur,events,owner)
+        assert len(first)==len(again)==25 and len(calls)==2
+        assert all(len(variables)==25 and timeout==(1,2) for _,variables,timeout in calls)
+        assert all('description' not in document for document,_,_ in calls)
+        # Re-check individual team/source identity; a bad row is omitted only.
+        issues[5]['team']={'id':OTHER_TENANT}
+        with self.db.cursor() as cur:
+            result=delivery.material_update_details(cur,events,owner)
+        assert len(result)==24 and events[5]['id'] not in result
+
+    def test_push_only_update_sends_neutral_payload(self,monkeypatch):
+        self.delivered_episode(); self.preferences[OWNER]={'push':True}
+        before=self.linear_issue(); after=self.linear_issue(owner='b',stamp=self.NEW)
+        self.queue(before,after)
+        config={'team_id':self.TEAM,'done_state_ids':[],'workflow':{'enabled':True,'sync_enabled':True}}
+        monkeypatch.setattr('tenant_linear_context.context',lambda *a,**k: ({},config,'key',self.version))
+        monkeypatch.setattr('tenant_linear_tasks_provider.issue',lambda *a,**k: after)
+        assert delivery.expand_events()==1
+        assert self.query('SELECT * FROM saas_tenant_notifications')==[]
+        item=delivery.claim_push(); assert item and item['send']
+        payload=str(payload_for(item['event'],target_url=item['target_url']))
+        assert all(private not in payload for private in ('Ali','Sara','BS-1513'))
+
+    def test_missing_assignee_field_is_not_interpreted_as_unassigned(self):
+        self.delivered_episode()
+        before=self.linear_issue(); before.pop('assignee')
+        after=self.linear_issue(owner='b',stamp=self.NEW)
+        self.queue(before,after)
+        assert self.updated()==[]
+        after=self.linear_issue(owner='b',state='done',stamp=self.NEW)
+        self.queue(before,after)
+        assert len(self.updated())==1 and not self.updated()[0]['update_data']['owner_changed']

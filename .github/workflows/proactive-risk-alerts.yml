@@ -6,6 +6,13 @@ on:
       - 'beintaskbot-main/tenant_proactive_risk_*.py'
       - 'beintaskbot-main/tenant_proactive_risk_store.py'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_*.py'
+      - 'beintaskbot-main/tests/test_tenant_risk_update_*.py'
+      - 'beintaskbot-main/tenant_linear_observer.py'
+      - 'beintaskbot-main/tenant_linear_provider.py'
+      - 'beintaskbot-main/tenant_linear_tasks_provider.py'
+      - 'beintaskbot-main/tenant_notification_center.py'
+      - 'beintaskbot-main/docs/tenant-dialog-consultations.js'
+      - 'beintaskbot-main/tests/test_tenant_notification_center_ui.cjs'
       - 'beintaskbot-main/docs/tenant-risk-alert-detail.js'
       - 'beintaskbot-main/docs/tenant-risk-alert-detail.css'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_ui.cjs'
@@ -51,8 +58,14 @@ jobs:
           tests/test_tenant_proactive_risk_delivery.py
           tests/test_tenant_proactive_risk_policy.py
           tests/test_tenant_proactive_risk_explanation.py
+          tests/test_tenant_risk_update_presentation.py
+          tests/test_tenant_risk_update_coalescing.py
+          tests/test_tenant_risk_update_races.py
+          tests/test_tenant_linear_observer.py
       - name: Risk detail localization and navigation
         run: node tests/test_tenant_proactive_risk_detail_ui.cjs
+      - name: Notification center risk localization
+        run: node tests/test_tenant_notification_center_ui.cjs
       - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Mobile risk detail
         run: node tests/test_tenant_proactive_risk_detail_browser.cjs

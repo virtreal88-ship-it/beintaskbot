@@ -1,6 +1,22 @@
 /* One owner-only alert, revalidated by the server before showing source context. */
 (()=>{
   'use strict';
+  function riskUpdateCopy(data,pending=false){
+    const words={
+      ru:{title:'Обновление задачи',owner:'Ответственный',status:'Статус в Linear',unassigned:'Не назначен',assigned:'Назначен',unknown:'Не указан',pending:'Откройте уведомление, чтобы проверить текущее состояние задачи.',unavailable:'Не удалось подтвердить источник. Проверьте позже.',caution:'Это данные Linear, а не подтверждение решения проблемы.'},
+      az:{title:'Tapşırıq yenilənib',owner:'Məsul şəxs',status:'Linear-da status',unassigned:'Təyin edilməyib',assigned:'Təyin edilib',unknown:'Göstərilməyib',pending:'Tapşırığın cari vəziyyətini yoxlamaq üçün bildirişi açın.',unavailable:'Mənbəni təsdiqləmək mümkün olmadı. Daha sonra yoxlayın.',caution:'Bu, Linear məlumatıdır; problemin həllini təsdiqləmir.'},
+      en:{title:'Task updated',owner:'Assignee',status:'Status in Linear',unassigned:'Unassigned',assigned:'Assigned',unknown:'Not specified',pending:'Open this notification to check the current task details.',unavailable:'Could not verify the source. Check again later.',caution:'This is Linear data, not confirmation that the problem is fixed.'}
+    };
+    const w=words[window.tenantI18n?.language||document.documentElement.lang]||words.az;
+    const text=value=>typeof value==='string'?value:'';
+    if(!data||typeof data!=='object')return {title:w.title,body:pending?w.pending:w.unavailable};
+    const owner=(name,assigned)=>assigned===false?w.unassigned:text(name)||(assigned===true?w.assigned:w.unknown);
+    const parts=[];
+    if(data.owner_changed===true)parts.push(w.owner+': '+owner(data.old_owner,data.old_assigned)+' → '+owner(data.new_owner,data.new_assigned)+'.');
+    if(data.state_changed===true)parts.push(w.status+': '+(text(data.old_state)||w.unknown)+' → '+(text(data.new_state)||w.unknown)+'.');
+    return {title:(text(data.identifier)?text(data.identifier)+': ':'')+w.title,body:parts.length?parts.join(' ')+' '+w.caution:w.unavailable};
+  }
+
   const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const copy={
     ru:{title:'Сигнал по задаче',close:'Закрыть',loading:'Проверяем источник…',gone:'Этот сигнал уже недоступен или больше не подтверждается источником.',error:'Не удалось проверить источник. Откройте уведомление позже.',what:'Что произошло',quote:'По тексту задачи (сообщение автора, не проверенный инцидент)',missingText:'Описание не заполнено. Подробности нужно уточнить в исходной задаче.',due:'Плановая дата в источнике',updated:'Запись обновлена в источнике',project:'Проект',status:'Статус',priority:'Приоритет задачи',priorities:['Не указан','Срочный','Высокий','Обычный','Низкий'],assigned:'В задаче указан ответственный.',unassigned:'В задаче не назначен ответственный. Это не означает, что никто не работает над ней.',why:'Почему стоит обратить внимание',next:'Что проверить дальше',unknown:'Что пока неизвестно',limits:'Работа системы, фактический ущерб и наличие временного решения этой проверкой не подтверждены. Комментарии и действия команды за пределами задачи не проверялись.',steps:'Проверьте, кто уже занимается задачей, и уточните текущий статус и временное решение. Если ответственного нет, согласуйте его назначение.',price_access:'В тексте есть упоминания цен или оплаты и прав доступа. Это повод проверить правила цен, оплаты и доступа; сам текст ещё не доказывает нарушение.',access:'В тексте есть вопрос о правах доступа. Стоит проверить, какие действия доступны затронутой роли.',price:'В тексте есть вопрос об изменении цены или оплаты. Стоит проверить правила цен и реальные операции.',outage:'В тексте есть сообщение о сбое. Стоит проверить, сохраняется ли проблема и кому она мешает.',unassignedWhy:'Срочная или важная задача остаётся без назначенного ответственного: нужно уточнить, кто её ведёт.',overdueWhy:'Плановая дата задачи прошла. Нужно уточнить фактический статус; это само по себе не доказывает ущерб.',staleWhy:'Запись давно не обновлялась. Это не означает, что работа остановилась.',genericWhy:'По задаче есть сигнал для проверки. Откройте источник и уточните текущую ситуацию.',checked:'Проверено',live:'Задача повторно прочитана из Linear при открытии.',cache:'Проверена недавняя сохранённая копия задачи CRM.',synced:'Копия обновлена',linear:'Открыть исходную задачу Linear',crm:'Открыть задачи CRM',original:'Текст источника показан на языке автора.',truncated:'Показан фрагмент. Полный текст доступен в исходной задаче.'},
@@ -17,11 +33,12 @@
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
     display=alert;overlay?.remove();
+    const updateCopy=riskUpdateCopy(alert.update_data);
     const shade=document.createElement('div');shade.className='tenant-risk-alert-shade';shade.setAttribute('role','presentation');
     const dialog=document.createElement('section');dialog.className='tenant-risk-alert-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-labelledby','riskAlertTitle');
     const head=document.createElement('header');head.className='risk-alert-head';
     const heading=document.createElement('div');heading.className='risk-alert-heading';head.append(heading);
-    addText(heading,'p',t('title'),'risk-alert-eyebrow');
+    addText(heading,'p',alert.event_type==='linear_update'?updateCopy.title:t('title'),'risk-alert-eyebrow');
     const c=alert.context||{},title=addText(heading,'h2',c.title||alert.source_title||t('title'));title.id='riskAlertTitle';
     const closeButton=addText(head,'button',t('close'),'risk-alert-close');closeButton.type='button';closeButton.onclick=()=>close(true);dialog.append(head);
     const body=document.createElement('div');body.className='risk-alert-body';body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-labelledby','riskAlertTitle');dialog.append(body);
@@ -32,6 +49,10 @@
       addText(context,'span',alert.source_kind==='linear'?'Linear':'CRM','risk-alert-tag');
       if(c.identifier)addText(context,'span',c.identifier,'risk-alert-tag');
       if(c.project)addText(context,'span',t('project')+': '+c.project);
+      if(alert.event_type==='linear_update'){
+        const update=document.createElement('section');update.className='risk-alert-section risk-alert-update';
+        addText(update,'h3',updateCopy.title);addText(update,'p',updateCopy.body);body.append(update);
+      }
       const what=section('what');
       addText(what,'p',t('quote'),'risk-alert-caption');
       const quote=document.createElement('div');quote.className='risk-alert-quote';what.append(quote);
@@ -46,6 +67,7 @@
       if(c.status)fact('status',c.status);
       if(facts.childElementCount)what.append(facts);
       if(typeof c.assigned==='boolean')addText(what,'p',t(c.assigned?'assigned':'unassigned'),'risk-alert-assignment');
+      if(alert.event_type!=='linear_update'){
       const why=section('why');
       const reasons=[];
       if(['price_access','access','price','outage'].includes(c.topic))reasons.push(c.topic);
@@ -55,6 +77,7 @@
       (reasons.length?reasons:['genericWhy']).forEach(key=>addText(why,'p',t(key)));
       addText(section('unknown','risk-alert-unknown'),'p',t('limits'));
       addText(section('next','risk-alert-next'),'p',t('steps'));
+      }else{addText(section('unknown','risk-alert-unknown'),'p',t('limits'));}
       const verification=document.createElement('div');verification.className='risk-alert-verification';
       const checked=stamp(alert.checked_at);if(checked)addText(verification,'small',t('checked')+': '+checked);
       if(c.source_mode){addText(verification,'p',t(c.source_mode==='live'?'live':'cache'));const synced=stamp(c.source_checked_at);if(synced)addText(verification,'small',t('synced')+': '+synced);}

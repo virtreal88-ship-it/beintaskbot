@@ -2,6 +2,7 @@ name: Dialogue consultation regression
 on:
   pull_request:
     paths:
+      - 'docs/public-case.html'
       - '.github/workflows/dialog-consultations.yml'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
       - 'beintaskbot-main/tenant_developer_question_draft.py'

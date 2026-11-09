@@ -3,11 +3,11 @@ import requests
 from tenant_linear_policy import TenantLinearError
 
 
-def query(key, document, variables=None):
+def query(key, document, variables=None, *, timeout=(5, 20)):
     try:
         response = requests.post('https://api.linear.app/graphql',
             headers={'Authorization': key, 'Content-Type': 'application/json'},
-            json={'query': document, 'variables': variables or {}}, timeout=(5, 20), allow_redirects=False)
+            json={'query': document, 'variables': variables or {}}, timeout=timeout, allow_redirects=False)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict) or payload.get('errors') or not isinstance(payload.get('data'), dict):
