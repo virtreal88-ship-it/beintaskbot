@@ -10,7 +10,7 @@ class Element {
   replaceChildren(){this.html='';}
   insertAdjacentHTML(position,html){this.innerHTML=(this.html||'')+html;}
   querySelectorAll(selector=''){return this.id==='tlColumnOptions'&&selector.includes('linear-column-toggle')?this.inputs:[];}
-  querySelector(selector=''){return this.id==='tlColumnDialog'&&selector.includes('checkbox')?this.inputs[0]||null:null;}
+  querySelector(selector=''){return this.id==='tlColumnDialog'&&selector.includes('checkbox')?elements.get('tlColumnOptions')?.inputs[0]||null:null;}
   addEventListener(name,listener){this.listeners[name]=listener;}
   dispatchEvent(event){this.listeners[event.type]?.(event);return!event.defaultPrevented;}
   showModal(){this.open=true;}
