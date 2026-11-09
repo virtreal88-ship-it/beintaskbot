@@ -133,9 +133,10 @@ function articleView(item,host){
   const body=make('div',undefined,{class:'catalog-article-body'});
   if(item.body_format==='html')body.append(safeHTML(item.body));else body.textContent=item.body||t('noText');host.append(body);
   if(item.images?.length){const gallery=make('div',undefined,{class:'catalog-images'});for(const img of item.images){let src='';if(img.src){const u=new URL(img.src,location.origin);if(u.origin===location.origin&&u.pathname.startsWith('/api/guides/public/images/'))src=u.href}else if(canManageGuides&&img.data&&['image/jpeg','image/png'].includes(img.mime))src='data:'+img.mime+';base64,'+img.data;if(!src)continue;const figure=make('figure');figure.append(make('img',undefined,{src,alt:img.alt||'',loading:'lazy'}));if(img.alt)figure.append(make('figcaption',img.alt));gallery.append(figure)}host.append(gallery)}
- }else{
+ }else if(item.status==='published'){
   host.append(make('p',t('public'),{class:'catalog-meta'}),make('div',undefined,{id:'catalogLessonPlayer',class:'catalog-lesson-player'}));
-  if(item.status!=='published')host.append(make('p',t(item.status),{class:'catalog-status'}));
+ }else{
+  host.append(make('p',statusLabel(item),{class:'catalog-read-status'}));
  }
  const actions=editorActions(item);if(actions.childNodes.length)host.append(actions);
 }
