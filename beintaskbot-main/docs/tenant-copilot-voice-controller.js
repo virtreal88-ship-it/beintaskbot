@@ -2,11 +2,11 @@
 (function(root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountExperimentalCopilotVoice = factory;
-})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}, onDismiss=()=>{}}) {
+})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, interruptTarget: providedInterruptTarget=null, language='ru', onIdle=()=>{}, onState=()=>{}, onDismiss=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
-  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить сессию',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер задержал подтверждение. Разговор не завершён.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Говорите. После паузы в 2 секунды AI ответит',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
-    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Sessiyanı bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server təsdiqi gecikdirir. Söhbət bitməyib.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışın. 2 saniyəlik fasilədən sonra AI cavab verəcək',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
+  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить сессию',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер слишком долго подтверждает перебивание. Повторите реплику.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Говорите. После паузы в 1 секунду AI ответит',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
+    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Sessiyanı bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Kəsmə təsdiqi çox gecikir. Replikanı təkrar edin.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışın. 1 saniyəlik fasilədən sonra AI cavab verəcək',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
   const sessionBusy=language==='az'?'Başqa səsli sessiya aktiv ola bilər və ya əvvəlki sessiyanın bitməsi təsdiqlənməyib. Digər açıq pəncərələri yoxlayın.':'Возможно, другой голосовой сеанс ещё открыт или завершение предыдущего не подтверждено. Проверьте другие открытые окна.';
   const document = root.ownerDocument;
@@ -15,12 +15,13 @@
   const status = document.createElement('p'); status.className='voice-session-status';status.setAttribute('role','status'); status.textContent=labels.off;
   const buttons=document.createElement('div');buttons.className='tenant-voice-buttons';
   const start = document.createElement('button'); start.type='button';start.className='voice-session-start';start.setAttribute('aria-label',labels.start);start.title=labels.start;start.innerHTML=micIcon;
-  const talk = document.createElement('button'); talk.type='button';talk.className='voice-session-talk';talk.setAttribute('aria-label',labels.talkStart);talk.setAttribute('aria-pressed','false');talk.title=labels.talkStart;talk.innerHTML=micIcon;talk.hidden=true;talk.disabled=true;
   const end = document.createElement('button'); end.type='button';end.className='voice-session-end';end.setAttribute('aria-label',labels.end);end.title=labels.end;end.innerHTML=endIcon;end.hidden=true;
-  buttons.append(start,talk,end);
-  const stopLabel=language==='az'?'AI cavabını dayandır':'Стоп';
+  buttons.append(start,end);
   root.append(status,buttons);
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false,  assistantResponding=false, currentAssistantItem=null;
+  const interruptTarget=providedInterruptTarget||root.ownerDocument?.querySelector?.('[data-voice-orb]')||null;
+  const interruptLabel=language==='az'?'Cavabı kəs və danış':'Перебить ответ и говорить';
+  const orbLabel=language==='az'?'AI səsli söhbəti dinləyir':'Анимация голосового разговора с AI';
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false, assistantResponding=false, currentAssistantItem=null;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false, playbackStartedItems=new Set();
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
@@ -36,10 +37,32 @@
   }
 
   let speechSamples=0, silenceSamples=0, turnSamples=0, candidate=[], candidateSamples=0, stopAwaiting=false;
+  const SAMPLE_RATE=24000, END_SILENCE_MS=1000, MIN_END_SILENCE_MS=750, MAX_END_SILENCE_MS=2000;
+  const END_SILENCE_SAMPLES=Math.round(SAMPLE_RATE*Math.max(MIN_END_SILENCE_MS,Math.min(MAX_END_SILENCE_MS,END_SILENCE_MS))/1000);
+  const MAX_PENDING_MIC_BYTES=SAMPLE_RATE*2*2;
+  let pendingMic=[],pendingMicBytes=0,pendingOverflow=false;
   let stoppedItems=new Set();
   const resetDetection=()=>{speechSamples=0;silenceSamples=0;turnSamples=0;candidate=[];candidateSamples=0;};
+  const resetPendingMic=()=>{pendingMic=[];pendingMicBytes=0;pendingOverflow=false;};
+  function setInterruptEnabled(enabled){
+    if(!interruptTarget)return;
+    interruptTarget.disabled=!enabled;
+    interruptTarget.setAttribute('aria-label',enabled?interruptLabel:orbLabel);
+    interruptTarget.title=enabled?interruptLabel:'';
+  }
+  function flushPendingMic(){
+    if(pendingOverflow){resetPendingMic();void stop(labels.inputQueueSlow);return false;}
+    const queued=pendingMic;resetPendingMic();
+    for(const pcm of queued)send({type:'audio',pcm});
+    if(silenceSamples>=END_SILENCE_SAMPLES){
+      inputEnabled=false;talkActive=false;talkPending=true;muted=true;
+      audio?.mute(true);resetDetection();send({type:'talk_end'});showResponse(false);
+    }
+    return true;
+  }
   function capture(bytes){
-    if(!channel||muted||!inputEnabled||!talkActive||assistantResponding||ending)return;
+    const buffering=talkPending&&!ending;
+    if(!channel||(!buffering&&(muted||!inputEnabled||!talkActive||assistantResponding))||ending)return;
     if(!(bytes instanceof Uint8Array)||!bytes.byteLength||bytes.byteLength%2)return;
     const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
     let energy=0;const samples=bytes.byteLength/2;
@@ -50,14 +73,19 @@
       candidate.push(bytes.slice());candidateSamples+=samples;
       if(candidateSamples<2400)return;
       speechSamples=candidateSamples;turnSamples=candidateSamples;
-      for(const pcm of candidate)send({type:'audio',pcm});
+      if(buffering){for(const pcm of candidate){pendingMic.push(pcm);pendingMicBytes+=pcm.byteLength;}}
+      else for(const pcm of candidate)send({type:'audio',pcm});
       candidate=[];candidateSamples=0;return;
     }
     if(voiced){speechSamples+=samples;silenceSamples=0;}
     else if(speechSamples)silenceSamples+=samples;
     if(!speechSamples)return; // Do not upload idle room silence.
-    turnSamples+=samples;send({type:'audio',pcm:bytes});
-    if(silenceSamples>=48000){
+    turnSamples+=samples;
+    if(buffering){
+      if(!pendingOverflow){pendingMic.push(bytes.slice());pendingMicBytes+=bytes.byteLength;
+        if(pendingMicBytes>MAX_PENDING_MIC_BYTES){pendingOverflow=true;pendingMic=[];pendingMicBytes=0;}}
+    }else send({type:'audio',pcm:bytes});
+    if(!buffering&&silenceSamples>=END_SILENCE_SAMPLES){
       inputEnabled=false;talkActive=false;talkPending=true;muted=true;
       audio?.mute(true);resetDetection();
       send({type:'talk_end'});showResponse(false);
@@ -65,13 +93,13 @@
   }
   function showResponse(canStop=true){
     assistantResponding=true;inputEnabled=false;muted=true;audio?.mute(true);
-    talk.hidden=!canStop;talk.disabled=!canStop;talk.innerHTML='■';talk.title=stopLabel;talk.setAttribute('aria-label',stopLabel);
+    setInterruptEnabled(canStop);
     setVoiceState('responding');status.textContent=labels.responding;
   }
   function listen(){
     if(!channel||ending||talkPending||talkActive)return;
-    resetDetection();muted=true;inputEnabled=false;assistantResponding=false;
-    talk.hidden=true;talk.disabled=true;talkPending=true;audio?.mute(true);
+    resetDetection();resetPendingMic();muted=false;inputEnabled=false;assistantResponding=false;
+    setInterruptEnabled(false);talkPending=true;audio?.mute(false);
     send({type:'talk_start'});
     setVoiceState('listening');status.textContent=labels.listening;
   }
@@ -83,8 +111,8 @@
     hideAfterConnect=false;
     const stopVersion=++generation;
     settleEnd(confirmed);
-    resetDetection();stopAwaiting=false;stoppedItems.clear();
-    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=confirmed;
+    resetDetection();resetPendingMic();stopAwaiting=false;stoppedItems.clear();
+    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;cleanupPending++;start.hidden=false;start.disabled=true;setInterruptEnabled(false);end.hidden=confirmed;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingOpenAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -113,7 +141,7 @@
       if(!destroyed)status.textContent=microphoneUncertain;
       idle();
     });
-    muted=false;endSent=false;talk.disabled=true;talk.setAttribute('aria-label',labels.talkStart);talk.title=labels.talkStart;talk.innerHTML=micIcon;
+    muted=false;endSent=false;
     if(!destroyed) status.textContent=voiceBlocked?reason:labels.disconnecting;
     await Promise.race([Promise.all([channelStop,mediaStop]),new Promise(resolve=>setTimeout(resolve,500))]);
   }
@@ -170,9 +198,9 @@
           } else if(event.type==='talk_ready'){
             stopAwaiting=false;
             talkPending=false;talkActive=true;assistantResponding=false;currentAssistantItem=null;
-            inputEnabled=true;muted=false;resetDetection();audio?.mute(false);
-            talk.hidden=true;talk.disabled=true;
-            setVoiceState('listening');status.textContent=labels.listening;
+            inputEnabled=true;muted=false;audio?.mute(false);
+            setInterruptEnabled(false);setVoiceState('listening');status.textContent=labels.listening;
+            flushPendingMic();
           } else if(event.type==='talk_empty'){
             talkPending=false;talkActive=false;listen();
           } else if(event.type==='thinking'){
@@ -227,8 +255,8 @@
     return endPromise;
   }
   end.addEventListener('click',()=>finish());
-  talk.addEventListener('click',()=>{
-    if(!audio||!channel||ending||talk.disabled||!assistantResponding)return;
+  const interrupt=()=>{
+    if(!audio||!channel||ending||!assistantResponding||stopAwaiting||talkPending)return;
     const event={type:'stop_response'};
     try{
       const interrupted=audio.interruptForTalk?.();
@@ -236,10 +264,11 @@
       else if(currentAssistantItem){event.item_id=currentAssistantItem;event.audio_end_ms=0;}
     }catch(_){void stop(playbackFailure);return;}
     if(event.item_id)stoppedItems.add(event.item_id);stopAwaiting=true;
-    assistantResponding=false;currentAssistantItem=null;talkPending=true;inputEnabled=false;muted=true;
-    talk.disabled=true;talk.hidden=true;resetDetection();audio?.mute(true);
+    assistantResponding=false;currentAssistantItem=null;talkPending=true;inputEnabled=false;muted=false;
+    setInterruptEnabled(false);resetDetection();resetPendingMic();audio?.mute(false);
     send(event);setVoiceState('listening');status.textContent=labels.listening;
-  });
+  };
+  interruptTarget?.addEventListener?.('click',interrupt);
   const hide=()=>{
     if(lifecycle?.visibilityState!=='hidden'||(!running&&!ending))return;
     if(ending)return;
@@ -258,6 +287,6 @@
     finish();
   };
   lifecycle?.addEventListener?.('visibilitychange',hide);
-  return {start:begin,stop,end:finish,isActive:()=>running||ending||cleanupPending>0,
-          destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);await stop();root.replaceChildren();}};
+  return {start:begin,stop,end:finish,interrupt,isActive:()=>running||ending||cleanupPending>0,
+          destroy:async()=>{destroyed=true;lifecycle?.removeEventListener?.('visibilitychange',hide);interruptTarget?.removeEventListener?.('click',interrupt);await stop();root.replaceChildren();}};
 });
