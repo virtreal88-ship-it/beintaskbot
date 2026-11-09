@@ -45,12 +45,13 @@ function catalogItems(state){
  return [...guides,...lessons];
 }
 function matches(item,q){if(!q)return true;const needle=q.toLocaleLowerCase();return [item.title,item.category,item.slug,item.operation,item.body].some(x=>String(x||'').toLocaleLowerCase().includes(needle))}
+function underPath(value,prefix,separator){return value===prefix||value.startsWith(prefix+separator)}
 function inScope(item){
  if(scope==='all')return true;
  if(scope==='guide')return item.kind==='guide';
  if(scope==='lesson')return item.kind==='lesson';
- if(scope.startsWith('g:'))return item.kind==='guide'&&String(item.slug||'').startsWith(scope.slice(2));
- if(scope.startsWith('l:'))return item.kind==='lesson'&&String(item.operation||'').startsWith(scope.slice(2));
+ if(scope.startsWith('g:'))return item.kind==='guide'&&underPath(String(item.slug||''),scope.slice(2),'/');
+ if(scope.startsWith('l:'))return item.kind==='lesson'&&underPath(String(item.operation||''),scope.slice(2),'.');
  return true;
 }
 function safeHTML(source){
@@ -84,7 +85,7 @@ function makeTree(items){
 function treeButton(parent,label,count,onClick,depth,selectedItem){const b=make('button',undefined,{type:'button',class:'catalog-tree-choice'+(selectedItem?' is-selected':'')});b.textContent=label+(count?' ('+count+')':'');b.style.paddingInlineStart=(12+depth*13)+'px';b.onclick=onClick;parent.append(b)}
 function renderTreeBranch(parent,node,kind,depth,allItems){
  for(const child of node.children.values()){
-  const own=allItems.filter(x=>kind==='guide'?String(x.slug||'').startsWith(child.path):String(x.operation||'').startsWith(child.path));
+  const own=allItems.filter(x=>kind==='guide'?underPath(String(x.slug||''),child.path,'/'):underPath(String(x.operation||''),child.path,'.'));
   treeButton(parent,child.label,own.length,()=>{scope=(kind==='guide'?'g:':'l:')+child.path;selected=null;render()},depth,scope===(kind==='guide'?'g:':'l:')+child.path);
   for(const item of child.items)treeButton(parent,item.title,0,()=>openItem(item),depth+1,selected&&selected.kind===item.kind&&String(selected.id||selected.slug)===String(item.id||item.slug));
   renderTreeBranch(parent,child,kind,depth+1,allItems);
@@ -143,7 +144,7 @@ function articleView(item,host){
 function render(){
  if(!root)return;player?.destroy?.();player=null;const search=byId('catalogSearch'),state=byId('catalogState'),q=(search?.value||'').trim(),status=canManageLessons?(state?.value||''):'';
  const items=catalogItems(status).filter(x=>matches(x,q));
- renderTree(items);const title=byId('catalogHeading');title.textContent=selected?(selected.title||''):scope==='all'?t('all'):scope==='guide'?t('articles'):scope==='lesson'?t('lessons'):t('section');
+ renderTree(items);const title=byId('catalogHeading');title.textContent=selected?(selected.title||''):scope==='all'?t('all'):scope==='guide'?t('articles'):scope==='lesson'?t('lessons'):scope.startsWith('g:')||scope.startsWith('l:')?scope.slice(2).split(/[/.]/).pop():t('section');
  const results=byId('catalogResults');results.replaceChildren();
  if(selected){const detail=make('div',undefined,{class:'catalog-detail'});articleView(selected,detail);results.append(detail);return}
  let shown=items;if(!q)shown=shown.filter(inScope);
