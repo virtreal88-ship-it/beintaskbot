@@ -84,7 +84,7 @@ const server=http.createServer((req,res)=>{
    const native=window.createImageBitmap.bind(window);
    window.createImageBitmap=async file=>{await new Promise(resolve=>setTimeout(resolve,900));return native(file)};
   });
-  const uploadPromise=photoInput.setInputFiles({name:'guide-photo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6WQAAAABJRU5ErkJggg==','base64')});
+  const uploadPromise=photoInput.setInputFiles(path.join(docs,'icon-192.png'));
   await page.waitForFunction(()=>{try{return !!document.querySelector('#instructionEditorFrame').contentWindow.tenantInstructionDirty()}catch{return false}});
   const{dialog:uploadClosePrompt,actionWait:uploadCloseClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
   assert.equal(uploadClosePrompt.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?','a selected Guide image is dirty while processing');
@@ -108,7 +108,7 @@ const server=http.createServer((req,res)=>{
   await failedPhotoInput.evaluate(input=>{
    window.createImageBitmap=async()=>{await new Promise(resolve=>setTimeout(resolve,900));throw new Error('synthetic image decode failure')};
   });
-  const failedUploadPromise=failedPhotoInput.setInputFiles({name:'broken-guide-photo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6WQAAAABJRU5ErkJggg==','base64')});
+  const failedUploadPromise=failedPhotoInput.setInputFiles(path.join(docs,'icon-192.png'));
   await page.waitForFunction(()=>{try{return !!document.querySelector('#instructionEditorFrame').contentWindow.tenantInstructionDirty()}catch{return false}});
   const concurrentTitle=failedUploadFrame.locator('#title');
   await concurrentTitle.fill('Keep this edit after image failure');
