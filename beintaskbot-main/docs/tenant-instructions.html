@@ -51,9 +51,9 @@
   <script>
     (function(){
       var copy={
-        ru:{brand:'AKUL / ИНСТРУКЦИИ',guide:'База статей',lessons:'Пошаговые уроки',guideTitle:'Редактор базы статей',lessonsTitle:'Библиотека пошаговых уроков'},
-        az:{brand:'AKUL / TƏLİMATLAR',guide:'Məqalələr bazası',lessons:'Addım-addım dərslər',guideTitle:'Məqalələr bazasının redaktoru',lessonsTitle:'Addım-addım dərslər kitabxanası'},
-        en:{brand:'AKUL / INSTRUCTIONS',guide:'Article library',lessons:'Step-by-step lessons',guideTitle:'Article library editor',lessonsTitle:'Step-by-step lesson library'}
+        ru:{brand:'AKUL / ИНСТРУКЦИИ',nav:'Разделы инструкций',guide:'База статей',lessons:'Пошаговые уроки',guideTitle:'Редактор базы статей',lessonsTitle:'Библиотека пошаговых уроков'},
+        az:{brand:'AKUL / TƏLİMATLAR',nav:'Təlimat bölmələri',guide:'Məqalələr bazası',lessons:'Addım-addım dərslər',guideTitle:'Məqalələr bazasının redaktoru',lessonsTitle:'Addım-addım dərslər kitabxanası'},
+        en:{brand:'AKUL / INSTRUCTIONS',nav:'Instruction sections',guide:'Article library',lessons:'Step-by-step lessons',guideTitle:'Article library editor',lessonsTitle:'Step-by-step lesson library'}
       };
       var requested=new URLSearchParams(location.search),language=['ru','az','en'].includes(requested.get('site_lang'))?requested.get('site_lang'):'ru',labels=copy[language];
       var guideTab=document.getElementById('guideTab'),lessonsTab=document.getElementById('lessonsTab'),guidePanel=document.getElementById('guidePanel'),lessonsPanel=document.getElementById('lessonsPanel'),frame=document.getElementById('guideEditorFrame');
@@ -63,6 +63,7 @@
       lessonsTab.textContent=labels.lessons;
       guideTab.setAttribute('aria-label',labels.guide);
       lessonsTab.setAttribute('aria-label',labels.lessons);
+      document.querySelector('.instruction-workspace-tabs').setAttribute('aria-label',labels.nav);
       frame.title=labels.guideTitle;
       function show(name){
         var guide=name==='guide';
@@ -70,14 +71,19 @@
         lessonsPanel.hidden=guide;
         guideTab.setAttribute('aria-selected',String(guide));
         lessonsTab.setAttribute('aria-selected',String(!guide));
+        guideTab.tabIndex=guide?0:-1;
+        lessonsTab.tabIndex=guide?-1:0;
       }
       guideTab.addEventListener('click',function(){show('guide')});
       lessonsTab.addEventListener('click',function(){show('lessons')});
-      [guideTab,lessonsTab].forEach(function(tab,index){tab.addEventListener('keydown',function(event){
-        if(event.key==='ArrowRight'||event.key==='ArrowLeft'){
+      [guideTab,lessonsTab].forEach(function(tab){tab.addEventListener('keydown',function(event){
+        if(event.key==='ArrowRight'||event.key==='ArrowLeft'||event.key==='Home'||event.key==='End'){
           event.preventDefault();
           var next=tab===guideTab?lessonsTab:guideTab;
-          next.focus();show(next===guideTab?'guide':'lessons');
+          if(event.key==='Home')next=guideTab;
+          else if(event.key==='End')next=lessonsTab;
+          show(next===guideTab?'guide':'lessons');
+          next.focus();
         }
       })});
       show(requested.has('lesson')||requested.has('share')?'lessons':'guide');
