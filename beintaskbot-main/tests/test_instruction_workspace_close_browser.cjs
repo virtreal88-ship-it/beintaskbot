@@ -47,6 +47,7 @@ const server=http.createServer((req,res)=>{
   await guideWarningDialog.accept();await guideWarningClick;
   const guideFrame=page.frameLocator('#instructionEditorFrame');
   await guideFrame.locator('#new').waitFor({state:'visible'});
+  await guideFrame.locator('#close-editor').click();
   await guideFrame.locator('#new').click();
   const guideTitle=guideFrame.locator('#title');
   await guideTitle.fill('Unsaved global guide edit');
@@ -76,6 +77,7 @@ const server=http.createServer((req,res)=>{
   await reopenGuideWarning.accept();await reopenGuideClick;
   const uploadFrame=page.frameLocator('#instructionEditorFrame');
   await uploadFrame.locator('#new').waitFor({state:'visible'});
+  await uploadFrame.locator('#close-editor').click();
   await uploadFrame.locator('#new').click();
   const photoInput=uploadFrame.locator('#article-photos');
   await photoInput.evaluate(input=>{
@@ -100,6 +102,7 @@ const server=http.createServer((req,res)=>{
   await retryGuideWarning.accept();await retryGuideClick;
   const failedUploadFrame=page.frameLocator('#instructionEditorFrame');
   await failedUploadFrame.locator('#new').waitFor({state:'visible'});
+  await failedUploadFrame.locator('#close-editor').click();
   await failedUploadFrame.locator('#new').click();
   const failedPhotoInput=failedUploadFrame.locator('#article-photos');
   await failedPhotoInput.evaluate(input=>{
