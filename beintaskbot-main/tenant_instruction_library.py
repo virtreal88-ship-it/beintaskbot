@@ -226,6 +226,83 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
         if connection is None: conn.commit()
         return result
 
+def _authorize_published_catalog(cur, profile):
+    """Allow read-only published lessons to any active member of an active tenant."""
+    if not isinstance(profile, dict):
+        raise TenantLinearError('No access', 403)
+    tenant = identifier(profile.get('tenant_id'))
+    try:
+        actor = int(profile.get('telegram_id'))
+    except (TypeError, ValueError):
+        raise TenantLinearError('No access', 403) from None
+    cur.execute('''SELECT m.active,t.status
+      FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
+      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s''', (tenant, actor))
+    row = cur.fetchone()
+    if not row or not row.get('active') or row.get('status') != 'active':
+        raise TenantLinearError('No access', 403)
+    return tenant, actor
+
+
+def published_list(profile, data=None):
+    """Bounded tenant-scoped catalog metadata; never returns drafts or tokens."""
+    data = data or {}
+    if not isinstance(data, dict):
+        raise ValueError('query')
+    q = str(data.get('q', '')).strip()[:180]
+    offset = min(max(int(data.get('offset', 0)), 0), 200)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant, _actor = _authorize_published_catalog(cur, profile)
+            cur.execute('''SELECT id,published_doc->>'title' AS title,
+                  published_doc->>'language' AS language,
+                  published_doc->>'operation' AS operation,updated_at
+                FROM saas_instruction_lessons
+                WHERE tenant_id=%s::uuid AND state='published' AND published_doc IS NOT NULL
+                  AND (%s='' OR published_doc->>'title' ILIKE %s
+                       OR published_doc->>'operation' ILIKE %s)
+                ORDER BY updated_at DESC,id LIMIT 51 OFFSET %s''',
+                (tenant, q, '%'+q+'%', '%'+q+'%', offset))
+            rows = [_row(row) for row in cur.fetchall()]
+            return {'items': rows[:50],
+                    'next_offset': offset+50 if len(rows)>50 else None}
+
+
+def published_read(profile, lesson_id):
+    """Return only the current published snapshot to an active tenant member."""
+    key = identifier(lesson_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant, _actor = _authorize_published_catalog(cur, profile)
+            cur.execute('''SELECT id,published_doc FROM saas_instruction_lessons
+              WHERE tenant_id=%s::uuid AND id=%s::uuid
+                AND state='published' AND published_doc IS NOT NULL''', (tenant, key))
+            row = cur.fetchone()
+            if not row:
+                raise TenantLinearError('Not found', 404)
+            return {'id': str(row['id']), 'doc': row['published_doc']}
+
+
+def published_asset(profile, lesson_id, asset_id):
+    """Read a screenshot only while its lesson remains published and references it."""
+    key = identifier(lesson_id)
+    if not isinstance(asset_id, str) or not asset_id.endswith('.jpg'):
+        raise TenantLinearError('Not found', 404)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant, _actor = _authorize_published_catalog(cur, profile)
+            cur.execute('''SELECT published_doc FROM saas_instruction_lessons
+              WHERE tenant_id=%s::uuid AND id=%s::uuid
+                AND state='published' AND published_doc IS NOT NULL''', (tenant, key))
+            row = cur.fetchone()
+            if not row:
+                raise TenantLinearError('Not found', 404)
+            return asset(cur, tenant, row['published_doc'], asset_id)
+
+
 def shared(token,asset_id=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]{43}',token or ''): raise TenantLinearError('Not found',404)
     with _connect() as conn:
