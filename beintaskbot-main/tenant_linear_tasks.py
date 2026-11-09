@@ -49,7 +49,7 @@ def listing(session, *, after=None, search=''):
                         {'description': {'containsIgnoreCase': search.strip()}}]}]}
                 page = issue_page(key, issue_filter, after)
             rows = [public_issue(profile, config, row) for row in page['nodes']
-                if visible(profile, config, row) and str(metadata(row, config.get('workflow', {})).get('account') or '').strip().casefold().replace('\\u0307', '') not in {'', 'göstərilməyib', 'gosterilmeyib', 'account göstərilməyib', 'account gosterilmeyib', '—', '-'}]
+                if visible(profile, config, row) and str(metadata(row, config.get('workflow', {})).get('account') or '').strip().casefold().replace('\u0307', '') not in {'', 'göstərilməyib', 'gosterilmeyib', 'account göstərilməyib', 'account gosterilmeyib', '—', '-'}]
             statuses = []
             if after is None and issue_filter is not None:
                 team = team_catalog(key, config['team_id'])
