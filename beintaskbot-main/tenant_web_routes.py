@@ -66,6 +66,9 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}/assets/{asset_id}', instruction_handler(member,origin,logger), ('GET',)),
+        ('/api/platform/instruction-catalog', instruction_handler(member,origin,logger,'catalog'), ('GET',)),
+        ('/api/platform/instruction-catalog/{lesson_id}', instruction_handler(member,origin,logger,'catalog'), ('GET',)),
+        ('/api/platform/instruction-catalog/{lesson_id}/assets/{asset_id}', instruction_handler(member,origin,logger,'catalog'), ('GET',)),
         ('/api/instructions/shared/{token}', instruction_handler(member,origin,logger,'public'), ('GET',)),
         ('/api/instructions/shared/{token}/assets/{asset_id}', instruction_handler(member,origin,logger,'public'), ('GET',)),
 
