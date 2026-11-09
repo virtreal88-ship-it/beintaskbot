@@ -17,6 +17,7 @@ class StalePlaybackAckTest(unittest.IsolatedAsyncioTestCase):
         s.response_inflight=True;s.provider_response_id='response-1';s.finished_response_ids=set()
         s.assistant_response_ids={};s.truncated_playback_items=set();s.cancel_requested=False
         s.item=None;s.produced=0;s.interrupt_pending=False;s.output_finished=False;s.greeting_pending=False
+        s.transcript=None
         s.truncate_pending=None;s.truncate_pending_audio_end_ms=None
         self.audio={'type':'response.output_audio.delta','response_id':'response-1','item_id':'item-1',
                     'content_index':0,'delta':base64.b64encode(bytes(2)).decode()}
@@ -51,6 +52,23 @@ class StalePlaybackAckTest(unittest.IsolatedAsyncioTestCase):
             fields=_provider_failure_fields('provider_event',event,caught.exception)
             self.assertEqual(fields,(expected,'provider_event','response.output_audio.delta','none','none',True,match))
             self.assertNotIn(response_id,repr(fields))
+
+    async def test_audio_after_done_and_overlapping_item_fail_closed_with_distinct_codes(self):
+        s=self.s
+        await s._receive_provider(self.audio)
+        overlap={**self.audio,'item_id':'item-2'}
+        with self.assertRaises(ProviderResponseRejected) as caught:
+            await s._receive_provider(overlap)
+        self.assertEqual(_provider_failure_fields('provider_event',overlap,caught.exception)[0],
+                         'overlapping_output_items')
+        self.setUp();s=self.s
+        await s._receive_provider(self.audio)
+        await s._receive_provider({'type':'response.output_audio.done','response_id':'response-1',
+                                   'item_id':'item-1','content_index':0})
+        with self.assertRaises(ProviderResponseRejected) as caught:
+            await s._receive_provider(self.audio)
+        self.assertEqual(_provider_failure_fields('provider_event',self.audio,caught.exception)[0],
+                         'audio_after_completion')
 
     def test_queue_diagnostic_excludes_payload(self):
         with self.assertLogs('tenant_operator_voice_session',level='INFO') as logs:
