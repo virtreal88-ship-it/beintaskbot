@@ -124,6 +124,7 @@ jobs:
           tests/test_knowledge_refinement.py::test_improve_api_origin_identity_and_dispatch
           tests/test_night_release.py
           tests/test_instruction_library.py
+          tests/test_tenant_web_routes.py
           tests/test_instruction_expert_integration.py
           tests/test_instruction_videos.py
           tests/test_instruction_video_postgres.py
