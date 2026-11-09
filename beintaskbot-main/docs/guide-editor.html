@@ -83,7 +83,7 @@ function richHTML(source){const box=document.createElement('div');box.append(saf
  else if(command==='youtube'){const value=prompt('YouTube video keçidi');if(!value)return;try{const url=new URL(value);let id;if(['youtube.com','www.youtube.com','m.youtube.com'].includes(url.hostname))id=url.searchParams.get('v')||url.pathname.match(/^\/(?:shorts|embed)\/([A-Za-z0-9_-]{11})/)?.[1];if(url.hostname==='youtu.be')id=url.pathname.slice(1);if(!/^[A-Za-z0-9_-]{11}$/.test(id||''))throw Error();document.execCommand('insertHTML',false,'<iframe src="https://www.youtube-nocookie.com/embed/'+id+'" title="YouTube video"></iframe><p><br></p>')}catch{status('Düzgün YouTube keçidi daxil edin');return}}
  else document.execCommand(command,false,null);syncRich();dirty=true;
  });
- function showEditor(){if(!el('editor-form').open)if(!el('editor-form').open)el('editor-form').showModal();el('modal-status').textContent='';}
+ function showEditor(){if(!el('editor-form').open)el('editor-form').showModal();el('modal-status').textContent='';}
  function closeEditor(){if(busy||uploading)return;if(leave()){dirty=false;el('editor-form').close()}}
  el('close-editor').onclick=closeEditor;el('editor-form').addEventListener('cancel',event=>{event.preventDefault();closeEditor()});
  el('edit-current').onclick=()=>{if(leave()){fill(rowAt(path));showEditor()}};
