@@ -34,10 +34,19 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
           (tenant, str(issue.get('id') or '')))
         return
     version = source_time(issue['updatedAt'])
-    cur.execute('SELECT state_id,source_version FROM saas_linear_snapshots WHERE tenant_id=%s::uuid AND issue_id=%s::uuid FOR UPDATE', (tenant, issue['id']))
+    cur.execute('SELECT state_id,source_version,source_scope,snapshot FROM saas_linear_snapshots WHERE tenant_id=%s::uuid AND issue_id=%s::uuid FOR UPDATE', (tenant, issue['id']))
     previous = cur.fetchone()
     if previous and version < previous['source_version']:
         return
+    # Capture an actual newer source transition before resolved findings are
+    # cancelled. Cached rechecks and initial/configuration baselines do not
+    # invent history or send follow-ups.
+    if (previous and not baseline and version > previous['source_version']
+            and previous.get('source_scope') == source_scope):
+        from tenant_proactive_risk_delivery import record_linear_material_update
+        record_linear_material_update(cur, tenant, source_scope, version.isoformat(),
+                                      previous.get('snapshot') or {}, issue,
+                                      done_state_ids=config.get('done_state_ids', []))
     kind = event_kind(config, previous, issue, baseline=baseline)
     cur.execute('''INSERT INTO saas_linear_snapshots(tenant_id,issue_id,source_version,state_id,snapshot,source_scope,observed_at,risk_snapshot)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,issue_id) DO UPDATE
@@ -46,8 +55,7 @@ def store_issue(cur, tenant: str, config: dict, issue: dict, *, baseline: bool,
           source_scope=EXCLUDED.source_scope,observed_at=EXCLUDED.observed_at''',
       (tenant, issue['id'], version, (issue.get('state') or {}).get('id', ''), json.dumps(issue), source_scope,
        source_checked_at, json.dumps(risk_snapshot(issue))))
-    # Dry-run only. Findings are generated from the same already-authorized issue
-    # page; this path has no delivery/outbox or external model calls.
+    # Findings and follow-up events use the same already-authorized issue page.
     findings = [] if (issue.get('state') or {}).get('id') in config.get('done_state_ids', []) else analyze_linear(
         issue, tenant_timezone=tenant_timezone, checked_at=source_checked_at)
     replace_source_findings(cur, tenant, 'linear', issue['id'], version.isoformat(), issue.get('title', ''), findings,
