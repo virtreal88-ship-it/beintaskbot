@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -50,10 +51,16 @@ def callback_domain(value: str, error: type[Exception] = ValueError) -> str:
     if not raw:
         raise error("Kommo hesab ünvanı cavabda yoxdur.")
     parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    domain = (parsed.netloc or parsed.path).split("/", 1)[0]
-    if not domain.endswith(".kommo.com"):
+    try:
+        hostname = parsed.hostname or ""
+        has_credentials = parsed.username is not None or parsed.password is not None
+        has_port = parsed.port is not None
+    except ValueError as exc:
+        raise error("Kommo hesab ünvanı etibarlı deyil.") from exc
+    if (has_credentials or has_port or len(hostname) > 253
+            or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+kommo\\.com", hostname)):
         raise error("Kommo hesab ünvanı etibarlı deyil.")
-    return domain
+    return hostname
 
 
 def token_is_expiring(value: str, *, now: datetime | None = None) -> bool:
