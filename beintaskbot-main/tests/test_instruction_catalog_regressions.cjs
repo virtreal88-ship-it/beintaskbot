@@ -299,7 +299,7 @@ const failedRefresh=mount(null,async url=>{
 await settle(60);
 const fd=failedRefresh.window.document;
 assert(fd.body.textContent.includes('Old company lesson'));
-fd.querySelector('.catalog-card-title').click();
+fd.querySelector('.catalog-card[data-kind="lesson"] .catalog-card-title').click();
 await settle(30);
 fd.querySelector('.catalog-detail .catalog-actions button').click();
 const errorDialog=fd.querySelector('#instructionEditor'),errorFrame=fd.querySelector('#instructionEditorFrame');
