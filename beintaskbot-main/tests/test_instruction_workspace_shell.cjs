@@ -30,15 +30,23 @@ function assertPanel(dom, activeTab) {
   assert.equal(document.documentElement.lang, 'ru');
   assert.equal(document.getElementById('guideTab').textContent, 'База статей');
   assert.equal(document.getElementById('lessonsTab').textContent, 'Пошаговые уроки');
+  assert.equal(document.querySelector('[role="tablist"]').getAttribute('aria-label'), 'Разделы инструкций');
   assert.equal(document.getElementById('guideEditorFrame').getAttribute('src'), '/guide-editor');
   assert.ok(document.getElementById('instructions'), 'existing lesson app root remains mounted');
   assertPanel(dom, 'guide');
+  assert.equal(document.getElementById('guideTab').tabIndex, 0);
+  assert.equal(document.getElementById('lessonsTab').tabIndex, -1);
 
   document.getElementById('lessonsTab').click();
+  assert.equal(document.getElementById('guideTab').tabIndex, -1);
+  assert.equal(document.getElementById('lessonsTab').tabIndex, 0);
   assertPanel(dom, 'lessons');
   document.getElementById('guideTab').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
   assert.equal(document.activeElement.id, 'lessonsTab');
   assertPanel(dom, 'lessons');
+  document.getElementById('lessonsTab').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+  assert.equal(document.activeElement.id, 'guideTab');
+  assertPanel(dom, 'guide');
 
   dom.window.close();
 }
@@ -53,6 +61,16 @@ for (const query of ['lesson=lesson-1', 'share=share-1']) {
   const dom = mount('https://example.test/app/instructions?site_lang=az');
   assert.equal(dom.window.document.documentElement.lang, 'az');
   assert.equal(dom.window.document.getElementById('guideTab').textContent, 'Məqalələr bazası');
+  assert.equal(dom.window.document.querySelector('[role="tablist"]').getAttribute('aria-label'), 'Təlimat bölmələri');
+  assertPanel(dom, 'guide');
+  dom.window.close();
+}
+
+{
+  const dom = mount('https://example.test/app/instructions?site_lang=en');
+  assert.equal(dom.window.document.documentElement.lang, 'en');
+  assert.equal(dom.window.document.getElementById('guideTab').textContent, 'Article library');
+  assert.equal(dom.window.document.querySelector('[role="tablist"]').getAttribute('aria-label'), 'Instruction sections');
   assertPanel(dom, 'guide');
   dom.window.close();
 }
