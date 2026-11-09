@@ -1,6 +1,7 @@
 """Owner-only, default-off policy for provider CRM synchronization."""
 from __future__ import annotations
 import uuid
+from datetime import date, datetime
 from tenant_platform_core import _connect, _ensure_schema, _json
 
 FIELDS={
@@ -48,7 +49,14 @@ def read_settings(profile):
                 if provider=='beinsystems'}
             if selected_kommo:
                 integrations['kommo']=selected_kommo.get('status')
-    return {'settings':[dict(r) for r in rows], 'outbox':statuses,'conflicts':conflicts,
+    settings=[]
+    for row in rows:
+        item=dict(row)
+        for field in ('enabled_since','updated_at'):
+            if isinstance(item.get(field), (datetime,date)):
+                item[field]=item[field].isoformat()
+        settings.append(item)
+    return {'settings':settings, 'outbox':statuses,'conflicts':conflicts,
         'integrations':integrations,
         'capabilities':{'kommo':{'contact':['to_external','from_external','bidirectional'],
                                  'deal':['to_external','from_external','bidirectional']},
