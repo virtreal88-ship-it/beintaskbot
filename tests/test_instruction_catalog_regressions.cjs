@@ -102,33 +102,42 @@ function apiCall(url){return new URL(String(url),'https://crm.pro.az')}
  assert(statusCalls.some(x=>x.pathname==='/api/platform/instructions'&&x.searchParams.get('state')==='pending_review'));
  statusDom.window.close();
 
- const aPublished=deferred(),aManaged=deferred();
- let meCalls=0;
+ let meCalls=0,aManagerCalls=0,resolveAStarted;
+ const aManagerStarted=new Promise(resolve=>{resolveAStarted=resolve});
  const race=mount(null,async url=>{
   const u=apiCall(url);
-  if(u.pathname==='/api/platform/me'){meCalls++;return makeResponse(200,{member:meCalls===1?{tenant_id:tenantA,telegram_id:21,role:'employee'}:{tenant_id:tenantB,telegram_id:23,role:'employee'}})}
+  if(u.pathname==='/api/platform/me'){meCalls++;return makeResponse(200,{member:meCalls<3?{tenant_id:tenantA,telegram_id:21,role:'owner'}:{tenant_id:tenantB,telegram_id:23,role:'employee'}})}
   const tenant=u.searchParams.get('expected_tenant_id');
-  if(tenant===tenantA){
-   if(u.pathname==='/api/platform/instruction-catalog')return aPublished.promise;
-   if(u.pathname==='/api/platform/instructions')return aManaged.promise;
-  }
-  if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[guide('Company B guide','/ops/b')]});
+  if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[guide('Shared guide','/ops/shared')]});
   if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No edit'});
-  if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('b-only','Company B lesson')],next_offset:null}});
+  if(tenant===tenantA&&u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson(u.searchParams.get('q')?'late-a-published':'a-published',u.searchParams.get('q')?'Late Company A published lesson':'Company A published lesson')],next_offset:null}});
+  if(tenant===tenantA&&u.pathname==='/api/platform/instructions'){
+   aManagerCalls++;
+   if(aManagerCalls===1)return makeResponse(200,{success:true,result:{items:[lesson('a-draft','Company A private draft','draft')],next_offset:null}});
+   resolveAStarted();
+   return new Promise(resolve=>{resolveAStarted=()=>resolve(makeResponse(200,{success:true,result:{items:[lesson('late-a-draft','Late Company A private draft','draft')],next_offset:null}}))});
+  }
+  if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('b-only','Late Company B lesson')],next_offset:null}});
   if(u.pathname==='/api/platform/instructions')return makeResponse(403,{success:false,error:'Read only'});
   throw Error('Unexpected race request '+u.pathname);
  });
- await settle(30);
- race.window.document.dispatchEvent(new race.window.CustomEvent('tenant-profile',{detail:{tenant_id:tenantB}}));
  await settle(80);
  const rd=race.window.document;
- assert(rd.body.textContent.includes('Company B lesson'));
- aPublished.resolve(makeResponse(200,{success:true,result:{items:[lesson('a-only','Company A lesson')],next_offset:null}}));
- aManaged.resolve(makeResponse(403,{success:false,error:'Read only'}));
+ assert(rd.body.textContent.includes('Company A private draft'));
+ assert.equal(rd.querySelector('#newLesson').hidden,false,'original owner controls are visible before switching');
+ const searchInput=rd.querySelector('#catalogSearch');searchInput.value='late';searchInput.dispatchEvent(new race.window.Event('input',{bubbles:true}));
+ await Promise.race([aManagerStarted,settle(1000).then(()=>{throw Error('A tenant refresh did not start its manager page')})]);
+ race.window.document.dispatchEvent(new race.window.CustomEvent('tenant-profile',{detail:{tenant_id:tenantB}}));
+ assert.equal(rd.querySelector('#newLesson').hidden,true,'tenant switch hides previous owner controls immediately');
+ assert.equal(rd.body.textContent.includes('Company A private draft'),false,'tenant switch clears the prior private lesson immediately');
  await settle(80);
- assert.equal(rd.body.textContent.includes('Company A guide'),false,'late A guide response cannot replace tenant B');
- assert.equal(rd.body.textContent.includes('Company A lesson'),false,'late A lesson response cannot replace tenant B');
- assert.equal(rd.body.textContent.includes('Company B lesson'),true);
+ assert(rd.body.textContent.includes('Late Company B lesson'));
+ assert.equal(rd.querySelector('#newLesson').hidden,true,'employee from B remains read only');
+ if(resolveAStarted)resolveAStarted();
+ await settle(80);
+ assert.equal(rd.body.textContent.includes('Late Company A private draft'),false,'late manager response cannot bleed A draft into B');
+ assert.equal(rd.body.textContent.includes('Late Company A published lesson'),false,'late published response cannot bleed A lesson into B');
+ assert.equal(rd.body.textContent.includes('Late Company B lesson'),true);
  race.window.close();
 
  let failMe=0;

@@ -235,8 +235,7 @@ async function refresh(){
   if(!r.ok||!body.member)throw Error(t('signIn'));
   const profile=body.member,key=profileKey(profile);
   if(member&&profileKey(member)!==key){
-   selected=null;player?.destroy?.();player=null;guidePublic=[];guideManaged=[];publishedLessons=[];managedLessons=[];canManageGuides=false;canManageLessons=false;resetLessonPagination();
-   void closeEditor(true);render();
+   void closeEditor(true);clearCatalogData();render();
   }
   const[guideData,lessonData]=await Promise.all([loadGuide(profile),loadLessonBatch(q,state,profile,{includePublished:!state||state==='published',includeManaged:true})]);
   if(request!==epoch)return;
@@ -292,7 +291,7 @@ function boot(){
  byId('closeInstructionEditor')?.addEventListener('click',()=>{void closeEditor(false)});
  byId('instructionEditor')?.addEventListener('cancel',event=>{event.preventDefault();void closeEditor(false)});
  window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==editorFrame()?.contentWindow)return;if(event.data?.type==='tenant-instruction-dirty')editorDirty=!!event.data.dirty});
- document.addEventListener('tenant-profile',()=>{epoch++;void closeEditor(true);player?.destroy?.();player=null;member=null;canManageGuides=false;canManageLessons=false;guidePublic=[];guideManaged=[];publishedLessons=[];managedLessons=[];guideUnavailable=false;lessonsUnavailable=false;selected=null;refreshing=false;resetLessonPagination();errorBox(t('loading'));render();refresh()});
+ document.addEventListener('tenant-profile',()=>{epoch++;void closeEditor(true);clearCatalogData();refreshing=false;errorBox(t('loading'));render();refresh()});
  refresh();
 }
 boot();
