@@ -38,8 +38,10 @@ setTimeout(async()=>{
  document.documentElement.dataset.appTheme='dark';
  const darkContrast=contrast(getComputedStyle(columnDialog).color,getComputedStyle(columnDialog).backgroundColor);
  const popupFits=popupBox.left>=0&&popupBox.right<=innerWidth&&popupBox.top>=0&&popupBox.bottom<=innerHeight;
- const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});columnDialog.dispatchEvent(escape);await new Promise(r=>setTimeout(r,0));
- const keyboardClose=!columnDialog.open&&columnTrigger.getAttribute('aria-expanded')==='false'&&document.activeElement===columnTrigger;
+ const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});columnDialog.dispatchEvent(escape);
+ const immediateKeyboardClose=!columnDialog.open&&columnTrigger.getAttribute('aria-expanded')==='false'&&document.activeElement===columnTrigger;
+ await new Promise(r=>setTimeout(r,0));
+ const keyboardClose=immediateKeyboardClose&&!columnDialog.open&&columnTrigger.getAttribute('aria-expanded')==='false'&&document.activeElement===columnTrigger;
  document.documentElement.dataset.appTheme='light';
  const measure=el=>({width:el.clientWidth,scroll:el.scrollWidth,overflow:getComputedStyle(el).overflowX});
  const top=[...board.children].map(x=>x.getBoundingClientRect().top);
