@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -50,10 +51,16 @@ def callback_domain(value: str, error: type[Exception] = ValueError) -> str:
     if not raw:
         raise error("Kommo hesab ünvanı cavabda yoxdur.")
     parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    domain = (parsed.netloc or parsed.path).split("/", 1)[0]
-    if not domain.endswith(".kommo.com"):
+    try:
+        hostname = parsed.hostname or ""
+        has_credentials = parsed.username is not None or parsed.password is not None
+        has_port = parsed.port is not None
+    except ValueError as exc:
+        raise error("Kommo hesab ünvanı etibarlı deyil.") from exc
+    if (has_credentials or has_port or len(hostname) > 253
+            or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+kommo\.com", hostname)):
         raise error("Kommo hesab ünvanı etibarlı deyil.")
-    return domain
+    return hostname
 
 
 def token_is_expiring(value: str, *, now: datetime | None = None) -> bool:
@@ -104,9 +111,8 @@ class TenantKommo:
 
     async def request(self, tenant_id: str, method: str, path: str, *,
                       params: dict | None = None, json_body: dict | list | None = None) -> dict:
-        client_id, client_secret, redirect_uri = self.settings()
-
         def refresh(credentials: dict) -> dict:
+            client_id, client_secret, redirect_uri = self.settings()
             response = requests.post(
                 f"https://{credentials['account_domain']}/oauth2/access_token",
                 json={"client_id": client_id, "client_secret": client_secret,
@@ -126,7 +132,7 @@ class TenantKommo:
         def run() -> dict:
             credentials = self.context.credentials(tenant_id=tenant_id)
             message_send = method.upper() == "POST" and path.strip("/").startswith("talks/") and path.strip("/").endswith("/send_message")
-            if token_is_expiring(credentials.get("token_expires_at") or ""):
+            if credentials.get("auth_mode") != "manual" and token_is_expiring(credentials.get("token_expires_at") or ""):
                 credentials = refresh(credentials)
 
             def send(active: dict):
@@ -139,7 +145,7 @@ class TenantKommo:
                 )
 
             response = send(credentials)
-            if response.status_code == 401:
+            if response.status_code == 401 and credentials.get("auth_mode") != "manual":
                 credentials = refresh(credentials)
                 response = send(credentials)
             # The chat send endpoint is accepted only on HTTP 202. A generic

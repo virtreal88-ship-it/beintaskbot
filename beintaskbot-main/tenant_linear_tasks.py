@@ -48,9 +48,26 @@ def listing(session, *, after=None, search=''):
                     issue_filter = {'and': [issue_filter, {'or': [{'title': {'containsIgnoreCase': search.strip()}},
                         {'description': {'containsIgnoreCase': search.strip()}}]}]}
                 page = issue_page(key, issue_filter, after)
-            rows = [public_issue(profile, config, row) for row in page['nodes'] if visible(profile, config, row)]
-    return {'issues': rows, 'pageInfo': page['pageInfo'], 'capabilities': capabilities(profile, config),
-        'config_version': version, 'tenant_id': str(profile['tenant_id']), 'user_id': profile['telegram_id']}
+            rows = [public_issue(profile, config, row) for row in page['nodes']
+                if visible(profile, config, row) and str(metadata(row, config.get('workflow', {})).get('account') or '').strip().casefold().replace('\u0307', '') not in {'', 'göstərilməyib', 'gosterilmeyib', 'account göstərilməyib', 'account gosterilmeyib', '—', '-'}]
+            statuses = []
+            if after is None and issue_filter is not None:
+                team = team_catalog(key, config['team_id'])
+                state_nodes = ((team or {}).get('states') or {}).get('nodes') or []
+                if not isinstance(state_nodes, list):
+                    state_nodes = []
+                # Linear's workflow position is the source of truth; Python's stable
+                # sort preserves API order if a provider response omits position.
+                state_nodes = sorted(enumerate(state_nodes), key=lambda pair: (
+                    pair[1].get('position') is None,
+                    pair[1].get('position') if pair[1].get('position') is not None else pair[0],
+                    pair[0]))
+                statuses = [{'id': state.get('id'), 'name': state.get('name'),
+                    'color': state.get('color'), 'type': state.get('type'), 'position': state.get('position')}
+                    for _, state in state_nodes if state.get('id')]
+    return {'issues': rows, 'pageInfo': page['pageInfo'], 'statuses': statuses,
+        'capabilities': capabilities(profile, config), 'config_version': version,
+        'tenant_id': str(profile['tenant_id']), 'user_id': profile['telegram_id']}
 
 
 def editor_choices(session):

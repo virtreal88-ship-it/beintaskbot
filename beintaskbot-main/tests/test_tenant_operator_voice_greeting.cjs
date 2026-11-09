@@ -100,3 +100,73 @@ test('continuous employee speech longer than 24 seconds is not forcibly submitte
   h.capture(20);assert.equal(h.sent.filter(x=>x.type==='talk_end').length,1);
  }finally{await h.destroy();}
 });
+
+test('busy startup explains uncertainty and permits closing the local screen without sending an end',async()=>{
+ const dom=new JSDOM('<div id="voice"></div>');const root=dom.window.document.querySelector('#voice');
+ let dismissed=0,released=0,closed=0;
+ const voice=mountVoice(root,{onDismiss:()=>dismissed++,acquireMicrophone:async()=>()=>released++,
+  openAudio:async()=>({mute(){},stopNow(){},close:async()=>{closed++;}}),
+  connect:async()=>{throw new Error('voice_session_busy');},
+  lifecycle:{visibilityState:'visible',addEventListener(){},removeEventListener(){}}});
+ try{
+  await voice.start();await tick();
+  assert.match(root.querySelector('[role=status]').textContent,/другой голосовой сеанс|завершение предыдущего не подтверждено/i);
+  const end=root.querySelector('.voice-session-end');assert.equal(end.hidden,false);
+  end.click();assert.equal(dismissed,1);assert.equal(released,1);assert.equal(closed,1);
+ }finally{await voice.destroy();dom.window.close();}
+});
+
+test('the full screen closes locally after a busy refusal and retains no microphone',async()=>{
+ const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/'});
+ const win=dom.window,host=win.document.querySelector('#host');let released=0;
+ win.mountExperimentalCopilotVoice=mountVoice;
+ win.acquireTenantMicrophone=async()=>()=>released++;
+ win.openExperimentalCopilotAudio=async()=>({mute(){},stopNow(){},close:async()=>{}});
+ win.connectExperimentalCopilotVoice=async()=>{throw new Error('voice_session_busy');};
+ const mountScreen=require('../docs/tenant-operator-copilot-voice.js');
+ const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
+ try{
+  assert.equal(await screen.startVoice(),true);await tick();await tick();
+  assert.equal(screen.hidden,false);assert.match(screen.querySelector('[role=status]').textContent,/другой голосовой сеанс/i);
+  const end=screen.querySelector('.voice-session-end');assert.equal(end.hidden,false);end.click();
+  assert.equal(screen.hidden,true);assert.equal(released,1);
+  screen.hidden=false;
+  screen.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(screen.hidden,true);assert.equal(released,1);
+ }finally{await screen.disposeVoice();dom.window.close();}
+});
+
+test('close during connecting is honored if the lease claim is refused',async()=>{
+ const dom=new JSDOM('<div id="voice"></div>');const root=dom.window.document.querySelector('#voice');
+ let dismissals=0,rejectConnect;const connecting=new Promise((_resolve,reject)=>{rejectConnect=reject;});
+ const voice=mountVoice(root,{onDismiss:()=>dismissals++,acquireMicrophone:async()=>()=>{},
+  openAudio:async()=>({mute(){},stopNow(){},close:async()=>{}}),connect:async()=>connecting,
+  lifecycle:{visibilityState:'visible',addEventListener(){},removeEventListener(){}}});
+ try{
+  const starting=voice.start();await tick();root.querySelector('.voice-session-end').click();
+  rejectConnect(new Error('voice_session_busy'));await starting;await tick();
+  assert.equal(dismissals,1);assert.equal(voice.isActive(),false);
+ }finally{await voice.destroy();dom.window.close();}
+});
+
+test('Escape on active voice waits for the server; unconfirmed termination stays visible',async()=>{
+ for(const terminal of ['ended','end_unconfirmed']){
+  const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/',pretendToBeVisual:true});
+  const win=dom.window,host=win.document.querySelector('#host');let eventHandler,endCount=0;
+  win.mountExperimentalCopilotVoice=mountVoice;win.acquireTenantMicrophone=async()=>()=>{};
+  win.openExperimentalCopilotAudio=async()=>({mute(){},flush(){},stopNow(){},close:async()=>{}});
+  win.connectExperimentalCopilotVoice=async (_path,cb)=>{eventHandler=cb;await cb({type:'ready'});
+    return{send(event){if(event.type==='end')endCount++;},close:async()=>{}};};
+  const mountScreen=require('../docs/tenant-operator-copilot-voice.js');
+  const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
+  try{
+   await screen.startVoice();await tick();
+   assert.equal(screen.isVoiceActive(),true,screen.querySelector('[role=status]').textContent);
+   screen.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+   assert.equal(endCount,1);assert.equal(screen.hidden,false,'screen remains while end is pending');
+   await eventHandler({type:terminal});await tick();
+   assert.equal(screen.hidden,terminal==='ended');
+   if(terminal==='end_unconfirmed')assert.match(screen.querySelector('[role=status]').textContent,/не подтверждено/i);
+  }finally{await screen.disposeVoice();dom.window.close();}
+ }
+});

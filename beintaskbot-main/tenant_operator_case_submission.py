@@ -75,7 +75,7 @@ def validate(cur,profile,data,training):
 
 def submit(profile,data):
     required={'channel_id','conversation_id','message_ids','agent_id','agent_version','assignment_revision'}
-    if not isinstance(data,dict) or set(data)!=required or not isinstance(data['message_ids'],list):
+    if not isinstance(data,dict) or set(data)-{'retry_request_id'}!=required or not isinstance(data['message_ids'],list):
         raise TenantLinearError('Некорректные параметры.')
     if type(data['agent_version']) is not int or type(data['assignment_revision']) is not int:
         raise TenantLinearError('Некорректная версия агента.')
@@ -87,4 +87,7 @@ def submit(profile,data):
     payload={'request_id':str(uuid.uuid4()),'channel_id':identifier(data['channel_id']),
        'conversation_id':data['conversation_id'],'message_ids':selected,'analysis_agent_id':training['agent_id'],
        'allow_external_media':False,'allow_paid_asr':False,'allow_vision':False}
-    return analyze(scoped(profile),payload,training=training)
+    if 'retry_request_id' in data:payload['retry_of']=identifier(data['retry_request_id'])
+    from tenant_operator_learning_retry import decorate
+    result=analyze(scoped(profile),payload,training=training)
+    return decorate(scoped(profile),result,_connect)

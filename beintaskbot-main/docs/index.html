@@ -227,6 +227,28 @@
         .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
         .page-toolbar { position:relative; }
         .toolbar-select { max-width:132px; height:36px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#475569; padding:0 28px 0 9px; font-size:11px; font-weight:700; outline:none; }
+        .linear-column-trigger { display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; background:#fff; color:#0f172a; border-color:#cbd5e1; }
+        .linear-column-dialog { --linear-popup-bg:#fff; --linear-popup-ink:#0f172a; --linear-popup-line:#cbd5e1; --linear-popup-raised:#f1f5f9; --linear-popup-accent:#0369a1; color-scheme:light; width:min(420px,calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:min(82dvh,640px); margin:auto; padding:0; overflow:hidden; border:1px solid var(--linear-popup-line); border-radius:18px; background:var(--linear-popup-bg); color:var(--linear-popup-ink); box-shadow:0 24px 70px rgba(15,23,42,.28); }
+        .linear-column-dialog::backdrop { background:rgba(15,23,42,.55); }
+        .linear-column-dialog__surface { max-height:min(82dvh,640px); overflow:auto; padding:18px; }
+        .linear-column-dialog__header { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:14px; }
+        .linear-column-dialog__header h2 { margin:0; color:var(--linear-popup-ink); font-size:16px; font-weight:800; }
+        .linear-column-dialog__header p { margin:4px 0 0; color:#64748b; font-size:12px; line-height:1.45; }
+        .linear-column-dialog__close { display:inline-flex; align-items:center; justify-content:center; flex:none; width:36px; height:36px; border:1px solid var(--linear-popup-line); border-radius:10px; background:var(--linear-popup-raised); color:var(--linear-popup-ink); font-size:22px; cursor:pointer; }
+        .linear-column-options { display:grid; gap:4px; max-height:min(55dvh,420px); overflow:auto; padding:2px; }
+        .linear-column-option { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:44px; padding:8px 10px; border:1px solid transparent; border-radius:10px; color:var(--linear-popup-ink); cursor:pointer; }
+        .linear-column-option:hover { border-color:var(--linear-popup-line); background:var(--linear-popup-raised); }
+        .linear-column-option:focus-within { outline:3px solid var(--linear-popup-accent); outline-offset:2px; }
+        .linear-column-option__name { display:flex; align-items:center; gap:9px; min-width:0; font-size:13px; font-weight:700; }
+        .linear-column-option__dot { width:9px; height:9px; flex:none; border-radius:50%; outline:1px solid rgba(100,116,139,.35); }
+        .linear-column-option input[type="checkbox"] { width:20px; height:20px; flex:none; margin:0; accent-color:var(--linear-popup-accent); }
+        .linear-column-dialog__reset { display:block; width:100%; min-height:42px; margin-top:12px; padding:8px 12px; border:1px solid var(--linear-popup-line); border-radius:10px; background:var(--linear-popup-raised); color:var(--linear-popup-ink); font-family:inherit; font-size:12px; font-weight:700; line-height:1.3; cursor:pointer; }
+        .linear-column-dialog :focus-visible { outline:3px solid var(--linear-popup-accent); outline-offset:2px; }
+        @media (prefers-color-scheme:dark) { .linear-column-trigger { background:#18181b; color:#f4f4f5; border-color:#52525b; } .linear-column-dialog { --linear-popup-bg:#18181b; --linear-popup-ink:#f4f4f5; --linear-popup-line:#52525b; --linear-popup-raised:#27272a; --linear-popup-accent:#7dd3fc; color-scheme:dark; } .linear-column-dialog__header p { color:#a1a1aa; } }
+        :is(html[data-app-theme="dark"],body[data-app-theme="dark"],html[data-theme="dark"],body[data-theme="dark"],html.dark,body.dark) .linear-column-trigger { background:#18181b; color:#f4f4f5; border-color:#52525b; }
+        :is(html[data-app-theme="dark"],body[data-app-theme="dark"],html[data-theme="dark"],body[data-theme="dark"],html.dark,body.dark) .linear-column-dialog { --linear-popup-bg:#18181b; --linear-popup-ink:#f4f4f5; --linear-popup-line:#52525b; --linear-popup-raised:#27272a; --linear-popup-accent:#7dd3fc; color-scheme:dark; }
+        :is(html[data-app-theme="dark"],body[data-app-theme="dark"],html[data-theme="dark"],body[data-theme="dark"],html.dark,body.dark) .linear-column-dialog__header p { color:#a1a1aa; }
+        @media (max-width:640px) { .linear-column-dialog { width:calc(100vw - 16px); max-width:calc(100vw - 16px); max-height:calc(100dvh - 20px); border-radius:16px; } .linear-column-dialog__surface { max-height:calc(100dvh - 20px); padding:16px; } }
         .search-expand { display:none; align-items:center; gap:8px; position:relative; }
         .search-expand.on { display:flex; }
         .search-expand input { flex:1; min-width:0; }
@@ -1485,6 +1507,7 @@
             <div><div class="text-sm font-extrabold text-gray-800">Linear tapşırıqları</div><div id="linear-page-meta" class="text-[10px] text-gray-400 font-medium mt-0.5">İcazəli mərhələlər</div></div>
             <div class="flex items-center gap-2">
                 <select id="linear-status-filter" class="toolbar-select" aria-label="Mərhələ filtri" onchange="filterLinearBoard()"><option value="all">Bütün mərhələlər</option></select>
+                <button id="linear-column-trigger" type="button" class="toolbar-select linear-column-trigger" aria-haspopup="dialog" aria-controls="linear-column-dialog" aria-expanded="false" onclick="openLinearBoardColumns()">Sütunlar <span aria-hidden="true">▾</span></button><dialog id="linear-column-dialog" class="linear-column-dialog" aria-labelledby="linear-column-title" onclose="linearBoardColumnsClosed()" onkeydown="if(event.key==='Escape'){event.preventDefault();closeLinearBoardColumns()}" onclick="if(event.target===this) closeLinearBoardColumns()"><div class="linear-column-dialog__surface"><div class="linear-column-dialog__header"><div><h2 id="linear-column-title">Sütunları seç</h2><p>Hansı status sütunlarının lövhədə görünəcəyini seçin.</p></div><button id="linear-column-close" type="button" class="linear-column-dialog__close" aria-label="Bağla" onclick="closeLinearBoardColumns()">×</button></div><div id="linear-column-options" class="linear-column-options" role="group" aria-label="Status sütunları"></div><button id="linear-column-reset" type="button" class="linear-column-dialog__reset" onclick="resetLinearBoardColumns()">Bütün sütunları göstər</button></div></dialog>
                 <select id="linear-operator-filter" class="toolbar-select max-w-[150px]" aria-label="Operator filtri" onchange="filterLinearBoard()"><option value="all">Bütün operatorlar</option></select>
                 <button id="linear-page-search-toggle" type="button" onclick="toggleLinearBoardSearch()" class="icon-action-btn" aria-label="Linear-da axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
                 <button id="linear-page-create" type="button" onclick="openLinearCreateModal()" class="icon-action-btn primary labeled" aria-label="Linear tapşırığı yarat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button>
@@ -3444,7 +3467,58 @@ function linearBoardOperatorMatches(item, operator) {
 
 function linearBoardHasAccount(item) {
     const account = String(item?.client || '').trim();
-    return !!account && !['göstərilməyib', 'gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
+    return !!account && !['göstərilməyib', 'gosterilmeyib', 'account göstərilməyib', 'account gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
+}
+
+function updateLinearBoardColumnOptions(statuses, hiddenColumns) {
+    const container = document.getElementById('linear-column-options');
+    if(!container) return;
+    const dialog = document.getElementById('linear-column-dialog');
+    const activeId = dialog?.open ? document.activeElement?.dataset?.linearColumnId : null;
+    container.innerHTML = statuses.map(state => {
+        const id = String(state.id);
+        const name = String(state.name || 'Status');
+        const rawColor = String(state.color || '');
+        const color = /^#[0-9a-f]{3,8}$/i.test(rawColor) ? rawColor : '#64748b';
+        return `<label class="linear-column-option" for="linear-column-${escapeHtml(id)}"><span class="linear-column-option__name"><span class="linear-column-option__dot" style="background:${color}"></span><span>${escapeHtml(name)}</span></span><input id="linear-column-${escapeHtml(id)}" type="checkbox" data-linear-column-toggle data-linear-column-id="${escapeHtml(id)}" value="${escapeHtml(id)}" ${hiddenColumns.has(id) ? '' : 'checked'} aria-label="Sütunu göstər: ${escapeHtml(name)}"></label>`;
+    }).join('');
+    if(activeId && dialog?.open) [...container.querySelectorAll('input[data-linear-column-toggle]')].find(input => input.dataset.linearColumnId === activeId)?.focus({preventScroll:true});
+}
+
+function openLinearBoardColumns() {
+    const dialog = document.getElementById('linear-column-dialog');
+    const trigger = document.getElementById('linear-column-trigger');
+    if(!dialog) return;
+    if(!dialog.open) {
+        if(typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+    }
+    trigger?.setAttribute('aria-expanded', 'true');
+    dialog.querySelector('input[type="checkbox"]')?.focus({preventScroll:true});
+}
+
+function closeLinearBoardColumns() {
+    const dialog = document.getElementById('linear-column-dialog');
+    if(dialog?.open) dialog.close();
+}
+
+function linearBoardColumnsClosed() {
+    const trigger = document.getElementById('linear-column-trigger');
+    trigger?.setAttribute('aria-expanded', 'false');
+    trigger?.focus({preventScroll:true});
+}
+
+function saveLinearBoardColumns() {
+    const options = [...document.querySelectorAll('#linear-column-options input[data-linear-column-toggle]')];
+    const hidden = options.filter(input => !input.checked).map(input => String(input.value));
+    try { localStorage.setItem('linear-board-hidden-columns:' + CURRENT_USER_ID, JSON.stringify(hidden)); } catch {}
+    renderLinearBoard();
+}
+
+function resetLinearBoardColumns() {
+    try { localStorage.setItem('linear-board-hidden-columns:' + CURRENT_USER_ID, '[]'); } catch {}
+    renderLinearBoard();
+    document.getElementById('linear-column-reset')?.focus({preventScroll:true});
 }
 
 function formatLinearTimestamp(value) {
@@ -3503,6 +3577,8 @@ function renderLinearBoard() {
     if(!statuses.length) statuses = linearBoardRows.map(row => row.status || {}).filter(row => row.id);
     const unique = []; const seen = new Set();
     statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
+    const hiddenColumns = (() => { try { return new Set(JSON.parse(localStorage.getItem('linear-board-hidden-columns:' + CURRENT_USER_ID) || '[]').map(String)); } catch { return new Set(); } })();
+    updateLinearBoardColumnOptions(unique, hiddenColumns);
     const countRows = linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     const statusCounts = countRows.reduce((counts, row) => {
         const key = String((row.status || {}).id || '');
@@ -3515,7 +3591,7 @@ function renderLinearBoard() {
         statusFilter.innerHTML = `<option value="all">Bütün mərhələlər (${countRows.length})</option>` + unique.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')} (${statusCounts.get(String(row.id)) || 0})</option>`).join('');
         if([...statusFilter.options].some(option => option.value === current)) statusFilter.value = current;
     }
-    const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
+    const visibleStatuses = unique.filter(row => !hiddenColumns.has(String(row.id)) && (isDesktop ? true : filter === 'all' || row.id === filter));
     const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     board.className = 'samil-kanban-board';
     board.innerHTML = visibleStatuses.map(state => {

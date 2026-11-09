@@ -1,0 +1,41 @@
+name: Tenant CRM sync regressions
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tenant-crm-sync.yml"
+      - "beintaskbot-main/tenant_crm_sync_store.py"
+      - "beintaskbot-main/tenant_crm_sync_policy.py"
+      - "beintaskbot-main/tenant_crm_sync_worker.py"
+      - "beintaskbot-main/tenant_crm_sync_import.py"
+      - "beintaskbot-main/tenant_kommo.py"
+      - "beintaskbot-main/tenant_integration_store.py"
+      - "beintaskbot-main/tests/test_tenant_crm_sync.py"
+      - "beintaskbot-main/tests/test_tenant_crm_external_sync.py"
+      - "beintaskbot-main/tests/test_tenant_kommo.py"
+      - "beintaskbot-main/tests/test_tenant_integration_store.py"
+
+permissions:
+  contents: read
+
+jobs:
+  tenant-crm-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run mocked CRM sync and Kommo integration regressions
+        run: >-
+          python -m pytest -q
+          tests/test_tenant_crm_sync.py
+          tests/test_tenant_crm_external_sync.py
+          tests/test_tenant_kommo.py
+          tests/test_tenant_integration_store.py

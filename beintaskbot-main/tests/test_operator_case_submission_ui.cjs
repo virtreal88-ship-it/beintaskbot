@@ -6,13 +6,17 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(resolve=>setTimeout
  const tenant='00000000-0000-4000-8000-000000000001',channel='00000000-0000-4000-8000-000000000002',agent='00000000-0000-4000-8000-000000000003',id='00000000-0000-4000-8000-000000000004';
  let route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'client',agent_id:agent,agent_name:'Agent',state:'human',can_send:true,controls_allowed:true,available_actions:[]};
  const profile={member:{tenant_id:tenant,telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true}}};
- let boundaryCount=0;
+ let boundaryCount=0,submissionMode='completed',releaseRetry=null;
  const calls=[];w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.fetch=async(url,options={})=>{url=String(url);calls.push({url,options});let result;
  if(url.includes('operator-preview'))result={agent:{agent_id:agent,agent_version:1,assignment_revision:2,agent_name:'Agent'},messages:[{id,role:'customer',sender_name:'Aysel Məmmədova',text:'Help',message_type:'text',happened_at:'2026-10-31T18:20:00.000Z'},{id:'00000000-0000-4000-8000-000000000005',role:'customer',text:'[Attachment pending_processing: contents not read]',message_type:'image',media_kind:'image',happened_at:'2026-10-31T18:21:00.000Z'},{id:'00000000-0000-4000-8000-000000000006',role:'operator',sender_name:'Nigar Məmmədova',text:'Caption [Attachment pending_processing: contents not read]',message_type:'voice',media_kind:'voice',happened_at:'2026-10-31T18:22:00.000Z'},{id:'00000000-0000-4000-8000-000000000007',role:'customer',text:'[Attachment pending_processing: contents not read]',message_type:'video',media_kind:'video',happened_at:'2026-10-31T18:23:00.000Z'},{id:'00000000-0000-4000-8000-000000000008',role:'customer',text:'[Attachment pending_processing: contents not read]',message_type:'document',media_kind:'document',happened_at:'2026-10-31T18:24:00.000Z'},{id:'00000000-0000-4000-8000-000000000009',role:'customer',text:'[Attachment pending_processing: contents not read]',happened_at:'2026-10-31T18:25:00.000Z'}]};
  else if(url.includes('/dialog-consultations/destinations'))result={destinations:[{channel_id:'synthetic-developer-channel',conversation_id:'synthetic-dev@g.us',customer_name:'Synthetic Developer'}]};
  else if(url.includes('/support-tickets')&&options.method==='POST'){const body=JSON.parse(options.body);result={ticket:{id:'synthetic-case',tenant_id:body.expected_tenant_id,create_request_id:body.request_id,lead_id:body.lead_id,channel_id:body.channel_id,conversation_id:body.conversation_id,assigned_developer_channel_id:body.assigned_developer_channel_id,assigned_developer_conversation_id:body.assigned_developer_conversation_id}}}
- else if(url.includes('operator-submit'))result={request:{execution_status:'completed'},candidates:[{id}]};
+ else if(url.includes('operator-submit')){
+   const body=JSON.parse(options.body);
+   if(body.retry_request_id&&submissionMode==='pending')await new Promise(resolve=>{releaseRetry=resolve;});
+   result=submissionMode==='failed'?{request:{id,execution_status:'failed'},candidates:[],preflight_retry_available:true}:submissionMode==='unknown'?{request:{id,execution_status:'unknown'},candidates:[]}:{request:{id:'successor',execution_status:'completed'},candidates:[{id}]};
+ }
  else if(url.includes('/dialogs/history'))result={dialog:route,messages:[],next_before:null};
  else if(url.includes('/dialogs?'))result={dialogs:[route],channels:[],agents:[],attention_count:0,next_offset:null};
  else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
@@ -25,6 +29,25 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(resolve=>setTimeout
  assert.equal(calls.filter(x=>x.url.includes('operator-submit')).length,1);assert(!calls.some(x=>x.url.includes('/chat/send')));assert(d.querySelector('.operator-complete-modal [role=status]').textContent);
  const post=JSON.parse(calls.find(x=>x.url.includes('operator-submit')).options.body);assert.deepEqual(post.message_ids,[id,'00000000-0000-4000-8000-000000000005','00000000-0000-4000-8000-000000000006','00000000-0000-4000-8000-000000000007','00000000-0000-4000-8000-000000000008','00000000-0000-4000-8000-000000000009']);assert.equal(post.agent_id,agent);
  for(const count of [10,30,31]){boundaryCount=count;button.click();await tick();await tick();const modal=d.getElementById('operatorTrainingModal'),start=modal.querySelector('[data-start]'),end=modal.querySelector('[data-end]'),send=modal.querySelector('[data-submit]');start.value='0';end.value=String(count-1);start.dispatchEvent(new w.Event('change'));end.dispatchEvent(new w.Event('change'));const before=calls.filter(x=>x.url.includes('operator-submit')).length;assert.equal(send.disabled,count>30);if(count<=30){send.click();await tick();await tick();const posts=calls.filter(x=>x.url.includes('operator-submit'));assert.equal(posts.length,before+1);assert.equal(JSON.parse(posts.at(-1).options.body).message_ids.length,count);}else{await send.onclick();assert.equal(calls.filter(x=>x.url.includes('operator-submit')).length,before,'programmatic dispatch cannot bypass the 30-message guard');}modal.querySelector('[data-close]').click();assert.equal(d.getElementById('operatorTrainingModal'),null);}
+ // A retry is a distinct click, never an automatic reaction to a failed response.
+ boundaryCount=10;submissionMode='unknown';button.click();await tick();await tick();
+ let retryModal=d.getElementById('operatorTrainingModal');
+ const choose=()=>{const first=retryModal.querySelector('[data-start]'),last=retryModal.querySelector('[data-end]');first.value='0';last.value='2';first.dispatchEvent(new w.Event('change'));last.dispatchEvent(new w.Event('change'));};
+ choose();retryModal.querySelector('[data-submit]').click();await tick();await tick();
+ assert(retryModal.querySelector('[data-retry]').hidden,'unknown outcomes never expose a retry');
+ submissionMode='failed';retryModal.querySelector('[data-submit]').click();await tick();await tick();
+ let retryButton=retryModal.querySelector('[data-retry]');assert(!retryButton.hidden);
+ const failedPosts=calls.filter(x=>x.url.includes('operator-submit')).length;await tick();assert.equal(calls.filter(x=>x.url.includes('operator-submit')).length,failedPosts,'no automatic retry');
+ choose();assert(retryButton.hidden,'changing boundaries invalidates the retry hint');
+ retryModal.querySelector('[data-submit]').click();await tick();await tick();assert(!retryButton.hidden);
+ submissionMode='pending';retryButton.click();await retryButton.onclick();await tick();
+ assert.equal(calls.filter(x=>x.url.includes('operator-submit')).length,failedPosts+2,'double click produces only one retry request');
+ const retryPayload=JSON.parse(calls.filter(x=>x.url.includes('operator-submit')).at(-1).options.body);
+ assert.equal(retryPayload.retry_request_id,id);assert.equal(retryPayload.message_ids.length,3);
+ assert(retryModal.querySelector('[data-submit]').disabled&&retryModal.querySelector('[data-start]').disabled,'no changed source during dispatch');
+ retryModal.querySelector('[data-close]').click();releaseRetry();await tick();await tick();
+ assert.equal(d.getElementById('operatorTrainingModal'),null,'late retry response never reopens a dismissed modal');
+ submissionMode='completed';
  route={...route,agent_id:null};await w.tenantOperator.openDialog(route);await tick();assert(d.getElementById('operatorTraining').disabled);assert(d.getElementById('operatorTraining').title);assert(d.getElementById('operatorTrainingMenuAction').disabled,'ellipsis action also requires an assigned agent');route={...route,agent_id:agent};profile.member.role='worker';profile.member.permissions=['dialogs'];await w.tenantOperator.openDialog(route);await tick();const menuTraining=d.getElementById('operatorTrainingMenuAction'),previewCount=calls.filter(x=>x.url.includes('operator-preview')).length;assert(menuTraining.disabled,'ellipsis action retains support permission checks');menuTraining.click();await tick();assert.equal(calls.filter(x=>x.url.includes('operator-preview')).length,previewCount,'disabled mobile action cannot bypass permissions');
  dom.window.close();console.log('PASS: bounded employee case action');
 })().catch(error=>{console.error(error);process.exitCode=1;});

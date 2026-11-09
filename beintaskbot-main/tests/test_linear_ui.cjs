@@ -5,6 +5,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'docs', 'index.html'), 'utf8');
+assert(html.includes('<dialog id="linear-column-dialog" class="linear-column-dialog"'));
+assert(html.includes('aria-haspopup="dialog"') && html.includes('aria-expanded="false"'));
+assert(!html.includes('id="linear-column-filter"'), 'the old expanded multi-select is removed');
+assert(html.includes('@media (prefers-color-scheme:dark)') && html.includes('--linear-popup-bg:#18181b'), 'legacy popup has a contrasting dark palette');
+assert(html.includes('.linear-column-trigger { display:inline-flex') && html.includes('background:#18181b; color:#f4f4f5; border-color:#52525b'), 'the opener and popup controls keep contrast in dark mode');
 function source(name) {
     const marker = new RegExp(`^(?:async )?function ${name}\\(`, 'm');
     const match = marker.exec(html);
@@ -17,23 +22,56 @@ function source(name) {
 async function test() {
     const button = {hidden: true, style: {display: 'none'}};
     const operatorFilter = {value: 'admin@nizam', hidden: false, style: {}};
+    const select = initial => {
+        const value = {value: initial, options: [], _html: ''};
+        Object.defineProperty(value, 'innerHTML', {get() {return this._html;}, set(html) {
+            this._html = html;
+            this.options = [...html.matchAll(/<option value="([^"]+)"([^>]*)>(.*?)<\/option>/g)]
+                .map(match => ({value: match[1], selected: /\bselected\b/.test(match[2]), text: match[3]}));
+        }});
+        Object.defineProperty(value, 'selectedOptions', {get() {return this.options.filter(option => option.selected);}});
+        return value;
+    };
+    const statusFilter = select('all');
+    const savedSettings = new Map();
+    const fakeDocument = {activeElement:null};
+    const columnOptions = {html:'', inputs:[], querySelectorAll(){return this.inputs;}};
+    Object.defineProperty(columnOptions,'innerHTML',{get(){return this.html;},set(html){
+        this.html=html;
+        this.inputs=[...html.matchAll(/<input\b([^>]*)>/g)].map(match=>{
+            const attrs=match[1], value=(attrs.match(/\bvalue="([^"]*)"/)||[])[1]||'';
+            const stateId=(attrs.match(/data-linear-column-id="([^"]*)"/)||[])[1]||value;
+            const input={value,checked:/(?:^|\s)checked(?:\s|$)/.test(attrs),dataset:{linearColumnId:stateId},
+                focus(){fakeDocument.activeElement=this;},matches(selector){return selector==='input[data-linear-column-toggle]';}};
+            return input;
+        });
+    }});
+    const trigger={attributes:{'aria-expanded':'false'},setAttribute(name,value){this.attributes[name]=value;},getAttribute(name){return this.attributes[name];},focus(){fakeDocument.activeElement=this;}};
+    const resetButton={focus(){fakeDocument.activeElement=this;}};
+    const dialog={open:false,showModal(){this.open=true;},close(){this.open=false;context.linearBoardColumnsClosed();},querySelector(){return columnOptions.inputs[0]||null;}};
     const board = {innerHTML: '', querySelectorAll: () => [], querySelector: () => null};
     let modal;
     const context = {
         console, setTimeout, clearTimeout, AbortController, API_BASE: '', CURRENT_USER_ID: '6824377548', TELEGRAM_INIT_DATA: '',
         isAdmin: false, employeePermissions: new Set(), employeeLinearCanCreate: false,
         canReviewNews: () => false,
-        HAS_CHATS: false, taskTypeTab: 'tasks', localStorage: {setItem() {}},
-        document: {
+        HAS_CHATS: false, taskTypeTab: 'tasks', localStorage: {getItem(key) {return savedSettings.get(key) || null;}, setItem(key, value) {savedSettings.set(key, value);}},
+        document: Object.assign(fakeDocument,{
             getElementById(id) {
                 if(id === 'linear-page-create') return button;
                 if(id === 'linear-operator-filter') return operatorFilter;
+                if(id === 'linear-status-filter') return statusFilter;
+                if(id === 'linear-column-options') return columnOptions;
+                if(id === 'linear-column-dialog') return dialog;
+                if(id === 'linear-column-trigger') return trigger;
+                if(id === 'linear-column-reset') return resetButton;
                 if(id === 'linear-tasks-container') return {querySelector: () => board};
                 return null;
             },
+            querySelectorAll(selector) {return selector.includes('linear-column-options') ? columnOptions.inputs : [];},
             createElement() {return {addEventListener() {}};},
             body: {appendChild(element) {modal = element;}},
-        },
+        }),
         window: {setTimeout() {}, matchMedia: () => ({matches: false})},
         CSS: {escape: value => value},
         async fetch() {
@@ -44,17 +82,19 @@ async function test() {
         escapeHtml: value => String(value || ''),
         bindLinearColumnDrop() {}, bindLinearTaskCard() {},
         linearBoardCardHtml: row => `<article>${row.id}</article>`,
-        linearBoardStatuses: [{id: 'triage', name: 'Triage'}], linearBoardProjects: [],
+        linearBoardStatuses: [{id: 'testiq', name: 'Testiq', position: 10}, {id: 'triage', name: 'Triage', position: 20}], linearBoardProjects: [],
         linearBoardRows: [
             {id: 'own-1', source_id: 'own-1', client: 'rufet', operator: 'nurane@beinsystems', status: {id: 'triage'}},
-            {id: 'own-2', source_id: 'own-2', client: 'rufet', operator: 'sermaye@beinsystems', status: {id: 'triage'}},
+            {id: 'own-2', source_id: 'own-2', client: 'rufet', operator: 'sermaye@beinsystems', status: {id: 'testiq'}},
+            {id: 'accountless-task', source_id: 'accountless-task', client: '', operator: 'nurane@beinsystems', status: {id: 'triage'}},
         ],
     };
     vm.createContext(context);
-    for(const name of ['loadEmployeeSession', 'applyEmployeePermissionUi', 'openLinearCreateModal', 'linearBoardTaskMatches', 'linearBoardOperatorMatches', 'linearBoardHasAccount', 'renderLinearBoard']) {
+    for(const name of ['loadEmployeeSession', 'applyEmployeePermissionUi', 'openLinearCreateModal', 'linearBoardTaskMatches', 'linearBoardOperatorMatches', 'linearBoardHasAccount', 'updateLinearBoardColumnOptions', 'renderLinearBoard', 'openLinearBoardColumns', 'closeLinearBoardColumns', 'linearBoardColumnsClosed', 'saveLinearBoardColumns', 'resetLinearBoardColumns']) {
         vm.runInContext(source(name), context);
     }
     await context.loadEmployeeSession();
+    assert(!context.linearBoardHasAccount({client: 'Account göstərilməyib'}));
     assert.equal(button.hidden, false);
     assert.equal(button.style.display, '');
     assert(!context.employeePermissions.has('linear_edit'));
@@ -66,9 +106,34 @@ async function test() {
         context.window.matchMedia = () => ({matches: desktop});
         context.renderLinearBoard();
         assert(board.innerHTML.includes('own-1') && board.innerHTML.includes('own-2'));
+        assert(!board.innerHTML.includes('accountless-task'));
+        assert(board.innerHTML.indexOf('data-linear-status-column="testiq"') < board.innerHTML.indexOf('data-linear-status-column="triage"'));
         assert.equal(operatorFilter.hidden, true);
         assert.equal(operatorFilter.style.display, 'none');
     }
+    assert(columnOptions.innerHTML.includes('aria-label="Sütunu göstər: Testiq"'));
+    columnOptions.inputs.forEach(input => { input.checked = input.value === 'triage'; });
+    context.saveLinearBoardColumns();
+    assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), JSON.stringify(['testiq']));
+    assert(board.innerHTML.includes('data-linear-status-column="triage"'));
+    assert(!board.innerHTML.includes('data-linear-status-column="testiq"'));
+    context.openLinearBoardColumns();
+    assert.equal(dialog.open, true);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(fakeDocument.activeElement.value, 'testiq');
+    const triageToggle = columnOptions.inputs.find(input => input.value === 'triage');
+    triageToggle.focus();
+    triageToggle.checked = true;
+    context.saveLinearBoardColumns();
+    assert.equal(fakeDocument.activeElement.dataset.linearColumnId, 'triage', 'checkbox focus survives rerender');
+    assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), JSON.stringify(['testiq']));
+    context.resetLinearBoardColumns();
+    assert(board.innerHTML.includes('data-linear-status-column="testiq"'));
+    assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), '[]');
+    context.closeLinearBoardColumns();
+    assert.equal(dialog.open, false);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(fakeDocument.activeElement, trigger, 'closing returns keyboard focus to the trigger');
     context.employeeLinearCanCreate = false;
     context.applyEmployeePermissionUi();
     assert.equal(button.hidden, true);
@@ -111,8 +176,9 @@ function testAdminConfirmationActions() {
     for(const name of ['linearIssueCardHtml', 'isLinearDoneStatus', 'linearBoardPriorityStyle', 'linearBoardStatusStyle', 'linearBoardPriorityLabel', 'formatLinearTimestamp', 'linearBoardCardHtml']) {
         vm.runInContext(source(name), context);
     }
-    const task = {id: 'BS-1', source_id: 'id', title: 'Task', client: 'rufet', priority: 2, in_confirmation: true, status: {name: 'Triage'}};
+    const task = {id: 'BS-1', source_id: 'id', url: 'https://linear.app/acme/BS-1', title: 'Task', client: 'rufet', priority: 2, in_confirmation: true, status: {name: 'Triage'}};
     for(const card of [context.linearIssueCardHtml(task), context.linearBoardCardHtml(task)]) {
+        assert(card.includes('href="https://linear.app/acme/BS-1"'));
         assert(card.includes("runLinearTesdiqAction('to_testiq'"));
         assert(card.includes('>Təsdiq</button>'));
         const menuStart = card.indexOf('<details');

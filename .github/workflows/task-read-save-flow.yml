@@ -4,6 +4,15 @@ on:
     paths:
       - '.github/workflows/task-read-save-flow.yml'
       - 'beintaskbot-main/*task*.py'
+      - 'beintaskbot-main/tenant_linear_provider.py'
+      - 'beintaskbot-main/tenant_linear_tasks_provider.py'
+      - 'beintaskbot-main/tenant_linear_commands.py'
+      - 'beintaskbot-main/docs/tenant-linear-board.js'
+      - 'beintaskbot-main/docs/index.html'
+      - 'beintaskbot-main/tests/test_tenant_linear_runtime.py'
+      - 'beintaskbot-main/tests/test_tenant_linear_commands.py'
+      - 'beintaskbot-main/tests/test_tenant_linear_board.cjs'
+      - 'beintaskbot-main/tests/test_linear_ui.cjs'
       - 'beintaskbot-main/tenant_crm_request_context.py'
       - 'beintaskbot-main/tenant_policy.py'
       - 'beintaskbot-main/tenant_web_assets.py'
@@ -74,6 +83,8 @@ jobs:
           tests/test_task_assignment_no_move.py
           tests/test_tenant_task_completion.py
           tests/test_tenant_task_approvals.py
+          tests/test_tenant_linear_runtime.py
+          tests/test_tenant_linear_commands.py
           tests/test_tenant_task_decision.py
           tests/test_tenant_web_routes.py
       - name: Task states, interrupted saves and retained native task form
@@ -84,6 +95,8 @@ jobs:
           node tests/test_tenant_tasks_ui.cjs
           node tests/test_tenant_task_completion_ui.cjs
           node tests/test_tenant_task_approvals_ui.cjs
+          node tests/test_tenant_linear_board.cjs
+          node tests/test_linear_ui.cjs
           node tests/test_task_dates_modal.cjs
       - name: Retained contacts, employee navigation and confirmed manual draft
         run: |

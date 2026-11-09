@@ -14,7 +14,7 @@ async function fixture(browser,width=390,withoutLocks=false,height=844){
   const Original=IntersectionObserver;window.IntersectionObserver=class extends Original{constructor(callback,options){super((entries,observer)=>{callback(entries,observer);for(const entry of entries)if(entry.isIntersecting&&['photo-a','photo-b'].includes(entry.target.dataset.chatAttachment))window.fixtureVisiblePhotos.add(entry.target.dataset.chatAttachment);},options);}};
  });
  page.setDefaultTimeout(10000);
- const state={authed:true,tenant,user:33,dialog:{...base},messages:[message()]};page.on('pageerror',e=>errors.push(e.message));
+ const state={authed:true,tenant,user:33,dialog:{...base},messages:[message()],dialogsGate:null};page.on('pageerror',e=>errors.push(e.message));
  await context.route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url()),name=url.pathname;
   if(name==='/app')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});
@@ -40,7 +40,7 @@ async function fixture(browser,width=390,withoutLocks=false,height=844){
   assert.equal(/copilot|audio-transcription|chat\/send/.test(name)&&req.method()==='POST',false,'photo opening never dispatches AI/ASR or messages');
   let result={};
   if(name.endsWith('/dialogs/history'))result={dialog:state.dialog,messages:state.messages,next_before:null};
-  else if(name.endsWith('/dialogs'))result={dialogs:[{...state.dialog,last_message_id:'photo',last_message_direction:'incoming',last_message_text:'Synthetic photo',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+state.dialog.channel_id,name:'WhatsApp'}],agents:[],next_offset:null};
+  else if(name.endsWith('/dialogs')){if(state.dialogsGate)await state.dialogsGate;result={dialogs:[{...state.dialog,last_message_id:'photo',last_message_direction:'incoming',last_message_text:'Synthetic photo',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+state.dialog.channel_id,name:'WhatsApp'}],agents:[],next_offset:null};}
   else if(name.endsWith('/developer-marker'))result={enabled:false};else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
   return route.fulfill({json:{success:true,result}});
  });
@@ -67,8 +67,12 @@ async function fixture(browser,width=390,withoutLocks=false,height=844){
     await f.page.evaluate(()=>document.querySelector('[data-view="profile"]').click());
     f.page.once('dialog',d=>d.accept());await f.page.locator('#logout').click();await f.page.locator('#fixtureLogin').waitFor();
     assert.equal(await f.page.locator('[data-media-preview]').count(),0,'logout removes private preview DOM');
-    cache.clear();await f.page.locator('#fixtureLogin').click();await f.page.waitForURL('**/app?view=dialogs');
-    if(await f.page.locator('.operator-row').first().isVisible())await f.page.locator('.operator-row').first().click();
+    // Hold list hydration after navigation so re-login cannot rely on an immediate visibility check.
+    let releaseDialogs;f.state.dialogsGate=new Promise(resolve=>{releaseDialogs=resolve;});
+    const dialogsRequested=f.page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/dialogs'));
+    cache.clear();await f.page.locator('#fixtureLogin').click();await f.page.waitForURL('**/app?view=dialogs');await dialogsRequested;
+    assert.equal(await f.page.locator('.operator-row').first().isVisible(),false,'post-login dialogue list is still loading');
+    const reopen=f.page.locator('.operator-row').first().click();releaseDialogs();await reopen;f.state.dialogsGate=null;
     await f.photo('photo').locator('[data-media-preview=image]').waitFor();assert.equal(upstream.length,3,'new login restores visible cold photo automatically');
     await f.page.evaluate(()=>{const source=document.querySelector('[data-chat-attachment="photo"]');for(const kind of ['audio','video','document','image']){const node=source.cloneNode(true);node.dataset.chatAttachment='hidden-'+kind;node.dataset.mediaKind=kind;node.querySelector('[data-media-preview]')?.remove();if(['image','audio'].includes(kind))node.hidden=true;document.querySelector('#chatRows').append(node);}document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
     await f.page.waitForTimeout(60);assert.equal(requests.some(r=>r.id.startsWith('hidden-')),false,'hidden photos and other media do not auto-load');

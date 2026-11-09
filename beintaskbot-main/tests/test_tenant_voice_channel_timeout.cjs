@@ -22,4 +22,14 @@ class Socket {
   const channel = await pending;
   assert.equal(typeof channel.send, 'function');
   await channel.close();
+
+  const refused = connectVoice('/api/copilot-voice/ws', () => {}, env);
+  Socket.instance.onopen();
+  Socket.instance.onmessage({data: JSON.stringify({type:'error',code:'voice_session_busy'})});
+  await assert.rejects(refused, {message:'voice_session_busy'});
+
+  const other = connectVoice('/api/copilot-voice/ws', () => {}, env);
+  Socket.instance.onopen();
+  Socket.instance.onmessage({data: JSON.stringify({type:'error',code:'private_detail'})});
+  await assert.rejects(other, {message:'voice_not_ready'});
 })().catch(error => { console.error(error); process.exitCode = 1; });
