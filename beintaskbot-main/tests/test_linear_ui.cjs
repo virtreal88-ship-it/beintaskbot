@@ -71,6 +71,7 @@ async function test() {
         vm.runInContext(source(name), context);
     }
     await context.loadEmployeeSession();
+    assert(!context.linearBoardHasAccount({client: 'Account göstərilməyib'}));
     assert.equal(button.hidden, false);
     assert.equal(button.style.display, '');
     assert(!context.employeePermissions.has('linear_edit'));
