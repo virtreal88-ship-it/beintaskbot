@@ -5,13 +5,11 @@
 })(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
-  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить разговор',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер задержал подтверждение. Разговор не завершён.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Нажмите, чтобы говорить',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
-    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Söhbəti bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server təsdiqi gecikdirir. Söhbət bitməyib.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışmaq üçün toxunun',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
+  const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить сессию',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер задержал подтверждение. Разговор не завершён.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Говорите. После паузы в 2 секунды AI ответит',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
+    az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Sessiyanı bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server təsdiqi gecikdirir. Söhbət bitməyib.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışın. 2 saniyəlik fasilədən sonra AI cavab verəcək',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
   const document = root.ownerDocument;
   const micIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>';
-  const sendIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3 10l12 2-12 2z"/></svg>';
-  const muteIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-.7 2.8l1.5 1.5A8 8 0 0 0 20 11h-2Zm-2 4.6A6 6 0 0 1 6 11H4a8 8 0 0 0 7 7.93V22h2v-3.07a8 8 0 0 0 2.6-.85l1.5 1.5 1.4-1.42L5.4 6.47 4 7.9l3.3 3.3A4.7 4.7 0 0 0 12 16a4.6 4.6 0 0 0 2.6-.8l1.4 1.4Z"/></svg>';
   const endIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18.3 5.7-1.4-1.4L12 9.2 7.1 4.3 5.7 5.7 10.6 10.6l-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9 4.9-4.9Z"/></svg>';
   const status = document.createElement('p'); status.className='voice-session-status';status.setAttribute('role','status'); status.textContent=labels.off;
   const buttons=document.createElement('div');buttons.className='tenant-voice-buttons';
@@ -19,9 +17,9 @@
   const talk = document.createElement('button'); talk.type='button';talk.className='voice-session-talk';talk.setAttribute('aria-label',labels.talkStart);talk.setAttribute('aria-pressed','false');talk.title=labels.talkStart;talk.innerHTML=micIcon;talk.hidden=true;talk.disabled=true;
   const end = document.createElement('button'); end.type='button';end.className='voice-session-end';end.setAttribute('aria-label',labels.end);end.title=labels.end;end.innerHTML=endIcon;end.hidden=true;
   buttons.append(start,talk,end);
+  const stopLabel=language==='az'?'AI cavabını dayandır':'Стоп';
   root.append(status,buttons);
-  const MAX_PENDING_AUDIO_BYTES=480000; // 10 seconds at 24 kHz PCM16 mono; bounded while talk_ready is in flight.
-  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false, talkQueueOverflow=false, assistantResponding=false, currentAssistantItem=null, pendingAudio=[], pendingAudioBytes=0;
+  let generation=0, release=null, audio=null, opening=null, channel=null, muted=false, running=false, destroyed=false, ending=false, endTimer=null, endPromise=null, resolveEnd=null, endSent=false, endStatusReason=null, inputEnabled=false, greetingPending=false, talkActive=false, talkPending=false,  assistantResponding=false, currentAssistantItem=null;
   let serverInitiated=false, voiceBlocked=false, cleanupPending=0, hideAfterConnect=false, playbackStartedItems=new Set();
   const uncertain=labels.uncertain;
   const playbackFailure=labels.playback+uncertain;
@@ -36,6 +34,46 @@
     catch(_){if(version===generation)void stop(uncertain);}
   }
 
+  let speechSamples=0, silenceSamples=0, turnSamples=0, candidate=[], candidateSamples=0, stopAwaiting=false;
+  let stoppedItems=new Set();
+  const resetDetection=()=>{speechSamples=0;silenceSamples=0;turnSamples=0;candidate=[];candidateSamples=0;};
+  function capture(bytes){
+    if(!channel||muted||!inputEnabled||!talkActive||assistantResponding||ending)return;
+    if(!(bytes instanceof Uint8Array)||!bytes.byteLength||bytes.byteLength%2)return;
+    const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+    let energy=0;const samples=bytes.byteLength/2;
+    for(let i=0;i<samples;i++){const v=view.getInt16(i*2,true)/32768;energy+=v*v;}
+    const voiced=Math.sqrt(energy/samples)>=0.015;
+    if(!speechSamples){
+      if(!voiced){candidate=[];candidateSamples=0;return;}
+      candidate.push(bytes.slice());candidateSamples+=samples;
+      if(candidateSamples<2400)return;
+      speechSamples=candidateSamples;turnSamples=candidateSamples;
+      for(const pcm of candidate)send({type:'audio',pcm});
+      candidate=[];candidateSamples=0;return;
+    }
+    if(voiced){speechSamples+=samples;silenceSamples=0;}
+    else if(speechSamples)silenceSamples+=samples;
+    if(!speechSamples)return; // Do not upload idle room silence.
+    turnSamples+=samples;send({type:'audio',pcm:bytes});
+    if(silenceSamples>=48000){
+      inputEnabled=false;talkActive=false;talkPending=true;muted=true;
+      audio?.mute(true);resetDetection();
+      send({type:'talk_end'});showResponse(false);
+    }
+  }
+  function showResponse(canStop=true){
+    assistantResponding=true;inputEnabled=false;muted=true;audio?.mute(true);
+    talk.hidden=!canStop;talk.disabled=!canStop;talk.innerHTML='■';talk.title=stopLabel;talk.setAttribute('aria-label',stopLabel);
+    setVoiceState('responding');status.textContent=labels.responding;
+  }
+  function listen(){
+    if(!channel||ending||talkPending||talkActive)return;
+    resetDetection();muted=true;inputEnabled=false;assistantResponding=false;
+    talk.hidden=true;talk.disabled=true;talkPending=true;audio?.mute(true);
+    send({type:'talk_start'});
+    setVoiceState('listening');status.textContent=labels.listening;
+  }
   async function stop(reason='ended',confirmed=false,retainMicrophone=false) {
     setVoiceState('stopping');
     if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
@@ -44,7 +82,8 @@
     hideAfterConnect=false;
     const stopVersion=++generation;
     settleEnd(confirmed);
-    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;talkQueueOverflow=false;assistantResponding=false;currentAssistantItem=null;pendingAudio=[];pendingAudioBytes=0;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=true;
+    resetDetection();stopAwaiting=false;stoppedItems.clear();
+    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingOpenAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -81,33 +120,13 @@
     if(running || destroyed || voiceBlocked || cleanupPending>0)return;
     running=true;endStatusReason=null;setVoiceState('connecting');start.hidden=true;start.disabled=true;end.hidden=false;status.textContent=labels.connecting;
     const version=++generation;
-    playbackStartedItems=new Set();
+    playbackStartedItems=new Set();stoppedItems=new Set();stopAwaiting=false;resetDetection();
     try {
       const held=await acquireMicrophone();
       if(version!==generation){if(held)held();return;}
       if(typeof held!=='function')throw new Error('microphone_busy');
       release=held;
-      const currentOpening=opening=Promise.resolve(openAudio(
-        bytes=>{
-          if(!channel||muted)return;
-          if(inputEnabled&&talkActive){send({type:'audio',pcm:bytes});return;}
-          if(talkPending){
-            const copy=bytes instanceof Uint8Array?bytes.slice():null;
-            if(!copy)return;
-            if(pendingAudioBytes+copy.byteLength>MAX_PENDING_AUDIO_BYTES){
-              // Keep the voice session alive. The server has not acknowledged
-              // this manual turn, so its audio cannot be safely committed.
-              // Mute capture, discard the partial local turn, and close only
-              // the empty turn after talk_ready arrives.
-              talkQueueOverflow=true;muted=true;inputEnabled=false;talkActive=false;
-              pendingAudio=[];pendingAudioBytes=0;
-              try{audio?.mute(true);}catch(_){}
-              status.textContent=labels.inputQueueSlow;return;
-            }
-            pendingAudio.push(copy);pendingAudioBytes+=copy.byteLength;
-          }
-        }
-      ));
+      const currentOpening=opening=Promise.resolve(openAudio(capture));
       const engine=await currentOpening;
       if(opening===currentOpening)opening=null;
       if(version!==generation){await engine.close();return;}
@@ -118,6 +137,7 @@
         if(ending && ['audio','audio_done','interrupt'].includes(event.type))return;
         try {
           if(event.type==='audio'){
+            if(stopAwaiting||stoppedItems.has(event.item_id))return;
             if(talkPending||talkActive){try{audio.interrupt(event.item_id);}catch(_){}return;}
             try{
               audio.play(event.item_id,event.pcm);
@@ -127,7 +147,7 @@
                 const contextState=typeof audio.contextState==='function'?audio.contextState():'unavailable';
                 if(['running','suspended'].includes(contextState))send({type:'playback_scheduled',item_id:event.item_id,context_state:contextState});
               }
-              inputEnabled=false;talk.disabled=false;talk.setAttribute('aria-pressed','false');talk.setAttribute('aria-label',labels.talkInterrupt);talk.title=labels.talkInterrupt;talk.innerHTML=micIcon;setVoiceState('responding');status.textContent=labels.responding;
+              showResponse();
             }catch(error){
               try{channel?.send({type:'playback_failed',item_id:event.item_id});}catch(_){}
               throw error;
@@ -135,7 +155,7 @@
           }
           else if(event.type==='audio_done'){
             Promise.resolve(audio.finished(event.item_id)).then(done=>{
-              if(done && version===generation && !ending)send({type:'played_all',item_id:event.item_id});
+              if(done && version===generation && !ending && !stopAwaiting && !stoppedItems.has(event.item_id))send({type:'played_all',item_id:event.item_id});
             }).catch(()=>{if(version===generation && !ending)void stop(playbackFailure);});
           }
           else if(event.type==='interrupt'){
@@ -145,49 +165,29 @@
             setVoiceState('listening');status.textContent=labels.listening;
           } else if(event.type==='ready'){
             greetingPending=event.greeting_pending===true;
-            assistantResponding=greetingPending;inputEnabled=false;talk.disabled=greetingPending;
-            setVoiceState(greetingPending?'responding':'listening');
-            status.textContent=greetingPending?labels.responding:labels.listening;
+            if(greetingPending)showResponse();else listen();
           } else if(event.type==='talk_ready'){
-            talkPending=false;assistantResponding=false;currentAssistantItem=null;
-            if(talkQueueOverflow){
-              // No partial utterance is sent to the model. Close this empty
-              // server turn and let the user retry without ending the call.
-              talkActive=false;inputEnabled=false;pendingAudio=[];pendingAudioBytes=0;
-              talk.disabled=true;talk.setAttribute('aria-pressed','false');audio?.mute(true);
-              send({type:'talk_end'});setVoiceState('listening');status.textContent=labels.inputQueueSlow;
-              return;
-            }
-            talkActive=true;inputEnabled=true;talk.disabled=false;talk.setAttribute('aria-pressed','true');
-            talk.setAttribute('aria-label',labels.talkSend);talk.title=labels.talkSend;talk.innerHTML=sendIcon;
-            const queued=pendingAudio;pendingAudio=[];pendingAudioBytes=0;
-            for(const pcm of queued)send({type:'audio',pcm});
-            setVoiceState('listening');status.textContent=labels.talking;
-          } else if(event.type==='talk_empty'){
-            const delayedTurn=talkQueueOverflow;
-            talkPending=false;talkActive=false;inputEnabled=false;assistantResponding=false;currentAssistantItem=null;pendingAudio=[];pendingAudioBytes=0;talk.disabled=false;talk.setAttribute('aria-pressed','false');
-            if(talkQueueOverflow){talkQueueOverflow=false;muted=false;try{audio?.mute(false);}catch(_){}}
-            talk.setAttribute('aria-label',labels.talkStart);talk.title=labels.talkStart;talk.innerHTML=micIcon;
-            setVoiceState('listening');status.textContent=delayedTurn?labels.inputRetry:labels.empty;
-          } else if(event.type==='thinking'){
-            // A thinking event after the user committed a turn means the
-            // pending click-to-talk operation has become an assistant reply.
-            // Re-enable barge-in before its first audio frame arrives.
-            if(!talkActive)talkPending=false;
-            assistantResponding=true;
-            if(!talkActive&&!talkPending){talk.disabled=false;talk.setAttribute('aria-pressed','false');talk.setAttribute('aria-label',labels.talkInterrupt);talk.title=labels.talkInterrupt;talk.innerHTML=micIcon;}
-            setVoiceState('responding');status.textContent=talkActive?labels.talking:labels.responding;
-          } else if(event.type==='listening'){
-            greetingPending=false;assistantResponding=false;currentAssistantItem=null;talkActive=false;talkPending=false;inputEnabled=false;pendingAudio=[];pendingAudioBytes=0;talk.disabled=false;talk.setAttribute('aria-pressed','false');
-            talk.setAttribute('aria-label',labels.talkStart);talk.title=labels.talkStart;talk.innerHTML=micIcon;
+            stopAwaiting=false;
+            talkPending=false;talkActive=true;assistantResponding=false;currentAssistantItem=null;
+            inputEnabled=true;muted=false;resetDetection();audio?.mute(false);
+            talk.hidden=true;talk.disabled=true;
             setVoiceState('listening');status.textContent=labels.listening;
+          } else if(event.type==='talk_empty'){
+            talkPending=false;talkActive=false;listen();
+          } else if(event.type==='thinking'){
+            if(stopAwaiting||talkActive)return;
+            talkPending=false;talkActive=false;showResponse();
+          } else if(event.type==='listening'){
+            greetingPending=false;assistantResponding=false;currentAssistantItem=null;
+            talkActive=false;talkPending=false;listen();
           }
           else if(event.type==='ended')await stop(endStatusReason||labels.connectionEnded,true);
           else if(event.type==='end_unconfirmed')await stop(uncertain);
         } catch (_) { await stop(playbackFailure); }
       });
       if(version!==generation){await socket.close();return;}
-      channel=socket;talk.hidden=false;talk.disabled=greetingPending;assistantResponding=greetingPending;status.textContent=greetingPending?labels.responding:labels.listening;
+      channel=socket;
+      if(greetingPending)showResponse();else listen();
       if(hideAfterConnect||lifecycle?.visibilityState==='hidden'){
         hideAfterConnect=false;
         finish();
@@ -217,26 +217,19 @@
     send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
     return endPromise;
   }
-  end.addEventListener('click',finish);
+  end.addEventListener('click',()=>finish());
   talk.addEventListener('click',()=>{
-    if(!audio||!channel||ending||talkPending||talk.disabled)return;
-    if(!talkActive){
-      const event={type:'talk_start'};
-      if(assistantResponding){
-        let interrupted=null;
-        try{interrupted=audio.interruptForTalk?.();}catch(_){void stop(playbackFailure);return;}
-        if(interrupted?.item_id){event.item_id=interrupted.item_id;event.audio_end_ms=interrupted.audio_end_ms;}
-        else if(currentAssistantItem){event.item_id=currentAssistantItem;event.audio_end_ms=0;}
-        assistantResponding=false;currentAssistantItem=null;
-      }
-      talkPending=true;talk.disabled=true;status.textContent=labels.connecting;send(event);
-      return;
-    }
-    // Flush the final PCM chunk before disabling uplink and committing the
-    // buffer. WebSocket ordering keeps those frames ahead of talk_end.
-    try{audio.flush?.();}catch(_){void stop(playbackFailure);return;}
-    inputEnabled=false;talkActive=false;talkPending=true;talk.disabled=true;talk.setAttribute('aria-pressed','false');
-    setVoiceState('connecting');status.textContent=labels.sending;send({type:'talk_end'});
+    if(!audio||!channel||ending||talk.disabled||!assistantResponding)return;
+    const event={type:'stop_response'};
+    try{
+      const interrupted=audio.interruptForTalk?.();
+      if(currentAssistantItem && interrupted?.item_id===currentAssistantItem){event.item_id=interrupted.item_id;event.audio_end_ms=interrupted.audio_end_ms;}
+      else if(currentAssistantItem){event.item_id=currentAssistantItem;event.audio_end_ms=0;}
+    }catch(_){void stop(playbackFailure);return;}
+    if(event.item_id)stoppedItems.add(event.item_id);stopAwaiting=true;
+    assistantResponding=false;currentAssistantItem=null;talkPending=true;inputEnabled=false;muted=true;
+    talk.disabled=true;talk.hidden=true;resetDetection();audio?.mute(true);
+    send(event);setVoiceState('listening');status.textContent=labels.listening;
   });
   const hide=()=>{
     if(lifecycle?.visibilityState!=='hidden'||(!running&&!ending))return;

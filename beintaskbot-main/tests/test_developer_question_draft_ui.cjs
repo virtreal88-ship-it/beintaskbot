@@ -4,12 +4,12 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
 const base='/api/platform/ai/dialog-consultations';
 const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222'];
-const messages=ids.map((id,index)=>({id,message_type:index?'audio':'text',body:index?'':'Printer stopped',direction:'incoming',happened_at:'2026-11-01T12:00:00Z',source_version:'version-'+index}));
+const messages=ids.map((id,index)=>({id,media_shareable:!!index,message_type:index?'audio':'text',body:index?'':'Printer stopped',direction:'incoming',happened_at:'2026-11-01T12:00:00Z',public_sender_version:'b'.repeat(64),source_version:'version-'+index}));
 const ok=result=>({ok:true,json:async()=>({success:true,result})});
 async function setup(kind,{language='en',versions=true,agent=true,targets=true}={}){
  const dom=new JSDOM('<html><head></head><body><div id="host"></div><section id="view-dialogs" class="active"></section><select data-app-language></select><details id="operatorMoreActions"><summary>More</summary><div id="operatorMenuExtra"></div></details><aside id="operatorCopilot"></aside><textarea id="chatText">Private customer text</textarea></body></html>',{url:'https://crm.test/app',runScripts:'outside-only'});
  const w=dom.window,d=w.document,calls=[],member={tenant_id:'tenant',telegram_id:33,role:'owner'},route={provider:'connect',agent_id:agent?'agent-a':null,agent_mode:'manual',channel_id:'source-channel',conversation_id:'source',lead_id:41},ticket={...route,id:'33333333-3333-4333-8333-333333333333',status:'new'};
- const state={hold:null,error:false,current:true,reply:'Please investigate the printer.',missing:true,preview:messages.map(message=>({...message,...(!versions?{source_version:undefined}:{})}))};
+ const state={hold:null,error:false,current:true,reply:'Please investigate the printer.',missing:true,preview:messages.map(message=>({...message,...(!versions?{public_sender_version:'b'.repeat(64),source_version:undefined}:{})}))};
  w.tenantI18n={language,date:value=>String(value)};w.tenantOperator={member,currentDialog:route,hasRight:()=>true};w.tenantProfileSnapshot={member};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body});
@@ -39,7 +39,7 @@ async function setup(kind,{language='en',versions=true,agent=true,targets=true}=
 }
 function controls(ctx,form){const selects=form.querySelectorAll('select');return{form,summary:form.querySelector('textarea'),recipient:selects[0],first:selects[1],last:selects[2],draft:form.querySelector('[data-question-draft]'),send:form.querySelector('button[type=submit]'),media:form.querySelector(ctx.kind==='dialog'?'[data-index]':'[data-case-media-check]'),status:form.querySelector('[data-question-draft-status]')};}
 function change(ctx,node,value,type='change'){if('checked' in node)node.checked=value;else node.value=value;node.dispatchEvent(new ctx.w.Event(type,{bubbles:true}));}
-function fill(ctx,c,text='Printer stopped'){change(ctx,c.recipient,'0');change(ctx,c.first,ctx.kind==='dialog'?'0':ids[0]);change(ctx,c.last,ctx.kind==='dialog'?'1':ids[1]);change(ctx,c.summary,text,'input');change(ctx,c.media,true);}
+function fill(ctx,c,text='Printer stopped'){change(ctx,c.recipient,'0');change(ctx,c.first,ctx.kind==='dialog'?'0':ids[0]);change(ctx,c.last,ctx.kind==='dialog'?'1':ids[1]);change(ctx,c.summary,text,'input');}
 const questionCalls=ctx=>ctx.calls.filter(call=>call.path===base+'/question-draft');
 const prepareCalls=ctx=>ctx.calls.filter(call=>call.path===base&&call.body);
 function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal(ctx.calls.some(call=>call.path.endsWith('/dispatch')||/messages\/send|dialogs\/send|analy[sz]e|transcrib/.test(call.path)),false);assert.equal(ctx.d.querySelector('#chatText').value,'Private customer text');}
@@ -48,8 +48,24 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
  unselectedForm.querySelector('textarea').value='Saved question';unselectedForm.querySelector('textarea').dispatchEvent(new unselected.w.Event('input'));
  assert.equal(unselectedForm.querySelector('select').value,'');unselected.closeForm();const reopenedUnselected=await unselected.open();assert.equal(reopenedUnselected.querySelector('select').value,'','dismissal must not silently choose the first recipient');assert.equal(reopenedUnselected.querySelector('button[type=submit]').disabled,true);assertNoSend(unselected);unselected.close();
  for(const kind of ['dialog','case']){
+  // Automatic attachments follow the current exact range, never saved file toggles.
+  const media=await setup(kind);
+  media.state.preview=['image','audio','video','document','voice','photo','image'].map((message_type,index)=>({id:'media-'+index,message_type,source_version:'media-version-'+index,public_sender_version:'b'.repeat(64),media_shareable:index===3?false:index===4?undefined:true,body:'Synthetic attachment',direction:'incoming'}));
+  const mf=controls(media,await media.open()),mv=index=>kind==='dialog'?String(index):'media-'+index;
+  assert.equal(mf.media,null);assert.equal(mf.form.querySelector('[data-consultation-review],.case-consult-preview,[data-public-header-preview]'),null);
+  assert.match(mf.form.querySelector('[data-public-scope]').textContent,/sender and customer names.*anyone with the link.*7 days/);
+  change(media,mf.recipient,'0');change(media,mf.first,mv(0));change(media,mf.last,mv(5));change(media,mf.summary,'Share only this fragment','input');
+  change(media,mf.first,mv(1));change(media,mf.last,mv(2));change(media,mf.first,mv(0));change(media,mf.last,mv(5));
+  assert.equal(questionCalls(media).length,0,'range changes do not start AI');assertNoSend(media);
+  media.closeForm();const restored=controls(media,await media.open());assert.equal(restored.first.value,mv(0));assert.equal(restored.last.value,mv(5));assert.equal(restored.summary.value,'Share only this fragment');
+  restored.send.click();await settle();const automaticPayload=prepareCalls(media)[0].body;
+  assert.deepEqual(automaticPayload.message_ids,['media-0','media-1','media-2','media-3','media-4','media-5']);
+  assert.deepEqual(automaticPayload.media_ids,['media-0','media-1','media-2','media-5'],'expanding restores shareable files, excludes blocked/unknown flags and outside files');
+  assert.equal(automaticPayload.public_dialog_version,1);assert.deepEqual(Object.keys(automaticPayload.public_sender_versions),automaticPayload.message_ids);assert.equal(questionCalls(media).length,0);media.close();
+  const missingSender=await setup(kind);missingSender.state.preview.forEach(message=>delete message.public_sender_version);const ms=controls(missingSender,await missingSender.open());fill(missingSender,ms);assert.equal(ms.send.disabled,true,'missing sender proof fails closed');assertNoSend(missingSender);missingSender.close();
+
   const range=await setup(kind);
-  range.state.preview=Array.from({length:80},(_,index)=>({id:'range-'+index,message_type:'text',body:'Saved message '+index,direction:'incoming',happened_at:'2026-11-01T12:00:00Z',source_version:'range-version-'+index,public_text:'Public message '+index}));
+  range.state.preview=Array.from({length:80},(_,index)=>({id:'range-'+index,message_type:'text',body:'Saved message '+index,direction:'incoming',happened_at:'2026-11-01T12:00:00Z',public_sender_version:'b'.repeat(64),source_version:'range-version-'+index,public_text:'Public message '+index}));
   const rf=controls(range,await range.open()),rangeValue=index=>kind==='dialog'?String(index):'range-'+index;
   change(range,rf.recipient,'0');change(range,rf.summary,'Manually written question','input');
   assert.equal(rf.send.disabled,false);assert.equal(rf.draft.disabled,false);
@@ -99,14 +115,14 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   change(ctx,c.summary,'Edited employee question','input');assert.equal(c.form.querySelectorAll('input[type=checkbox]').length,0);assert.equal(c.send.disabled,false);
   c.send.click();await settle();assert.equal(prepareCalls(ctx).length,1);assert.equal(ctx.calls.filter(call=>call.path.endsWith('/dispatch')).length,1);assert.equal(prepareCalls(ctx)[0].body.summary,'Edited employee question');assert.equal(prepareCalls(ctx)[0].body.question_draft_request_id,'44444444-4444-4444-8444-444444444444');assert.deepEqual(prepareCalls(ctx)[0].body.source_versions,firstRequest.source_versions);ctx.close();
 
-  for(const edit of ['summary','selection','media','recipient']){
+  for(const edit of ['summary','selection','recipient']){
    const late=await setup(kind),f=controls(late,await late.open());fill(late,f);let release;late.state.hold=new Promise(resolve=>release=resolve);f.draft.click();await settle();
-   if(edit==='summary')change(late,f.summary,'Keep my edit','input');if(edit==='selection')change(late,f.first,kind==='dialog'?'1':ids[1]);if(edit==='media')change(late,f.media,false);if(edit==='recipient')change(late,f.recipient,'1');
+   if(edit==='summary')change(late,f.summary,'Keep my edit','input');if(edit==='selection')change(late,f.first,kind==='dialog'?'1':ids[1]);if(edit==='recipient')change(late,f.recipient,'1');
    const expected=f.summary.value;release();await settle();assert.equal(f.summary.value,expected,kind+' late result after '+edit+' cannot overwrite');assert.equal(f.form.querySelectorAll('input[type=checkbox]').length,0);assertNoSend(late);late.close();
   }
 
-  const lost=await setup(kind),f=controls(lost,await lost.open());fill(lost,f);lost.state.error=true;f.draft.click();await settle();const requestId=questionCalls(lost)[0].body.request_id;assert.match(f.status.textContent,/same request/);lost.closeForm();const reopened=controls(lost,await lost.open());assert.equal(reopened.summary.value,'Printer stopped');assert.equal(reopened.media.checked,true);lost.state.error=false;reopened.draft.click();await settle();assert.equal(questionCalls(lost)[1].body.request_id,requestId,'close/reopen keeps uncertain identity');assert.equal(reopened.summary.value,lost.state.reply);assertNoSend(lost);
-  change(lost,reopened.media,false);assert.equal(reopened.summary.value,lost.state.reply,'selection change does not erase generated text');assert.equal(reopened.send.disabled,true,'stale AI sources cannot send');assert.match(reopened.status.textContent,/changed/);assert.match(reopened.form.querySelector('[data-send-disabled-reason]').textContent,/changed/);reopened.form.dispatchEvent(new lost.w.Event('submit',{cancelable:true}));await settle();assertNoSend(lost);lost.close();
+  const lost=await setup(kind),f=controls(lost,await lost.open());fill(lost,f);lost.state.error=true;f.draft.click();await settle();const requestId=questionCalls(lost)[0].body.request_id;assert.match(f.status.textContent,/same request/);lost.closeForm();const reopened=controls(lost,await lost.open());assert.equal(reopened.summary.value,'Printer stopped');assert.equal(reopened.media,null);lost.state.error=false;reopened.draft.click();await settle();assert.equal(questionCalls(lost)[1].body.request_id,requestId,'close/reopen keeps uncertain identity');assert.equal(reopened.summary.value,lost.state.reply);assertNoSend(lost);
+  change(lost,reopened.last,kind==='dialog'?'0':ids[0]);assert.equal(reopened.summary.value,lost.state.reply,'selection change does not erase generated text');assert.equal(reopened.send.disabled,true,'stale AI sources cannot send');assert.match(reopened.status.textContent,/changed/);assert.match(reopened.form.querySelector('[data-send-disabled-reason]').textContent,/changed/);reopened.form.dispatchEvent(new lost.w.Event('submit',{cancelable:true}));await settle();assertNoSend(lost);lost.close();
 
   const closePending=await setup(kind),p=controls(closePending,await closePending.open());fill(closePending,p);let finish;closePending.state.hold=new Promise(resolve=>finish=resolve);p.draft.click();await settle();closePending.closeForm();const pendingReopened=controls(closePending,await closePending.open());assert.equal(pendingReopened.draft.disabled,true,'reopened pending generation is not duplicated');assert.equal(pendingReopened.send.disabled,true);finish();await settle();closePending.state.hold=null;assert.equal(pendingReopened.summary.value,'Printer stopped','dismissed form output is not silently accepted by reopened form');assert.equal(pendingReopened.draft.disabled,false);pendingReopened.draft.click();await settle();assert.equal(questionCalls(closePending)[0].body.request_id,questionCalls(closePending)[1].body.request_id);assertNoSend(closePending);closePending.close();
 
