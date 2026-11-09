@@ -144,7 +144,7 @@ function render(){
  const items=catalogItems(status).filter(x=>matches(x,q));
  renderTree(items);const title=byId('catalogHeading');title.textContent=selected?(selected.title||''):scope==='all'?t('all'):scope==='guide'?t('articles'):scope==='lesson'?t('lessons'):t('section');
  const results=byId('catalogResults');results.replaceChildren();
- if(selected){articleView(selected,results);return}
+ if(selected){const detail=make('div',undefined,{class:'catalog-detail'});articleView(selected,detail);results.append(detail);return}
  let shown=items;if(!q)shown=shown.filter(inScope);
  byId('catalogCount').textContent=shown.length+' '+t('resultCount');
  if(!shown.length){results.append(make('p',q?t('empty'):t('empty'),{class:'catalog-empty'}));return}
