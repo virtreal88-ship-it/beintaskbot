@@ -3,7 +3,7 @@ const path=require('node:path');
 const assert=require('node:assert/strict');
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const html=fs.readFileSync(path.join(__dirname,'../../docs/public-case.html'),'utf8');
-const fixture={selected_media_ids:['im','vid','aud','doc'],public_messages:[
+const fixture={public_identity:{version:1,customer_name:'<b>Customer</b>',phone_status:'verified',verified_phone:'+15550001111',company_name:'Synthetic company',operator_name:'Synthetic employee',last_message_at:'2026-11-02T11:03:00Z'},selected_media_ids:['im','vid','aud','doc'],public_messages:[
  {id:'text',speaker:'Müştəri',text:'<img src=x onerror=alert(1)> complaint',type:'text'},
  {id:'im',speaker:'Müştəri',text:'Image attached',type:'image'},
  {id:'vid',speaker:'Müştəri',text:'Video attached',type:'video'},
@@ -16,6 +16,8 @@ dom.window.eval(script);
 const doc=dom.window.document;
 (async()=>{
 assert.equal(doc.querySelectorAll('form').length,0,'public page is read only');
+assert.deepEqual([...doc.querySelectorAll('.identity span')].map(n=>n.textContent),['Müştəri: <b>Customer</b>','Telefon: +15550001111','Şirkət: Synthetic company','Operator: Synthetic employee']);assert.equal(doc.querySelectorAll('.identity b').length,0);assert.ok(!doc.querySelector('.head').textContent.includes('2026'));assert.ok(!doc.querySelector('.head').textContent.includes('Fraqmentin son mesajı'));
+
 for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
 assert.equal(doc.querySelectorAll('#thread img,#thread video,#thread audio').length,3,'selected AV loads without clicks');
 const buttons=[...doc.querySelectorAll('.media-box button')];assert.equal(buttons.length,4);assert.equal(mediaCalls.length,3);assert.ok(!mediaCalls.some(url=>url.endsWith('/doc')),'documents remain manual');

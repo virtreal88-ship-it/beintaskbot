@@ -24,7 +24,7 @@ const base='/api/platform/ai/dialog-consultations';
   assert.equal(await page.locator('#caseDeveloperForm input[type=checkbox]').count(),0);
   assert.equal(await page.locator('[data-case-media-check]').count(),0);
   assert.equal(await page.locator('.case-consult-preview').count(),0);
-  assert.match(await page.locator('[data-public-scope]').textContent(),/sender and customer names.*anyone with the link.*7 days/);
+  assert.match(await page.locator('[data-public-scope]').textContent(),/conversation, files, names, company and phone.*anyone with the link.*7 days/);
   await page.locator('.case-consult-materials summary').click();await page.locator('#caseConsultFirst').selectOption('message-0');
   await page.locator('#caseQuestionDraft').click();await page.waitForFunction(()=>document.querySelector('#consultReason').value==='Please check this audio report.');
   await page.waitForFunction(()=>!document.querySelector('#caseConsultSend').disabled);
