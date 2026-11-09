@@ -25,6 +25,7 @@ let member=null,canManageLessons=false,canManageGuides=false,guidePublic=[],guid
 const MAX_PAGES_PER_BATCH=5;
 function make(tag,text,attrs){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(attrs)for(const[k,v]of Object.entries(attrs))e.setAttribute(k,String(v));return e}
 function profileKey(profile){return profile?String(profile.tenant_id)+':'+String(profile.telegram_id):''}
+function sameIdentity(left,right){return !!left&&left.telegram_id!=null&&right?.telegram_id!=null&&String(left.telegram_id)===String(right.telegram_id)}
 function idParams(profile=member){return new URLSearchParams({expected_tenant_id:String(profile.tenant_id),expected_user_id:String(profile.telegram_id)})}
 async function responseJson(url){const r=await fetch(url,{credentials:'same-origin',cache:'no-store'});let body={};try{body=await r.json()}catch{}return{r,body}}
 function errorBox(text){const n=byId('catalogStatus');if(n)n.textContent=text}
@@ -249,7 +250,7 @@ async function refresh(){
   if(!r.ok||!body.member)throw Error(t('signIn'));
   const profile=body.member,key=profileKey(profile);
   if(member&&profileKey(member)!==key){
-   void closeEditor(true);clearCatalogData();render();
+   const previous=member;if(sameIdentity(previous,profile))void closeEditor(true);else forceCloseEditor();clearCatalogData();render();
   }
   const[guideData,lessonData]=await Promise.all([loadGuide(profile),loadLessonBatch(q,state,profile,{includePublished:!state||state==='published',includeManaged:true})]);
   if(request!==epoch)return;
@@ -306,8 +307,8 @@ function boot(){
  byId('instructionEditor')?.addEventListener('cancel',event=>{event.preventDefault();void closeEditor(false)});
  window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==editorFrame()?.contentWindow)return;if(event.data?.type==='tenant-instruction-dirty')editorDirty=!!event.data.dirty});
  document.addEventListener('tenant-profile',event=>{
-  const previous=member,next=event.detail?.member,sameIdentity=!!previous&&previous.telegram_id!=null&&next?.telegram_id!=null&&String(previous.telegram_id)===String(next.telegram_id);
-  epoch++;if(sameIdentity)void closeEditor(true);else forceCloseEditor();clearCatalogData();refreshing=false;errorBox(t('loading'));render();refresh();
+  const previous=member,next=event.detail?.member;
+  epoch++;if(sameIdentity(previous,next))void closeEditor(true);else forceCloseEditor();clearCatalogData();refreshing=false;errorBox(t('loading'));render();refresh();
  });
  document.addEventListener('tenant-auth-invalid',()=>{epoch++;forceCloseEditor();clearCatalogData();refreshing=false;errorBox(t('signIn'));render()});
  refresh();
