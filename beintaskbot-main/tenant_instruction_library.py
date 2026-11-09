@@ -112,7 +112,7 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
             delegated_policy=None;delegated_basis=None;delegated_source_id=None;delegated_channel=None
             if action=='list':
                 q=str(data.get('q',''))[:180];state=data.get('state','');offset=min(max(int(data.get('offset',0)),0),100000)
-                c.execute('''SELECT id,version,state,doc->>'title' AS title,doc->>'language' AS language,updated_at
+                c.execute('''SELECT id,version,state,doc->>'title' AS title,doc->>'language' AS language,doc->>'operation' AS operation,updated_at
                   FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND (%s='archived' OR state<>'archived')
                   AND (%s='' OR state=%s) AND doc->>'title' ILIKE %s ORDER BY updated_at DESC,id LIMIT 51 OFFSET %s''',(tenant,state,state,state,'%'+q+'%',offset))
                 rows=[_row(r) for r in c.fetchall()];return {'items':rows[:50],'next_offset':offset+50 if len(rows)>50 else None}
@@ -250,7 +250,7 @@ def published_list(profile, data=None):
     if not isinstance(data, dict):
         raise ValueError('query')
     q = str(data.get('q', '')).strip()[:180]
-    offset = min(max(int(data.get('offset', 0)), 0), 200)
+    offset = min(max(int(data.get('offset', 0)), 0), 100000)
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
