@@ -93,17 +93,61 @@ class SettingsSerializationTests(unittest.IsolatedAsyncioTestCase):
         self.log.exception.assert_not_called()
         self.api.require_json_post.assert_called_once()
 
-    async def test_native_postgres_timestamptz_response(self):
+    async def test_native_postgres_get_and_post_are_tenant_scoped_and_json_safe(self):
         dsn=os.environ.get('BEINTASKBOT_TEST_POSTGRES_DSN')
         if not dsn: self.skipTest('isolated PostgreSQL DSN not configured')
         import psycopg
-        with psycopg.connect(dsn) as conn:
+        from psycopg.rows import dict_row
+        from contextlib import nullcontext
+        conn=psycopg.connect(dsn, row_factory=dict_row)
+        try:
             with conn.cursor() as cur:
-                cur.execute("SELECT '2026-11-09T15:14:32+00:00'::timestamptz")
-                self.rows[0]['enabled_since']=cur.fetchone()[0]
-        response=await self.api.handler(lambda req:self.profile,'https://example.test',self.log)(Request('GET'))
-        self.assertEqual(response.status,200)
-        self.assertEqual(datetime.fromisoformat(json.loads(response.body)['result']['settings'][0]['enabled_since']),self.utc)
+                cur.execute("""CREATE TEMP TABLE saas_crm_provider_settings (
+                    tenant_id uuid, entity_type text, provider text, mode text,
+                    primary_provider text, sync_direction text, allowed_fields jsonb,
+                    enabled_since timestamptz, updated_at timestamptz DEFAULT now(),
+                    updated_by bigint, PRIMARY KEY(tenant_id,entity_type))""")
+                cur.execute("""CREATE TEMP TABLE saas_crm_sync_outbox (
+                    tenant_id uuid,provider text,entity_type text,state text)""")
+                cur.execute("""CREATE TEMP TABLE saas_crm_sync_conflicts (
+                    tenant_id uuid,provider text,entity_type text,resolved_at timestamptz)""")
+                cur.execute("CREATE TEMP TABLE saas_tenant_integrations (tenant_id uuid,provider text,status text)")
+                cur.execute("""CREATE TEMP TABLE saas_tenant_audit_events (
+                    id uuid,tenant_id uuid,action text,entity_type text,entity_id text,payload jsonb)""")
+                cur.execute("""INSERT INTO saas_crm_provider_settings
+                    (tenant_id,entity_type,provider,mode,primary_provider,sync_direction,allowed_fields,enabled_since,updated_at)
+                    VALUES (%s,'deal','kommo','external','kommo','from_external',
+                    '["title","pipeline_id","stage_id"]'::jsonb,%s,%s),
+                    (%s,'deal','kommo','external','kommo','off','[]'::jsonb,NULL,%s)""",
+                    (TENANT,self.utc,self.offset,OTHER,self.utc))
+                cur.execute("INSERT INTO saas_tenant_integrations VALUES (%s,'kommo_manual','connected')",(TENANT,))
+            conn.commit()
+            policy=load_policy(lambda:nullcontext(conn))
+            api=load_api(policy)
+            handler=api.handler(lambda req:self.profile,'https://example.test',self.log)
+            get_response=await handler(Request('GET'))
+            self.assertEqual(get_response.status,200)
+            before=json.loads(get_response.body)['result']
+            self.assertEqual(len(before['settings']),1)
+            self.assertEqual(before['settings'][0]['sync_direction'],'from_external')
+            self.assertEqual(datetime.fromisoformat(before['settings'][0]['enabled_since']),self.utc)
+            item={'entity_type':'deal','provider':'kommo','mode':'external','primary_provider':'kommo',
+                  'sync_direction':'off','allowed_fields':[]}
+            post_response=await handler(Request('POST',{'settings':[item]}))
+            self.assertEqual(post_response.status,200)
+            after=json.loads(post_response.body)['result']
+            self.assertEqual(after['settings'][0]['sync_direction'],'off')
+            self.assertIsNone(after['settings'][0]['enabled_since'])
+            self.assertIsNotNone(datetime.fromisoformat(after['settings'][0]['updated_at']))
+            with conn.cursor() as cur:
+                cur.execute('SELECT sync_direction FROM saas_crm_provider_settings WHERE tenant_id=%s',(OTHER,))
+                self.assertEqual(cur.fetchone()['sync_direction'],'off')
+                cur.execute('SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s',(TENANT,))
+                self.assertEqual(cur.fetchone()['n'],1)
+            denied=await api.handler(lambda req:{**self.profile,'role':'manager'},'https://example.test',self.log)(Request('GET'))
+            self.assertEqual(denied.status,403)
+        finally:
+            conn.close()
 
     async def test_manager_and_inactive_owner_do_not_get_settings(self):
         for profile in ({**self.profile,'role':'manager'}, {**self.profile,'active':False}):
