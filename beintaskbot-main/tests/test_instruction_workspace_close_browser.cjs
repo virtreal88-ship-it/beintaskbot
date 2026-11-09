@@ -37,44 +37,37 @@ const server=http.createServer((req,res)=>{
  const address=server.address();
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox']});
  const page=await browser.newPage();
+ async function actionWithDialog(action){const dialogWait=page.waitForEvent('dialog');const actionWait=action();const dialog=await dialogWait;return{dialog,actionWait};}
  try{
   await page.goto('http://127.0.0.1:'+address.port+'/app/instructions?site_lang=ru');
   await page.locator('#newLesson').waitFor({state:'visible'});
   assert.equal(await page.locator('#catalogGlobalNotice').textContent(),'Общий справочник: статьи видны всем компаниям. Изменения в редакторе влияют на общий справочник.');
-  const guideWarning=page.waitForEvent('dialog');
-  await page.locator('.catalog-card[data-kind="guide"] .catalog-actions button:nth-child(2)').click();
-  const guideWarningDialog=await guideWarning;
+  const{dialog:guideWarningDialog,actionWait:guideWarningClick}=await actionWithDialog(()=>page.locator('.catalog-card[data-kind="guide"] .catalog-actions button:nth-child(2)').click());
   assert.equal(guideWarningDialog.message(),'Это общий справочник для всех компаний. Изменения будут видны всем. Открыть редактор?');
-  await guideWarningDialog.accept();
+  await guideWarningDialog.accept();await guideWarningClick;
   const guideFrame=page.frameLocator('#instructionEditorFrame');
   await guideFrame.locator('#new').waitFor({state:'visible'});
   await guideFrame.locator('#new').click();
   const guideTitle=guideFrame.locator('#title');
   await guideTitle.fill('Unsaved global guide edit');
 
-  const guideXDialog=page.waitForEvent('dialog');
-  await page.locator('#closeInstructionEditor').click();
-  const guideX=await guideXDialog;
+  const{dialog:guideX,actionWait:guideXClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
   assert.equal(guideX.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?');
-  await guideX.dismiss();
+  await guideX.dismiss();await guideXClick;
   await page.waitForTimeout(30);
   assert.equal(await page.locator('#instructionEditor').evaluate(dialog=>dialog.open),true,'declining Guide close keeps editor open');
   assert.equal(await guideTitle.inputValue(),'Unsaved global guide edit');
 
   await page.locator('#closeInstructionEditor').focus();
-  const guideEscapeDialog=page.waitForEvent('dialog');
-  await page.keyboard.press('Escape');
-  const guideEscape=await guideEscapeDialog;
+  const{dialog:guideEscape,actionWait:guideEscapePress}=await actionWithDialog(()=>page.keyboard.press('Escape'));
   assert.equal(guideEscape.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?');
-  await guideEscape.dismiss();
+  await guideEscape.dismiss();await guideEscapePress;
   assert.equal(await page.locator('#instructionEditor').evaluate(dialog=>dialog.open),true,'declining Guide Escape keeps editor open');
   assert.equal(await guideTitle.inputValue(),'Unsaved global guide edit');
 
-  const guideDiscardDialog=page.waitForEvent('dialog');
-  await page.locator('#closeInstructionEditor').click();
-  const guideDiscard=await guideDiscardDialog;
+  const{dialog:guideDiscard,actionWait:guideDiscardClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
   assert.equal(guideDiscard.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?');
-  await guideDiscard.accept();
+  await guideDiscard.accept();await guideDiscardClick;
   await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
   assert.equal(guidePosts,0,'discarded Guide edits are not posted to the shared CMS');
 
@@ -84,21 +77,17 @@ const server=http.createServer((req,res)=>{
   await title.waitFor({state:'visible'});
   await title.fill('Unsaved warehouse draft');
 
-  const xDialog=page.waitForEvent('dialog');
-  await page.locator('#closeInstructionEditor').click();
-  const xPrompt=await xDialog;
+  const{dialog:xPrompt,actionWait:xClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
   assert.equal(xPrompt.type(),'confirm');
-  await xPrompt.dismiss();
+  await xPrompt.dismiss();await xClick;
   await page.waitForTimeout(30);
   assert.equal(await page.locator('#instructionEditor').evaluate(dialog=>dialog.open),true,'declining × close leaves the editor visible');
   assert.equal(await title.inputValue(),'Unsaved warehouse draft','declining close preserves the edited title');
 
   await page.locator('#closeInstructionEditor').focus();
-  const escapeDialog=page.waitForEvent('dialog');
-  await page.keyboard.press('Escape');
-  const escapePrompt=await escapeDialog;
+  const{dialog:escapePrompt,actionWait:escapePress}=await actionWithDialog(()=>page.keyboard.press('Escape'));
   assert.equal(escapePrompt.type(),'confirm');
-  await escapePrompt.dismiss();
+  await escapePrompt.dismiss();await escapePress;
   await page.waitForTimeout(30);
   assert.equal(await page.locator('#instructionEditor').evaluate(dialog=>dialog.open),true,'declining Escape leaves the editor visible');
   assert.equal(await title.inputValue(),'Unsaved warehouse draft','Escape refusal does not hide or lose edits');
@@ -121,11 +110,9 @@ const server=http.createServer((req,res)=>{
   assert(reloadPrompts.filter(type=>type==='confirm').length>=2,'reopened lesson restores the latest unsaved draft');
 
   page.off('dialog',acceptReloadPrompt);
-  const discardDialog=page.waitForEvent('dialog');
-  await page.locator('#closeInstructionEditor').click();
-  const discard=await discardDialog;
+  const{dialog:discard,actionWait:discardClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
   assert.equal(discard.type(),'confirm');
-  await discard.accept();
+  await discard.accept();await discardClick;
   await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('instruction-latest:00000000-0000-4000-8000-000000000031:31')),null,'confirmed discard removes the cached draft');
   await page.locator('#newLesson').click();
@@ -145,15 +132,15 @@ const server=http.createServer((req,res)=>{
    await page.locator('#newLesson').click();
    const localizedFrame=page.frameLocator('#instructionEditorFrame'),localizedTitle=localizedFrame.locator('.il-lesson-settings input').first();
    await localizedTitle.waitFor({state:'visible'});await localizedTitle.fill('Unsaved '+locale+' lesson');
-   const localDialog=page.waitForEvent('dialog');await page.locator('#closeInstructionEditor').click();const prompt=await localDialog;
-   assert.equal(prompt.message(),discardText,locale+' exact discard warning');await prompt.dismiss();
+   const{dialog:prompt,actionWait:localClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+   assert.equal(prompt.message(),discardText,locale+' exact discard warning');await prompt.dismiss();await localClick;
    assert.equal(await localizedTitle.inputValue(),'Unsaved '+locale+' lesson');
    await page.locator('#closeInstructionEditor').focus();
-   const escapePromptWait=page.waitForEvent('dialog');await page.keyboard.press('Escape');const escapePrompt=await escapePromptWait;
-   assert.equal(escapePrompt.message(),discardText,locale+' exact Escape warning');await escapePrompt.dismiss();
+   const{dialog:escapePrompt,actionWait:localEscape}=await actionWithDialog(()=>page.keyboard.press('Escape'));
+   assert.equal(escapePrompt.message(),discardText,locale+' exact Escape warning');await escapePrompt.dismiss();await localEscape;
    assert.equal(await localizedTitle.inputValue(),'Unsaved '+locale+' lesson');
-   const acceptWait=page.waitForEvent('dialog');await page.locator('#closeInstructionEditor').click();const acceptPrompt=await acceptWait;
-   assert.equal(acceptPrompt.message(),discardText);await acceptPrompt.accept();
+   const{dialog:acceptPrompt,actionWait:localAcceptClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+   assert.equal(acceptPrompt.message(),discardText);await acceptPrompt.accept();await localAcceptClick;
    await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
   }
   console.log('PASS: Guide editor dirty handshake and cancel/confirm flows; RU/AZ/EN global notices and discard warnings; new lesson recovery');
