@@ -9,11 +9,40 @@ from tenant_crm_sync_schema import ensure_sync_schema
 from tenant_crm_sync_windows import choose_window
 
 
-def connection_id(cur, tenant_id: str) -> str:
-    cur.execute('''SELECT account_domain, connected_at FROM saas_tenant_integrations
-        WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected' ''', (tenant_id,))
-    row = cur.fetchone()
-    return str(row['account_domain']) + ':' + str(row['connected_at']) if row and row['account_domain'] else ''
+def _kommo_connections(cur, tenant_id: str, *, lock: bool = False) -> dict:
+    """Read both tenant-local connection rows in the same OAuth-first order used by credentials."""
+    sql = '''SELECT provider,status,account_domain,connected_at FROM saas_tenant_integrations
+        WHERE tenant_id=%s::uuid AND provider IN ('kommo','kommo_manual')
+        ORDER BY CASE WHEN provider='kommo' THEN 0 ELSE 1 END'''
+    if lock:
+        # Lock inactive OAuth state too: it may become the selected credential
+        # while this page is being committed.
+        sql += ' FOR SHARE'
+    cur.execute(sql, (tenant_id,))
+    return {str(row['provider']): row for row in cur.fetchall()}
+
+
+def _selected_kommo_connection(rows: dict) -> dict | None:
+    oauth = rows.get('kommo')
+    manual = rows.get('kommo_manual')
+    if oauth and oauth.get('status') == 'connected':
+        return oauth
+    if manual and manual.get('status') == 'connected':
+        return manual
+    return None
+
+
+def _connection_identity(row: dict | None) -> str:
+    if not row or not row.get('account_domain'):
+        return ''
+    # Preserve existing OAuth job identities so deployment does not invalidate
+    # in-flight OAuth pages. Manual jobs include their provider explicitly.
+    prefix = 'manual:' if row.get('provider') == 'kommo_manual' else ''
+    return prefix + str(row['account_domain']) + ':' + str(row['connected_at'])
+
+
+def connection_id(cur, tenant_id: str, *, lock: bool = False) -> str:
+    return _connection_identity(_selected_kommo_connection(_kommo_connections(cur, tenant_id, lock=lock)))
 
 
 def public_job(row: dict) -> dict:
@@ -66,14 +95,21 @@ def enqueue_enabled_imports() -> int:
     with _connect() as conn:
         ensure_sync_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT s.tenant_id,s.entity_type,s.enabled_since,i.account_domain,i.connected_at
-              FROM saas_crm_provider_settings s JOIN saas_tenant_integrations i USING(tenant_id)
+            cur.execute('''SELECT s.tenant_id,s.entity_type,s.enabled_since,i.provider,i.account_domain,i.connected_at
+              FROM saas_crm_provider_settings s
+              JOIN LATERAL (
+                SELECT i.provider,i.account_domain,i.connected_at
+                FROM saas_tenant_integrations i
+                WHERE i.tenant_id=s.tenant_id AND i.provider IN ('kommo','kommo_manual') AND i.status='connected'
+                ORDER BY CASE WHEN i.provider='kommo' THEN 0 ELSE 1 END LIMIT 1
+              ) i ON TRUE
               WHERE s.provider='kommo' AND s.sync_direction IN ('from_external','bidirectional')
-                AND s.enabled_since IS NOT NULL AND i.provider='kommo' AND i.status='connected'
-                AND s.entity_type IN ('contact','deal') ORDER BY s.tenant_id,s.entity_type''')
+                AND s.enabled_since IS NOT NULL AND s.entity_type IN ('contact','deal')
+              ORDER BY s.tenant_id,s.entity_type''')
             for p in cur.fetchall():
                 tenant=str(p['tenant_id']);resource='contacts' if p['entity_type']=='contact' else 'leads'
-                connection=str(p['account_domain'])+':'+str(p['connected_at'])
+                prefix='manual:' if p['provider']=='kommo_manual' else ''
+                connection=prefix+str(p['account_domain'])+':'+str(p['connected_at'])
                 cur.execute('SELECT * FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s FOR UPDATE',(tenant,resource));old=cur.fetchone()
                 if old and old['status'] in {'queued','running'} and old['connection_id']==connection:continue
                 since=int(p['enabled_since'].timestamp());end=int(time.time())-30
@@ -163,10 +199,7 @@ class SyncPageStore:
             if not current or str(current['run_id']) != str(self.row['run_id']):
                 self.conn.rollback()
                 return
-            cur.execute('''SELECT account_domain,connected_at FROM saas_tenant_integrations
-                WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected' FOR SHARE''', (tenant,))
-            integration = cur.fetchone()
-            matches = integration and str(integration['account_domain']) + ':' + str(integration['connected_at']) == self.row['connection_id']
+            matches = connection_id(cur, tenant, lock=True) == self.row['connection_id']
             if not matches:
                 self.conn.rollback()
                 self.fail(permanent=True)
