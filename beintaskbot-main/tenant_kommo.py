@@ -58,7 +58,7 @@ def callback_domain(value: str, error: type[Exception] = ValueError) -> str:
     except ValueError as exc:
         raise error("Kommo hesab ünvanı etibarlı deyil.") from exc
     if (has_credentials or has_port or len(hostname) > 253
-            or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+kommo\\.com", hostname)):
+            or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+kommo\.com", hostname)):
         raise error("Kommo hesab ünvanı etibarlı deyil.")
     return hostname
 
