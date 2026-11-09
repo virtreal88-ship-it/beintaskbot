@@ -30,6 +30,21 @@ def authorized_row(profile, config, key, issue_id):
     return row
 
 
+def confirm_status(profile, config, key, issue_id, fields, changed):
+    target = fields.get('stateId')
+    if target is None:
+        return changed
+    if (changed.get('state') or {}).get('id') == target:
+        return changed
+    # Some provider responses can acknowledge the mutation without returning the
+    # resulting state. Read the same issue through the tenant key before recording
+    # success, so app requests cannot silently accept a no-op status update.
+    row = authorized_row(profile, config, key, issue_id)
+    if (row.get('state') or {}).get('id') != target:
+        raise TenantLinearError('Linear status dəyişikliyini təsdiqləmədi.', 502)
+    return {'id': row['id'], 'updatedAt': row['updatedAt'], 'state': row['state']}
+
+
 def intent_for(profile, config, key, data, issue_id):
     action = data['action']; rights = capabilities(profile, config)
     if action == 'create':
@@ -143,6 +158,8 @@ def execute(session, data):
                     raise TenantLinearError('Tapşırıq başqa yerdə dəyişib. Dəyişiklik tətbiq edilmədi.', 409)
                 else:
                     changed = mutate(key, issue_id, intent['fields'])
+                if intent['action'] in {'status', 'button'}:
+                    changed = confirm_status(profile, config, key, issue_id, intent['fields'], changed)
                 if intent.get('comment'):
                     # Remote status and comment are not one provider transaction.
                     # A pending request reconciles the status and completes the same
