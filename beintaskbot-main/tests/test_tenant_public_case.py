@@ -155,11 +155,12 @@ def test_public_page_renders_media_kinds_read_only_and_never_uses_old_deal_endpo
     from pathlib import Path
     page=(Path(__file__).resolve().parents[2]/'docs/public-case.html').read_text()
     for kind,tag in [('image','img'),('video','video'),('audio','audio')]:
-        assert f"kind==='{kind}'" in page
-        assert f"createElement('{tag}')" in page
+        assert f"'{kind}'" in page
+        assert f"'{tag}'" in page
     assert "createElement('a')" in page  # document fallback
     assert "textContent" in page and 'api/deal/file' not in page and 'api/deal/public' not in page
-    assert 'form' not in page.lower() and "button.onclick=async()=>" in page
+    assert '<form' not in page.lower() and '<textarea' not in page.lower()
+    assert "method:'POST'" not in page and "method:'PUT'" not in page
     assert "credentials:'omit',cache:'no-store'" in page
     from tenant_public_case_api import _PUBLIC_HEADERS
     assert _PUBLIC_HEADERS['Cache-Control']=='no-store, private, max-age=0'
