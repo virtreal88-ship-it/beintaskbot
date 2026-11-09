@@ -92,7 +92,8 @@ class ListingTests(unittest.TestCase):
 
     def test_visible_issue_without_account_is_hidden(self):
         self.page.return_value={'nodes':[issue(),issue(id=TARGET,description='Account: \nOperator: worker@example'),
-            issue(id=STATE,description='Account: Account göstərilməyib\nOperator: worker@example')],
+            issue(id=STATE,description='Account: Account göstərilməyib\nOperator: worker@example'),
+            issue(id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',description='Account: GÖSTƏRİLMƏYİB\nOperator: worker@example')],
             'pageInfo':{'hasNextPage':False,'endCursor':None}}
         result=self.module.listing(PERSON)
         self.assertEqual([row['id'] for row in result['issues']],[OTHER])
