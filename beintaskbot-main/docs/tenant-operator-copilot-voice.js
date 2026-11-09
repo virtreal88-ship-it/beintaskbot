@@ -81,7 +81,7 @@
       controller=win.mountExperimentalCopilotVoice(controls,{
         acquireMicrophone:()=>win.acquireTenantMicrophone(),openAudio:callback=>win.openExperimentalCopilotAudio(callback,undefined,undefined,{pushToTalk:true}),
         connect:callback=>win.connectExperimentalCopilotVoice(options.socketPath,callback),
-        lifecycle:document,interruptTarget:section.querySelector('[data-voice-orb]'),language:options.language,onState:setVoiceState,
+        lifecycle:document,interruptTarget:section.querySelector('[data-voice-orb]'),language:options.language,duplex:true,onState:setVoiceState,
         onDismiss:()=>{section.hidden=true;},
         onIdle:()=>{setVoiceState('idle');if(!disposed)options.onIdle?.();},
       });
