@@ -1,0 +1,21 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(__dirname, "..");
+const script = fs.readFileSync(path.join(root, "docs", "tenant-kommo-settings.js"), "utf8");
+const app = fs.readFileSync(path.join(root, "docs", "tenant-app.html"), "utf8");
+const assets = fs.readFileSync(path.join(root, "tenant_web_assets.py"), "utf8");
+
+assert.match(app, /\/assets\/tenant-kommo-settings\.js/);
+assert.match(assets, /tenant-kommo-settings\.js/);
+assert.match(script, /next\.role !== "owner"/);
+assert.match(script, /type="password"/);
+assert.match(script, /autocomplete="new-password"/);
+assert.match(script, /confirm_long_lived_token: true/);
+assert.match(script, /expected_tenant_id: profile\.tenant_id/);
+assert.match(script, /expected_user_id: profile\.telegram_id/);
+assert.match(script, /provider: "kommo_manual"/);
+assert.match(script, /\$\("tkToken"\)\.value = ""/);
+assert.match(script, /\/api\/platform\/integrations\/kommo\/test/);
+assert.doesNotMatch(script, /localStorage|sessionStorage|console\.log/);
+console.log("Tenant Kommo manual settings contracts passed");

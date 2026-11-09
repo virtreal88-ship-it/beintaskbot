@@ -57,7 +57,7 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
 
     def test_domain_and_expiry_are_strict(self):
         self.assertEqual(callback_domain("HTTPS://Demo.Kommo.com/path", StoreError), "demo.kommo.com")
-        for value in ("", "evil.example", "kommo.com.evil.example"):
+        for value in ("", "evil.example", "kommo.com.evil.example", "https://demo.kommo.com@evil.example", "https://user@demo.kommo.com", "https://demo.kommo.com:443", "https://-bad.kommo.com"):
             with self.assertRaises(StoreError): callback_domain(value, StoreError)
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.assertTrue(token_is_expiring("bad", now=now))
@@ -116,6 +116,73 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
         self.service.request = AsyncMock(return_value={"id": 7, "name": "Demo", "subdomain": "demo"})
         result = self.payload(await api["test"](self.request()))
         self.assertEqual(result["account"], {"id": 7, "name": "Demo", "subdomain": "demo"})
+
+
+    async def test_manual_connection_verifies_owner_token_without_returning_it(self):
+        api = kommo_handlers(self.service.context, self.service)
+        request = self.request("POST", {
+            "action": "manual_connect", "account_domain": "demo.kommo.com",
+            "access_token": "private-long-lived-token",
+            "expected_tenant_id": "company", "expected_user_id": "1",
+            "confirm_long_lived_token": True,
+        })
+        request.content_type = "application/json"
+        request.headers = {"Origin": "https://crm.pro.az"}
+        with patch("tenant_kommo_api.validate_kommo_manual_storage") as storage, \
+             patch("tenant_kommo_api.requests.get", return_value=Response(200, {
+                 "id": 42, "name": "Demo", "subdomain": "demo"})) as verify, \
+             patch("tenant_kommo_api.save_kommo_manual_token", return_value={
+                 "provider": "kommo_manual", "status": "connected"}) as save:
+            response = await api["request"](request)
+        payload = self.payload(response)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["auth_mode"], "manual")
+        self.assertEqual(payload["account"]["subdomain"], "demo")
+        self.assertNotIn("private-long-lived-token", str(payload))
+        storage.assert_called_once()
+        verify.assert_called_once_with(
+            "https://demo.kommo.com/api/v4/account",
+            headers={"Authorization": "Bearer private-long-lived-token", "Accept": "application/hal+json"},
+            timeout=15, allow_redirects=False)
+        save.assert_called_once_with(
+            tenant_id="company", owner_id=1, account_domain="demo.kommo.com",
+            access_token="private-long-lived-token")
+        self.audit.assert_called_once()
+        self.assertNotIn("private-long-lived-token", str(self.audit.call_args))
+
+    async def test_manual_connection_requires_origin_identity_and_permission_acknowledgement(self):
+        api = kommo_handlers(self.service.context, self.service)
+        data = {
+            "action": "manual_connect", "account_domain": "demo.kommo.com",
+            "access_token": "private-token", "expected_tenant_id": "company",
+            "expected_user_id": "1", "confirm_long_lived_token": True,
+        }
+        with patch("tenant_kommo_api.requests.get") as verify, \
+             patch("tenant_kommo_api.save_kommo_manual_token") as save:
+            bad_origin = self.request("POST", data)
+            bad_origin.content_type = "application/json"
+            bad_origin.headers = {"Origin": "https://evil.example"}
+            self.assertEqual((await api["request"](bad_origin)).status, 403)
+            no_ack_data = {**data, "confirm_long_lived_token": False}
+            no_ack = self.request("POST", no_ack_data)
+            no_ack.content_type = "application/json"
+            no_ack.headers = {"Origin": "https://crm.pro.az"}
+            self.assertEqual((await api["request"](no_ack)).status, 400)
+        verify.assert_not_called()
+        save.assert_not_called()
+
+    async def test_manual_token_request_does_not_need_oauth_settings_or_refresh(self):
+        self.credentials.return_value = {
+            "account_domain": "demo.kommo.com", "access_token": "long-lived",
+            "refresh_token": "", "token_expires_at": "", "auth_mode": "manual",
+        }
+        self.service.settings = Mock(side_effect=AssertionError("OAuth setup is not configured"))
+        with patch("tenant_kommo.wait_slot"), \
+             patch("tenant_kommo.requests.request", return_value=Response(200, {"id": 42})) as call:
+            result = await self.service.request("company", "GET", "account")
+        self.assertEqual(result, {"id": 42})
+        call.assert_called_once()
+        self.replace.assert_not_called()
 
     async def test_pipeline_output_is_bounded_and_normalized(self):
         api = kommo_handlers(self.service.context, self.service)
