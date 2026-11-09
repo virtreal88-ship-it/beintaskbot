@@ -118,8 +118,8 @@ class SettingsSerializationTests(unittest.IsolatedAsyncioTestCase):
                     (tenant_id,entity_type,provider,mode,primary_provider,sync_direction,allowed_fields,enabled_since,updated_at)
                     VALUES (%s,'deal','kommo','external','kommo','from_external',
                     '["title","pipeline_id","stage_id"]'::jsonb,%s,%s),
-                    (%s,'deal','kommo','external','kommo','off','[]'::jsonb,NULL,%s)""",
-                    (TENANT,self.utc,self.offset,OTHER,self.utc))
+                    (%s,'deal','kommo','external','kommo','from_external','["title","pipeline_id","stage_id"]'::jsonb,%s,%s)""",
+                    (TENANT,self.utc,self.offset,OTHER,self.utc,self.utc))
                 cur.execute("INSERT INTO saas_tenant_integrations VALUES (%s,'kommo_manual','connected')",(TENANT,))
             conn.commit()
             policy=load_policy(lambda:nullcontext(conn))
@@ -141,7 +141,7 @@ class SettingsSerializationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(datetime.fromisoformat(after['settings'][0]['updated_at']))
             with conn.cursor() as cur:
                 cur.execute('SELECT sync_direction FROM saas_crm_provider_settings WHERE tenant_id=%s',(OTHER,))
-                self.assertEqual(cur.fetchone()['sync_direction'],'off')
+                self.assertEqual(cur.fetchone()['sync_direction'],'from_external')
                 cur.execute('SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s',(TENANT,))
                 self.assertEqual(cur.fetchone()['n'],1)
             denied=await api.handler(lambda req:{**self.profile,'role':'manager'},'https://example.test',self.log)(Request('GET'))
