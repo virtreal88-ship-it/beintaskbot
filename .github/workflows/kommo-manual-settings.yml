@@ -1,0 +1,43 @@
+name: Kommo manual token settings
+
+on:
+  pull_request:
+    paths:
+      - "beintaskbot-main/tenant_kommo.py"
+      - "beintaskbot-main/tenant_kommo_api.py"
+      - "beintaskbot-main/tenant_integration_store.py"
+      - "beintaskbot-main/tenant_platform.py"
+      - "beintaskbot-main/docs/tenant-kommo-settings.js"
+      - "beintaskbot-main/docs/tenant-app.html"
+      - "beintaskbot-main/tenant_web_assets.py"
+      - "beintaskbot-main/tests/test_tenant_kommo.py"
+      - "beintaskbot-main/tests/test_tenant_integration_store.py"
+      - "beintaskbot-main/tests/test_tenant_kommo_settings.cjs"
+  push:
+    branches:
+      - codex/kommo-manual-token
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest
+      - name: Run Kommo API and storage tests
+        run: python -m pytest -q tests/test_tenant_kommo.py tests/test_tenant_integration_store.py tests/test_tenant_web_routes.py
+      - name: Check Kommo settings UI contract
+        run: node tests/test_tenant_kommo_settings.cjs
