@@ -6,9 +6,85 @@ import requests
 from urllib.parse import quote, urlencode
 
 from tenant_kommo import KommoContext, TenantKommo, callback_domain
+from tenant_integration_store import save_kommo_manual_token, validate_kommo_manual_storage
+
+
+class KommoManualVerificationUnavailable(Exception):
+    pass
+
+
+def _verify_manual_token(domain: str, token: str, platform_error: type[Exception]) -> dict:
+    try:
+        response = requests.get(
+            f"https://{domain}/api/v4/account",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/hal+json"},
+            timeout=15, allow_redirects=False,
+        )
+    except requests.RequestException:
+        raise KommoManualVerificationUnavailable() from None
+    if response.status_code != 200:
+        raise platform_error("Kommo token və hesab ünvanı təsdiqlənmədi.")
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        raise platform_error("Kommo hesab cavabı düzgün deyil.") from None
+    expected_subdomain = domain[:-len(".kommo.com")]
+    if (not isinstance(payload, dict)
+            or str(payload.get("subdomain") or "").strip().casefold() != expected_subdomain.casefold()):
+        raise platform_error("Kommo hesab ünvanı tokenlə uyğun gəlmir.")
+    return {
+        "id": payload.get("id"),
+        "name": str(payload.get("name") or "Kommo hesabı")[:200],
+        "subdomain": str(payload.get("subdomain") or "")[:100],
+    }
 
 
 def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
+        async def manual_connect(request: web.Request, profile: dict, data: dict) -> web.Response:
+            headers = {"Cache-Control": "no-store"}
+            if (request.content_type != "application/json"
+                    or request.headers.get("Origin", "").rstrip("/") != context.origin.rstrip("/")):
+                return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."},
+                                         status=403, headers=headers)
+            if (str(data.get("expected_tenant_id") or "") != str(profile["tenant_id"])
+                    or str(data.get("expected_user_id") or "") != str(profile["telegram_id"])):
+                return web.json_response({"success": False, "error": "Kabinet dəyişib. Yeniləyin."},
+                                         status=409, headers=headers)
+            try:
+                if data.get("confirm_long_lived_token") is not True:
+                    raise context.platform_error("Kommo token icazələrini təsdiqləyin.")
+                domain = callback_domain(data.get("account_domain"), context.platform_error)
+                token = data.get("access_token")
+                if (not isinstance(token, str) or not token.strip() or len(token.strip()) > 4096
+                        or any(ord(char) < 32 for char in token)):
+                    raise context.platform_error("Kommo tokenini yoxlayın.")
+                token = token.strip()
+                # Check that at-rest encryption is configured before making
+                # any request that sends the owner-provided credential.
+                await asyncio.to_thread(validate_kommo_manual_storage)
+                account = await asyncio.to_thread(_verify_manual_token, domain, token, context.platform_error)
+                integration = await asyncio.to_thread(
+                    save_kommo_manual_token, tenant_id=profile["tenant_id"],
+                    owner_id=int(profile["telegram_id"]), account_domain=domain, access_token=token)
+                await asyncio.to_thread(
+                    context.append_audit, tenant_id=profile["tenant_id"],
+                    actor_telegram_id=int(profile["telegram_id"]), action="integration_connected",
+                    entity_type="integration", entity_id="kommo_manual",
+                    payload={"account_domain": domain, "auth_mode": "manual"})
+                return web.json_response({"success": True, "integration": integration,
+                                          "account": account, "auth_mode": "manual"}, headers=headers)
+            except KommoManualVerificationUnavailable:
+                return web.json_response({"success": False, "error": "Kommo yoxlaması hazırda əlçatan deyil."},
+                                         status=503, headers=headers)
+            except context.platform_error as exc:
+                return web.json_response({"success": False, "error": str(exc)}, status=400, headers=headers)
+            except (ValueError, TypeError):
+                return web.json_response({"success": False, "error": "Sorğu düzgün deyil."}, status=400, headers=headers)
+            except Exception:
+                context.logger.error("Kommo manual connection failed")
+                return web.json_response({"success": False, "error": "Kommo bağlantısı tamamlanmadı."},
+                                         status=503, headers=headers)
+
         async def request_connection(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -17,6 +93,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 data = await request.json()
             except Exception:
                 data = {}
+            if isinstance(data, dict) and data.get("action") == "manual_connect":
+                return await manual_connect(request, profile, data)
             try:
                 integration = await asyncio.to_thread(
                     context.request_connection, tenant_id=profile["tenant_id"],
@@ -142,7 +220,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             try:
                 account = await client.request(profile["tenant_id"], "GET", "account")
-                return web.json_response({"success": True, "message": "Kommo bağlantısı işləyir.", "account": {
+                credentials = await asyncio.to_thread(context.credentials, tenant_id=profile["tenant_id"])
+                auth_mode = "manual" if isinstance(credentials, dict) and credentials.get("auth_mode") == "manual" else "oauth"
+                return web.json_response({"success": True, "message": "Kommo bağlantısı işləyir.", "auth_mode": auth_mode, "account": {
                     "id": account.get("id"), "name": str(account.get("name") or "Kommo hesabı"),
                     "subdomain": str(account.get("subdomain") or "")}})
             except context.platform_error as exc:
