@@ -38,8 +38,15 @@ def read_settings(profile):
             cur.execute('''SELECT provider,entity_type,count(*)::int AS count FROM saas_crm_sync_conflicts
                 WHERE tenant_id=%s::uuid AND resolved_at IS NULL GROUP BY provider,entity_type''',(tenant,))
             conflicts=cur.fetchall()
-            cur.execute("SELECT provider,status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=ANY(%s)",(tenant,['kommo','beinsystems']))
-            integrations={r['provider']:r['status'] for r in cur.fetchall()}
+            cur.execute("SELECT provider,status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=ANY(%s)",(tenant,['kommo','kommo_manual','beinsystems']))
+            rows_by_provider={r['provider']:r for r in cur.fetchall()}
+            oauth=rows_by_provider.get('kommo')
+            manual=rows_by_provider.get('kommo_manual')
+            selected_kommo=oauth if oauth and oauth.get('status')=='connected' else (
+                manual if manual and manual.get('status')=='connected' else oauth or manual)
+            integrations={'beinsystems':(rows_by_provider.get('beinsystems') or {}).get('status')}
+            if selected_kommo:
+                integrations['kommo']=selected_kommo.get('status')
     return {'settings':[dict(r) for r in rows], 'outbox':statuses,'conflicts':conflicts,
         'integrations':integrations,
         'capabilities':{'kommo':{'contact':['to_external','from_external','bidirectional'],
