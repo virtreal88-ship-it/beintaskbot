@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>BeinSystems · Инструкции</title>
+<script>if(['lesson','share','lesson_new'].some(key=>new URLSearchParams(location.search).has(key)))document.documentElement.classList.add('instruction-editor-mode')</script>
 <link rel="stylesheet" href="/assets/tenant-instructions.css">
 <link rel="stylesheet" href="/assets/tenant-instructor-lesson.css">
 <style>
 :root{color-scheme:light;--ink:#082342;--navy:#071e3b;--blue:#12598c;--line:#d4e5f1;--soft:#edf4fa;--accent:#02a4f2}
 *{box-sizing:border-box}
 body{margin:0;background:#edf4fa;color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+html.instruction-editor-mode .catalog-top,html.instruction-editor-mode .catalog-hero{display:none!important}
+html.instruction-editor-mode #instructions{max-width:1500px;margin:0 auto;padding:16px}
 .catalog-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px max(20px,calc((100% - 1180px)/2));background:var(--blue);color:#fff;box-shadow:0 4px 18px #001a4420}
 .catalog-brand{font-weight:700;letter-spacing:.2px}.catalog-top a{color:#c9ebff;text-decoration:none}
 .catalog-hero{padding:42px 24px 34px;background:linear-gradient(120deg,#071e3b,#12598c);color:#fff}
