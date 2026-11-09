@@ -176,24 +176,108 @@ function apiCall(url){return new URL(String(url),'https://crm.pro.az')}
  assert.equal(rd.body.textContent.includes('Late Company B lesson'),true);
  race.window.close();
 
- let failMe=0;
- const failedRefresh=mount(null,async url=>{
+ {
+ const selectedDoc={schema_version:1,title:'Selected published lesson',operation:'inventory.selected',language:'en',slides:[],subtitles:{language:'en',slides:[]}};
+ const previewDom=mount(null,async url=>{
   const u=apiCall(url);
-  if(u.pathname==='/api/platform/me'){failMe++;return failMe===1?makeResponse(200,{member:{tenant_id:tenantA,telegram_id:24,role:'employee'}}):makeResponse(503,{error:'temporary failure'})}
-  if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[guide('Old company guide','/ops/old')]});
-  if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No edit'});
-  if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('old-only','Old company lesson')],next_offset:null}});
-  if(u.pathname==='/api/platform/instructions')return makeResponse(403,{success:false,error:'Read only'});
-  throw Error('Unexpected failure request '+u.pathname);
+  if(u.pathname==='/api/platform/me')return makeResponse(200,{member:manager});
+  if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[]});
+  if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No guide edit access'});
+  if(u.pathname==='/api/platform/instruction-catalog/selected')return makeResponse(200,{success:true,result:{id:'selected',doc:selectedDoc}});
+  if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('selected','Selected published lesson')],next_offset:null}});
+  if(u.pathname==='/api/platform/instructions')return makeResponse(200,{success:true,result:{items:[],next_offset:null}});
+  throw Error('Unexpected selected-preview request '+u.pathname);
  });
  await settle(60);
- const fd=failedRefresh.window.document;
- assert(fd.body.textContent.includes('Old company lesson'));
- failedRefresh.window.document.dispatchEvent(new failedRefresh.window.CustomEvent('tenant-profile',{detail:{tenant_id:tenantB}}));
- await settle(60);
- assert.equal(fd.body.textContent.includes('Old company guide'),false,'a failed identity refresh clears the previous global/tenant view');
- assert.equal(fd.body.textContent.includes('Old company lesson'),false,'a failed identity refresh clears prior tenant lessons');
- assert.equal(fd.querySelector('#catalogStatus').textContent.includes('clearCatalogData'),false,'error handling does not throw while clearing prior results');
- failedRefresh.window.close();
- console.log('PASS: bounded lesson continuation, tenant-bound search, status mapping, global guide disclosure, atomic tenant switch, and failed-refresh clearing');
+ const vd=previewDom.window.document;
+ vd.querySelector('.catalog-card-title').click();
+ await settle(30);
+ assert.equal(vd.querySelector('.catalog-detail-heading h2').textContent,'Selected published lesson');
+ assert.equal(vd.querySelector('.catalog-lesson-player').textContent,'Lesson','published lesson preview is mounted before editing');
+ vd.querySelector('.catalog-detail .catalog-actions button').click();
+ assert.equal(vd.querySelector('#instructionEditor').open,true,'the editor opens from the published lesson preview');
+ vd.querySelector('#closeInstructionEditor').click();
+ await settle(100);
+ assert.equal(vd.querySelector('#instructionEditor').open,false,'closing an unchanged editor closes the dialog');
+ assert.equal(vd.querySelector('.catalog-detail-heading h2').textContent,'Selected published lesson','the selected lesson remains open after refresh');
+ assert.equal(vd.querySelector('.catalog-lesson-player').textContent,'Lesson','the published lesson preview remounts after closing the editor without edits');
+ previewDom.window.close();
+}
+
+let activeIdentity={tenant_id:tenantA,telegram_id:22,role:'owner'};
+const identityDom=mount(null,async url=>{
+ const u=apiCall(url);
+ if(u.pathname==='/api/platform/me')return makeResponse(200,{member:activeIdentity});
+ if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[]});
+ if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No guide edit access'});
+ if(u.pathname==='/api/platform/instruction-catalog/a-private')return makeResponse(200,{success:true,result:{id:'a-private',doc:{schema_version:1,title:'Company A published',operation:'inventory.a',language:'en',slides:[],subtitles:{slides:[]}}}});
+ if(u.pathname==='/api/platform/instruction-catalog/b-published')return makeResponse(200,{success:true,result:{id:'b-published',doc:{schema_version:1,title:'Company B published',operation:'inventory.b',language:'en',slides:[],subtitles:{slides:[]}}}});
+ if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson(activeIdentity.tenant_id===tenantA?'a-private':'b-published',activeIdentity.tenant_id===tenantA?'Company A published':'Company B published')],next_offset:null}});
+ if(u.pathname==='/api/platform/instructions')return activeIdentity.role==='owner'?makeResponse(200,{success:true,result:{items:[],next_offset:null}}):makeResponse(403,{success:false,error:'Read only'});
+ throw Error('Unexpected identity request '+u.pathname);
+});
+await settle(60);
+const idd=identityDom.window.document;
+idd.querySelector('.catalog-card-title').click();
+await settle(30);
+assert.equal(idd.querySelector('.catalog-lesson-player').textContent,'Lesson');
+idd.querySelector('.catalog-detail .catalog-actions button').click();
+const sameUserDialog=idd.querySelector('#instructionEditor'),sameUserFrame=idd.querySelector('#instructionEditorFrame'),sameUserMessages=[];
+Object.defineProperty(sameUserFrame.contentWindow,'tenantInstructionDirty',{configurable:true,value:()=>true});
+Object.defineProperty(sameUserFrame.contentWindow,'postMessage',{configurable:true,value:data=>{
+ sameUserMessages.push(data.type);
+ if(data.type==='tenant-instruction-tenant-change')setTimeout(()=>identityDom.window.dispatchEvent(new identityDom.window.MessageEvent('message',{origin:identityDom.window.location.origin,source:sameUserFrame.contentWindow,data:{type:'tenant-instruction-tenant-changed'}})),0);
+}});
+activeIdentity={tenant_id:tenantB,telegram_id:22,role:'owner'};
+identityDom.window.document.dispatchEvent(new identityDom.window.CustomEvent('tenant-profile',{detail:{member:activeIdentity}}));
+await settle(100);
+assert(sameUserMessages.includes('tenant-instruction-tenant-change'),'same-user company changes use the editor context-change handshake');
+assert.equal(sameUserDialog.open,false,'same-user company change closes after the iframe acknowledges its context change');
+assert.equal(idd.body.textContent.includes('Company A published'),false,'same-user company switch clears the previous company catalog');
+assert(idd.body.textContent.includes('Company B published'),'same user can load the newly selected company catalog');
+
+idd.querySelector('.catalog-card-title').click();
+await settle(30);
+idd.querySelector('.catalog-detail .catalog-actions button').click();
+const changedUserDialog=idd.querySelector('#instructionEditor'),changedUserFrame=idd.querySelector('#instructionEditorFrame'),changedUserMessages=[];
+Object.defineProperty(changedUserFrame.contentWindow,'tenantInstructionDirty',{configurable:true,value:()=>true});
+Object.defineProperty(changedUserFrame.contentWindow,'postMessage',{configurable:true,value:data=>changedUserMessages.push(data.type)});
+activeIdentity={tenant_id:tenantB,telegram_id:23,role:'employee'};
+identityDom.window.document.dispatchEvent(new identityDom.window.CustomEvent('tenant-profile',{detail:{member:activeIdentity}}));
+assert.equal(changedUserDialog.open,false,'changing user identity immediately hides the old editor');
+assert.equal(changedUserFrame.isConnected,false,'changing user identity destroys the previous iframe');
+assert.deepEqual(changedUserMessages,[],'the previous iframe cannot refuse closure after identity changes');
+await settle(100);
+assert.equal(idd.body.textContent.includes('Company A published'),false,'the previous account data is absent');
+assert.equal(idd.querySelector('#newLesson').hidden,true,'the new employee keeps the existing read-only permissions');
+identityDom.window.close();
+
+let failMe=0;
+const failedRefresh=mount(null,async url=>{
+ const u=apiCall(url);
+ if(u.pathname==='/api/platform/me')return ++failMe===1?makeResponse(200,{member:manager}):makeResponse(503,{error:'temporary failure'});
+ if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[guide('Old company guide','/ops/old')]});
+ if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No edit'});
+ if(u.pathname==='/api/platform/instruction-catalog/old-only')return makeResponse(200,{success:true,result:{id:'old-only',doc:{schema_version:1,title:'Old company lesson',operation:'inventory.old',language:'en',slides:[],subtitles:{slides:[]}}}});
+ if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('old-only','Old company lesson')],next_offset:null}});
+ if(u.pathname==='/api/platform/instructions')return makeResponse(200,{success:true,result:{items:[],next_offset:null}});
+ throw Error('Unexpected failure request '+u.pathname);
+});
+await settle(60);
+const fd=failedRefresh.window.document;
+assert(fd.body.textContent.includes('Old company lesson'));
+fd.querySelector('.catalog-card-title').click();
+await settle(30);
+fd.querySelector('.catalog-detail .catalog-actions button').click();
+const errorDialog=fd.querySelector('#instructionEditor'),errorFrame=fd.querySelector('#instructionEditorFrame');
+Object.defineProperty(errorFrame.contentWindow,'tenantInstructionDirty',{configurable:true,value:()=>true});
+const errorSearch=fd.querySelector('#catalogSearch');errorSearch.value='refresh-fails';errorSearch.dispatchEvent(new failedRefresh.window.Event('input',{bubbles:true}));
+await settle(330);
+assert.equal(errorDialog.open,false,'an /api/platform/me error immediately closes the dirty editor');
+assert.equal(errorFrame.isConnected,false,'an /api/platform/me error destroys the previous identity iframe without waiting for its refusal');
+assert.equal(fd.body.textContent.includes('Old company guide'),false,'a failed identity refresh clears the previous global/tenant view');
+assert.equal(fd.body.textContent.includes('Old company lesson'),false,'a failed identity refresh clears prior tenant lessons');
+assert.equal(fd.querySelector('#catalogStatus').textContent.includes('clearCatalogData'),false,'error handling does not throw while clearing prior results');
+failedRefresh.window.close();
+console.log('PASS: unified catalog, selected lesson recovery, dirty editor identity isolation, bounded pagination, status mapping, global Guide warning and tenant switching');
 })().catch(error=>{console.error(error);process.exitCode=1});
