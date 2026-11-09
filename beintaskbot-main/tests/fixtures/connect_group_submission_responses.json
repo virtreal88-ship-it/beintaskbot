@@ -1,0 +1,87 @@
+{
+  "provenance": {
+    "repository": "virtreal88-ship-it/beintaskbot-connect",
+    "pull_request": 27,
+    "test": "test/ordinary-message-ack.integration.test.ts",
+    "producer": "buildApp /group-messages actual handler with synthetic provider and native disposable PostgreSQL",
+    "contract": "stable-submission-status-v1"
+  },
+  "cases": [
+    {
+      "name": "normal",
+      "response": {
+        "id": "e4a00334-b614-48a3-92f6-5f131dbc9acc",
+        "tenantId": "6e2a30b7-e08d-484a-a4fb-51190a56bf02",
+        "channelId": "a08e3757-e7f6-45f8-9922-04f745e45013",
+        "conversationId": "120363000000001@g.us",
+        "externalMessageId": "FIXTURE_normal",
+        "clientMessageId": "63103869-af4c-464f-a43d-47c8cbed61fe",
+        "direction": "outgoing",
+        "type": "text",
+        "text": "Synthetic cross-repo receipt",
+        "status": "sent",
+        "timestamp": "2026-11-08T16:07:55.670Z",
+        "providerStatus": "sent",
+        "providerAccepted": true,
+        "deliveryConfirmed": false
+      }
+    },
+    {
+      "name": "early-delivered",
+      "response": {
+        "id": "cb14cdc4-4e7a-4b92-bd1c-a51f5a2a9391",
+        "tenantId": "6e2a30b7-e08d-484a-a4fb-51190a56bf02",
+        "channelId": "a08e3757-e7f6-45f8-9922-04f745e45013",
+        "conversationId": "120363000000001@g.us",
+        "externalMessageId": "FIXTURE_early_delivered",
+        "clientMessageId": "898eb7a9-4b8d-416c-8a17-00753503e785",
+        "direction": "outgoing",
+        "type": "text",
+        "text": "Synthetic cross-repo receipt",
+        "status": "sent",
+        "timestamp": "2026-11-08T16:07:55.711Z",
+        "providerStatus": "delivered",
+        "providerAccepted": true,
+        "deliveryConfirmed": true
+      }
+    },
+    {
+      "name": "early-read",
+      "response": {
+        "id": "953c96e2-09c7-425d-a5bf-b6ee8a3ffdba",
+        "tenantId": "6e2a30b7-e08d-484a-a4fb-51190a56bf02",
+        "channelId": "a08e3757-e7f6-45f8-9922-04f745e45013",
+        "conversationId": "120363000000001@g.us",
+        "externalMessageId": "FIXTURE_early_read",
+        "clientMessageId": "4e06ea19-83e3-474c-908f-2ee91e2fde36",
+        "direction": "outgoing",
+        "type": "text",
+        "text": "Synthetic cross-repo receipt",
+        "status": "sent",
+        "timestamp": "2026-11-08T16:07:55.770Z",
+        "providerStatus": "read",
+        "providerAccepted": true,
+        "deliveryConfirmed": true
+      }
+    },
+    {
+      "name": "early-failed",
+      "response": {
+        "id": "069d2e2b-50ce-47f4-b5f0-ba3a18636dc1",
+        "tenantId": "6e2a30b7-e08d-484a-a4fb-51190a56bf02",
+        "channelId": "a08e3757-e7f6-45f8-9922-04f745e45013",
+        "conversationId": "120363000000001@g.us",
+        "externalMessageId": "FIXTURE_early_failed",
+        "clientMessageId": "5348ec9f-5df7-4c3f-b21f-57e19bba6607",
+        "direction": "outgoing",
+        "type": "text",
+        "text": "Synthetic cross-repo receipt",
+        "status": "sent",
+        "timestamp": "2026-11-08T16:07:55.808Z",
+        "providerStatus": "failed",
+        "providerAccepted": true,
+        "deliveryConfirmed": false
+      }
+    }
+  ]
+}
