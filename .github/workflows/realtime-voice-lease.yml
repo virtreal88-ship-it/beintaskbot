@@ -11,6 +11,7 @@ on:
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
       - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_greeting.cjs'
+      - 'beintaskbot-main/tests/test_tenant_voice_start_failure.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-channel.js'
       - 'beintaskbot-main/tests/test_tenant_voice_pilot_browser.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
@@ -47,13 +48,14 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_tenant_operator_voice_lease.py
+          tests/test_tenant_voice_start_failure.py
           tests/test_tenant_operator_voice_live_admission.py
           tests/test_tenant_operator_voice_duration.py
           tests/test_tenant_operator_realtime_wire.py
           tests/test_tenant_operator_realtime_aiohttp.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
-        run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs
+        run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs tests/test_tenant_voice_channel_timeout.cjs
       - name: Test automatic voice turns and explicit Stop in browser
         working-directory: beintaskbot-main
         env:
