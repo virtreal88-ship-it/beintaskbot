@@ -3,6 +3,7 @@ import asyncio
 import base64
 import binascii
 import logging
+import math
 import re
 import time
 import uuid
@@ -48,6 +49,20 @@ class ProviderEventGuardRejected(Refused):
 
 
 _LOG=logging.getLogger(__name__)
+
+_SAFE_LATENCY_STAGES=frozenset({'talk_end_to_commit_ack','commit_ack_to_dispatch','dispatch_checks',
+                                'response_to_first_audio','first_audio_to_playback',
+                                'output_done_to_played_all','output_done_pending_at_end'})
+
+
+def _log_voice_latency(stage, start, end):
+    """Emit bounded elapsed time only; never log provider or conversation data."""
+    if (not isinstance(stage,str) or stage not in _SAFE_LATENCY_STAGES or type(start) not in (int,float) or
+            type(end) not in (int,float) or not math.isfinite(start) or
+            not math.isfinite(end) or end < start):
+        return
+    duration_ms=int(min(end-start,600)*1000)
+    _LOG.info('realtime_voice_latency stage=%s duration_ms=%d',stage,duration_ms)
 
 # Provider startup includes credential retrieval, the WebSocket upgrade and the
 # Realtime session handshake.  Keep it bounded, but longer than the provider's
@@ -185,6 +200,11 @@ class Session:
         self._opening = False
         self._stop_requested = False
         self._open_task = None
+        self._latency_response_sent_at = None
+        self._latency_first_audio_at = None
+        self._latency_first_audio_item = None
+        self._latency_output_done_at = None
+        self._latency_commit_times = {}
 
     async def _send_provider(self, event):
         async with self.io_lock:
@@ -363,6 +383,9 @@ class Session:
             self.item is not None or self.closed):
             return
         self.response_number += 1
+        latency_dispatch_started=time.monotonic()
+        commit_times=getattr(self,'_latency_commit_times',{})
+        _log_voice_latency('commit_ack_to_dispatch',commit_times.pop(self.pending_input_item_id,None),latency_dispatch_started)
         if self.pilot_policy is None and self.response_number > 2:
             raise Refused('session_response_limit')
         # Validate the server-owned context before issuing a one-use pilot
@@ -403,6 +426,12 @@ class Session:
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
             await self._send_provider({'type': 'response.create'})
+            sent_at=time.monotonic()
+            _log_voice_latency('dispatch_checks',latency_dispatch_started,sent_at)
+            self._latency_response_sent_at=sent_at
+            self._latency_first_audio_at=None
+            self._latency_first_audio_item=None
+            self._latency_output_done_at=None
         except BaseException:
             marked=await self.ledger.mark_unknown(reservation) if self.pilot_policy is None else {'state':'unknown'}
             if isinstance(marked,dict) and marked.get('state')=='unknown':
@@ -506,6 +535,7 @@ class Session:
             raise
 
     async def _receive_client(self, event):
+        received_at=time.monotonic() if isinstance(event,dict) and event.get('type')=='talk_end' else None
         if not isinstance(event, dict) or self.closed:
             raise Refused('session_closed')
         kind = event.get('type')
@@ -576,6 +606,8 @@ class Session:
                     if offset>max_audio_ms:
                         raise Refused('talk_interrupt_offset_out_of_range')
                     self.interrupt_pending=True
+                    self._latency_first_audio_item=None
+                    self._latency_output_done_at=None
                     self.truncate_pending=target_item
                     self.truncate_pending_audio_end_ms=offset
                     if self.transcript is not None:self.transcript.interrupted(target_item)
@@ -604,6 +636,7 @@ class Session:
                     await self._send_client({'type':'talk_empty'})
                     return
                 turn['stopped']=True
+                turn['latency_talk_end_at']=received_at
                 self.activity=time.monotonic()
                 await self._send_provider({'type':'input_audio_buffer.commit'})
             return
@@ -659,6 +692,8 @@ class Session:
                 # heard the answer. The text history marks it unverified.
                 if self.transcript is not None:self.transcript.device_playback_complete(self.item)
                 completed_item=self.item
+                _log_voice_latency('output_done_to_played_all',getattr(self,'_latency_output_done_at',None),time.monotonic())
+                self._latency_output_done_at=None
                 self.item,self.produced=None,0
                 self.output_finished=False
                 if self.greeting_pending and completed_item==self.greeting_item_id:
@@ -672,6 +707,9 @@ class Session:
         if kind == 'playback_scheduled' and set(event)=={'type','item_id','context_state'}:
             if (event['item_id']!=self.item or event['context_state'] not in {'running','suspended'}):
                 raise Refused('invalid_playback_start_ack')
+            if not getattr(self,'interrupt_pending',False) and event['item_id']==getattr(self,'_latency_first_audio_item',None):
+                _log_voice_latency('first_audio_to_playback',getattr(self,'_latency_first_audio_at',None),time.monotonic())
+                self._latency_first_audio_item=None
             return
         if kind == 'playback_failed' and set(event)=={'type','item_id'}:
             if event['item_id']!=self.item:
@@ -815,6 +853,10 @@ class Session:
                     raise Refused('multiple_commits_for_input_turn')
                 turn['item_id']=item_id
                 self.seen_input_item_ids.add(item_id)
+                committed_at=time.monotonic()
+                _log_voice_latency('talk_end_to_commit_ack',turn.pop('latency_talk_end_at',None),committed_at)
+                if not hasattr(self,'_latency_commit_times'):self._latency_commit_times={}
+                self._latency_commit_times[item_id]=committed_at
                 if self.transcript is not None:self.transcript.register(item_id,'employee')
                 if turn['stopped']:
                     await self._accept_committed_input(turn)
@@ -895,6 +937,12 @@ class Session:
                 self.item = item
                 if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
                     raise Refused('provider_audio_output_limit')
+                if getattr(self,'_latency_response_sent_at',None) is not None:
+                    first_audio_at=time.monotonic()
+                    _log_voice_latency('response_to_first_audio',self._latency_response_sent_at,first_audio_at)
+                    self._latency_response_sent_at=None
+                    self._latency_first_audio_at=first_audio_at
+                    self._latency_first_audio_item=item
                 self.produced += len(data)
                 # Realtime output deltas vary in size. Keep the browser's
                 # bounded frame contract by splitting a valid provider delta
@@ -963,6 +1011,7 @@ class Session:
                     return
                 if not self.interrupt_pending:
                     self.output_finished=True
+                    self._latency_output_done_at=time.monotonic()
                     if self.transcript is not None:self.transcript.assistant_audio_done(self.item)
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
@@ -1061,6 +1110,10 @@ class Session:
             return await asyncio.shield(self._end_task)
         if self.closed:
             return False
+        if getattr(self,'output_finished',False) and not getattr(self,'interrupt_pending',False):
+            _log_voice_latency('output_done_pending_at_end',getattr(self,'_latency_output_done_at',None),time.monotonic())
+        self._latency_output_done_at=None
+        getattr(self,'_latency_commit_times',{}).clear()
         self.closed = True
         if self.watchdog and self.watchdog is not asyncio.current_task():
             self.watchdog.cancel()
