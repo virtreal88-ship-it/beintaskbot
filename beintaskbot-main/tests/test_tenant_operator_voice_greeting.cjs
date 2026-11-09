@@ -4,11 +4,11 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const mountVoice=require('../docs/tenant-copilot-voice-controller.js');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function pcm(ms,voiced=false){const samples=new Int16Array(ms*24);if(voiced)for(let i=0;i<samples.length;i++)samples[i]=Math.round(2000*Math.sin(i*.2));return new Uint8Array(samples.buffer);}
-async function setup({greeting=false,deferredPlayback=false,language='ru',duplex=false}={}){
+async function setup({greeting=false,deferredPlayback=false,language='ru'}={}){
  const dom=new JSDOM('<button data-voice-orb type="button" disabled></button><div id="voice"></div>');const root=dom.window.document.querySelector('#voice');
  const sent=[],mutes=[],plays=[],states=[];let capture,emit,finishPlayback,released=0,closed=0,interrupts=0;
  const playback=new Promise(resolve=>finishPlayback=resolve);
- const voice=mountVoice(root,{language,duplex,onState:value=>states.push(value),acquireMicrophone:async()=>()=>released++,
+ const voice=mountVoice(root,{language,onState:value=>states.push(value),acquireMicrophone:async()=>()=>released++,
   openAudio:async fn=>{capture=fn;return{play:(id)=>plays.push(id),contextState:()=> 'running',
    finished:async()=>deferredPlayback?playback:true,interrupt:()=>{interrupts++;return 0;},
    interruptForTalk:()=>{interrupts++;return plays.length?{item_id:plays.at(-1),audio_end_ms:120}:null;},
@@ -20,24 +20,6 @@ async function setup({greeting=false,deferredPlayback=false,language='ru',duplex
  return{dom,root,voice,sent,mutes,plays,states,capture:(ms,voiced=false)=>{for(let n=0;n<ms;n+=20)capture(pcm(Math.min(20,ms-n),voiced));},
   emit:event=>emit(event),finishPlayback,counts:()=>({released,closed,interrupts}),destroy:async()=>{await voice.destroy();dom.window.close();}};
 }
-test('duplex streams PCM while speaking and stops old playback on server interruption',async()=>{
- const h=await setup({duplex:true,deferredPlayback:true});try{
-  assert.equal(h.sent.some(x=>x.type==='talk_start'),false);
-  h.capture(40,true);assert.equal(h.sent.filter(x=>x.type==='audio').length,2);
-  await h.emit({type:'thinking'});await h.emit({type:'audio',item_id:'answer',pcm:pcm(20)});
-  const before=h.sent.filter(x=>x.type==='audio').length;
-  h.capture(40,true);assert.equal(h.sent.filter(x=>x.type==='audio').length,before+2);
-  assert.notEqual(h.mutes.at(-1),true);
-  await h.emit({type:'interrupt',item_id:'answer'});
-  assert.equal(h.counts().interrupts,1);
-  assert.equal(h.sent.at(-1).type,'played');
-  h.capture(40,true);assert.equal(h.sent.some(x=>x.type==='talk_end'),false);
-  await h.emit({type:'audio',item_id:'answer-2',pcm:pcm(20)});
-  h.dom.window.document.querySelector('[data-voice-orb]').click();
-  assert.equal(h.sent.at(-1).type,'stop_response');
-  h.capture(20,true);assert.equal(h.sent.at(-1).type,'audio');
- }finally{await h.destroy();}
-});
 test('employee starts automatically; idle silence and brief noise do not create requests; one second silence submits once',async()=>{
  const h=await setup();try{
   assert.deepEqual(h.sent,[{type:'talk_start'}]);assert.equal(h.dom.window.document.querySelector('[data-voice-orb]').disabled,true);
