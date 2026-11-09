@@ -96,6 +96,30 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
   assert.equal(guidePosts,0,'discarding the unsaved Guide image does not post to the shared CMS');
 
+  const{dialog:retryGuideWarning,actionWait:retryGuideClick}=await actionWithDialog(()=>page.locator('.catalog-card[data-kind="guide"] .catalog-actions button:nth-child(2)').click());
+  await retryGuideWarning.accept();await retryGuideClick;
+  const failedUploadFrame=page.frameLocator('#instructionEditorFrame');
+  await failedUploadFrame.locator('#new').waitFor({state:'visible'});
+  await failedUploadFrame.locator('#new').click();
+  const failedPhotoInput=failedUploadFrame.locator('#article-photos');
+  await failedPhotoInput.evaluate(input=>{
+   window.createImageBitmap=async()=>{await new Promise(resolve=>setTimeout(resolve,900));throw new Error('synthetic image decode failure')};
+  });
+  const failedUploadPromise=failedPhotoInput.setInputFiles({name:'broken-guide-photo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6WQAAAABJRU5ErkJggg==','base64')});
+  await page.waitForFunction(()=>{try{return !!document.querySelector('#instructionEditorFrame').contentWindow.tenantInstructionDirty()}catch{return false}});
+  const concurrentTitle=failedUploadFrame.locator('#title');
+  await concurrentTitle.fill('Keep this edit after image failure');
+  await failedUploadPromise;
+  await failedUploadFrame.locator('#modal-status').getByText('synthetic image decode failure').waitFor({state:'visible'});
+  const{dialog:failedUploadClosePrompt,actionWait:failedUploadCloseClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+  assert.equal(failedUploadClosePrompt.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?','parallel form edit remains dirty after image failure');
+  await failedUploadClosePrompt.dismiss();await failedUploadCloseClick;
+  assert.equal(await concurrentTitle.inputValue(),'Keep this edit after image failure','image failure must preserve the edit made during preparation');
+  const closeFailedArticle=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+  await closeFailedArticle.dialog.accept();await closeFailedArticle.actionWait;
+  await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
+  assert.equal(guidePosts,0,'failed photo processing and discarded text never post to the shared CMS');
+
   await page.locator('#newLesson').click();
   const iframe=page.frameLocator('#instructionEditorFrame');
   const title=iframe.locator('.il-lesson-settings input').first();
