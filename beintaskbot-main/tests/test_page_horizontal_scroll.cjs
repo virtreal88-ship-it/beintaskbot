@@ -38,7 +38,7 @@ setTimeout(async()=>{
  document.documentElement.dataset.appTheme='dark';
  const darkContrast=contrast(getComputedStyle(columnDialog).color,getComputedStyle(columnDialog).backgroundColor);
  const popupFits=popupBox.left>=0&&popupBox.right<=innerWidth&&popupBox.top>=0&&popupBox.bottom<=innerHeight;
- const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});columnDialog.dispatchEvent(escape);
+ const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});columnDialog.dispatchEvent(escape);await new Promise(r=>setTimeout(r,0));
  const keyboardClose=!columnDialog.open&&columnTrigger.getAttribute('aria-expanded')==='false'&&document.activeElement===columnTrigger;
  document.documentElement.dataset.appTheme='light';
  const measure=el=>({width:el.clientWidth,scroll:el.scrollWidth,overflow:getComputedStyle(el).overflowX});
@@ -69,7 +69,8 @@ try {
   assert(r.sameRow&&r.moved&&r.board.scroll>r.board.width,'Linear columns scroll in one row');
   assert.equal(r.cardWrap,'anywhere');
   assert(r.columnPopup,'status selector opens a dialog with one control per status');
-  assert(r.columnPopupFocus&&r.columnKeyboardClose,'dialog is focusable and closes by Escape with focus restored');
+  assert(r.columnPopupFocus,'the first checkbox receives keyboard focus on open');
+  assert(r.columnKeyboardClose,'Escape closes the dialog and restores focus to its trigger');
   assert(r.columnPopupNoShift,'opening the status dialog does not move toolbar controls');
   assert(r.columnPopupFits,'dialog remains inside desktop/mobile viewport');
   assert(r.columnLightContrast>=4.5&&r.columnDarkContrast>=4.5,'status labels meet contrast in light and dark themes');
