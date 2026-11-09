@@ -2,12 +2,14 @@
 (function(root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountExperimentalCopilotVoice = factory;
-})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, interruptTarget: providedInterruptTarget=null, language='ru', onIdle=()=>{}, onState=()=>{}, onDismiss=()=>{}}) {
+})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, interruptTarget: providedInterruptTarget=null, language='ru', duplex=false, onIdle=()=>{}, onState=()=>{}, onDismiss=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
   const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить сессию',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер слишком долго подтверждает перебивание. Повторите реплику.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Говорите. После паузы в 1 секунду AI ответит',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
     az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Sessiyanı bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Kəsmə təsdiqi çox gecikir. Replikanı təkrar edin.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışın. 1 saniyəlik fasilədən sonra AI cavab verəcək',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
+  const listeningLabel=duplex?(language==='az'?'Danışın, AI sizi dinləyir':'Говорите, AI слушает'):labels.listening;
+  const respondingLabel=duplex?(language==='az'?'AI cavab verir, mikrofon aktivdir':'AI отвечает, микрофон включён'):labels.responding;
   const sessionBusy=language==='az'?'Başqa səsli sessiya aktiv ola bilər və ya əvvəlki sessiyanın bitməsi təsdiqlənməyib. Digər açıq pəncərələri yoxlayın.':'Возможно, другой голосовой сеанс ещё открыт или завершение предыдущего не подтверждено. Проверьте другие открытые окна.';
   const document = root.ownerDocument;
   const micIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>';
@@ -61,6 +63,11 @@
     return true;
   }
   function capture(bytes){
+    if(duplex){
+      if(channel&&running&&!ending&&bytes instanceof Uint8Array&&bytes.byteLength&&bytes.byteLength%2===0)
+        send({type:'audio',pcm:bytes});
+      return;
+    }
     const buffering=talkPending&&!ending;
     if(!channel||(!buffering&&(muted||!inputEnabled||!talkActive||assistantResponding))||ending)return;
     if(!(bytes instanceof Uint8Array)||!bytes.byteLength||bytes.byteLength%2)return;
@@ -92,11 +99,17 @@
     }
   }
   function showResponse(canStop=true){
-    assistantResponding=true;inputEnabled=false;muted=true;audio?.mute(true);
+    assistantResponding=true;inputEnabled=false;muted=!duplex;if(!duplex)audio?.mute(true);
     setInterruptEnabled(canStop);
-    setVoiceState('responding');status.textContent=labels.responding;
+    setVoiceState('responding');status.textContent=respondingLabel;
   }
   function listen(){
+    if(duplex){
+      if(!channel||ending)return;
+      assistantResponding=false;muted=false;inputEnabled=true;talkPending=false;talkActive=false;
+      audio?.mute(false);setInterruptEnabled(false);setVoiceState('listening');status.textContent=listeningLabel;
+      return;
+    }
     if(!channel||ending||talkPending||talkActive)return;
     resetDetection();resetPendingMic();muted=false;inputEnabled=false;assistantResponding=false;
     setInterruptEnabled(false);talkPending=true;audio?.mute(false);
@@ -188,10 +201,11 @@
             }).catch(()=>{if(version===generation && !ending)void stop(playbackFailure);});
           }
           else if(event.type==='interrupt'){
+            if(duplex && event.item_id)stoppedItems.add(event.item_id);
             const ms=audio.interrupt(event.item_id);
             send({type:'played',item_id:event.item_id,played_ms:ms});
             assistantResponding=false;currentAssistantItem=null;
-            setVoiceState('listening');status.textContent=labels.listening;
+            setVoiceState('listening');status.textContent=listeningLabel;
           } else if(event.type==='ready'){
             greetingPending=event.greeting_pending===true;
             if(greetingPending)showResponse();else listen();
@@ -263,10 +277,10 @@
       if(currentAssistantItem && interrupted?.item_id===currentAssistantItem){event.item_id=interrupted.item_id;event.audio_end_ms=interrupted.audio_end_ms;}
       else if(currentAssistantItem){event.item_id=currentAssistantItem;event.audio_end_ms=0;}
     }catch(_){void stop(playbackFailure);return;}
-    if(event.item_id)stoppedItems.add(event.item_id);stopAwaiting=true;
-    assistantResponding=false;currentAssistantItem=null;talkPending=true;inputEnabled=false;muted=false;
+    if(event.item_id)stoppedItems.add(event.item_id);stopAwaiting=!duplex;
+    assistantResponding=false;currentAssistantItem=null;talkPending=!duplex;inputEnabled=duplex;muted=false;
     setInterruptEnabled(false);resetDetection();resetPendingMic();audio?.mute(false);
-    send(event);setVoiceState('listening');status.textContent=labels.listening;
+    send(event);setVoiceState('listening');status.textContent=listeningLabel;
   };
   interruptTarget?.addEventListener?.('click',interrupt);
   const hide=()=>{

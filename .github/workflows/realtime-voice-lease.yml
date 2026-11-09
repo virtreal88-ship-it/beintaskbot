@@ -55,6 +55,7 @@ jobs:
           tests/test_tenant_operator_realtime_aiohttp.py
           tests/test_tenant_operator_voice_latency.py
           tests/test_tenant_operator_voice_stale_ack.py
+          tests/test_tenant_operator_voice_duplex.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
         run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs tests/test_tenant_voice_channel_timeout.cjs
