@@ -16,6 +16,7 @@ ASSETS = (
     ('/assets/tenant-ai-instructor.js', 'tenant-ai-instructor.js', 'no-store'),
     ('/assets/tenant-ai-instructor.css', 'tenant-ai-instructor.css', 'no-store'),
     ('/assets/tenant-instructions.js', 'tenant-instructions.js', 'no-store'),
+    ('/assets/tenant-instruction-catalog.js', 'tenant-instruction-catalog.js', 'no-store'),
     ('/assets/tenant-instructions.css', 'tenant-instructions.css', 'no-store'),
     ('/assets/tenant-instructor-lesson.js', 'tenant-instructor-lesson.js', 'no-store'),
     ('/assets/tenant-instructor-lesson.css', 'tenant-instructor-lesson.css', 'no-store'),

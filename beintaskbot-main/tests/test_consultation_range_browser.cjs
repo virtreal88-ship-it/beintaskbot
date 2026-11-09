@@ -36,7 +36,7 @@ const base='/api/platform/ai/dialog-consultations',hash='a'.repeat(64);
   await draft.click();await page.waitForFunction(()=>document.querySelector('[data-question-draft]').disabled===false);assert.equal(await send.isDisabled(),false);assert.equal(calls.filter(c=>c.path===base+'/question-draft').at(-1).body.message_ids.length,20);
   await first.selectOption(value(0));assert.equal(await send.isDisabled(),true,'stale AI remains blocked');assert.equal(await draft.isDisabled(),false);await form.locator('textarea').fill('Manual edit of stale AI');assert.equal(await send.isDisabled(),true);
   await draft.click();await page.waitForFunction(()=>document.querySelector('[data-question-draft]').disabled===false);assert.equal(await send.isDisabled(),false);
-  assert.equal(calls.filter(c=>c.path===base||c.path.endsWith('/dispatch')).length,0);const prepared=page.waitForRequest(request=>new URL(request.url()).pathname===base);await send.click();await prepared;
+  assert.equal(calls.filter(c=>c.path===base||c.path.endsWith('/dispatch')).length,0);const prepared=page.waitForResponse(response=>new URL(response.url()).pathname===base);await send.click();await prepared;
   const payload=calls.find(c=>c.path===base)?.body;assert.ok(payload);assert.deepEqual(payload.message_ids,Array.from({length:30},(_,i)=>'m'+i));assert.deepEqual(Object.keys(payload.public_header_source_versions),payload.message_ids);assert.equal(payload.public_header_hash,hash);assert.deepEqual(payload.media_ids,[],'old file outside range never reselected');
   await page.close();console.log('PASS: range adjustment, manual/AI, frozen public preview '+kind+' '+language);
  }}finally{await browser.close();}

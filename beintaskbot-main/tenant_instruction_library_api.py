@@ -15,7 +15,15 @@ def handler(member,origin,logger,resource='collection'):
             else:
                 profile=member(request)
                 if not profile:raise TenantLinearError('No access',403)
-                if request.method=='GET':
+                if resource=='catalog':
+                    if request.method!='GET':raise TenantLinearError('Method not allowed',405)
+                    data=dict(request.query);_expected(data,profile)
+                    if asset:
+                        result=await asyncio.to_thread(store.published_asset,profile,key,asset)
+                        return web.Response(body=result,content_type='image/jpeg',headers=headers)
+                    if key:result=await asyncio.to_thread(store.published_read,profile,key)
+                    else:result=await asyncio.to_thread(store.published_list,profile,data)
+                elif request.method=='GET':
                     data=dict(request.query);_expected(data,profile)
                     if asset and asset.endswith('.mp4'):
                         return await stream_video(request,profile,key,asset[:-4],headers)

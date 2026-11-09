@@ -124,6 +124,7 @@ jobs:
           tests/test_knowledge_refinement.py::test_improve_api_origin_identity_and_dispatch
           tests/test_night_release.py
           tests/test_instruction_library.py
+          tests/test_tenant_web_routes.py
           tests/test_instruction_expert_integration.py
           tests/test_instruction_videos.py
           tests/test_instruction_video_postgres.py
@@ -139,6 +140,9 @@ jobs:
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_unread_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_mobile_dialog_list_gutters_browser.cjs
           node tests/test_instruction_editor.cjs
+          node tests/test_instruction_workspace_shell.cjs
+          node tests/test_instruction_catalog_regressions.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_instruction_workspace_close_browser.cjs
           node tests/test_instruction_video_card.cjs
           SUPPORT_CASES_JSDOM=../.support-test-deps/node_modules/jsdom node tests/test_case_media_coverage_ui.cjs
           SUPPORT_CASES_JSDOM=../.support-test-deps/node_modules/jsdom node tests/test_case_current_result_ui.cjs
