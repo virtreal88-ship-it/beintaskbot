@@ -283,3 +283,73 @@ def test_native_two_device_stale_source_push_claims_do_not_send_or_deadlock(risk
         assert {row['endpoint_hash'] for row in rows} == {'device-hash', 'device-second'}
         assert len(rows) == 2 and all(row['status'] == 'skipped' for row in rows)
         assert not any(row['status'] in ('sending', 'accepted', 'unknown') for row in rows)
+
+
+class TestPushCursorFairness:
+    setup_database = Base.setup_database
+    read_workflow = Base.read_workflow
+    create_tables = Base.create_tables
+    seed_company = Base.seed_company
+    task = Base.task
+    seed_source = Base.seed_source
+    endpoint_hash = staticmethod(Base.endpoint_hash)
+    query = Base.query
+
+    def insert_event(self, source, offset, endpoints=None):
+        event_id=str(uuid4())
+        self.query('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s::uuid,%s::uuid,%s,'crm_task',%s,'risk','scope','v1','fp','expanded')''',
+          (event_id,TENANT,OWNER,source))
+        for endpoint in endpoints or [self.endpoint_hash(TENANT,coalescing.fixtures.SOURCE_ID)]:
+            self.query('''INSERT INTO saas_proactive_risk_alert_deliveries
+              (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+              VALUES(%s::uuid,%s::uuid,%s,'push',%s,'pending',now()+%s*interval '1 second')''',
+              (TENANT,event_id,OWNER,endpoint,offset))
+        return event_id
+
+    def prepare(self, monkeypatch):
+        for name,value in (('_push_cursor',None),('_push_age_cursor',None),('_push_age_cutoff',None),('_push_selections_since_age',0)):
+            monkeypatch.setattr(delivery,name,value)
+        monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+        monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                            (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+
+    def test_second_device_precedes_newer_source(self,monkeypatch):
+        self.prepare(monkeypatch)
+        second='z'*64
+        self.query('INSERT INTO saas_push_devices(endpoint_hash,owner_telegram_id,subscription) VALUES(%s,%s,%s)',(second,OWNER,'encrypted'))
+        self.query('''INSERT INTO saas_member_push_devices(tenant_id,telegram_id,endpoint_hash,active)
+          VALUES(%s::uuid,%s,%s,TRUE)''',(TENANT,OWNER,second))
+        first_endpoint=self.endpoint_hash(TENANT,coalescing.fixtures.SOURCE_ID)
+        self.insert_event('old',-60,[first_endpoint,second])
+        first=delivery.claim_push(); assert first and first['source_id']=='old'
+        self.insert_event('new',0)
+        next_item=delivery.claim_push()
+        assert next_item and next_item['source_id']=='old' and next_item['endpoint_hash']!=first['endpoint_hash']
+
+    def test_temporarily_busy_source_is_revisited_despite_new_arrivals(self,monkeypatch):
+        self.prepare(monkeypatch)
+        self.insert_event('old-busy',-60); self.insert_event('first-free',-30)
+        original=delivery.try_lock_source_transition; locked={'value':True}
+        def source_lock(cur,tenant,kind,source):
+            if source=='old-busy' and locked['value']: return False
+            return original(cur,tenant,kind,source)
+        monkeypatch.setattr(delivery,'try_lock_source_transition',source_lock)
+        first=delivery.claim_push(); assert first and first['source_id']=='first-free'
+        locked['value']=False
+        claimed=[]
+        for n in range(delivery.MAX_PUSH_SOURCE_CHECKS_PER_CLAIM+2):
+            self.insert_event('new-'+str(n),100+n)
+            item=delivery.claim_push()
+            if item: claimed.append(item['source_id'])
+            if 'old-busy' in claimed: break
+        assert 'old-busy' in claimed
+
+    def test_empty_aging_snapshot_falls_back_to_regular_queue(self,monkeypatch):
+        self.prepare(monkeypatch)
+        self.insert_event('new-source',100)
+        monkeypatch.setattr(delivery,'_push_age_cutoff','2000-01-01T00:00:00+00:00')
+        monkeypatch.setattr(delivery,'_push_selections_since_age',delivery.MAX_PUSH_SOURCE_CHECKS_PER_CLAIM)
+        item=delivery.claim_push()
+        assert item and item['send'] and item['source_id']=='new-source'

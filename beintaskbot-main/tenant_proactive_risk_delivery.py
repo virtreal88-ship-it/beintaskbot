@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import threading
 import uuid
 
 from tenant_platform import _connect, _read_tenant_workflow
@@ -27,6 +28,11 @@ MAX_PUSH_SOURCE_CHECKS_PER_CLAIM = 25
 CRM_SOURCE_MAX_AGE = timedelta(minutes=15)
 RISK_EVENT = 'proactive_risk'
 DEFERRED_FOR_QUOTA = object()
+_PUSH_CURSOR_LOCK = threading.Lock()
+_push_cursor = None
+_push_age_cursor = None
+_push_age_cutoff = None
+_push_selections_since_age = 0
 
 
 def alertable(finding: dict) -> bool:
@@ -55,6 +61,13 @@ def lock_daily_quota_transition(cur, tenant: str) -> None:
 def lock_source_transition(cur, tenant: str, source_kind: str, source_id: str) -> None:
     """Call before reading/replacing source findings to serialize first scans too."""
     _advisory_lock(cur, 'risk-source', f'{tenant}:{source_kind}:{source_id}')
+
+
+def try_lock_source_transition(cur, tenant: str, source_kind: str, source_id: str) -> bool:
+    """Skip a busy source rather than serialize unrelated push claims."""
+    key = hashlib.sha256(f'risk-source:{tenant}:{source_kind}:{source_id}'.encode()).hexdigest()[:16]
+    cur.execute("SELECT pg_try_advisory_xact_lock(('x' || %s)::bit(64)::bigint) AS locked", (key,))
+    return bool((cur.fetchone() or {}).get('locked'))
 
 
 def _channels(profile: dict, tenant: str) -> list[str]:
@@ -819,6 +832,75 @@ def delivery_key(item: dict) -> tuple:
             str(item['endpoint_hash']))
 
 
+def _next_push_candidate(cur, excluded=()) -> dict | None:
+    """Rotate selections and periodically revisit a finite snapshot of old work."""
+    global _push_cursor, _push_age_cursor, _push_age_cutoff, _push_selections_since_age
+    query = '''SELECT d.tenant_id,d.event_id,d.recipient_id,d.endpoint_hash,
+                d.updated_at,e.source_kind,e.source_id
+          FROM saas_proactive_risk_alert_deliveries d
+          JOIN saas_proactive_risk_alert_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
+          WHERE d.channel='push' AND d.status='pending' AND e.state='expanded'
+            AND (d.retry_after IS NULL OR d.retry_after<=now())
+            {excluded}
+            {where}
+        ORDER BY d.updated_at,d.event_id,d.recipient_id,d.endpoint_hash LIMIT 1'''
+    with _PUSH_CURSOR_LOCK:
+        aging = _push_selections_since_age >= MAX_PUSH_SOURCE_CHECKS_PER_CLAIM
+        if aging and _push_age_cutoff is None:
+            cur.execute('SELECT now() AS cutoff')
+            _push_age_cutoff = str(cur.fetchone()['cutoff'])
+        cursor = _push_age_cursor if aging else _push_cursor
+
+        def select(position, cutoff):
+            clauses, args = [], []
+            skipped = sorted(excluded)
+            excluded_sql = ('AND NOT (' + ' OR '.join(
+                '(d.tenant_id=%s::uuid AND e.source_kind=%s AND e.source_id=%s)' for _ in skipped) + ')') if skipped else ''
+            for source in skipped:
+                args.extend(source)
+            if position:
+                clauses.append('(d.updated_at,d.event_id,d.recipient_id,d.endpoint_hash)>(%s::timestamptz,%s::uuid,%s::bigint,%s::text)')
+                args.extend(position)
+            if cutoff:
+                clauses.append('d.updated_at<=%s::timestamptz')
+                args.append(cutoff)
+            where = ('AND ' + ' AND '.join(clauses)) if clauses else ''
+            cur.execute(query.format(where=where, excluded=excluded_sql), tuple(args))
+            return cur.fetchone()
+
+        row = select(cursor, _push_age_cutoff if aging else None)
+        if not row and cursor:
+            # Aging cycles use a fixed upper time bound, so new arrivals cannot
+            # prevent a wrap back to an old temporarily busy source.
+            if aging:
+                cur.execute('SELECT now() AS cutoff')
+                _push_age_cutoff = str(cur.fetchone()['cutoff'])
+            row = select(None, _push_age_cutoff if aging else None)
+        if aging and not row:
+            # No eligible old source in this snapshot. Continue the normal
+            # bounded rotation now rather than delaying newer available work.
+            _push_age_cursor = None
+            _push_age_cutoff = None
+            _push_selections_since_age = 0
+            aging = False
+            cursor = _push_cursor
+            row = select(cursor, None)
+            if not row and cursor:
+                row = select(None, None)
+        position = (str(row['updated_at']), str(row['event_id']),
+                    int(row['recipient_id']), str(row['endpoint_hash'])) if row else None
+        if aging:
+            _push_age_cursor = position
+            if not row:
+                _push_age_cutoff = None
+            _push_selections_since_age = 0
+        else:
+            _push_cursor = position
+            if row:
+                _push_selections_since_age += 1
+        return row
+
+
 def claim_push() -> dict | None:
     """Recheck owner, preference, current source and exact device before I/O."""
     with _connect() as conn:
@@ -827,24 +909,24 @@ def claim_push() -> dict | None:
             cur.execute('''UPDATE saas_proactive_risk_alert_deliveries SET status='unknown',updated_at=now()
               WHERE channel='push' AND status='sending' AND updated_at<now()-interval '5 minutes' ''')
             conn.commit()
+            # Push claims do not reserve quota. Taking only the source lock
+            # before the delivery lock preserves observer order while allowing
+            # unrelated sources of the same tenant to proceed concurrently.
+            seen_sources = set()
             for _ in range(MAX_PUSH_SOURCE_CHECKS_PER_CLAIM):
-                # Select without locking first, then match observer's quota →
-                # source → delivery order before any source revalidation can
-                # cancel its event. Only one source is held per transaction.
-                cur.execute('''SELECT d.tenant_id,d.event_id,d.recipient_id,d.endpoint_hash,
-                        e.source_kind,e.source_id
-                  FROM saas_proactive_risk_alert_deliveries d
-                  JOIN saas_proactive_risk_alert_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
-                  WHERE d.channel='push' AND d.status='pending' AND e.state='expanded'
-                    AND (d.retry_after IS NULL OR d.retry_after<=now())
-                  ORDER BY d.updated_at,d.event_id LIMIT 1''')
-                candidate = cur.fetchone()
+                candidate = _next_push_candidate(cur, seen_sources)
+                conn.commit()
                 if not candidate:
-                    conn.commit()
                     return None
                 tenant = str(candidate['tenant_id'])
-                lock_daily_quota_transition(cur, tenant)
-                lock_source_transition(cur, tenant, candidate['source_kind'], str(candidate['source_id']))
+                source = (tenant, candidate['source_kind'], str(candidate['source_id']))
+                if source in seen_sources:
+                    # One full bounded wrap over currently eligible sources.
+                    return None
+                seen_sources.add(source)
+                if not try_lock_source_transition(cur, tenant, candidate['source_kind'], str(candidate['source_id'])):
+                    conn.commit()
+                    continue
                 cur.execute('''SELECT d.*,e.source_kind,e.source_id,e.rule_id,e.source_scope,e.source_version,
                         e.alert_fingerprint,e.event_type,e.update_data,e.state AS event_state,p.subscription,p.owner_telegram_id,
                         b.active AS device_active,t.owner_telegram_id AS current_owner_id

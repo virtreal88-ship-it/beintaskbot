@@ -18,6 +18,8 @@ import tenant_proactive_risk_schema as risk_schema
 
 @pytest.fixture
 def risk_postgres(monkeypatch):
+    for name,value in (('_push_cursor',None),('_push_age_cursor',None),('_push_age_cutoff',None),('_push_selections_since_age',0)):
+        monkeypatch.setattr(delivery,name,value)
     dsn = os.environ.get('TEST_POSTGRES_DSN') or os.environ.get('BEINTASKBOT_TEST_POSTGRES_DSN')
     if not dsn:
         pytest.skip('Set TEST_POSTGRES_DSN to an isolated PostgreSQL database for native concurrency checks')
@@ -328,3 +330,162 @@ def test_concurrent_material_update_enqueues_once(risk_postgres):
     with _profiled_connection(dsn,schema) as conn:
         rows=conn.execute("SELECT state FROM saas_proactive_risk_alert_events WHERE event_type='linear_update'").fetchall()
     assert rows == [{'state':'pending'}]
+
+
+def test_busy_source_backlog_does_not_starve_other_source(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    with _profiled_connection(dsn, schema) as conn:
+        for n in range(26):
+            source='busy' if n < 25 else 'free'
+            event_id=str(uuid4())
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+              VALUES(%s,%s,101,'crm_task',%s,'risk','scope','v1','fp','expanded')''', (event_id,tenant,source))
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+              (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+              VALUES(%s,%s,101,'push','device-hash','pending',now()+%s*interval '1 second')''',
+              (tenant,event_id,n))
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                        (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+    with _profiled_connection(dsn,schema) as blocker:
+        with blocker.cursor() as cur:
+            delivery.lock_source_transition(cur,tenant,'crm_task','busy')
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result=pool.submit(delivery.claim_push).result(timeout=10)
+        assert result and result['send'] is True and result['source_id']=='free'
+
+
+def test_rotation_reaches_free_source_after_twenty_five_busy_sources(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    with _profiled_connection(dsn, schema) as conn:
+        for n in range(26):
+            source=f'busy-{n:02}' if n < 25 else 'free'
+            event_id=str(uuid4())
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+              (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+              VALUES(%s,%s,101,'crm_task',%s,'risk','scope','v1','fp','expanded')''', (event_id,tenant,source))
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+              (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+              VALUES(%s,%s,101,'push','device-hash','pending',now()+%s*interval '1 second')''',
+              (tenant,event_id,n))
+    monkeypatch.setattr(delivery,'_push_cursor',None)
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                        (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+    original=delivery.try_lock_source_transition
+    checks=[]
+    def count(cur, tenant_id, kind, source):
+        checks.append(source)
+        return original(cur,tenant_id,kind,source)
+    monkeypatch.setattr(delivery,'try_lock_source_transition',count)
+    with _profiled_connection(dsn,schema) as blocker:
+        with blocker.cursor() as cur:
+            for n in range(25):
+                delivery.lock_source_transition(cur,tenant,'crm_task',f'busy-{n:02}')
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(delivery.claim_push).result(timeout=10) is None
+            assert len(checks)==25
+            previous=len(checks)
+            result=pool.submit(delivery.claim_push).result(timeout=10)
+        assert result and result['send'] is True and result['source_id']=='free'
+        assert 1 <= len(checks)-previous <= delivery.MAX_PUSH_SOURCE_CHECKS_PER_CLAIM
+        assert checks[-1]=='free'
+
+
+def test_continuous_arrivals_do_not_starve_unprocessed_sources(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    def insert(conn, source, seconds):
+        event_id=str(uuid4())
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s,%s,101,'crm_task',%s,'risk','scope','v1','fp','expanded')''', (event_id,tenant,source))
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+          (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+          VALUES(%s,%s,101,'push','device-hash','pending',now()+%s*interval '1 second')''',
+          (tenant,event_id,seconds))
+    with _profiled_connection(dsn,schema) as conn:
+        for n in range(3): insert(conn,f'old-{n}',n)
+    monkeypatch.setattr(delivery,'_push_cursor',None)
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                        (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+    claimed=[]
+    for n in range(3):
+        with _profiled_connection(dsn,schema) as conn:
+            insert(conn,f'new-{n}',100+n)
+        row=delivery.claim_push(); assert row and row['send']
+        claimed.append(row['source_id'])
+    assert claimed == ['old-0','old-1','old-2']
+
+
+def test_same_event_devices_not_skipped_by_new_arrivals(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    with _profiled_connection(dsn,schema) as conn:
+        conn.execute("INSERT INTO saas_push_devices VALUES('device-second',101,%s)",(b'encrypted',))
+        conn.execute("INSERT INTO saas_member_push_devices VALUES(%s,101,'device-second',TRUE)",(tenant,))
+        event_id=str(uuid4())
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s,%s,101,'crm_task','old','risk','scope','v1','fp','expanded')''',(event_id,tenant))
+        for endpoint in ('device-hash','device-second'):
+            conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+              (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+              VALUES(%s,%s,101,'push',%s,'pending',now()-interval '1 minute')''',(tenant,event_id,endpoint))
+    for name,value in (('_push_cursor',None),('_push_age_cursor',None),('_push_age_cutoff',None),('_push_selections_since_age',0)):
+        monkeypatch.setattr(delivery,name,value)
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                        (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+    first=delivery.claim_push(); assert first and first['source_id']=='old'
+    with _profiled_connection(dsn,schema) as conn:
+        fresh=str(uuid4())
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s,%s,101,'crm_task','new','risk','scope','v1','fp','expanded')''',(fresh,tenant))
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+          (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+          VALUES(%s,%s,101,'push','device-hash','pending',now())''',(tenant,fresh))
+    second=delivery.claim_push()
+    assert second and second['source_id']=='old' and second['endpoint_hash']!=first['endpoint_hash']
+
+
+def test_temporarily_busy_old_source_revisited_during_continuous_arrivals(risk_postgres, monkeypatch):
+    dsn, schema, tenant = risk_postgres
+    def insert(conn, source, seconds):
+        event_id=str(uuid4())
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s,%s,101,'crm_task',%s,'risk','scope','v1','fp','expanded')''',(event_id,tenant,source))
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+          (tenant_id,event_id,recipient_id,channel,endpoint_hash,status,updated_at)
+          VALUES(%s,%s,101,'push','device-hash','pending',now()+%s*interval '1 second')''',(tenant,event_id,seconds))
+    with _profiled_connection(dsn,schema) as conn:
+        insert(conn,'old-busy',-60); insert(conn,'first-free',-30)
+    for name,value in (('_push_cursor',None),('_push_age_cursor',None),('_push_age_cutoff',None),('_push_selections_since_age',0)):
+        monkeypatch.setattr(delivery,name,value)
+    monkeypatch.setattr(delivery,'_connect',lambda:_profiled_connection(dsn,schema))
+    monkeypatch.setattr(delivery,'ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(delivery,'_channels',lambda _profile,_tenant:['push'])
+    monkeypatch.setattr(delivery,'_authorize_event',lambda cur,item,**_kwargs:
+                        (delivery._owner_profile(cur,item['tenant_id'],int(item['recipient_id'])),True))
+    with _profiled_connection(dsn,schema) as blocker:
+        with blocker.cursor() as cur: delivery.lock_source_transition(cur,tenant,'crm_task','old-busy')
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first=pool.submit(delivery.claim_push).result(timeout=10)
+        assert first and first['source_id']=='first-free'
+    claimed=[]
+    for n in range(delivery.MAX_PUSH_SOURCE_CHECKS_PER_CLAIM+2):
+        with _profiled_connection(dsn,schema) as conn: insert(conn,f'new-{n}',100+n)
+        item=delivery.claim_push()
+        if item: claimed.append(item['source_id'])
+        if 'old-busy' in claimed: break
+    assert 'old-busy' in claimed
