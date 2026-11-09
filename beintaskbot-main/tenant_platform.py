@@ -44,4 +44,5 @@ from tenant_integration_store import (
     begin_kommo_oauth, consume_kommo_oauth_state, disconnect_integration,
     kommo_credentials, list_integrations, replace_kommo_tokens,
     request_kommo_connection, save_kommo_oauth_tokens,
+    save_kommo_manual_token, validate_kommo_manual_storage,
 )
