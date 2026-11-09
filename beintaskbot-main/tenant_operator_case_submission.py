@@ -5,7 +5,11 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_group_coordination import group_jid
 import tenant_knowledge_candidates_store as store
 
+MAX_SUBMISSION_MESSAGES=30
 _SUBMISSION_CAPABILITY=object()
+
+def is_submission(profile):
+    return isinstance(profile,dict) and profile.get('_case_submission_capability') is _SUBMISSION_CAPABILITY
 
 def scoped(profile):
     return {**profile, '_case_submission_capability':_SUBMISSION_CAPABILITY}
@@ -53,7 +57,7 @@ def preview(profile,data):
                        'media_kind':ref.get('media_kind'),'message_type':meta['message_type'],
                        'happened_at':meta['happened_at']}
                     for ref,msg,meta in zip(item['refs'],item['messages'],item['preview_metadata'])],
-                    'has_earlier':bool(item['next_before'])}
+                    'has_earlier':bool(item['next_before']),'max_messages':MAX_SUBMISSION_MESSAGES}
 
 
 def validate(cur,profile,data,training):
@@ -76,7 +80,7 @@ def submit(profile,data):
     if type(data['agent_version']) is not int or type(data['assignment_revision']) is not int:
         raise TenantLinearError('Некорректная версия агента.')
     selected=[identifier(v) for v in data['message_ids']]
-    if not 1<=len(selected)<=80:raise TenantLinearError('Выберите от 1 до 80 сообщений.')
+    if not 1<=len(selected)<=MAX_SUBMISSION_MESSAGES:raise TenantLinearError(f'Выберите от 1 до {MAX_SUBMISSION_MESSAGES} сообщений.')
     training={k:data[k] for k in ('agent_id','agent_version','assignment_revision')}
     training['agent_id']=identifier(training['agent_id'])
     from tenant_knowledge_candidates_service import analyze

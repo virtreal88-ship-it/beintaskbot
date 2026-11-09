@@ -1720,3 +1720,136 @@ def test_training_unknown_provider_then_unassignment_keeps_monetary_and_token_ho
     tokens=db.execute('SELECT reserved_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,request))[0]
     assert tokens['reserved_tokens']>=policy.MAX_TOKENS
     generation.assert_called_once()
+
+
+@pytest.mark.parametrize('count,kind,locale',[(10,'text','az'),(30,'text','az'),(10,'text','ru'),(30,'text','ru'),(30,'document','az')])
+def test_employee_submission_preserves_long_message_window(ready,monkeypatch,count,kind,locale):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))
+    text='Длинный синтетический текст. ' if locale=='ru' else 'Uzun sintetik mətn. '
+    monkeypatch.setattr(runs,'knowledge_context',lambda *a,**k:[{'source_id':str(uuid.UUID(int=12000+i)),'title':'Reference '+str(i),'content':text*100} for i in range(4)])
+    ids=[str(uuid.UUID(int=9000+i)) for i in range(count)]
+    for i,message_id in enumerate(ids):
+        db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming',%s,%s,%s::jsonb,now()+(%s * interval '1 second'))",
+          (A,message_id,'bounded-'+str(i),'connect:'+CA,text*3000,kind,json.dumps({'fileLength':999999999,'mediaId':'fixture-'+str(i)}),i))
+    db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert preview['max_messages']==30
+    assert [m['id'] for m in preview['messages']]==ids
+    assert sum(len(m['text']) for m in preview['messages'])<=policy.MAX_CONTEXT
+    assert all('Truncated' in m['text'] for m in preview['messages'])
+    request={'channel_id':CA,'conversation_id':'client','message_ids':ids,
+      **{k:preview['agent'][k] for k in ('agent_id','agent_version','assignment_revision')}}
+    # Existing media pipeline remains mocked and must not download attachments.
+    result=submission.submit(PROFILE,request)
+    assert generation.call_count==1
+    provider_messages=generation.call_args.args[3]
+    assert [m['ref'] for m in provider_messages]==['m'+str(i+1) for i in range(count)]
+    assert generation.call_args.kwargs['images']==[]
+    assert generation.call_args.kwargs['max_output_tokens']==1800
+    assert policy.MAX_TOKENS==16000
+    extra=generation.call_args.kwargs['extra_context']
+    assert len((service._json(provider_messages)+generation.call_args.kwargs['instructions']+service._json(extra)).encode())+2300<=policy.MAX_TOKENS
+    assert extra['reference_context_note']
+    assert len(extra['reference_knowledge'])<4
+    extraction=db.execute("SELECT source_refs,route FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid",(A,))[0]
+    assert [ref['id'] for ref in extraction['source_refs']]==ids
+    assert result['candidates'][0]['source_message_ids']==ids
+    assert not any(extraction['route'].get(flag) for flag in ('allow_external_media','allow_paid_asr','allow_vision'))
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid",(A,))[0]['n']==0
+    assert submission.submit(PROFILE,request)['already_submitted'] is True
+    assert generation.call_count==1
+    with pytest.raises(TenantLinearError):
+        submission.submit({'tenant_id':B,'telegram_id':22},request)
+    with pytest.raises(TenantLinearError,match='30'):
+        submission.submit(PROFILE,{**request,'message_ids':[str(uuid.UUID(int=10000+i)) for i in range(31)]})
+    assert generation.call_count==1
+
+
+def test_employee_preview_window_is_capped_at_30_without_global_limit_change(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    for i in range(31):
+        db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','Synthetic short message',now()+(%s * interval '1 second'))",
+          (A,str(uuid.UUID(int=11000+i)),'window-'+str(i),'connect:'+CA,i+10))
+    db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert len(preview['messages'])==30 and preview['has_earlier'] is True
+    with db.cursor() as cur:
+        ordinary=store.snapshot(cur,PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert len(ordinary['refs'])==34 and policy.MAX_MESSAGES==80
+    generation.assert_not_called()
+
+
+def test_training_reference_budget_preserves_rank_and_mandatory_instructions():
+    prompt={'assigned_agent_instructions':'DO NOT CHANGE', 'company_instructions':'SAFETY',
+      'reference_knowledge':[{'source_id':'high','content':'Relevant '*200},{'source_id':'low','content':'Əlavə '*200}]}
+    while len(prompt['reference_knowledge'])==2:
+        assert service._shrink_training_reference(prompt)
+    assert prompt['reference_knowledge']==[{'source_id':'high','content':'Relevant '*200}]
+    assert prompt['assigned_agent_instructions']=='DO NOT CHANGE' and prompt['company_instructions']=='SAFETY'
+    assert 'omitted' in prompt['reference_context_note']
+
+
+def test_training_mandatory_context_fails_closed_without_dropping_sources():
+    item={'messages':[{'ref':'m1','role':'customer','text':'Short question','customer_language_text':'Short question'}],
+      'refs':[{'id':'source-1','text_limit':14}]}
+    original=json.loads(json.dumps(item))
+    with pytest.raises(TenantLinearError,match='Контекст агента'):
+        service._shrink_training_excerpt(item)
+    assert item==original
+
+
+def test_training_oversize_mandatory_context_rejected_before_reservation(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    instructions='Обязательная инструкция безопасности. '*200
+    company='Обязательное правило компании. '*200
+    db.execute('UPDATE saas_ai_agents SET instructions=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(instructions,A,AGENT))
+    db.execute('UPDATE saas_ai_agent_settings SET company_instructions=%s WHERE tenant_id=%s::uuid',(company,A))
+    db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    request={'channel_id':CA,'conversation_id':'client','message_ids':[m['id'] for m in preview['messages']],
+      **{k:preview['agent'][k] for k in ('agent_id','agent_version','assignment_revision')}}
+    with pytest.raises(TenantLinearError,match='Контекст агента'):
+        submission.submit(PROFILE,request)
+    generation.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_extractions')[0]['n']==0
+    assert db.execute('SELECT instructions FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['instructions']==instructions
+    assert db.execute('SELECT company_instructions FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(A,))[0]['company_instructions']==company
+
+
+@pytest.mark.parametrize('training', [True, False])
+def test_extraction_serializes_native_postgres_agent_uuid(ready, monkeypatch, training):
+    """PGlite returns strings; production psycopg returns native UUID values."""
+    import tenant_dialog_ai_context as context
+    import tenant_operator_case_submission as submission
+    from tenant_chat_ai_provider import request_payload
+    db, generation, data = ready
+    monkeypatch.setattr(submission, '_connect', lambda: db)
+    original_resolve = context.resolve
+    def native_uuid(*args, **kwargs):
+        value = original_resolve(*args, **kwargs)
+        return {**value, 'agent_id': uuid.UUID(str(value['agent_id']))}
+    monkeypatch.setattr(context, 'resolve', native_uuid)
+    expected = generation.return_value
+    def serialize_only(key, model, mode, lines, draft, **kwargs):
+        assert kwargs['extra_context']['assigned_agent']['agent_id'] == AGENT
+        request_payload(model, mode, lines, draft, **{k: kwargs[k] for k in
+            ('instructions', 'extra_context', 'images', 'max_output_tokens')})
+        return expected
+    generation.side_effect = serialize_only
+    if training:
+        preview = submission.preview(PROFILE, {'channel_id': CA, 'conversation_id': 'client'})
+        result = submission.submit(PROFILE, {
+            'channel_id': CA, 'conversation_id': 'client',
+            'message_ids': [m['id'] for m in preview['messages']],
+            **{k: preview['agent'][k] for k in ('agent_id', 'agent_version', 'assignment_revision')},
+        })
+    else:
+        result = service.analyze(PROFILE, data)
+    assert result['request']['execution_status'] == 'completed'
+    assert result['request']['error_code'] == ''
+    assert len(result['candidates']) == 1
+    assert generation.call_count == 1

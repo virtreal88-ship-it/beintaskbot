@@ -93,7 +93,10 @@ class Session:
             raise Refused('provider_claim_binding_required')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
             raise Refused('invalid_scope')
-        if not 0 < idle_seconds <= max_seconds <= 120 or not 0 < poll_seconds <= 1:
+        # Only the exact, scope-bound owner pilot admits a longer session.
+        # The general ledger path retains its original reservation/time bound.
+        maximum_seconds = 600 if pilot_policy is not None else 120
+        if not 0 < idle_seconds <= max_seconds <= maximum_seconds or not 0 < poll_seconds <= 1:
             raise Refused('invalid_limits')
         self.scope = scope  # (tenant, actor, channel, conversation), server-derived
         self.authority, self.ledger, self.lease = authority, ledger, lease
@@ -528,7 +531,7 @@ class Session:
                     self.stopped_input_turns.clear()
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
-        if kind == 'talk_start' and set(event) in ({'type'},{'type','item_id','audio_end_ms'}):
+        if kind in ('talk_start','stop_response') and set(event) in ({'type'},{'type','item_id','audio_end_ms'}):
             item_id=event.get('item_id')
             audio_end_ms=event.get('audio_end_ms')
             if 'item_id' in event and (not isinstance(item_id,str) or not item_id or len(item_id)>128):
@@ -536,9 +539,18 @@ class Session:
             if 'audio_end_ms' in event and (type(audio_end_ms) is not int or audio_end_ms<0):
                 raise Refused('talk_interrupt_offset_invalid')
             async with self.lock:
+                # Only the explicit Stop button may interrupt an assistant
+                # response. An automatic listening request racing provider
+                # output must not cancel, truncate, or close the conversation.
+                if kind=='talk_start' and (self.response_inflight or self.item is not None or
+                    self.current_reservation is not None or self.pending_input_item_id is not None or
+                    self.response_pending or self.interrupt_pending or self.truncate_pending or self.greeting_pending):
+                    return
                 if (self.muted or self.input_turn is not None or self.pending_input_item_id is not None or
                     self.response_pending or self.interrupt_pending or self.truncate_pending or self.greeting_pending):
-                    raise Refused('talk_not_ready')
+                    # Duplicate Stop or a Stop while input is still committing
+                    # cannot create another turn or repeat a cancellation.
+                    return
                 if self.response_inflight and self.item is None:
                     # The user can interrupt while the model is still thinking,
                     # before its first audio chunk reaches the browser.
@@ -596,9 +608,11 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
-                if self.greeting_pending:
-                    # Ignore early frames until the greeting has actually
-                    # finished playing; the browser also gates microphone uplink.
+                if self.greeting_pending or (self.input_turn is None and (
+                    self.response_inflight or self.item is not None or self.response_pending or
+                    self.current_reservation is not None or self.pending_input_item_id is not None)):
+                    # Ignore residual microphone/echo frames until playback
+                    # completes, unless explicit Stop opened a replacement turn.
                     return
                 if not isinstance(self.input_turn,dict) or self.input_turn.get('stopped') is True:
                     raise Refused('audio_without_talk_start')

@@ -238,3 +238,26 @@ class Worker(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+def test_material_updates_only_for_newer_same_scope_nonbaseline(monkeypatch):
+    from unittest.mock import MagicMock, Mock
+    import tenant_linear_observer as observer
+    import tenant_proactive_risk_delivery as delivery
+    previous_issue=row(state={'id':BEFORE,'name':'Todo'},assignee={'id':'x','name':'Ali'})
+    current=row(state={'id':DONE,'name':'Done'},assignee={'id':'y','name':'Sara'})
+    prior={'state_id':BEFORE,'source_version':source_time('2026-10-08T09:00:00Z'),
+           'source_scope':'scope','snapshot':previous_issue}
+    cur=MagicMock(); cur.fetchone.return_value=prior
+    capture=Mock(); monkeypatch.setattr(delivery,'record_linear_material_update',capture)
+    monkeypatch.setattr(observer,'replace_source_findings',Mock())
+    observer.store_issue(cur,TENANT,config(),current,baseline=False,source_scope='scope')
+    capture.assert_called_once()
+    for baseline,scope,version in [(True,'scope','2026-10-08T09:00:00Z'),
+                                   (False,'other','2026-10-08T09:00:00Z'),
+                                   (False,'scope',STAMP),
+                                   (False,'scope','2026-10-08T11:00:00Z')]:
+        capture.reset_mock(); cur.reset_mock()
+        cur.fetchone.return_value={**prior,'source_version':source_time(version)}
+        observer.store_issue(cur,TENANT,config(),current,baseline=baseline,source_scope=scope)
+        capture.assert_not_called()

@@ -2,7 +2,7 @@
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const base='/api/platform/ai/dialog-consultations';
-const message={id:'11111111-1111-4111-8111-111111111111',body:'Printer is unavailable',message_type:'text',direction:'incoming',happened_at:'2026-11-01T12:00:00Z',source_version:'preview-version'};
+const message={id:'11111111-1111-4111-8111-111111111111',body:'Printer is unavailable',message_type:'text',direction:'incoming',happened_at:'2026-11-01T12:00:00Z',public_sender_version:'b'.repeat(64),source_version:'preview-version'};
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')?'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe':fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{for(const kind of ['dialog','case'])for(const width of [390,1280]){

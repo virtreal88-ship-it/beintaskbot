@@ -246,7 +246,7 @@ def _compose_pilot_session(authority,client,lease,session_id):
     provider=create_pilot_provider(policy,ServerCredentialLoader(authority))
     return Session(authority.session_scope,authority=authority,ledger=None,lease=lease,
                    context=CopilotContext(authority),provider=provider,client=client,history=None,
-                   executor=_EXECUTOR,session_id=session_id,pilot_policy=policy)
+                   executor=_EXECUTOR,session_id=session_id,pilot_policy=policy,max_seconds=600)
 
 
 async def prepare_server_session(profile,route,client,lease):

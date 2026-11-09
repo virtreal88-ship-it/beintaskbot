@@ -7,8 +7,11 @@ FIELDS = '''id identifier title description priority url dueDate createdAt updat
   assignee { id name email }'''
 
 
-def issue(key, issue_id):
-    return query(key, 'query($id:String!) { issue(id:$id) { ' + FIELDS + ' } }', {'id': issue_id}).get('issue')
+def issue(key, issue_id, *, timeout=None):
+    document = 'query($id:String!) { issue(id:$id) { ' + FIELDS + ' } }'
+    if timeout is None:
+        return query(key, document, {'id': issue_id}).get('issue')
+    return query(key, document, {'id': issue_id}, timeout=timeout).get('issue')
 
 
 def issue_page(key, issue_filter, after=None):

@@ -105,7 +105,11 @@
       }
       if(currentItem===null){currentItem=item;itemStartTime=null;itemEndTime=null;}
       const length=pcm.byteLength/2,buf=ctx.createBuffer(1,length,24000),channel=buf.getChannelData(0),view=new DataView(pcm.buffer,pcm.byteOffset,pcm.byteLength);
-      for(let i=0;i<length;i++)channel[i]=view.getInt16(i*2,true)/32768;
+      // Modest +2 dB lift with smooth limiting, never hard-clipped PCM.
+      for(let i=0;i<length;i++){
+        const sample=view.getInt16(i*2,true)/32768;
+        channel[i]=Math.tanh(sample*1.26);
+      }
       const node=ctx.createBufferSource();node.buffer=buf;node.connect(ctx.destination);
       const at=Math.max(ctx.currentTime,nextTime);segments.push(node);
       if(itemStartTime===null)itemStartTime=at;

@@ -127,3 +127,25 @@ test('local barge-in pauses queued assistant audio on sustained speech, not quie
   assert.equal(audio.interrupt('assistant-item'),0,'the later server VAD interrupt remains safe and idempotent');
   await audio.close();
 });
+
+test('half-duplex output ignores speech and gently boosts quiet PCM without clipping', async()=>{
+  let processor,buffer,stops=0,speech=0;
+  class Ctx{
+    constructor(){this.sampleRate=24000;this.state='running';this.destination={};this.currentTime=0;}
+    async resume(){} async close(){this.state='closed';}
+    createMediaStreamSource(){return{connect(){},disconnect(){}};}
+    createScriptProcessor(){processor={connect(){},disconnect(){}};return processor;}
+    createGain(){return{gain:{value:1},connect(){},disconnect(){}};}
+    createBuffer(_,length){buffer=new Float32Array(length);return{getChannelData:()=>buffer};}
+    createBufferSource(){return{connect(){},start(){},stop(){stops++;}};}
+  }
+  const audio=await openAudio(()=>{},{AudioContext:Ctx,navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[],getAudioTracks:()=>[]})}}},()=>speech++,{pushToTalk:true});
+  const samples=new Int16Array([3277,-3277,32767,-32768]);
+  audio.play('answer',new Uint8Array(samples.buffer));
+  assert.ok(buffer[0]>0.1&&buffer[0]<0.13);assert.ok(buffer[1]<-0.1);
+  assert.ok([...buffer].every(x=>Math.abs(x)<1),'limited output never clips');
+  const voice=Float32Array.from({length:1024},(_,i)=>Math.sin(i*0.2)*0.3);
+  for(let i=0;i<10;i++)processor.onaudioprocess({inputBuffer:{getChannelData:()=>voice}});
+  assert.equal(stops,0);assert.equal(speech,0,'speech never cancels half-duplex output');
+  await audio.close();
+});
