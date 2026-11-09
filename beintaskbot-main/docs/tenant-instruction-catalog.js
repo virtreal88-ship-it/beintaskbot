@@ -11,7 +11,7 @@ const words={
 };
 const t=k=>(words[lang]&&words[lang][k])||k;
 const byId=id=>document.getElementById(id);
-let member=null,canManageLessons=false,canManageGuides=false,guidePublic=[],guideManaged=[],publishedLessons=[],managedLessons=[],selected=null,scope='all',player=null,epoch=0,searchTimer=null;
+let member=null,canManageLessons=false,canManageGuides=false,guidePublic=[],guideManaged=[],publishedLessons=[],managedLessons=[],selected=null,scope='all',player=null,epoch=0,searchTimer=null,guideUnavailable=false,lessonsUnavailable=false;
 function make(tag,text,attrs){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(attrs)for(const[k,v]of Object.entries(attrs))e.setAttribute(k,String(v));return e}
 function idParams(){return new URLSearchParams({expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)})}
 async function responseJson(url){const r=await fetch(url,{credentials:'same-origin',cache:'no-store'});let body={};try{body=await r.json()}catch{}return{r,body}}
@@ -19,17 +19,18 @@ function errorBox(text){const n=byId('catalogStatus');if(n)n.textContent=text}
 function noteStatus(item){return t(item.status||'unknown')}
 function sameArticle(a,b){return ['title','slug','category','body','body_format'].every(k=>(a&&a[k]||'')===(b&&b[k]||''))}
 async function loadGuide(){
- guidePublic=[];guideManaged=[];canManageGuides=false;
+ guidePublic=[];guideManaged=[];canManageGuides=false;guideUnavailable=false;
  try{const{r,body}=await responseJson('/api/guides/public');if(r.ok&&body.success&&Array.isArray(body.items))guidePublic=body.items}catch{}
  try{const{r,body}=await responseJson('/api/guides');if(r.ok&&body.success&&Array.isArray(body.items)){guideManaged=body.items;canManageGuides=true}}catch{}
+ guideUnavailable=!guidePublic.length&&!guideManaged.length;
  const publicBySlug=new Map(guidePublic.map(x=>[x.slug,x]));
  if(canManageGuides){guidePublic=guideManaged.flatMap(row=>{const pub=row.published||publicBySlug.get(row.slug)||null,edit=row.draft||pub;if(!edit)return[];return[{kind:'guide',slug:row.slug,title:edit.title||row.slug,category:edit.category||'',body:edit.body||'',body_format:edit.body_format||'text',images:edit.images||[],status:!pub?'draft':sameArticle(edit,pub)?'published':'draft',published:!!pub,updated_at:row.updated_at||'',_pending:!!pub&&!sameArticle(edit,pub)}]})}
  else guidePublic=guidePublic.map(row=>({kind:'guide',slug:row.slug,title:row.title||row.slug,category:row.category||'',body:row.body||'',body_format:row.body_format||'text',images:row.images||[],status:'published',published:true}));
 }
 async function pages(url){const items=[];let offset=0;for(let n=0;n<5;n++){const target=new URL(url,location.origin);target.searchParams.set('offset',String(offset));const{r,body}=await responseJson(target.href);if(!r.ok||!body.success)throw Error(body.error||r.status);const page=body.result||{};items.push(...(page.items||[]));if(page.next_offset==null)break;offset=page.next_offset}return items}
 async function loadLessons(q,state){
- publishedLessons=[];managedLessons=[];canManageLessons=false;
- try{const params=idParams();params.set('q',q);publishedLessons=await pages('/api/platform/instruction-catalog?'+params.toString())}catch{}
+ publishedLessons=[];managedLessons=[];canManageLessons=false;lessonsUnavailable=false;
+ try{const params=idParams();params.set('q',q);publishedLessons=await pages('/api/platform/instruction-catalog?'+params.toString())}catch{lessonsUnavailable=true}
  try{const params=idParams();params.set('q',q);if(state)params.set('state',state);managedLessons=await pages('/api/platform/instructions?'+params.toString());canManageLessons=true}catch{}
 }
 function catalogItems(state){
@@ -131,7 +132,7 @@ function articleView(item,host){
  if(item.kind==='guide'){
   const body=make('div',undefined,{class:'catalog-article-body'});
   if(item.body_format==='html')body.append(safeHTML(item.body));else body.textContent=item.body||t('noText');host.append(body);
-  if(item.images?.length){const gallery=make('div',undefined,{class:'catalog-images'});for(const img of item.images){const u=new URL(img.src||'',location.origin);if(u.origin!==location.origin||!u.pathname.startsWith('/api/guides/public/images/'))continue;const figure=make('figure');figure.append(make('img',undefined,{src:u.href,alt:img.alt||'',loading:'lazy'}));if(img.alt)figure.append(make('figcaption',img.alt));gallery.append(figure)}host.append(gallery)}
+  if(item.images?.length){const gallery=make('div',undefined,{class:'catalog-images'});for(const img of item.images){let src='';if(img.src){const u=new URL(img.src,location.origin);if(u.origin===location.origin&&u.pathname.startsWith('/api/guides/public/images/'))src=u.href}else if(canManageGuides&&img.data&&['image/jpeg','image/png'].includes(img.mime))src='data:'+img.mime+';base64,'+img.data;if(!src)continue;const figure=make('figure');figure.append(make('img',undefined,{src,alt:img.alt||'',loading:'lazy'}));if(img.alt)figure.append(make('figcaption',img.alt));gallery.append(figure)}host.append(gallery)}
  }else{
   host.append(make('p',t('public'),{class:'catalog-meta'}),make('div',undefined,{id:'catalogLessonPlayer',class:'catalog-lesson-player'}));
   if(item.status!=='published')host.append(make('p',t(item.status),{class:'catalog-status'}));
@@ -157,7 +158,7 @@ async function refresh(){
   const q=(byId('catalogSearch')?.value||'').trim(),state=byId('catalogState')?.value||'';
   await loadLessons(q,state);if(request!==epoch)return;
   byId('newArticle').hidden=!canManageGuides;byId('manageGuides').hidden=!canManageGuides;byId('newLesson').hidden=!canManageLessons;byId('createAI').hidden=!canManageLessons;byId('catalogState').hidden=!canManageLessons;
-  errorBox('');render();
+  const warnings=[];if(guideUnavailable)warnings.push(t('articlesUnavailable'));if(lessonsUnavailable)warnings.push(t('lessonsUnavailable'));errorBox(warnings.join(' · '));render();
  }catch(e){if(request!==epoch)return;errorBox(e.message||t('error'))}
 }
 function applyLocale(){
@@ -176,7 +177,7 @@ function boot(){
  applyLocale();
  const status=byId('catalogState');if(status)for(const key of ['','draft','pending_review','approved','published','archived'])status.append(make('option',key?t(key):t('allStatus'),{value:key}));
  const search=byId('catalogSearch');search?.addEventListener('input',()=>{selected=null;clearTimeout(searchTimer);searchTimer=setTimeout(()=>refresh(),220)});
- status?.addEventListener('change',()=>refresh());
+ status?.addEventListener('change',()=>{selected=null;refresh()});
  byId('newArticle')?.addEventListener('click',()=>openEditor('/guide-editor?new=1&parent='+encodeURIComponent(scope.startsWith('g:')?scope.slice(2):''),t('editorTitle')));
  byId('newLesson')?.addEventListener('click',()=>openEditor('/app/instructions?lesson_new=1&site_lang='+encodeURIComponent(lang),t('editorTitle')));
  byId('createAI')?.addEventListener('click',()=>{location.href='/app/ai-instructor?site_lang='+encodeURIComponent(lang)});
