@@ -143,9 +143,10 @@ class StorageTests(unittest.TestCase):
     def store(self, resource='leads'):
         return self.module.SyncPageStore(self.conn, {**self.row,'resource':resource})
 
-    def current(self):
-        self.cur.fetchone.side_effect = [{'run_id':'run-1'},
-            {'account_domain':'example.kommo.com','connected_at':'connected'}]
+    def current(self, integrations=None):
+        self.cur.fetchone.return_value = {'run_id':'run-1'}
+        self.cur.fetchall.return_value = integrations if integrations is not None else [
+            {'provider':'kommo','status':'connected','account_domain':'example.kommo.com','connected_at':'connected'}]
 
     def test_page_snapshot_and_cursor_share_one_commit(self):
         self.current()
@@ -159,6 +160,25 @@ class StorageTests(unittest.TestCase):
         conflict = sql.split('DO UPDATE SET')[1]
         self.assertNotIn('last_message=', conflict); self.assertNotIn('channel=', conflict)
 
+    def test_connection_selection_prefers_active_oauth_when_both_rows_exist(self):
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'connected','account_domain':'oauth.kommo.com','connected_at':'oauth-time'},
+            {'provider':'kommo_manual','status':'connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}]
+        self.assertEqual(self.module.connection_id(self.cur,'company-a'),'oauth.kommo.com:oauth-time')
+
+    def test_connection_selection_falls_back_to_manual_and_scopes_identity(self):
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'awaiting_oauth','account_domain':'oauth.kommo.com','connected_at':'oauth-time'},
+            {'provider':'kommo_manual','status':'connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}]
+        self.assertEqual(self.module.connection_id(self.cur,'company-a'),'manual:manual.kommo.com:manual-time')
+
+    def test_connection_selection_rejects_revoked_credentials_and_can_lock_both_rows(self):
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'awaiting_oauth','account_domain':'oauth.kommo.com','connected_at':'oauth-time'},
+            {'provider':'kommo_manual','status':'not_connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}]
+        self.assertEqual(self.module.connection_id(self.cur,'company-a',lock=True),'')
+        self.assertIn('FOR SHARE',self.cur.execute.call_args.args[0])
+
     def test_database_failure_cannot_advance_cursor(self):
         self.current(); self.cur.executemany.side_effect = RuntimeError('write failed')
         with self.assertRaises(RuntimeError): self.store().save_page([{'id':7}], done=False)
@@ -171,12 +191,42 @@ class StorageTests(unittest.TestCase):
         self.cur.executemany.assert_not_called(); self.conn.rollback.assert_called_once()
 
     def test_replaced_integration_during_get_cannot_write_snapshots(self):
-        self.cur.fetchone.side_effect = [{'run_id':'run-1'},
-            {'account_domain':'other.kommo.com','connected_at':'new'}]
+        self.current([{'provider':'kommo','status':'connected','account_domain':'other.kommo.com','connected_at':'new'}])
         self.store().save_page([{'id':7}], done=True)
         self.cur.executemany.assert_not_called()
         self.assertIn("status=CASE WHEN", self.cur.execute.call_args.args[0])
         self.assertTrue(self.cur.execute.call_args.args[1][0])
+
+    def test_manual_refresh_page_is_saved_when_oauth_is_only_awaiting(self):
+        self.row['connection_id']='manual:manual.kommo.com:manual-time'
+        self.current([
+            {'provider':'kommo','status':'awaiting_oauth','account_domain':'oauth.kommo.com','connected_at':'oauth-time'},
+            {'provider':'kommo_manual','status':'connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}])
+        self.store().save_page([{'id':7,'pipeline_id':10,'status_id':100}],done=False)
+        self.cur.executemany.assert_called_once()
+        self.conn.commit.assert_called_once()
+
+    def test_manual_refresh_page_is_fenced_when_oauth_takes_over_or_manual_is_revoked(self):
+        self.row['connection_id']='manual:manual.kommo.com:manual-time'
+        scenarios=[
+            [{'provider':'kommo','status':'connected','account_domain':'oauth.kommo.com','connected_at':'oauth-new'},
+             {'provider':'kommo_manual','status':'connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}],
+            [{'provider':'kommo','status':'awaiting_oauth','account_domain':'oauth.kommo.com','connected_at':'oauth-time'},
+             {'provider':'kommo_manual','status':'not_connected','account_domain':'manual.kommo.com','connected_at':'manual-time'}],
+        ]
+        for integrations in scenarios:
+            self.cur.reset_mock()
+            self.current(integrations)
+            self.store().save_page([{'id':7,'pipeline_id':10,'status_id':100}],done=False)
+            self.cur.executemany.assert_not_called()
+            self.assertTrue(any('status=CASE WHEN' in call.args[0] for call in self.cur.execute.call_args_list))
+
+    def test_native_crm_data_import_scheduler_remains_oauth_only(self):
+        self.cur.fetchall.return_value=[]
+        self.assertEqual(self.module.enqueue_enabled_imports(),0)
+        sql=self.cur.execute.call_args.args[0]
+        self.assertIn("i.provider='kommo' AND i.status='connected'",sql)
+        self.assertNotIn("'kommo_manual'",sql)
 
     def test_retry_is_bounded_and_never_changes_page(self):
         self.store().fail()
@@ -185,14 +235,17 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(params, (False,'company-a','leads','run-1'))
 
     def test_concurrent_enqueue_returns_existing_job_without_reset(self):
-        self.cur.fetchone.side_effect = [{'account_domain':'example.kommo.com','connected_at':'connected'},
-            {**self.row, 'status':'running','pages_done':3}]
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'connected','account_domain':'example.kommo.com','connected_at':'connected'}]
+        self.cur.fetchone.return_value = {**self.row, 'status':'running','pages_done':3}
         result = self.module.enqueue('company-a','leads')
         self.assertEqual(result, {'resource':'leads','status':'running','pages_done':3})
         self.assertFalse(any('INSERT INTO' in call.args[0] for call in self.cur.execute.call_args_list))
 
     def test_no_integration_no_enqueue(self):
-        self.cur.fetchone.return_value = None
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'awaiting_oauth','account_domain':'example.kommo.com','connected_at':'old'},
+            {'provider':'kommo_manual','status':'not_connected','account_domain':'manual.kommo.com','connected_at':'old'}]
         with self.assertRaises(RuntimeError): self.module.enqueue('company-a','tasks')
         self.assertFalse(any('INSERT INTO' in call.args[0] for call in self.cur.execute.call_args_list))
 
@@ -217,12 +270,47 @@ class StorageTests(unittest.TestCase):
         self.assertFalse(any("SET status='running'" in call.args[0] for call in self.cur.execute.call_args_list))
 
     def test_failed_job_restarts_at_same_page_instead_of_page_one(self):
-        self.cur.fetchone.side_effect = [{'account_domain':'example.kommo.com','connected_at':'connected'},
-            {**self.row,'status':'failed'}, {**self.row,'status':'queued'}]
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'connected','account_domain':'example.kommo.com','connected_at':'connected'}]
+        self.cur.fetchone.side_effect = [{**self.row,'status':'failed'}, {**self.row,'status':'queued'}]
         self.module.enqueue('company-a','leads')
         update = self.cur.execute.call_args.args[0]
         self.assertIn("status='queued'", update)
         self.assertNotIn('next_page=1', update)
+
+
+class PolicyStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.conn=MagicMock()
+        self.conn.__enter__.return_value=self.conn
+        self.cur=self.conn.cursor.return_value.__enter__.return_value
+        connect=MagicMock(return_value=self.conn)
+        self.module=load_module('tenant_crm_sync_policy', {
+            '_connect':connect,'_ensure_schema':Mock(),'_json':json.dumps,'uuid':uuid,
+        }, {'tenant_platform_core'})
+        self.profile={'tenant_id':'00000000-0000-0000-0000-000000000001',
+                      'telegram_id':20,'active':True,'role':'owner'}
+
+    def read(self, integrations):
+        self.cur.fetchall.side_effect=[[],[],[],integrations]
+        return self.module.read_settings(self.profile)
+
+    def test_manual_connection_is_shown_as_active_with_oauth_waiting(self):
+        result=self.read([
+            {'provider':'kommo','status':'awaiting_oauth'},
+            {'provider':'kommo_manual','status':'connected'},
+        ])
+        self.assertEqual(result['integrations'],{'kommo':'connected'})
+        self.assertEqual(result['settings'],[])
+        self.assertNotIn('kommo_manual',result['integrations'])
+
+    def test_connected_oauth_remains_preferred_when_manual_row_is_also_connected(self):
+        result=self.read([
+            {'provider':'kommo','status':'connected'},
+            {'provider':'kommo_manual','status':'connected'},
+            {'provider':'beinsystems','status':'connected'},
+        ])
+        self.assertEqual(result['integrations'],{'kommo':'connected','beinsystems':'connected'})
 
 
 class SchemaTests(unittest.TestCase):
