@@ -94,6 +94,8 @@ on:
       - 'beintaskbot-main/tenant_media_coverage.py'
       - 'beintaskbot-main/tenant_ai_agent_worker.py'
       - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tests/test_group_consultation_receipt.py'
+      - 'beintaskbot-main/tests/fixtures/connect_group_submission_responses.json'
       - 'beintaskbot-main/tenant_ai_agent_connect.py'
       - 'beintaskbot-main/tests/test_shared_media_coverage.py'
       - 'beintaskbot-main/tests/test_connect_documents.py'
