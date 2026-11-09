@@ -147,7 +147,11 @@ const server=http.createServer((req,res)=>{
   const reloadPrompts=[];
   const acceptReloadPrompt=dialog=>{reloadPrompts.push(dialog.type());void dialog.accept()};
   page.on('dialog',acceptReloadPrompt);
-  await iframe.locator('#instructions').evaluate(()=>location.reload()).catch(()=>{});
+  const reloadFrame=page.frames().find(frame=>frame.url().includes('lesson_new=1'));
+  assert(reloadFrame,'new lesson iframe exists before reload');
+  const reloadNavigation=reloadFrame.waitForNavigation({waitUntil:'domcontentloaded'});
+  await reloadFrame.evaluate(()=>location.reload()).catch(()=>{});
+  await reloadNavigation;
   await page.waitForFunction(()=>{const frame=document.querySelector('#instructionEditorFrame');try{return frame.contentDocument?.querySelector('.il-lesson-settings input')?.value==='Unsaved warehouse draft'}catch{return false}});
   assert(reloadPrompts.includes('beforeunload'),'reload asks before leaving dirty editor');
   assert(reloadPrompts.includes('confirm'),'lesson_new=1 restores the cached draft after reload');
