@@ -252,6 +252,39 @@ assert.equal(idd.body.textContent.includes('Company A published'),false,'the pre
 assert.equal(idd.querySelector('#newLesson').hidden,true,'the new employee keeps the existing read-only permissions');
 identityDom.window.close();
 
+{
+let accountIdentity={tenant_id:tenantA,telegram_id:22,role:'owner'};
+const accountSwitch=mount(null,async url=>{
+ const u=apiCall(url);
+ if(u.pathname==='/api/platform/me')return makeResponse(200,{member:accountIdentity});
+ if(u.pathname==='/api/guides/public')return makeResponse(200,{success:true,items:[]});
+ if(u.pathname==='/api/guides')return makeResponse(403,{success:false,error:'No guide edit access'});
+ if(u.pathname==='/api/platform/instruction-catalog/account-lesson')return makeResponse(200,{success:true,result:{id:'account-lesson',doc:{schema_version:1,title:'Account lesson',operation:'inventory.account',language:'en',slides:[],subtitles:{slides:[]}}}});
+ if(u.pathname==='/api/platform/instruction-catalog')return makeResponse(200,{success:true,result:{items:[lesson('account-lesson','Account lesson')],next_offset:null}});
+ if(u.pathname==='/api/platform/instructions')return accountIdentity.role==='owner'?makeResponse(200,{success:true,result:{items:[],next_offset:null}}):makeResponse(403,{success:false,error:'Read only'});
+ throw Error('Unexpected /me identity-switch request '+u.pathname);
+});
+await settle(60);
+const ad=accountSwitch.window.document;
+ad.querySelector('.catalog-card-title').click();
+await settle(30);
+ad.querySelector('.catalog-detail .catalog-actions button').click();
+const accountDialog=ad.querySelector('#instructionEditor'),accountFrame=ad.querySelector('#instructionEditorFrame'),accountMessages=[];
+Object.defineProperty(accountFrame.contentWindow,'tenantInstructionDirty',{configurable:true,value:()=>true});
+Object.defineProperty(accountFrame.contentWindow,'postMessage',{configurable:true,value:data=>{
+ accountMessages.push(data.type);
+ if(data.type==='tenant-instruction-tenant-change')setTimeout(()=>accountSwitch.window.dispatchEvent(new accountSwitch.window.MessageEvent('message',{origin:accountSwitch.window.location.origin,source:accountFrame.contentWindow,data:{type:'tenant-instruction-tenant-change-refused'}})),0);
+}});
+accountIdentity={tenant_id:tenantA,telegram_id:23,role:'employee'};
+const accountSearch=ad.querySelector('#catalogSearch');accountSearch.value='identity-refresh';accountSearch.dispatchEvent(new accountSwitch.window.Event('input',{bubbles:true}));
+await settle(360);
+assert.equal(accountDialog.open,false,'a /me identity change force-closes a dirty editor instead of allowing the old iframe to refuse');
+assert.equal(accountFrame.isConnected,false,'a /me identity change replaces the previous account iframe');
+assert.deepEqual(accountMessages,[],'a /me identity change does not send the old editor a context-change handshake');
+assert.equal(ad.querySelector('#newLesson').hidden,true,'the new employee cannot keep the previous owner controls');
+accountSwitch.window.close();
+}
+
 let failMe=0;
 const failedRefresh=mount(null,async url=>{
  const u=apiCall(url);
