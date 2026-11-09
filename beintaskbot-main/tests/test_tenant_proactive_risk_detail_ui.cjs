@@ -71,6 +71,28 @@ async function until(predicate,message){for(let i=0;i<40;i++){if(predicate())ret
  d.querySelector('[role="dialog"] button').click();
  assert.equal(w.location.search,'','Close removes route');
  assert.equal(d.querySelector('[role="dialog"]'),null);
+ w.fetch=async()=>({ok:true,status:200,json:async()=>({success:true,alert:{
+   event_type:'linear_update',update_title:'Task updated',update_body:'SERVER FALLBACK SHOULD NOT SHOW',
+   update_data:{identifier:'BS-1513',owner_changed:true,old_assigned:false,new_assigned:true,new_owner:'<img src=x onerror=alert(1)> Leyla',state_changed:true,old_state:'In progress',new_state:'Completed'},
+   source_kind:'linear',source_url:'https://linear.app/acme/issue/BS-1513',rule_id:'high_priority_unassigned',
+   context:{title:'Previously alerted issue',status:'Completed',assigned:true,topic:'price_access',source_mode:'live'}
+ }})});
+ w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));
+ await until(()=>!!d.querySelector('.risk-alert-update'),'dedicated update section missing');
+ assert(d.querySelector('.risk-alert-update').textContent.includes('Status in Linear: In progress → Completed.'));
+ assert(!d.body.textContent.includes('Why it needs attention'),'completed update must not suggest the old risk is active');
+ assert(!d.body.textContent.includes('What to check next'),'completed update must not prescribe stale next steps');
+ assert(d.body.textContent.includes('does not confirm'),'update retains limits of source verification');
+ assert(!d.querySelector('img'),'update copy is inert text');
+ for(const [lang,ownerLabel,stateLabel] of [['ru','Ответственный','Статус в Linear'],['az','Məsul şəxs','Linear-da status'],['en','Assignee','Status in Linear']]){
+   w.tenantI18n.language=lang;d.dispatchEvent(new w.CustomEvent('tenant-language'));
+   const copy=d.querySelector('.risk-alert-update').textContent;
+   assert(copy.includes(ownerLabel)&&copy.includes(stateLabel),'update labels follow '+lang);
+   assert(copy.includes('Leyla')&&copy.includes('Completed'),'provider names stay verbatim');
+   assert(!copy.includes('SERVER FALLBACK SHOULD NOT SHOW'));
+   assert(!d.querySelector('img'),'localized update stays inert');
+ }
+ d.querySelector('[role="dialog"] button').click();
  let late;
  w.fetch=()=>new Promise(resolve=>{late=resolve});
  w.history.pushState({},'',url);w.dispatchEvent(new w.PopStateEvent('popstate'));

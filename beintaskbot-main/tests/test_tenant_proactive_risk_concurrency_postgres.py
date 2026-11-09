@@ -304,3 +304,27 @@ def test_two_parallel_push_claims_do_not_upgrade_shared_tenant_lock(risk_postgre
     with _profiled_connection(dsn,schema) as conn:
         states=conn.execute("SELECT status,count(*) AS n FROM saas_proactive_risk_alert_deliveries GROUP BY status").fetchall()
     assert {row['status']:row['n'] for row in states}=={'sending':2}
+
+
+def test_concurrent_material_update_enqueues_once(risk_postgres):
+    dsn, schema, tenant = risk_postgres
+    issue_id = str(uuid4())
+    original = str(uuid4())
+    with _profiled_connection(dsn, schema) as conn:
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_events
+          (id,tenant_id,recipient_id,source_kind,source_id,rule_id,source_scope,source_version,alert_fingerprint,state)
+          VALUES(%s,%s,101,'linear',%s,'access_control_claim','scope','2026-11-08T10:00:00Z','risk','expanded')''',
+          (original,tenant,issue_id))
+        conn.execute('''INSERT INTO saas_proactive_risk_alert_deliveries
+          (tenant_id,event_id,recipient_id,channel,status) VALUES(%s,%s,101,'internal','delivered')''', (tenant,original))
+    before={'id':issue_id,'state':{'id':'todo','name':'Todo'},'assignee':{'id':'a','name':'Ali'}}
+    after={'id':issue_id,'state':{'id':'done','name':'Done'},'assignee':{'id':'b','name':'Sara'}}
+    def observe(_):
+        with _profiled_connection(dsn,schema) as conn:
+            with conn.cursor() as cur:
+                delivery.record_linear_material_update(cur,tenant,'scope','2026-11-08T10:01:00Z',before,after)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(observe,range(16)))
+    with _profiled_connection(dsn,schema) as conn:
+        rows=conn.execute("SELECT state FROM saas_proactive_risk_alert_events WHERE event_type='linear_update'").fetchall()
+    assert rows == [{'state':'pending'}]

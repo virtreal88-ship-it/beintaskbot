@@ -241,6 +241,10 @@ def _public(row):
     value.update(title=str(row.get('title') or '')[:200], body=str(row.get('body') or '')[:1000],
                  target_url=str(row.get('target_url') or ''), kind='consultation' if row.get('is_reply') else row.get('module') or 'account',
                  target_state=row.get('target_state') or 'legacy')
+    if row.get('risk_update_pending') is True:
+        value['risk_update_pending'] = True
+    if isinstance(row.get('risk_update'), dict):
+        value['risk_update'] = row['risk_update']
     if row.get('is_reply'):
         value['consultation_id'] = str(row['consultation_id'])
         value['case_id'] = str(row['case_id']) if row.get('case_id') else None
@@ -280,6 +284,68 @@ def case_context(cur,profile,notification_id,ticket_id):
     return context
 
 
+def _hydrate_risk_updates(cur, tenant, actor, rows):
+    """Hydrate an owner page with one bounded live Linear request, never cached.
+
+    Prior source labels are stored only in the scoped update outbox, not the
+    notification ledger; they are projected only after current authorization.
+    """
+    candidates = {}
+    for row in rows:
+        if not str(row.get('event_key') or '').startswith('proactive_risk:'):
+            continue
+        try:
+            event_id = identifier(row['event_key'].split(':', 1)[1])
+        except TenantLinearError:
+            continue
+        candidates[event_id] = row
+    if not candidates:
+        return
+    cur.execute("SELECT to_regclass('saas_proactive_risk_alert_events') IS NOT NULL AS ready")
+    if not (cur.fetchone() or {}).get('ready'):
+        return
+    from tenant_proactive_risk_delivery import (_owner_profile, _channels,
+        material_update_details, material_update_text, material_update_payload)
+    cur.execute("""SELECT * FROM saas_proactive_risk_alert_events
+      WHERE tenant_id=%s::uuid AND recipient_id=%s AND id=ANY(%s::uuid[])""",
+      (tenant, actor, list(candidates)))
+    events = {str(event['id']): event for event in cur.fetchall()}
+    updates = []
+    for event_id, row in candidates.items():
+        event = events.get(event_id)
+        if not event:
+            row.update(title='Tapşırıq üzrə bildiriş', body='Bildiriş artıq əlçatan deyil.',
+                       target_url='', target_state='unavailable')
+            continue
+        if event.get('event_type') != 'linear_update':
+            continue
+        row.pop('risk_update', None)
+        row.update(risk_update_pending=True, title='Tapşırıq üzrə yenilənmə',
+                   body='Mənbəni təsdiqləmək mümkün olmadı. Daha sonra yoxlayın.',
+                   target_url='', target_state='unavailable')
+        if event.get('state') == 'expanded':
+            updates.append(event)
+    if not updates:
+        return
+    try:
+        owner = _owner_profile(cur, tenant, actor)
+        if not owner or 'internal' not in _channels(owner, tenant):
+            return
+        details = material_update_details(cur, updates, owner, timeout=(1, 2))
+    except (TenantLinearError, TimeoutError, ConnectionError, OSError):
+        # A source outage must not expose saved or unverified source text.
+        return
+    for event in updates:
+        event_id = str(event['id'])
+        detail = details.get(event_id)
+        if not detail:
+            continue
+        title, body = material_update_text(event, detail)
+        candidates[event_id].update(title=title, body=body,
+            risk_update=material_update_payload(event, detail), target_state='legacy',
+            target_url='/app?view=linear&risk_alert_id=' + event_id)
+
+
 def listing(profile, status='unread', limit=20, before=''):
     if status not in {'unread', 'all'}:
         raise TenantLinearError('Некорректный фильтр уведомлений.', 400)
@@ -304,6 +370,7 @@ def listing(profile, status='unread', limit=20, before=''):
             rows = cur.fetchall()
             unread = int(rows[0]['unread_count']) if rows else 0
             rows = [row for row in rows if row.get('id')]
+            _hydrate_risk_updates(cur, tenant, actor, rows[:limit])
     next_before = None
     if len(rows) > limit:
         last = rows[limit - 1]

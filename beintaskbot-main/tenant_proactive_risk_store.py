@@ -167,7 +167,16 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             if event['state'] != 'expanded' or not _channels(profile, tenant):
                 conn.commit()
                 raise TenantLinearError('Bu siqnal artıq mövcud deyil və mənbəyi təsdiqlənmir.', 404)
-            finding = current_finding(cur, event, profile)
+            if event.get('event_type') == 'linear_update':
+                from tenant_proactive_risk_delivery import material_update_detail, material_update_text, material_update_payload
+                finding = material_update_detail(cur, event, profile)
+                if finding:
+                    title, body = material_update_text(event, finding)
+                    finding = {**finding, 'event_type': 'linear_update',
+                               'update_title': title, 'update_body': body,
+                               'update_data': material_update_payload(event, finding)}
+            else:
+                finding = current_finding(cur, event, profile)
             if not finding:
                 # The owner opened this exact authorized alert, but its source
                 # has gone stale. Keep the acknowledgement while failing closed
@@ -182,4 +191,4 @@ def alert_detail(session: dict, alert_id: str) -> dict:
             return {key: finding.get(key) for key in (
                 'source_kind', 'source_id', 'source', 'source_title', 'source_url',
                 'rule_id', 'severity', 'confidence', 'facts', 'assessment',
-                'recommended_step', 'checked_at', 'context')}
+                'recommended_step', 'checked_at', 'context', 'event_type', 'update_title', 'update_body', 'update_data')}
