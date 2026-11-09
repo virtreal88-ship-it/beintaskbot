@@ -185,7 +185,7 @@ function boot(){
  byId('manageGuides')?.addEventListener('click',()=>window.open('/guide-editor','_blank','noopener'));
  byId('closeInstructionEditor')?.addEventListener('click',closeEditor);
  byId('instructionEditor')?.addEventListener('close',()=>{const frame=byId('instructionEditorFrame');frame.src='about:blank';refresh()});
- document.addEventListener('tenant-profile',()=>{epoch++;player?.destroy?.();member=null;guidePublic=[];publishedLessons=[];refresh()});
+ document.addEventListener('tenant-profile',()=>{epoch++;player?.destroy?.();member=null;canManageGuides=false;canManageLessons=false;guidePublic=[];guideManaged=[];publishedLessons=[];managedLessons=[];selected=null;errorBox(t('loading'));render();refresh()});
  refresh();
 }
 boot();
