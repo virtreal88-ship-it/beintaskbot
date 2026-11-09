@@ -84,7 +84,7 @@ function treeButton(parent,label,count,onClick,depth,selectedItem){const b=make(
 function renderTreeBranch(parent,node,kind,depth,allItems){
  for(const child of node.children.values()){
   const own=allItems.filter(x=>kind==='guide'?String(x.slug||'').startsWith(child.path):String(x.operation||'').startsWith(child.path));
-  treeButton(parent,child.label,own.length,()=>{scope=(kind==='guide'?'g:':'l:')+child.path;selected=null;render()},depth,false);
+  treeButton(parent,child.label,own.length,()=>{scope=(kind==='guide'?'g:':'l:')+child.path;selected=null;render()},depth,scope===(kind==='guide'?'g:':'l:')+child.path);
   for(const item of child.items)treeButton(parent,item.title,0,()=>openItem(item),depth+1,selected&&selected.kind===item.kind&&String(selected.id||selected.slug)===String(item.id||item.slug));
   renderTreeBranch(parent,child,kind,depth+1,allItems);
  }
@@ -139,7 +139,7 @@ function articleView(item,host){
  const actions=editorActions(item);if(actions.childNodes.length)host.append(actions);
 }
 function render(){
- if(!root)return;const search=byId('catalogSearch'),state=byId('catalogState'),q=(search?.value||'').trim(),status=canManageLessons?(state?.value||''):'';
+ if(!root)return;player?.destroy?.();player=null;const search=byId('catalogSearch'),state=byId('catalogState'),q=(search?.value||'').trim(),status=canManageLessons?(state?.value||''):'';
  const items=catalogItems(status).filter(x=>matches(x,q));
  renderTree(items);const title=byId('catalogHeading');title.textContent=selected?(selected.title||''):scope==='all'?t('all'):scope==='guide'?t('articles'):scope==='lesson'?t('lessons'):t('section');
  const results=byId('catalogResults');results.replaceChildren();
@@ -160,9 +160,22 @@ async function refresh(){
   errorBox('');render();
  }catch(e){if(request!==epoch)return;errorBox(e.message||t('error'))}
 }
+function applyLocale(){
+ document.documentElement.lang=lang;
+ document.title='BeinSystems · '+t('all');
+ byId('catalogBrand').textContent=t('brand');byId('catalogEyebrow').textContent=t('eyebrow');
+ byId('catalogTitle').textContent=t('title');byId('catalogIntro').textContent=t('intro');
+ byId('catalogTreeTitle').textContent=t('tree');byId('catalogTree').setAttribute('aria-label',t('tree'));
+ byId('catalogSearch').placeholder=t('searchHint');byId('catalogSearch').setAttribute('aria-label',t('search'));
+ byId('catalogState').setAttribute('aria-label',t('allStatus'));
+ byId('newArticle').textContent=t('newArticle');byId('newLesson').textContent=t('newLesson');
+ byId('createAI').textContent=t('createAI');byId('manageGuides').textContent=t('manageArticles');
+ byId('closeInstructionEditor').setAttribute('aria-label',t('back'));
+}
 function boot(){
+ applyLocale();
  const status=byId('catalogState');if(status)for(const key of ['','draft','pending_review','approved','published','archived'])status.append(make('option',key?t(key):t('allStatus'),{value:key}));
- const search=byId('catalogSearch');search?.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>refresh(),220)});
+ const search=byId('catalogSearch');search?.addEventListener('input',()=>{selected=null;clearTimeout(searchTimer);searchTimer=setTimeout(()=>refresh(),220)});
  status?.addEventListener('change',()=>refresh());
  byId('newArticle')?.addEventListener('click',()=>openEditor('/guide-editor?new=1&parent='+encodeURIComponent(scope.startsWith('g:')?scope.slice(2):''),t('editorTitle')));
  byId('newLesson')?.addEventListener('click',()=>openEditor('/app/instructions?lesson_new=1&site_lang='+encodeURIComponent(lang),t('editorTitle')));
