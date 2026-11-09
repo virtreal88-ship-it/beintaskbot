@@ -139,7 +139,13 @@ async function closeEditor(tenantChanged=false){
  if(dirty&&!window.confirm(t('discardConfirm')))return;
  if(dirty){const ack=await waitForEditorAck('tenant-instruction-discard','tenant-instruction-discarded');if(token!==editorCloseToken)return;if(!ack){errorBox(t('closeError'));return}}
  if(token!==editorCloseToken)return;
- dialog.close();frame.src='about:blank';editorDirty=false;await refresh();
+ const prior=selected;dialog.close();frame.src='about:blank';editorDirty=false;await refresh();
+ if(prior&&selected===prior){
+  const status=canManageLessons?(byId('catalogState')?.value||''):'',q=(byId('catalogSearch')?.value||'').trim(),key=prior.kind==='guide'?String(prior.slug):String(prior.id);
+  const current=catalogItems(status).find(item=>item.kind===prior.kind&&String(prior.kind==='guide'?item.slug:item.id)===key&&matches(item,q));
+  selected=current||null;render();
+  if(current?.kind==='lesson'&&current.status==='published')await loadLessonDetail(current).catch(e=>errorBox(e.message));
+ }
 }
 function editURL(item){
  if(item.kind==='guide')return '/guide-editor?slug='+encodeURIComponent(item.slug);
