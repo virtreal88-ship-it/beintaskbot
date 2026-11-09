@@ -221,14 +221,12 @@ class StorageTests(unittest.TestCase):
             self.cur.executemany.assert_not_called()
             self.assertTrue(any('status=CASE WHEN' in call.args[0] for call in self.cur.execute.call_args_list))
 
-    def test_opted_in_manual_import_queues_under_manual_identity(self):
-        self.cur.fetchall.return_value=[{'tenant_id':'company-a','entity_type':'deal',
-            'enabled_since':datetime(2026,1,1,tzinfo=timezone.utc),'provider':'kommo_manual',
-            'account_domain':'manual.kommo.com','connected_at':'manual-time'}]
-        self.cur.fetchone.return_value=None
-        self.assertEqual(self.module.enqueue_enabled_imports(),1)
-        insert=next(call for call in self.cur.execute.call_args_list if 'INSERT INTO saas_crm_sync_jobs' in call.args[0])
-        self.assertTrue(insert.args[1][3].startswith('manual:manual.kommo.com:'))
+    def test_native_crm_data_import_scheduler_remains_oauth_only(self):
+        self.cur.fetchall.return_value=[]
+        self.assertEqual(self.module.enqueue_enabled_imports(),0)
+        sql=self.cur.execute.call_args.args[0]
+        self.assertIn("i.provider='kommo' AND i.status='connected'",sql)
+        self.assertNotIn("'kommo_manual'",sql)
 
     def test_retry_is_bounded_and_never_changes_page(self):
         self.store().fail()
