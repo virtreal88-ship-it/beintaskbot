@@ -83,8 +83,14 @@ def ensure_schema(conn) -> None:
             END $$''')
             cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ NULL")
             cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS quota_reserved_at TIMESTAMPTZ NULL")
+            # Follow-ups share the risk quota and neutral push transport. The
+            # bounded prior labels in update_data are only projected after live
+            # owner/source authorization; ordinary bell/push storage is neutral.
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT 'finding'")
+            cur.execute("ALTER TABLE saas_proactive_risk_alert_events ADD COLUMN IF NOT EXISTS update_data JSONB NOT NULL DEFAULT '{}'::jsonb")
             cur.execute('''UPDATE saas_proactive_risk_alert_events SET quota_reserved_at=created_at
               WHERE quota_reserved_at IS NULL AND state NOT IN ('deferred','suppressed')
+                AND (state<>'cancelled' OR event_type<>'linear_update')
                 AND created_at>=now()-interval '1 day' ''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_proactive_risk_alert_pending_idx
               ON saas_proactive_risk_alert_events(created_at,tenant_id) WHERE state='pending' ''')

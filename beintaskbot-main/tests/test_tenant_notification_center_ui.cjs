@@ -32,5 +32,18 @@ function setup(fetch){const dom=new JSDOM('<header><select data-app-language></s
  riskDoc.dispatchEvent(new risk.window.CustomEvent('tenant-risk-alert-read',{detail:{alert_id:'alert'}}));await settle();
  assert.ok(riskFetches>beforeRiskRead,'risk detail read event reloads the shared notification ledger');assert.equal(riskDoc.querySelector('.notification-unread-badge'),null,'risk detail read clears the bell count immediately');risk.window.close();
 
+ const localized=setup(async()=>response({notifications:[{id:'translated-risk',event_key:'proactive_risk:alert',title:'SERVER FALLBACK',body:'SERVER FALLBACK',target_url:'/app?view=linear&risk_alert_id=alert',risk_update:{identifier:'BS-12',owner_changed:true,old_assigned:false,new_assigned:true,new_owner:'<img src=x onerror=alert(1)> Leyla',state_changed:true,old_state:'In progress',new_state:'Done'},read_at:null}],unread_count:1,next_before:null}));
+ await settle();const ld=localized.window.document;ld.querySelector('#dialogConsultationBell').click();await settle();
+ for(const [lang,ownerLabel,stateLabel,title] of [['ru','Ответственный','Статус в Linear','Обновление задачи'],['az','Məsul şəxs','Linear-da status','Tapşırıq yenilənib'],['en','Assignee','Status in Linear','Task updated']]){
+   localized.window.tenantI18n.language=lang;ld.dispatchEvent(new localized.window.CustomEvent('tenant-language'));
+   const card=ld.querySelector('[data-notification-id="translated-risk"]');
+   assert(card.textContent.includes(ownerLabel)&&card.textContent.includes(stateLabel));
+   assert(card.querySelector('h3').textContent.includes(title));
+   assert(card.textContent.includes('Leyla')&&card.textContent.includes('Done'));
+   assert(!card.textContent.includes('SERVER FALLBACK'),'no untranslated server copy');
+   assert(!card.querySelector('img'),'provider labels are inert text');
+ }
+ localized.window.close();
+
  console.log('PASS: one ledger list/count, handled/read recovery, personal read, safe rendering, task-only access, errors and bounded reads.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
