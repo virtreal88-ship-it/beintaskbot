@@ -101,6 +101,13 @@ function safeHTML(source){
  for(const child of parsed.body.childNodes)copy(child,out);return out;
 }
 function editorFrame(){return byId('instructionEditorFrame')}
+function forceCloseEditor(){
+ ++editorCloseToken;
+ const dialog=byId('instructionEditor'),frame=editorFrame();
+ if(dialog?.open)dialog.close();
+ if(frame){const replacement=document.createElement('iframe');replacement.id=frame.id;replacement.title=frame.title;replacement.setAttribute('referrerpolicy','no-referrer');frame.replaceWith(replacement);replacement.src='about:blank'}
+ editorDirty=false;
+}
 function editorHasUnsavedChanges(){
  const frame=editorFrame();try{if(typeof frame?.contentWindow?.tenantInstructionDirty==='function')return !!frame.contentWindow.tenantInstructionDirty()}catch{}
  return editorDirty;
@@ -246,7 +253,7 @@ async function refresh(){
   refreshing=false;
   byId('newArticle').hidden=!canManageGuides;byId('manageGuides').hidden=!canManageGuides;byId('newLesson').hidden=!canManageLessons;byId('createAI').hidden=!canManageLessons;byId('catalogState').hidden=!canManageLessons;
   errorBox(warningsText());render();
- }catch(e){if(request!==epoch)return;refreshing=false;void closeEditor(true);clearCatalogData();errorBox(e.message||t('error'));render()}
+ }catch(e){if(request!==epoch)return;refreshing=false;forceCloseEditor();clearCatalogData();errorBox(e.message||t('error'));render()}
 }
 async function loadMore(){
  if(!member||refreshing||loadingMore)return;
@@ -292,7 +299,11 @@ function boot(){
  byId('closeInstructionEditor')?.addEventListener('click',()=>{void closeEditor(false)});
  byId('instructionEditor')?.addEventListener('cancel',event=>{event.preventDefault();void closeEditor(false)});
  window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==editorFrame()?.contentWindow)return;if(event.data?.type==='tenant-instruction-dirty')editorDirty=!!event.data.dirty});
- document.addEventListener('tenant-profile',()=>{epoch++;void closeEditor(true);clearCatalogData();refreshing=false;errorBox(t('loading'));render();refresh()});
+ document.addEventListener('tenant-profile',event=>{
+  const previous=member,next=event.detail?.member,sameIdentity=!!previous&&previous.telegram_id!=null&&next?.telegram_id!=null&&String(previous.telegram_id)===String(next.telegram_id);
+  epoch++;if(sameIdentity)void closeEditor(true);else forceCloseEditor();clearCatalogData();refreshing=false;errorBox(t('loading'));render();refresh();
+ });
+ document.addEventListener('tenant-auth-invalid',()=>{epoch++;forceCloseEditor();clearCatalogData();refreshing=false;errorBox(t('signIn'));render()});
  refresh();
 }
 boot();
