@@ -2,12 +2,13 @@
 (function(root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountExperimentalCopilotVoice = factory;
-})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}}) {
+})(typeof window === 'object' ? window : globalThis, function mountVoice(root, {acquireMicrophone, openAudio, connect, lifecycle = globalThis.document, language='ru', onIdle=()=>{}, onState=()=>{}, onDismiss=()=>{}}) {
   if (typeof acquireMicrophone !== 'function' || typeof openAudio !== 'function' || typeof connect !== 'function')
     throw new Error('voice_dependencies_missing');
   const catalog={ru:{off:'Голосовой разговор не начат',start:'Начать голосовой разговор',talkStart:'Нажмите, чтобы говорить',talkInterrupt:'Нажмите, чтобы перебить и говорить',talkSend:'Нажмите, чтобы отправить',talking:'Говорите…',sending:'Отправляю вопрос…',empty:'Запись пустая. Нажмите, чтобы попробовать ещё раз.',end:'Завершить сессию',uncertain:'Завершение разговора не подтверждено; текстовый чат доступен.',playback:'Ошибка воспроизведения. ',inputQueueSlow:'Сервер задержал подтверждение. Разговор не завершён.',inputRetry:'Эта реплика не отправлена; нажмите микрофон и повторите.',microphone:'Не удалось подтвердить отключение микрофона. Текстовый чат доступен.',connecting:'Подключение…',disconnecting:'Завершаю разговор…',ended:'Разговор завершён',connectionEnded:'Соединение завершено',responding:'AI отвечает',listening:'Говорите. После паузы в 2 секунды AI ответит',denied:'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.',busy:'Микрофон уже используется в другом режиме.',failed:'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.',ending:'Завершение разговора…',muted:'Микрофон выключен'},
     az:{off:'Səsli söhbət başlamayıb',start:'Səsli söhbətə başla',talkStart:'Danışmaq üçün toxunun',talkInterrupt:'Söhbəti kəsib danışmaq üçün toxunun',talkSend:'Göndərmək üçün toxunun',talking:'Danışın…',sending:'Sual göndərilir…',empty:'Yazı boşdur. Yenidən cəhd etmək üçün toxunun.',end:'Sessiyanı bitir',uncertain:'Söhbətin bitdiyi təsdiqlənmədi; mətn söhbəti əlçatandır.',playback:'Səsləndirmə xətası. ',inputQueueSlow:'Server təsdiqi gecikdirir. Söhbət bitməyib.',inputRetry:'Bu replika göndərilmədi; yenidən danışmaq üçün mikrofona toxunun.',microphone:'Mikrofonun söndürüldüyü təsdiqlənmədi. Mətn söhbəti əlçatandır.',connecting:'Qoşulur…',disconnecting:'Söhbət bitirilir…',ended:'Söhbət bitdi',connectionEnded:'Bağlantı bitdi',responding:'AI cavab verir',listening:'Danışın. 2 saniyəlik fasilədən sonra AI cavab verəcək',denied:'Mikrofona giriş yoxdur. Brauzer ayarlarında mikrofona icazə verin.',busy:'Mikrofon başqa rejimdə istifadə olunur.',failed:'Səsli söhbəti başlatmaq olmadı. Bağlantını və mikrofon icazəsini yoxlayın.',ending:'Söhbət bitirilir…',muted:'Mikrofon söndürülüb'}};
   const labels=catalog[language]||catalog.ru;
+  const sessionBusy=language==='az'?'Başqa səsli sessiya aktiv ola bilər və ya əvvəlki sessiyanın bitməsi təsdiqlənməyib. Digər açıq pəncərələri yoxlayın.':'Возможно, другой голосовой сеанс ещё открыт или завершение предыдущего не подтверждено. Проверьте другие открытые окна.';
   const document = root.ownerDocument;
   const micIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>';
   const endIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18.3 5.7-1.4-1.4L12 9.2 7.1 4.3 5.7 5.7 10.6 10.6l-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9 4.9-4.9Z"/></svg>';
@@ -83,7 +84,7 @@
     const stopVersion=++generation;
     settleEnd(confirmed);
     resetDetection();stopAwaiting=false;stoppedItems.clear();
-    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=true;
+    running=false; ending=false; inputEnabled=false;greetingPending=false;talkActive=false;talkPending=false;assistantResponding=false;currentAssistantItem=null;cleanupPending++;start.hidden=false;start.disabled=true; talk.hidden=true; end.hidden=confirmed;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
     const oldChannel=channel, oldAudio=audio, pendingOpenAudio=opening, oldRelease=release;
     channel=null;audio=null;opening=null;release=null;
@@ -194,15 +195,23 @@
       }
     } catch(error) {
       if(version!==generation)return;
-      const code=error?.message==='microphone_stop_unconfirmed'?microphoneUncertain:
+      const busy=error?.message==='voice_session_busy';
+      const dismissAfterRefusal=busy && hideAfterConnect;
+      const code=busy?sessionBusy:error?.message==='microphone_stop_unconfirmed'?microphoneUncertain:
         error?.name==='NotAllowedError'?labels.denied:
         error?.message==='microphone_busy'?labels.busy:
         labels.failed;
-      await stop(code,false,error?.message==='microphone_stop_unconfirmed');
+      // A lease refusal is definitive for this attempt; it says nothing about
+      // whether the previous session actually ended. Leave the local close
+      // control available without touching that session or its lease.
+      await stop(code,busy,error?.message==='microphone_stop_unconfirmed');
+      if(busy && !destroyed)end.hidden=false;
+      if(dismissAfterRefusal && !destroyed){try{onDismiss();}catch(_){}}
     }
   }
   start.addEventListener('click',begin);
   function finish(reason=labels.connectionEnded){
+    if(!running && !ending){try{onDismiss();}catch(_){}return Promise.resolve(false);}
     endStatusReason=reason;
     if(!channel){
       if(serverInitiated){hideAfterConnect=true;ending=true;end.disabled=true;status.textContent=labels.ending;if(!endPromise)endPromise=new Promise(resolve=>{resolveEnd=resolve;});return endPromise;}
