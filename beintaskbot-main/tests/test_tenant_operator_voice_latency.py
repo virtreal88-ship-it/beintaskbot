@@ -30,6 +30,7 @@ class LatencyDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         s._accept_committed_input=AsyncMock();s.muted=False;s.seen_input_item_ids=set();s.transcript=None
         s.input_turn={'sequence':1,'stopped':False,'item_id':None,'manual':True,'audio_bytes':2}
         s.response_inflight=True;s.provider_response_id='private response';s.finished_response_ids=set()
+        s.assistant_response_ids={};s.truncated_playback_items=set()
         s.cancel_requested=False;s.item=None;s.produced=0;s.interrupt_pending=False;s.output_finished=False
         s.greeting_pending=False;s._latency_response_sent_at=time.monotonic()
         s._latency_first_audio_at=None;s._latency_first_audio_item=None

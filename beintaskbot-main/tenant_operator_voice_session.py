@@ -20,6 +20,7 @@ class LeaseAlreadyActive(Refused):
 _SAFE_RESPONSE_REJECTION_CODES=frozenset({
     'session_closed','output_authorization_rejected','voice_lease_rejected',
     'response_not_inflight','response_id_mismatch',
+    'unreserved_response','audio_after_completion','overlapping_output_items',
 })
 _SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected'})
 _TERMINAL_RESPONSE_EVENT_TYPES=frozenset({
@@ -52,7 +53,7 @@ _LOG=logging.getLogger(__name__)
 
 _SAFE_LATENCY_STAGES=frozenset({'talk_end_to_commit_ack','commit_ack_to_dispatch','dispatch_checks',
                                 'response_to_first_audio','first_audio_to_playback',
-                                'output_done_to_played_all','output_done_pending_at_end'})
+                                'output_done_to_played_all','output_done_pending_at_end','playback_ack_server_queue'})
 
 
 def _log_voice_latency(stage, start, end):
@@ -173,6 +174,7 @@ class Session:
         self.input_transcription_events = {}
         self.seen_assistant_item_ids = set()
         self.assistant_response_ids = {}
+        self.truncated_playback_items = set()
         self.provider_response_id = None
         # Realtime may flush a queued delta after the terminal response.done
         # event. Keep the exact response IDs scoped to this short-lived
@@ -705,7 +707,12 @@ class Session:
                     await self._send_client({'type':'listening'})
             return
         if kind == 'playback_scheduled' and set(event)=={'type','item_id','context_state'}:
-            if (event['item_id']!=self.item or event['context_state'] not in {'running','suspended'}):
+            if (not isinstance(event['item_id'],str) or not event['item_id'] or len(event['item_id'])>128 or
+                not isinstance(event['context_state'],str) or event['context_state'] not in {'running','suspended'}):
+                raise Refused('invalid_playback_start_ack')
+            if event['item_id']!=self.item:
+                if event['item_id'] in self.truncated_playback_items:
+                    return
                 raise Refused('invalid_playback_start_ack')
             if not getattr(self,'interrupt_pending',False) and event['item_id']==getattr(self,'_latency_first_audio_item',None):
                 _log_voice_latency('first_audio_to_playback',getattr(self,'_latency_first_audio_at',None),time.monotonic())
@@ -906,7 +913,8 @@ class Session:
             return
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
-                raise Refused('unreserved_response')
+                raise ProviderResponseRejected('unreserved_response',self.response_inflight is True,
+                    isinstance(self.provider_response_id,str) and event.get('response_id')==self.provider_response_id)
             if self.cancel_requested and self.item is None:
                 # VAD cancelled the response before any audio reached the
                 # browser. Discard late deltas: there is nothing audible to
@@ -928,10 +936,16 @@ class Session:
             async with self.lock:
                 if self.interrupt_pending:
                     return  # queued unplayed audio must not reach playback
+                previous_response=self.assistant_response_ids.get(item)
+                if previous_response is not None and previous_response!=event.get('response_id'):
+                    raise Refused('assistant_item_response_conflict')
+                self.assistant_response_ids[item]=event.get('response_id')
                 if self.output_finished:
-                    raise Refused('audio_after_completion')
+                    raise ProviderResponseRejected('audio_after_completion',self.response_inflight is True,
+                        isinstance(self.provider_response_id,str) and event.get('response_id')==self.provider_response_id)
                 if self.item not in (None, item):
-                    raise Refused('overlapping_output_items')
+                    raise ProviderResponseRejected('overlapping_output_items',self.response_inflight is True,
+                        isinstance(self.provider_response_id,str) and event.get('response_id')==self.provider_response_id)
                 if self.item is None:
                     if self.greeting_pending:self.greeting_item_id=item
                 self.item = item
@@ -958,6 +972,8 @@ class Session:
                     event.get('content_index')!=0 or type(event.get('audio_end_ms')) is not int or
                     event.get('audio_end_ms')!=self.truncate_pending_audio_end_ms):
                     raise Refused('invalid_truncation_confirmation')
+                if self.truncate_pending in self.assistant_response_ids:
+                    self.truncated_playback_items.add(self.truncate_pending)
                 self.truncate_pending=None
                 self.truncate_pending_audio_end_ms=None
                 self.interrupt_pending=False
