@@ -17,7 +17,7 @@
   const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
     data.member.role === 'owner' || binding(data)?.can_review_news === true));
   const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
-    '#integrationMarketplaceDialog,#tenantLinearPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
+    '#integrationMarketplaceDialog,#tenantLinearPanel,#tenantKommoPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
   const style = document.createElement('style');
   style.textContent = protectedSelector.split(',').map(selector =>
     `html[data-tenant-panels-pending] ${selector}`).join(',') + '{visibility:hidden!important;pointer-events:none!important}';
@@ -53,7 +53,7 @@
     const visible = item.provider ? integration === item.provider :
       document.getElementById('view-' + item.view)?.classList.contains('active') &&
       (!item.host || !document.getElementById(item.host)?.hidden);
-    if (!visible) { item.visible = false; return; }
+    if (!visible) { item.visible = false; if (item.resetOnHide && item.started) reset(item, profile); return; }
     // Never replace an edited form just because the user returned or /me refreshed.
     if (!item.visible && item.started && !dirty(item) && Date.now() - item.started >= 30000) reset(item, profile);
     item.visible = true;

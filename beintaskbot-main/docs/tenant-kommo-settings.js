@@ -67,7 +67,7 @@
     window.tenantViewDemand.clean("#tenantKommoPanel");
     $("tenantKommoPanel")?.remove();
     if (next.role !== "owner") return;
-    const settings = $("view-settings");
+    const settings = $("integrationSettingsHost");
     if (!settings) return;
 
     const panel = document.createElement("article");
@@ -122,7 +122,8 @@
   }
 
   window.tenantViewDemand.watch({
-    provider: "kommo-manual",
+    provider: "kommo",
+    resetOnHide: true,
     editable: "#tenantKommoPanel",
     activate: install,
     reset: () => {

@@ -1308,6 +1308,7 @@ function IntegrationMarketplace() {
       close: "Закрыть",
       connection: "Подключение",
       settings: "Настройки",
+      kommoOwnerOnly: "Ручное подключение Kommo доступно только владельцу компании.",
       empty: "Интеграции не найдены.",
     },
     az: {
@@ -1325,6 +1326,7 @@ function IntegrationMarketplace() {
       close: "Bağla",
       connection: "Qoşulma",
       settings: "Ayarlar",
+      kommoOwnerOnly: "Əl ilə Kommo bağlantısı yalnız şirkət sahibinə açıqdır.",
       empty: "İnteqrasiya tapılmadı.",
     },
     en: {
@@ -1342,6 +1344,7 @@ function IntegrationMarketplace() {
       close: "Close",
       connection: "Connection",
       settings: "Settings",
+      kommoOwnerOnly: "Manual Kommo connection is available only to the company owner.",
       empty: "No integrations found.",
     },
   };
@@ -1909,6 +1912,21 @@ function IntegrationMarketplace() {
                               >
                                 Vərəq və mərhələləri seç
                               </Button>
+                            )}
+                            {profile?.member?.role === "owner" ? (
+                              <Box
+                                id="integrationSettingsHost"
+                                className="integration-settings-host"
+                              />
+                            ) : (
+                              <Box
+                                p="4"
+                                bg="app.raised"
+                                color="app.ink"
+                                borderRadius="xl"
+                              >
+                                {tx("kommoOwnerOnly")}
+                              </Box>
                             )}
                           </Stack>
                         ) : (
