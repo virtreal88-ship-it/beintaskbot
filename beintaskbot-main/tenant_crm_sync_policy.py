@@ -44,7 +44,8 @@ def read_settings(profile):
             manual=rows_by_provider.get('kommo_manual')
             selected_kommo=oauth if oauth and oauth.get('status')=='connected' else (
                 manual if manual and manual.get('status')=='connected' else oauth or manual)
-            integrations={'beinsystems':(rows_by_provider.get('beinsystems') or {}).get('status')}
+            integrations={provider:row.get('status') for provider,row in rows_by_provider.items()
+                if provider=='beinsystems'}
             if selected_kommo:
                 integrations['kommo']=selected_kommo.get('status')
     return {'settings':[dict(r) for r in rows], 'outbox':statuses,'conflicts':conflicts,
