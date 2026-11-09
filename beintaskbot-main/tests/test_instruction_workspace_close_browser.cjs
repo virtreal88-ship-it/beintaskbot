@@ -71,6 +71,31 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
   assert.equal(guidePosts,0,'discarded Guide edits are not posted to the shared CMS');
 
+  const{dialog:reopenGuideWarning,actionWait:reopenGuideClick}=await actionWithDialog(()=>page.locator('.catalog-card[data-kind="guide"] .catalog-actions button:nth-child(2)').click());
+  assert.equal(reopenGuideWarning.message(),'Это общий справочник для всех компаний. Изменения будут видны всем. Открыть редактор?');
+  await reopenGuideWarning.accept();await reopenGuideClick;
+  const uploadFrame=page.frameLocator('#instructionEditorFrame');
+  await uploadFrame.locator('#new').waitFor({state:'visible'});
+  await uploadFrame.locator('#new').click();
+  const photoInput=uploadFrame.locator('#article-photos');
+  await photoInput.evaluate(input=>{
+   const native=window.createImageBitmap.bind(window);
+   window.createImageBitmap=async file=>{await new Promise(resolve=>setTimeout(resolve,900));return native(file)};
+  });
+  const uploadPromise=photoInput.setInputFiles({name:'guide-photo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6WQAAAABJRU5ErkJggg==','base64')});
+  await page.waitForFunction(()=>{try{return !!document.querySelector('#instructionEditorFrame').contentWindow.tenantInstructionDirty()}catch{return false}});
+  const{dialog:uploadClosePrompt,actionWait:uploadCloseClick}=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+  assert.equal(uploadClosePrompt.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?','a selected Guide image is dirty while processing');
+  await uploadClosePrompt.dismiss();await uploadCloseClick;
+  await uploadPromise;
+  await uploadFrame.locator('.photo-card img').waitFor({state:'visible'});
+  assert.equal(await uploadFrame.locator('.photo-card img').count(),1,'cancelling the close prompt preserves the processed Guide image');
+  const closeAfterUpload=await actionWithDialog(()=>page.locator('#closeInstructionEditor').click());
+  assert.equal(closeAfterUpload.dialog.message(),'Есть несохранённые изменения. Отбросить их и закрыть редактор?');
+  await closeAfterUpload.dialog.accept();await closeAfterUpload.actionWait;
+  await page.waitForFunction(()=>!document.querySelector('#instructionEditor').open);
+  assert.equal(guidePosts,0,'discarding the unsaved Guide image does not post to the shared CMS');
+
   await page.locator('#newLesson').click();
   const iframe=page.frameLocator('#instructionEditorFrame');
   const title=iframe.locator('.il-lesson-settings input').first();
