@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>BeinSystems · Инструкции</title>
+<script>if(['lesson','share','lesson_new'].some(key=>new URLSearchParams(location.search).has(key)))document.documentElement.classList.add('instruction-editor-mode')</script>
+<link rel="stylesheet" href="/assets/tenant-instructions.css">
+<link rel="stylesheet" href="/assets/tenant-instructor-lesson.css">
+<style>
+:root{color-scheme:light;--ink:#082342;--navy:#071e3b;--blue:#12598c;--line:#d4e5f1;--soft:#edf4fa;--accent:#02a4f2}
+*{box-sizing:border-box}
+body{margin:0;background:#edf4fa;color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+html.instruction-editor-mode .catalog-top,html.instruction-editor-mode .catalog-hero{display:none!important}
+html.instruction-editor-mode #instructions{max-width:1500px;margin:0 auto;padding:16px}
+.catalog-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px max(20px,calc((100% - 1180px)/2));background:var(--blue);color:#fff;box-shadow:0 4px 18px #001a4420}
+.catalog-brand{font-weight:700;letter-spacing:.2px}.catalog-top a{color:#c9ebff;text-decoration:none}
+.catalog-hero{padding:42px 24px 34px;background:linear-gradient(120deg,#071e3b,#12598c);color:#fff}
+.catalog-hero-inner{max-width:1180px;margin:auto}
+.catalog-eyebrow{margin:0;color:#73d2ff;font-size:11px;font-weight:700;letter-spacing:1.5px}
+.catalog-hero h1{max-width:760px;margin:12px 0;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-1px}
+.catalog-intro{margin:0 0 22px;color:#d2e5f2}
+.catalog-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.catalog-toolbar input{flex:1 1 360px;min-width:180px}
+.catalog-toolbar input,.catalog-toolbar select{height:46px;padding:10px 13px;border:1px solid #c7dcea;border-radius:10px;background:#fff;color:#153c60;font:inherit}
+.catalog-toolbar select{width:auto;flex:0 1 180px}
+.catalog-toolbar button,.catalog-toolbar a{min-height:44px;padding:10px 14px;border:1px solid #ffffff55;border-radius:9px;background:#ffffff12;color:#fff;font:inherit;font-weight:600;text-decoration:none;cursor:pointer}
+.catalog-toolbar button:hover,.catalog-toolbar a:hover{background:#ffffff25}
+.catalog-toolbar :focus-visible,.catalog-tree-choice:focus-visible,.catalog-card button:focus-visible,.catalog-detail-tools button:focus-visible{outline:3px solid #02a4f2;outline-offset:2px}
+.catalog-status-line{max-width:1180px;margin:14px auto 0;color:#e1f2fc;font-size:13px}
+#instructions{max-width:1220px;margin:24px auto 55px;padding:0 20px}
+.catalog-layout{display:grid;grid-template-columns:minmax(220px,270px) minmax(0,1fr);gap:22px;align-items:start}
+.catalog-tree-panel,.catalog-main-panel{min-width:0;background:#fff;border:1px solid var(--line);border-radius:17px;box-shadow:0 8px 24px #06284808}
+.catalog-tree-panel{position:sticky;top:78px;max-height:calc(100dvh - 95px);overflow:auto;padding:17px 12px}
+.catalog-tree-panel h2{margin:2px 8px 12px;color:#5c7890;font-size:11px;letter-spacing:1.3px;text-transform:uppercase}
+#catalogTree{display:flex;flex-direction:column;gap:3px}
+.catalog-tree-choice{width:100%;min-height:37px;padding:7px 10px;border:0;border-radius:8px;background:transparent;color:#214c6b;text-align:left;font:inherit;overflow-wrap:anywhere;cursor:pointer}
+.catalog-tree-choice:hover{background:#edf6fc}
+.catalog-tree-choice.is-selected{background:#d9efff;color:#0d5483;font-weight:700}
+.catalog-main-panel{min-height:480px;padding:22px}
+.catalog-main-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.catalog-main-header h2{margin:0 0 8px;font-size:24px;line-height:1.25}
+#catalogCount{color:#69859b;font-size:12px}
+.catalog-global-notice{max-width:980px;margin:12px auto;padding:10px 14px;border:1px solid #d6b36a;border-radius:10px;background:#fff8e6;color:#5c4514;font-size:13px;line-height:1.5}
+.catalog-more-controls{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 0}
+.catalog-more-controls p{margin:0;color:#526c80;font-size:13px;text-align:center}
+#catalogLoadMore{min-height:42px;padding:8px 16px;border:1px solid #9bb5c7;border-radius:10px;background:#fff;color:#143b55;font:inherit;font-weight:700;cursor:pointer}
+#catalogLoadMore:disabled{opacity:.6;cursor:wait}
+.catalog-detail{grid-column:1/-1;min-width:0}
+.catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}
+.catalog-card{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:17px;border:1px solid #d3e2ef;border-radius:14px;background:#f8fbfe}
+.catalog-card:hover{border-color:#86c7eb;background:#f3faff}
+.catalog-type,.catalog-status{display:inline-flex;align-items:center;padding:4px 8px;border-radius:6px;background:#e4eff8;color:#286083;font-size:11px;font-weight:600}
+.catalog-status{background:#f0f3f6;color:#667c8e}
+.catalog-card-title{padding:0;border:0;background:transparent;color:#15567f;text-align:left;font-size:17px;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
+.catalog-card-title:hover{text-decoration:underline}
+.catalog-meta{margin:0;color:#65839a;font-size:12px;overflow-wrap:anywhere}
+.catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:3px}
+.catalog-actions button,.catalog-detail-tools button{padding:8px 11px;border:1px solid #bfd6e6;border-radius:8px;background:#fff;color:#15567f;font:inherit;font-size:13px;cursor:pointer}
+.catalog-actions button:hover,.catalog-detail-tools button:hover{background:#e8f5ff}
+.catalog-empty{padding:50px 18px;border:1px dashed #c3d8e7;border-radius:12px;color:#648197;text-align:center}
+.catalog-detail-tools{margin-bottom:12px}
+.catalog-detail-heading{padding-bottom:16px;border-bottom:1px solid #e5edf3}
+.catalog-detail-heading h2{margin:13px 0 5px;font-size:clamp(23px,3vw,32px);line-height:1.2}
+.catalog-article-body{padding:18px 2px;line-height:1.8;overflow-wrap:anywhere}
+.catalog-article-body h2{margin:20px 0 9px;font-size:22px}
+.catalog-article-body table{width:100%;border-collapse:collapse}
+.catalog-article-body th,.catalog-article-body td{padding:9px;border:1px solid #cbd9e4;text-align:left}
+.catalog-article-body iframe{display:block;width:100%;aspect-ratio:16/9;margin:16px 0;border:0}
+.catalog-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}
+.catalog-images figure{margin:0;padding:9px;border:1px solid #d7e5ef;border-radius:12px}
+.catalog-images img{display:block;width:100%;max-height:340px;object-fit:contain;background:#f3f7fa}
+.catalog-images figcaption{padding-top:7px;color:#607b90;font-size:12px}
+.catalog-lesson-player{min-height:180px;margin-top:14px}
+.catalog-lesson-player .il-stage{margin-inline:auto}
+.catalog-read-status{margin-top:12px;color:#607b90;font-size:13px}
+#instructionEditor{width:min(1280px,96vw);height:min(900px,94dvh);padding:0;border:1px solid #bed8e9;border-radius:16px;background:#edf4fa;box-shadow:0 25px 90px #001a4470}
+#instructionEditor::backdrop{background:#041a3ab3;backdrop-filter:blur(4px)}
+#instructionEditorFrame{display:block;width:100%;height:100%;border:0;background:#edf4fa}
+#closeInstructionEditor{position:absolute;z-index:2;top:8px;right:10px;width:38px;height:38px;border:0;border-radius:10px;background:#fff;color:#12426a;font-size:25px;cursor:pointer;box-shadow:0 2px 8px #001a4420}
+[hidden]{display:none!important}
+@media(max-width:800px){.catalog-layout{grid-template-columns:1fr}.catalog-tree-panel{position:static;max-height:250px}.catalog-tree-panel h2{margin-top:0}.catalog-grid{grid-template-columns:1fr}.catalog-hero{padding:32px 20px 26px}.catalog-top{padding:11px 16px}}
+@media(max-width:480px){#instructions{padding:0 10px;margin-top:14px}.catalog-main-panel{padding:16px}.catalog-toolbar input{flex-basis:100%}.catalog-toolbar button,.catalog-toolbar a{flex:1;text-align:center}.catalog-images{grid-template-columns:1fr}.catalog-main-header h2{font-size:21px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="catalog-top"><div class="catalog-brand" id="catalogBrand">AKUL / ИНСТРУКЦИИ</div><a href="/webapp">← BeinSystems</a></header>
+<section class="catalog-hero"><div class="catalog-hero-inner">
+<p class="catalog-eyebrow" id="catalogEyebrow">BEIN SYSTEMS · СПРАВОЧНЫЙ ЦЕНТР</p>
+<h1 id="catalogTitle">Инструкции для вашей команды</h1><p class="catalog-intro" id="catalogIntro">Статьи справочника и пошаговые уроки — в одном каталоге.</p><p id="catalogGlobalNotice" class="catalog-global-notice" role="note"></p>
+<div class="catalog-toolbar">
+<input id="catalogSearch" type="search" placeholder="Поиск по инструкциям" aria-label="Поиск по инструкциям" autocomplete="off">
+<select id="catalogState" aria-label="Все статусы" hidden></select>
+<button id="newArticle" type="button" hidden>Новая статья</button>
+<button id="newLesson" type="button" hidden>Новый урок</button>
+<a id="createAI" href="/app/ai-instructor" hidden>Создать с AI</a>
+<a id="manageGuides" href="/guide-editor" target="_blank" rel="noopener" hidden>Редактор статей и экспорт</a>
+</div><p id="catalogStatus" class="catalog-status-line" role="status" aria-live="polite">Загружаем каталог…</p>
+</div></section>
+<main id="instructions"><div id="catalogShell" class="catalog-layout">
+<aside class="catalog-tree-panel" aria-labelledby="catalogTreeTitle"><h2 id="catalogTreeTitle">Разделы</h2><nav id="catalogTree" aria-label="Разделы инструкций"></nav></aside>
+<section class="catalog-main-panel" aria-labelledby="catalogHeading"><div class="catalog-main-header"><div><h2 id="catalogHeading">Все инструкции</h2><span id="catalogCount"></span></div></div><div id="catalogResults" class="catalog-grid" aria-live="polite"></div><div id="catalogMoreControls" class="catalog-more-controls"><p id="catalogMoreStatus" role="status" aria-live="polite"></p><button id="catalogLoadMore" type="button" hidden></button></div></section>
+</div></main>
+<dialog id="instructionEditor" aria-label="Редактор инструкции"><button id="closeInstructionEditor" type="button" aria-label="Закрыть редактор">×</button><iframe id="instructionEditorFrame" title="Редактор инструкции" referrerpolicy="no-referrer"></iframe></dialog>
+<script src="/assets/tenant-instructor-lesson.js"></script>
+<script src="/assets/tenant-instructions.js"></script>
+<script src="/assets/tenant-instruction-catalog.js"></script>
+</body>
+</html>
