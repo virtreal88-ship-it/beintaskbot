@@ -14,6 +14,7 @@ assert.match(script, /autocomplete="new-password"/);
 assert.match(script, /confirm_long_lived_token: true/);
 assert.match(script, /expected_tenant_id: profile\.tenant_id/);
 assert.match(script, /expected_user_id: profile\.telegram_id/);
+assert.match(script, /provider: "kommo_manual"/);
 assert.match(script, /\$\("tkToken"\)\.value = ""/);
 assert.match(script, /\/api\/platform\/integrations\/kommo\/test/);
 assert.doesNotMatch(script, /localStorage|sessionStorage|console\.log/);
