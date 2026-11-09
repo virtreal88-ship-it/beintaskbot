@@ -70,8 +70,6 @@
         lessonsPanel.hidden=guide;
         guideTab.setAttribute('aria-selected',String(guide));
         lessonsTab.setAttribute('aria-selected',String(!guide));
-        if(guide)frame.focus?.();
-        else document.getElementById('instructions').focus?.();
       }
       guideTab.addEventListener('click',function(){show('guide')});
       lessonsTab.addEventListener('click',function(){show('lessons')});
