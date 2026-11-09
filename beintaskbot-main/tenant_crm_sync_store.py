@@ -95,21 +95,14 @@ def enqueue_enabled_imports() -> int:
     with _connect() as conn:
         ensure_sync_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT s.tenant_id,s.entity_type,s.enabled_since,i.provider,i.account_domain,i.connected_at
-              FROM saas_crm_provider_settings s
-              JOIN LATERAL (
-                SELECT i.provider,i.account_domain,i.connected_at
-                FROM saas_tenant_integrations i
-                WHERE i.tenant_id=s.tenant_id AND i.provider IN ('kommo','kommo_manual') AND i.status='connected'
-                ORDER BY CASE WHEN i.provider='kommo' THEN 0 ELSE 1 END LIMIT 1
-              ) i ON TRUE
+            cur.execute('''SELECT s.tenant_id,s.entity_type,s.enabled_since,i.account_domain,i.connected_at
+              FROM saas_crm_provider_settings s JOIN saas_tenant_integrations i USING(tenant_id)
               WHERE s.provider='kommo' AND s.sync_direction IN ('from_external','bidirectional')
-                AND s.enabled_since IS NOT NULL AND s.entity_type IN ('contact','deal')
-              ORDER BY s.tenant_id,s.entity_type''')
+                AND s.enabled_since IS NOT NULL AND i.provider='kommo' AND i.status='connected'
+                AND s.entity_type IN ('contact','deal') ORDER BY s.tenant_id,s.entity_type''')
             for p in cur.fetchall():
                 tenant=str(p['tenant_id']);resource='contacts' if p['entity_type']=='contact' else 'leads'
-                prefix='manual:' if p['provider']=='kommo_manual' else ''
-                connection=prefix+str(p['account_domain'])+':'+str(p['connected_at'])
+                connection=str(p['account_domain'])+':'+str(p['connected_at'])
                 cur.execute('SELECT * FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s FOR UPDATE',(tenant,resource));old=cur.fetchone()
                 if old and old['status'] in {'queued','running'} and old['connection_id']==connection:continue
                 since=int(p['enabled_since'].timestamp());end=int(time.time())-30
