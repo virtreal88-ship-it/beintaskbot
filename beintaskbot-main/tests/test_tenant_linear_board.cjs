@@ -2,17 +2,27 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const elements=new Map(),events={};
 class Element {
-  constructor(id=''){this.id=id;this.value='';this.hidden=false;this.disabled=false;this.style={};this.dataset={};this.options=[];this.listeners={};Object.defineProperty(this,'selectedOptions',{get:()=>this.options.filter(option=>option.selected)});const names=new Set();this.classList={add:n=>names.add(n),remove:n=>names.delete(n),contains:n=>names.has(n),toggle:(n,on)=>on?names.add(n):names.delete(n)};if(id)elements.set(id,this);}
-  set innerHTML(html){this.html=html;if(this.id==='tlStateFilter')this.value='';if(this.id==='tlStateFilter'||this.id==='tlColumnFilter')this.options=[...html.matchAll(/<option value="([^"]+)"([^>]*)>(.*?)<\/option>/g)].map(match=>({value:match[1],selected:/\bselected\b/.test(match[2]),text:match[3]}));for(const match of html.matchAll(/id="([^"]+)"/g))if(!elements.has(match[1]))new Element(match[1]);}
+  constructor(id=''){this.id=id;this.value='';this.hidden=false;this.disabled=false;this.open=false;this.style={};this.dataset={};this.options=[];this.inputs=[];this.listeners={};this.attributes={};Object.defineProperty(this,'selectedOptions',{get:()=>this.options.filter(option=>option.selected)});const names=new Set();this.classList={add:n=>names.add(n),remove:n=>names.delete(n),contains:n=>names.has(n),toggle:(n,on)=>on?names.add(n):names.delete(n)};if(id)elements.set(id,this);}
+  set innerHTML(html){this.html=html;if(this.id==='tlStateFilter')this.value='';if(this.id==='tlStateFilter')this.options=[...html.matchAll(/<option value="([^"]+)"([^>]*)>(.*?)<\/option>/g)].map(match=>({value:match[1],selected:/\bselected\b/.test(match[2]),text:match[3]}));
+    if(this.id==='tlColumnOptions')this.inputs=[...html.matchAll(/<input\b([^>]*)>/g)].map(match=>{const attrs=match[1],value=(attrs.match(/\bvalue="([^"]*)"/)||[])[1]||'',stateId=(attrs.match(/data-linear-column-id="([^"]*)"/)||[])[1]||value;return{value,checked:/(?:^|\s)checked(?:\s|$)/.test(attrs),dataset:{linearColumnId:stateId},matches:selector=>selector==='input[data-linear-column-toggle]',focus(){document.activeElement=this;}};});
+    for(const match of html.matchAll(/id="([^"]+)"/g))if(!elements.has(match[1]))new Element(match[1]);}
   get innerHTML(){return this.html||'';}
   replaceChildren(){this.html='';}
   insertAdjacentHTML(position,html){this.innerHTML=(this.html||'')+html;}
-  querySelectorAll(){return [];}
+  querySelectorAll(selector=''){return this.id==='tlColumnOptions'&&selector.includes('linear-column-toggle')?this.inputs:[];}
+  querySelector(selector=''){return this.id==='tlColumnDialog'&&selector.includes('checkbox')?this.inputs[0]||null:null;}
   addEventListener(name,listener){this.listeners[name]=listener;}
+  dispatchEvent(event){this.listeners[event.type]?.(event);return!event.defaultPrevented;}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.listeners.close?.();}
+  setAttribute(name,value){this.attributes[name]=String(value);}
+  getAttribute(name){return this.attributes[name]??null;}
+  removeAttribute(name){delete this.attributes[name];}
+  focus(){document.activeElement=this;}
   click(){return this.onclick?.();}
 }
 const nav=new Element(),main=new Element(),head=new Element(),$=id=>elements.get(id);
-const document={getElementById:$,head,querySelector:selector=>selector==='.nav'?nav:main,
+const document={activeElement:null,getElementById:$,head,querySelector:selector=>selector==='.nav'?nav:main,
   querySelectorAll:selector=>selector==='.view'?[$('view-linear')]:selector==='.nav button'?[$('tlNav')]:[],
   addEventListener:(name,listener)=>events[name]=listener};
 const person=(tenant='company-a',role='worker',user=20)=>({member:{tenant_id:tenant,telegram_id:user,role,permissions:['linear']},capabilities:{modules:{linear:true}}});
@@ -38,7 +48,14 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   assert($('tlBoard').innerHTML.includes('data-button-id="pass"'));assert.equal($('tlCreate').hidden,true);
   assert(requests.some(url=>url.includes('&after=cursor')), 'loads remaining pages without a click');
   assert.equal($('tlNext').hidden,true);
-  const columnFilter=$('tlColumnFilter');columnFilter.options.forEach(option=>{option.selected=option.value==='triage';});columnFilter.onchange();assert($('tlBoard').innerHTML.includes('data-state-id="triage"'));assert(!$('tlBoard').innerHTML.includes('data-state-id="testiq"'));assert.deepEqual(JSON.parse(local.get('tenant-linear-columns:company-a:20')),['testiq','done']);$('tlColumnsAll').onclick();assert($('tlBoard').innerHTML.includes('data-state-id="testiq"'));
+  const columnOptions=$('tlColumnOptions');assert.equal(columnOptions.inputs.length,3);assert(columnOptions.innerHTML.includes('aria-label="Sütunu göstər: Testiq"'));
+  columnOptions.inputs.forEach(input=>{input.checked=input.value==='triage';});
+  columnOptions.onchange({target:columnOptions.inputs.find(input=>input.value==='triage')});
+  assert($('tlBoard').innerHTML.includes('data-state-id="triage"'));assert(!$('tlBoard').innerHTML.includes('data-state-id="testiq"'));assert.deepEqual(JSON.parse(local.get('tenant-linear-columns:company-a:20')),['testiq','done']);
+  $('tlColumnsOpen').click();assert.equal($('tlColumnDialog').open,true);assert.equal($('tlColumnsOpen').getAttribute('aria-expanded'),'true');assert.equal(document.activeElement.value,'testiq');
+  const triageToggle=columnOptions.inputs.find(input=>input.value==='triage');triageToggle.focus();triageToggle.checked=true;columnOptions.onchange({target:triageToggle});assert.equal(document.activeElement.dataset.linearColumnId,'triage','checkbox focus survives rerender');
+  const escape={type:'keydown',key:'Escape',preventDefault(){this.defaultPrevented=true;}};$('tlColumnDialog').dispatchEvent(escape);assert.equal($('tlColumnDialog').open,false);assert.equal($('tlColumnsOpen').getAttribute('aria-expanded'),'false');assert.equal(document.activeElement,$('tlColumnsOpen'));
+  $('tlColumnsOpen').click();$('tlColumnsAll').click();assert($('tlBoard').innerHTML.includes('data-state-id="testiq"'));assert.equal(JSON.parse(local.get('tenant-linear-columns:company-a:20')).length,0);
   const before=requests.length;$('tlSearch').value='changed';await $('tlNext').click();assert.equal(requests.length,before);
   $('tlSearch').value='';
   $('tlStateFilter').value='done';$('tlStateFilter').onchange();await $('tlRefresh').click();assert.equal($('tlStateFilter').value,'done','refresh preserves selected status');

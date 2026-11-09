@@ -5,6 +5,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'docs', 'index.html'), 'utf8');
+assert(html.includes('<dialog id="linear-column-dialog" class="linear-column-dialog"'));
+assert(html.includes('aria-haspopup="dialog"') && html.includes('aria-expanded="false"'));
+assert(!html.includes('id="linear-column-filter"'), 'the old expanded multi-select is removed');
+assert(html.includes('@media (prefers-color-scheme:dark)') && html.includes('--linear-popup-bg:#18181b'), 'legacy popup has a contrasting dark palette');
+assert(html.includes('.linear-column-trigger { display:inline-flex') && html.includes('background:#18181b; color:#f4f4f5; border-color:#52525b'), 'the opener and popup controls keep contrast in dark mode');
 function source(name) {
     const marker = new RegExp(`^(?:async )?function ${name}\\(`, 'm');
     const match = marker.exec(html);
@@ -28,8 +33,22 @@ async function test() {
         return value;
     };
     const statusFilter = select('all');
-    const columnFilter = select('');
     const savedSettings = new Map();
+    const fakeDocument = {activeElement:null};
+    const columnOptions = {html:'', inputs:[], querySelectorAll(){return this.inputs;}};
+    Object.defineProperty(columnOptions,'innerHTML',{get(){return this.html;},set(html){
+        this.html=html;
+        this.inputs=[...html.matchAll(/<input\b([^>]*)>/g)].map(match=>{
+            const attrs=match[1], value=(attrs.match(/\bvalue="([^"]*)"/)||[])[1]||'';
+            const stateId=(attrs.match(/data-linear-column-id="([^"]*)"/)||[])[1]||value;
+            const input={value,checked:/(?:^|\s)checked(?:\s|$)/.test(attrs),dataset:{linearColumnId:stateId},
+                focus(){fakeDocument.activeElement=this;},matches(selector){return selector==='input[data-linear-column-toggle]';}};
+            return input;
+        });
+    }});
+    const trigger={attributes:{'aria-expanded':'false'},setAttribute(name,value){this.attributes[name]=value;},getAttribute(name){return this.attributes[name];},focus(){fakeDocument.activeElement=this;}};
+    const resetButton={focus(){fakeDocument.activeElement=this;}};
+    const dialog={open:false,showModal(){this.open=true;},close(){this.open=false;context.linearBoardColumnsClosed();},querySelector(){return columnOptions.inputs[0]||null;}};
     const board = {innerHTML: '', querySelectorAll: () => [], querySelector: () => null};
     let modal;
     const context = {
@@ -37,18 +56,22 @@ async function test() {
         isAdmin: false, employeePermissions: new Set(), employeeLinearCanCreate: false,
         canReviewNews: () => false,
         HAS_CHATS: false, taskTypeTab: 'tasks', localStorage: {getItem(key) {return savedSettings.get(key) || null;}, setItem(key, value) {savedSettings.set(key, value);}},
-        document: {
+        document: Object.assign(fakeDocument,{
             getElementById(id) {
                 if(id === 'linear-page-create') return button;
                 if(id === 'linear-operator-filter') return operatorFilter;
                 if(id === 'linear-status-filter') return statusFilter;
-                if(id === 'linear-column-filter') return columnFilter;
+                if(id === 'linear-column-options') return columnOptions;
+                if(id === 'linear-column-dialog') return dialog;
+                if(id === 'linear-column-trigger') return trigger;
+                if(id === 'linear-column-reset') return resetButton;
                 if(id === 'linear-tasks-container') return {querySelector: () => board};
                 return null;
             },
+            querySelectorAll(selector) {return selector.includes('linear-column-options') ? columnOptions.inputs : [];},
             createElement() {return {addEventListener() {}};},
             body: {appendChild(element) {modal = element;}},
-        },
+        }),
         window: {setTimeout() {}, matchMedia: () => ({matches: false})},
         CSS: {escape: value => value},
         async fetch() {
@@ -67,7 +90,7 @@ async function test() {
         ],
     };
     vm.createContext(context);
-    for(const name of ['loadEmployeeSession', 'applyEmployeePermissionUi', 'openLinearCreateModal', 'linearBoardTaskMatches', 'linearBoardOperatorMatches', 'linearBoardHasAccount', 'renderLinearBoard', 'saveLinearBoardColumns', 'resetLinearBoardColumns']) {
+    for(const name of ['loadEmployeeSession', 'applyEmployeePermissionUi', 'openLinearCreateModal', 'linearBoardTaskMatches', 'linearBoardOperatorMatches', 'linearBoardHasAccount', 'updateLinearBoardColumnOptions', 'renderLinearBoard', 'openLinearBoardColumns', 'closeLinearBoardColumns', 'linearBoardColumnsClosed', 'saveLinearBoardColumns', 'resetLinearBoardColumns']) {
         vm.runInContext(source(name), context);
     }
     await context.loadEmployeeSession();
@@ -88,13 +111,29 @@ async function test() {
         assert.equal(operatorFilter.hidden, true);
         assert.equal(operatorFilter.style.display, 'none');
     }
-    columnFilter.options.forEach(option => { option.selected = option.value === 'triage'; });
+    assert(columnOptions.innerHTML.includes('aria-label="Sütunu göstər: Testiq"'));
+    columnOptions.inputs.forEach(input => { input.checked = input.value === 'triage'; });
     context.saveLinearBoardColumns();
     assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), JSON.stringify(['testiq']));
     assert(board.innerHTML.includes('data-linear-status-column="triage"'));
     assert(!board.innerHTML.includes('data-linear-status-column="testiq"'));
+    context.openLinearBoardColumns();
+    assert.equal(dialog.open, true);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(fakeDocument.activeElement.value, 'testiq');
+    const triageToggle = columnOptions.inputs.find(input => input.value === 'triage');
+    triageToggle.focus();
+    triageToggle.checked = true;
+    context.saveLinearBoardColumns();
+    assert.equal(fakeDocument.activeElement.dataset.linearColumnId, 'triage', 'checkbox focus survives rerender');
+    assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), JSON.stringify(['testiq']));
     context.resetLinearBoardColumns();
     assert(board.innerHTML.includes('data-linear-status-column="testiq"'));
+    assert.equal(savedSettings.get('linear-board-hidden-columns:6824377548'), '[]');
+    context.closeLinearBoardColumns();
+    assert.equal(dialog.open, false);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(fakeDocument.activeElement, trigger, 'closing returns keyboard focus to the trigger');
     context.employeeLinearCanCreate = false;
     context.applyEmployeePermissionUi();
     assert.equal(button.hidden, true);
