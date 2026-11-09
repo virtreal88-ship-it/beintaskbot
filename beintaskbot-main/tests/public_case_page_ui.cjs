@@ -3,7 +3,7 @@ const path=require('node:path');
 const assert=require('node:assert/strict');
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const html=fs.readFileSync(path.join(__dirname,'../../docs/public-case.html'),'utf8');
-const fixture={selected_media_ids:['im','vid','aud','doc'],public_messages:[
+const fixture={public_identity:{version:1,customer_name:'<b>Customer</b>',phone_status:'verified',verified_phone:'+15550001111',company_name:'Synthetic company',operator_name:'Synthetic employee',last_message_at:'2026-11-02T11:03:00Z'},selected_media_ids:['im','vid','aud','doc'],public_messages:[
  {id:'text',speaker:'Müştəri',text:'<img src=x onerror=alert(1)> complaint',type:'text'},
  {id:'im',speaker:'Müştəri',text:'Image attached',type:'image'},
  {id:'vid',speaker:'Müştəri',text:'Video attached',type:'video'},
@@ -16,14 +16,17 @@ dom.window.eval(script);
 const doc=dom.window.document;
 (async()=>{
 assert.equal(doc.querySelectorAll('form').length,0,'public page is read only');
-assert.equal(doc.querySelectorAll('#thread img,#thread video,#thread audio').length,0,'private media is not fetched or rendered until a click');
-const buttons=[...doc.querySelectorAll('.media-box button')];assert.equal(buttons.length,4);assert.equal(mediaCalls.length,0);
+assert.deepEqual([...doc.querySelectorAll('.identity span')].map(n=>n.textContent),['Müştəri: <b>Customer</b>','Telefon: +15550001111','Şirkət: Synthetic company','Operator: Synthetic employee']);assert.equal(doc.querySelectorAll('.identity b').length,0);assert.ok(!doc.querySelector('.head').textContent.includes('2026'));assert.ok(!doc.querySelector('.head').textContent.includes('Fraqmentin son mesajı'));
+
+for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
+assert.equal(doc.querySelectorAll('#thread img,#thread video,#thread audio').length,3,'selected AV loads without clicks');
+const buttons=[...doc.querySelectorAll('.media-box button')];assert.equal(buttons.length,4);assert.equal(mediaCalls.length,3);assert.ok(!mediaCalls.some(url=>url.endsWith('/doc')),'documents remain manual');
 for(const button of buttons)button.click();for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));
-assert.equal(mediaCalls.length,4,'one explicit click triggers each selected media request');
+assert.equal(mediaCalls.length,4,'only document requires an explicit click');
 assert.equal(doc.querySelectorAll('#thread img').length,1,'untrusted text cannot inject another image');
 assert.equal(doc.querySelector('#thread img').alt,'Müraciətə əlavə edilmiş şəkil');
-assert.equal(doc.querySelector('video').controls,true);assert.equal(doc.querySelector('video').preload,'none');
-assert.equal(doc.querySelector('audio').controls,true);assert.equal(doc.querySelector('audio').preload,'none');
+assert.equal(doc.querySelector('video').controls,true);assert.equal(doc.querySelector('video').preload,'metadata');
+assert.equal(doc.querySelector('audio').controls,true);assert.equal(doc.querySelector('audio').preload,'metadata');
 assert.equal(doc.querySelector('#thread a').textContent,'Əlavə edilmiş sənədi endir');
 for(const button of buttons)button.click();assert.equal(mediaCalls.length,4,'repeat actions reuse the in-view object URL');
 const media=[...doc.querySelectorAll('#thread img,#thread video,#thread audio,#thread a')];assert.equal(media.length,4);assert.ok(media.every(node=>node.src||node.href));
@@ -31,5 +34,5 @@ assert.ok(doc.querySelector('#thread').textContent.includes('<img src=x onerror=
 assert.ok(!doc.querySelector('#thread img[onerror]'));
 assert.ok(doc.querySelector('meta[name=referrer]').content==='no-referrer');
 dom.window.close();
-console.log('PASS: synthetic public-case fixture loads selected media only on click, renders image/video/audio/document, escapes HTML and offers no write form.');
+console.log('PASS: synthetic public-case fixture automatically loads selected AV and manually loads documents, renders image/video/audio/document, escapes HTML and offers no write form.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

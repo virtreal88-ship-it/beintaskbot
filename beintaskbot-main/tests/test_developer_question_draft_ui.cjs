@@ -20,6 +20,7 @@ async function setup(kind,{language='en',versions=true,agent=true,targets=true}=
    if(state.error)throw Error('Response lost');
    return ok({text:state.reply,request_id:'44444444-4444-4444-8444-444444444444',developer_question_draft:true,customer_message_sent:false,context_usage:{missing_media:state.missing?[{id:ids[1],kind:'audio',reason:'not_analyzed'}]:[]}});
   }
+  if(path===base&&state.prepareError)return {ok:false,status:409,json:async()=>({success:false,error:state.prepareError})};
   if(path===base)return ok({id:'consultation',request_id:body?.request_id});
   if(path.endsWith('/dispatch'))return ok({state:'sent'});
   if(path===base+'/replies')return ok({replies:[],consultations:[]});
@@ -47,13 +48,29 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
  const unselected=await setup('dialog'),unselectedForm=await unselected.open();
  unselectedForm.querySelector('textarea').value='Saved question';unselectedForm.querySelector('textarea').dispatchEvent(new unselected.w.Event('input'));
  assert.equal(unselectedForm.querySelector('select').value,'');unselected.closeForm();const reopenedUnselected=await unselected.open();assert.equal(reopenedUnselected.querySelector('select').value,'','dismissal must not silently choose the first recipient');assert.equal(reopenedUnselected.querySelector('button[type=submit]').disabled,true);assertNoSend(unselected);unselected.close();
+ for(const kind of ['dialog','case'])for(const language of ['ru','az','en','unsupported',null]){
+  const expectedLanguage=['ru','az','en'].includes(language)?language:kind==='dialog'?'az':'ru';
+  const compact=await setup(kind,{language}),c=controls(compact,await compact.open());fill(compact,c,'Manual question');
+  assert.equal(c.form.querySelectorAll('.consultation-recipient,[data-case-send-recipient],#caseConsultSendHint').length,0,'no duplicate recipient or send explanation');
+  assert.match(c.recipient.selectedOptions[0].textContent,/Developer A/,'recipient stays identifiable in selector');
+  assert.equal(c.form.querySelectorAll('[data-public-scope]').length,1);
+  const scope=c.form.querySelector('[data-public-scope]').textContent;
+  assert.ok(scope.length<120,'short pre-send privacy notice');assert.match(scope,/7/);
+  assert.match(scope,({ru:/переписка, файлы, имена, компания и телефон.*всем по ссылке/,az:/yazışma, fayllar, adlar, şirkət və telefon.*hər kəsə/,en:/conversation, files, names, company and phone.*anyone with the link/})[expectedLanguage]);
+  assert.doesNotMatch(c.form.textContent,/Файлы выбранного фрагмента добавляются автоматически|Files in the selected fragment are included automatically|Seçilmiş fraqmentin faylları avtomatik əlavə olunur/);
+  assert.equal(c.send.disabled,false);assert.equal(questionCalls(compact).length,0);
+  compact.state.prepareError='Фрагмент частично пересекается с существующей консультацией. Проверьте её; новый вопрос не объединён автоматически.';
+  c.send.click();await settle();assert.equal(prepareCalls(compact).length,1);assert.equal(compact.calls.some(call=>call.path.endsWith('/dispatch')),false,'overlap conflict cannot dispatch');
+  assert.match(c.form.textContent,({ru:/Есть пересечение. Проверьте консультацию или измените фрагмент./,az:/Fraqmentlər kəsişir. Məsləhəti yoxlayın və ya fraqmenti dəyişin./,en:/Overlapping fragment. Review the consultation or change the range./})[expectedLanguage]);
+  assert.doesNotMatch(c.form.textContent,/новый вопрос не объединён автоматически/);compact.close();
+ }
  for(const kind of ['dialog','case']){
   // Automatic attachments follow the current exact range, never saved file toggles.
   const media=await setup(kind);
   media.state.preview=['image','audio','video','document','voice','photo','image'].map((message_type,index)=>({id:'media-'+index,message_type,source_version:'media-version-'+index,public_sender_version:'b'.repeat(64),media_shareable:index===3?false:index===4?undefined:true,body:'Synthetic attachment',direction:'incoming'}));
   const mf=controls(media,await media.open()),mv=index=>kind==='dialog'?String(index):'media-'+index;
   assert.equal(mf.media,null);assert.equal(mf.form.querySelector('[data-consultation-review],.case-consult-preview,[data-public-header-preview]'),null);
-  assert.match(mf.form.querySelector('[data-public-scope]').textContent,/sender and customer names.*anyone with the link.*7 days/);
+  assert.match(mf.form.querySelector('[data-public-scope]').textContent,/conversation, files, names, company and phone.*anyone with the link.*7 days/);
   change(media,mf.recipient,'0');change(media,mf.first,mv(0));change(media,mf.last,mv(5));change(media,mf.summary,'Share only this fragment','input');
   change(media,mf.first,mv(1));change(media,mf.last,mv(2));change(media,mf.first,mv(0));change(media,mf.last,mv(5));
   assert.equal(questionCalls(media).length,0,'range changes do not start AI');assertNoSend(media);

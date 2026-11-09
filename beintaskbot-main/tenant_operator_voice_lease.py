@@ -5,6 +5,7 @@ review-only additive migration lives with the Realtime candidate. A missing or
 incompatible schema therefore keeps session admission closed.
 """
 import asyncio
+import logging
 import uuid
 
 from tenant_linear_policy import TenantLinearError
@@ -20,6 +21,7 @@ REALTIME_SESSION_MAX_SECONDS = 60 * 60
 ACTIVE_RECOVERY_GRACE_SECONDS = 5 * 60
 ACTIVE_RECOVERY_AFTER_SECONDS = REALTIME_SESSION_MAX_SECONDS + ACTIVE_RECOVERY_GRACE_SECONDS
 _ACTIVE = ('starting', 'active')
+_LOG = logging.getLogger(__name__)
 
 
 class VoiceSessionLease:
@@ -63,6 +65,12 @@ class VoiceSessionLease:
                         # elapsed. The incremented fence blocks stale owners.
                         if old and not (old['state']=='closed' or
                                         (old['state']=='active' and old['provider_session_expired'] is True)):
+                            # Operational diagnosis only: never log tenant,
+                            # session, conversation, owner, or provider data.
+                            # Expiry is not evidence of provider closure.
+                            state=old['state'] if old['state'] in _ACTIVE else 'other'
+                            _LOG.info('realtime_voice_lease_claim_refused state=%s lease_live=%s provider_lifetime_elapsed=%s',
+                                      state,old['live'] is True,old['provider_session_expired'] is True)
                             conn.commit(); return None
                         if old:
                             next_fence = int(old['fence']) + 1

@@ -12,6 +12,10 @@ class Refused(Exception):
     pass
 
 
+class LeaseAlreadyActive(Refused):
+    """A scoped lease claim was declined before any provider open."""
+
+
 _SAFE_RESPONSE_REJECTION_CODES=frozenset({
     'session_closed','output_authorization_rejected','voice_lease_rejected',
     'response_not_inflight','response_id_mismatch',
@@ -231,7 +235,7 @@ class Session:
             stage='lease_claim'
             self.fence = await self.lease.claim(self.scope)
             if not self.fence:
-                raise Refused('session_already_active')
+                raise LeaseAlreadyActive('session_already_active')
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # The owner pilot intentionally has no monetary reserve. It does
             # require owner authorization and the durable user lease.

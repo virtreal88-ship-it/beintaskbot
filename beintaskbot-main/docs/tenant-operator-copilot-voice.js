@@ -33,7 +33,12 @@
     try{options.onState?.(state);}catch(_){}
   };
   const abort=()=>{void section.disposeVoice().catch(()=>{});};
-  section.addEventListener('keydown',event=>{if(event.key==='Escape'&&controller?.isActive?.()){event.preventDefault();event.stopPropagation();void controller.end?.();}});
+  section.addEventListener('keydown',event=>{
+    if(event.key!=='Escape'||section.hidden)return;
+    event.preventDefault();event.stopPropagation();
+    if(controller?.isActive?.()){endRequested=true;void controller.end?.();}
+    else section.hidden=true; // Dismiss only the local UI; never release a server lease.
+  });
   section.addEventListener('keydown',event=>{
     if(event.key!=='Tab')return;
     const nodes=[...section.querySelectorAll('button:not([hidden]):not(:disabled)')];
@@ -78,6 +83,7 @@
         acquireMicrophone:()=>win.acquireTenantMicrophone(),openAudio:callback=>win.openExperimentalCopilotAudio(callback,undefined,undefined,{pushToTalk:true}),
         connect:callback=>win.connectExperimentalCopilotVoice(options.socketPath,callback),
         lifecycle:document,language:options.language,onState:setVoiceState,
+        onDismiss:()=>{section.hidden=true;},
         onIdle:()=>{setVoiceState('idle');if(!disposed)options.onIdle?.();},
       });
       controls?.addEventListener('click',event=>{if(event.target.closest?.('.voice-session-end'))endRequested=true;},true);
