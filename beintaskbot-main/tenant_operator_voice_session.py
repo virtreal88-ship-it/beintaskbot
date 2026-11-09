@@ -52,8 +52,7 @@ _LOG=logging.getLogger(__name__)
 
 _SAFE_LATENCY_STAGES=frozenset({'talk_end_to_commit_ack','commit_ack_to_dispatch','dispatch_checks',
                                 'response_to_first_audio','first_audio_to_playback',
-                                'output_done_to_played_all','output_done_pending_at_end',
-                                'vad_stop_to_commit_ack','commit_ack_to_vad_stop'})
+                                'output_done_to_played_all','output_done_pending_at_end'})
 
 
 def _log_voice_latency(stage, start, end):
@@ -89,8 +88,6 @@ class Session:
     SAMPLE_RATE = 24000
     MAX_FRAME = 9600  # 200 ms PCM16 mono
     MAX_OUTPUT_BYTES = 4_800_000
-    MAX_PILOT_OUTPUT_BYTES = 28_800_000  # 10 minutes of PCM16 mono at 24 kHz
-    MAX_PILOT_RESPONSES = 120
     # VAD may split a natural utterance into several pauses while the model
     # is speaking. Keep a bounded backlog large enough for a short interruption
     # burst without ending the whole conversation.
@@ -98,8 +95,7 @@ class Session:
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
-                 pilot_policy=None, duplex=False):
-        if type(duplex) is not bool:raise Refused('invalid_duplex_mode')
+                 pilot_policy=None):
         if any(x is None for x in (authority, lease, context, provider, client)) or (ledger is None and pilot_policy is None):
             raise Refused('trusted_dependencies_missing')
         if getattr(provider, 'mock_only', None) is not True:
@@ -164,8 +160,7 @@ class Session:
         self.response_pending = False
         self.input_sequence = 0
         self.input_turn = None
-        self.duplex = duplex
-        self.manual_turns = not duplex
+        self.manual_turns = True
         self.stopped_input_turns = []
         self.pending_input_item_id = None
         self.queued_input_item_ids = []
@@ -185,7 +180,6 @@ class Session:
         self.finished_response_ids = set()
         self.item = None
         self.produced = 0
-        self.pilot_output_bytes = 0
         self.interrupt_pending = False
         self.truncate_pending = None
         self.truncate_pending_audio_end_ms = None
@@ -223,13 +217,6 @@ class Session:
                 self.started and time.monotonic()-self.started >= self.max_seconds):
                 raise Refused('session_duration_limit')
             await self.provider.send(event)
-
-    async def _send_cancel_when_identified(self):
-        if getattr(self,'duplex',False):
-            if self.provider_response_id is not None:
-                await self._send_provider({'type':'response.cancel','response_id':self.provider_response_id})
-        else:
-            await self._send_provider({'type':'response.cancel'})
 
     async def _send_client(self, event):
         async with self.client_lock:
@@ -302,10 +289,8 @@ class Session:
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
             stage='provider_open'
-            options={'tools':[],'create_response':False,'interrupt_response':False,
-                     'transcription':None,'reconnect':False}
-            if not self.manual_turns:options['duplex']=True
-            self._open_task = asyncio.create_task(self.provider.open(snapshot,**options))
+            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
+                                                                    transcription=None, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
                 self._open_task.cancel()
@@ -397,8 +382,6 @@ class Session:
             self.truncate_pending or self.response_inflight or self.current_reservation is not None or
             self.item is not None or self.closed):
             return
-        if self.pilot_policy is not None and self.response_number>=self.MAX_PILOT_RESPONSES:
-            raise Refused('session_response_limit')
         self.response_number += 1
         latency_dispatch_started=time.monotonic()
         commit_times=getattr(self,'_latency_commit_times',{})
@@ -496,14 +479,6 @@ class Session:
         """Dispatch only after VAD stop and provider commit identify one item."""
         if not turn['stopped'] or not turn['item_id']:
             return
-        vad_stopped_at=turn.pop('latency_vad_stop_at',None)
-        committed_at=turn.pop('latency_vad_commit_at',None)
-        vad_first=turn.pop('latency_vad_first',None)
-        if vad_stopped_at is not None and committed_at is not None:
-            if vad_first=='stop':
-                _log_voice_latency('vad_stop_to_commit_ack',vad_stopped_at,committed_at)
-            elif vad_first=='commit':
-                _log_voice_latency('commit_ack_to_vad_stop',committed_at,vad_stopped_at)
         if self.pending_input_item_id is None and not self.response_pending:
             self.pending_input_item_id=turn['item_id']
             self.response_pending=True
@@ -591,8 +566,6 @@ class Session:
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
         if kind in ('talk_start','stop_response') and set(event) in ({'type'},{'type','item_id','audio_end_ms'}):
-            if getattr(self,'duplex',False) and kind=='talk_start':
-                raise Refused('talk_start_not_available')
             item_id=event.get('item_id')
             audio_end_ms=event.get('audio_end_ms')
             if 'item_id' in event and (not isinstance(item_id,str) or not item_id or len(item_id)>128):
@@ -619,7 +592,7 @@ class Session:
                         raise Refused('talk_interrupt_item_unexpected')
                     if not self.cancel_requested:
                         self.cancel_requested=True
-                        await self._send_cancel_when_identified()
+                        await self._send_provider({'type':'response.cancel'})
                 elif self.item is not None:
                     # Stop local playback immediately and trim the provider's
                     # conversation item at the browser's conservative playback
@@ -640,15 +613,13 @@ class Session:
                     if self.transcript is not None:self.transcript.interrupted(target_item)
                     if self.response_inflight and not self.cancel_requested:
                         self.cancel_requested=True
-                        await self._send_cancel_when_identified()
+                        await self._send_provider({'type':'response.cancel'})
                     await self._send_provider({'type':'conversation.item.truncate','item_id':target_item,
                                                'content_index':0,'audio_end_ms':offset})
                 elif self.response_pending or self.response_inflight or self.current_reservation is not None:
                     raise Refused('talk_not_ready')
                 elif item_id is not None and item_id not in self.seen_assistant_item_ids:
                     raise Refused('talk_interrupt_item_unknown')
-                if getattr(self,'duplex',False):
-                    return
                 self.input_sequence+=1
                 self.input_turn={'sequence':self.input_sequence,'stopped':False,'item_id':None,
                                  'manual':True,'audio_bytes':0}
@@ -656,7 +627,6 @@ class Session:
                 await self._send_client({'type':'talk_ready'})
             return
         if kind == 'talk_end' and set(event)=={'type'}:
-            if getattr(self,'duplex',False):raise Refused('talk_end_not_available')
             async with self.lock:
                 turn=self.input_turn
                 if not isinstance(turn,dict) or turn.get('manual') is not True or turn.get('stopped'):
@@ -675,13 +645,6 @@ class Session:
             if not data or len(data) > self.MAX_FRAME or len(data) % 2:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
-                if getattr(self,'duplex',False):
-                    if self.input_bytes + len(data) > self.max_input_bytes:
-                        raise Refused('session_input_limit')
-                    self.input_bytes += len(data)
-                    await self._send_provider({'type':'input_audio_buffer.append','audio':base64.b64encode(data).decode('ascii')})
-                    self.activity=time.monotonic()
-                    return
                 if self.greeting_pending or (self.input_turn is None and (
                     self.response_inflight or self.item is not None or self.response_pending or
                     self.current_reservation is not None or self.pending_input_item_id is not None)):
@@ -814,11 +777,15 @@ class Session:
                         return
                     raise Refused('input_turn_commit_pending')
                 self.activity = time.monotonic()
-                if self.response_inflight and not self.cancel_requested:
-                    # Duplex disables provider-side automatic cancellation so
-                    # this lock serializes VAD and explicit-stop requests.
+                if self.response_inflight:
+                    # server_vad interrupt_response owns cancellation. Sending
+                    # response.cancel here races the provider's own turn-detected
+                    # cancellation: if response.done is already queued, that
+                    # duplicate cancel is rejected as a provider error and used
+                    # to tear down the entire conversation. Mark the response
+                    # interrupted locally, stop browser playback below, and let
+                    # the provider emit the single authoritative response.done.
                     self.cancel_requested=True
-                    if getattr(self,'duplex',False):await self._send_cancel_when_identified()
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
                     # Stop local playback immediately, but do not wait for a
@@ -848,9 +815,6 @@ class Session:
                     return
                 turn['stopped']=True
                 self.activity = time.monotonic()
-                if getattr(self,'duplex',False):
-                    turn['latency_vad_stop_at']=self.activity
-                    turn.setdefault('latency_vad_first','stop')
                 self.input_turn=None
                 if turn['item_id']:
                     await self._accept_committed_input(turn)
@@ -890,9 +854,6 @@ class Session:
                 turn['item_id']=item_id
                 self.seen_input_item_ids.add(item_id)
                 committed_at=time.monotonic()
-                if getattr(self,'duplex',False):
-                    turn['latency_vad_commit_at']=committed_at
-                    turn.setdefault('latency_vad_first','commit')
                 _log_voice_latency('talk_end_to_commit_ack',turn.pop('latency_talk_end_at',None),committed_at)
                 if not hasattr(self,'_latency_commit_times'):self._latency_commit_times={}
                 self._latency_commit_times[item_id]=committed_at
@@ -976,10 +937,6 @@ class Session:
                 self.item = item
                 if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
                     raise Refused('provider_audio_output_limit')
-                if getattr(self,'pilot_policy',None) is not None:
-                    if getattr(self,'pilot_output_bytes',0)+len(data)>self.MAX_PILOT_OUTPUT_BYTES:
-                        raise Refused('session_output_limit')
-                    self.pilot_output_bytes+=len(data)
                 if getattr(self,'_latency_response_sent_at',None) is not None:
                     first_audio_at=time.monotonic()
                     _log_voice_latency('response_to_first_audio',self._latency_response_sent_at,first_audio_at)
@@ -1039,8 +996,6 @@ class Session:
             if not self.response_inflight or self.provider_response_id or not isinstance(rid,str) or not rid or len(rid)>128:
                 raise Refused('unreserved_or_duplicate_response')
             self.provider_response_id=rid
-            if getattr(self,'duplex',False) and self.cancel_requested:
-                await self._send_cancel_when_identified()
             await self._send_client({'type':'thinking'})
             return
         if kind == 'response.output_audio.done':
@@ -1060,7 +1015,7 @@ class Session:
                     if self.transcript is not None:self.transcript.assistant_audio_done(self.item)
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
-        if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created','response_cancel_noop'):
+        if kind in ('input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
             return
         if kind in ('conversation.item.added','conversation.item.created','conversation.item.done'):
             item=event.get('item')

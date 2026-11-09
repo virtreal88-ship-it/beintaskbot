@@ -19,7 +19,6 @@ OPENAI_URL='wss://api.openai.com/v1/realtime'
 MAX_WIRE_MESSAGE=262144
 CONNECT_DEADLINE=4
 CLOSE_DEADLINE=3
-CANCEL_RACE_DEADLINE=2
 _LOG=logging.getLogger(__name__)
 
 # Only stable provider machine codes that are useful to the operator may reach
@@ -120,12 +119,6 @@ class AiohttpRealtimeSocket:
         if data.get('type')=='error':
             error=data.get('error')
             code=error.get('code') if isinstance(error,dict) else None
-            event_id=error.get('event_id') if isinstance(error,dict) else None
-            if code=='response_cancel_not_active' and isinstance(event_id,str) and 0<len(event_id)<=128:
-                # Correlation stays inside the transport; no provider text is retained.
-                result={'type':'_cancel_not_active','event_id':event_id}
-                if 'session_id' in data:result['session_id']=data['session_id']
-                return result
             safe_code=code if isinstance(code,str) and code in SAFE_PROVIDER_ERROR_CODES else 'provider_error'
             raise SafeRealtimeFailure(safe_code,event_type='error')
         return data
@@ -210,7 +203,6 @@ class _RealtimeWire:
         if not callable(getattr(claim_guard,'consume',None)):
             raise ValueError('claim_guard_required')
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
-        self.duplex=False;self._cancel_events={};self._completed_responses=set();self._pending_cancel_races={}
 
     def _note_conversation(self,event,session_id=None):
         conversation=event.get('conversation')
@@ -221,8 +213,8 @@ class _RealtimeWire:
             raise ValueError('provider_conversation_invalid')
         self.conversation_id=value
 
-    async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect,duplex=False):
-        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
+    async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -244,9 +236,7 @@ class _RealtimeWire:
                             # Click-to-talk owns turn boundaries. The server
                             # commits input only after the employee presses
                             # Send, so VAD cannot auto-submit a pause or noise.
-                            'turn_detection':({'type':'server_vad','threshold':0.5,'prefix_padding_ms':300,
-                                               'silence_duration_ms':500,'create_response':False,
-                                               'interrupt_response':False} if duplex else None)},
+                            'turn_detection':None},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -277,19 +267,7 @@ class _RealtimeWire:
             ('status' in item and item['status']!='completed') or
             item.get('content')!=[{'type':'input_text','text':context_text}]):
             raise ValueError('provider_context_unconfirmed')
-        self.config=config;self.session_id=session_id;self.duplex=duplex;self.ready=True
-
-    @staticmethod
-    def _turn_detection_matches(actual,expected):
-        if expected is None:return actual is None
-        if not isinstance(actual,dict) or not isinstance(expected,dict):return False
-        allowed=set(expected)|{'idle_timeout_ms'}
-        return (set(actual)<=allowed and actual.get('idle_timeout_ms') is None and
-                actual.get('type')=='server_vad' and actual.get('create_response') is False and
-                actual.get('interrupt_response') is False and
-                type(actual.get('threshold')) in (int,float) and actual.get('threshold')==expected['threshold'] and
-                type(actual.get('prefix_padding_ms')) is int and actual.get('prefix_padding_ms')==expected['prefix_padding_ms'] and
-                type(actual.get('silence_duration_ms')) is int and actual.get('silence_duration_ms')==expected['silence_duration_ms'])
+        self.config=config;self.session_id=session_id;self.ready=True
 
     @staticmethod
     def _verify(event,expected,session_id):
@@ -310,7 +288,7 @@ class _RealtimeWire:
               # OpenAI normalizes an omitted transcription config to null in
               # session.updated. Null means no separate transcription model.
               'audio.input.transcription':incoming.get('transcription') is None,
-              'audio.input.turn_detection':_RealtimeWire._turn_detection_matches(incoming.get('turn_detection'),expected['audio']['input']['turn_detection']),
+              'audio.input.turn_detection.disabled':incoming.get('turn_detection') is None,
               'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
             }
             mismatch=[name for name,valid in checks.items() if not valid]
@@ -371,10 +349,6 @@ class _RealtimeWire:
         elif kind=='response.cancel' and set(event) in ({'type'},{'type','response_id'}):
             if 'response_id' in event and (not isinstance(event['response_id'],str) or not event['response_id'] or len(event['response_id'])>128):
                 raise ValueError('response_id_invalid')
-            if self.duplex:
-                if 'response_id' not in event:raise ValueError('cancel_response_id_required')
-                event=dict(event);event_id='cancel_'+uuid.uuid4().hex
-                event['event_id']=event_id;self._cancel_events[event_id]=event['response_id']
         elif kind=='conversation.item.truncate' and set(event)=={'type','item_id','content_index','audio_end_ms'}:
             # The server bounds this offset against the exact PCM bytes it
             # sent for the active item. Preserve the same finite ceiling here
@@ -389,36 +363,10 @@ class _RealtimeWire:
 
     async def receive(self):
         if not self.ready:raise ValueError('session_not_ready')
-        while True:
-            if self._pending_cancel_races:
-                remaining=min(deadline for _,deadline in self._pending_cancel_races.values())-asyncio.get_running_loop().time()
-                if remaining<=0:raise SafeRealtimeFailure('provider_error',event_type='error')
-                try:event=await asyncio.wait_for(self.socket.receive_json(),remaining)
-                except asyncio.TimeoutError:raise SafeRealtimeFailure('provider_error',event_type='error') from None
-            else:event=await self.socket.receive_json()
-            if not isinstance(event,dict):raise ValueError('provider_event_invalid')
-            if 'session_id' in event and event['session_id']!=self.session_id:
-                self.ready=False;raise ValueError('provider_session_changed')
-            if event.get('type')!='_cancel_not_active':break
-            event_id=event.get('event_id')
-            if not isinstance(event_id,str):raise SafeRealtimeFailure('provider_error',event_type='error')
-            response_id=self._cancel_events.get(event_id)
-            if response_id is None or event_id in self._pending_cancel_races:
-                raise SafeRealtimeFailure('provider_error',event_type='error')
-            if response_id in self._completed_responses:
-                self._cancel_events.pop(event_id,None)
-                return {'type':'response_cancel_noop'}
-            # The provider may report this error before response.done reaches
-            # us. Keep reading in order, with a hard deadline; never infer a
-            # successful completion from the error alone.
-            self._pending_cancel_races[event_id]=(response_id,asyncio.get_running_loop().time()+CANCEL_RACE_DEADLINE)
-        if event.get('type')=='response.done':
-            response=event.get('response');response_id=response.get('id') if isinstance(response,dict) else None
-            if isinstance(response_id,str) and response_id in self._cancel_events.values():
-                self._completed_responses.add(response_id)
-                for event_id,(pending_response,_) in list(self._pending_cancel_races.items()):
-                    if pending_response==response_id:
-                        self._pending_cancel_races.pop(event_id,None);self._cancel_events.pop(event_id,None)
+        event=await self.socket.receive_json()
+        if not isinstance(event,dict):raise ValueError('provider_event_invalid')
+        if 'session_id' in event and event['session_id']!=self.session_id:
+            self.ready=False;raise ValueError('provider_session_changed')
         if event.get('type') in {'session.created','session.updated'}:
             # No settings changes after the attested startup are permitted.
             self.ready=False
@@ -429,7 +377,7 @@ class _RealtimeWire:
         return event
 
     async def close(self):
-        self.ready=False;self.bound=None;self._cancel_events.clear();self._completed_responses.clear();self._pending_cancel_races.clear()
+        self.ready=False;self.bound=None
         await self.socket.close()
 
 
