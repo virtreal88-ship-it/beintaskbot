@@ -5,10 +5,10 @@ const source=fs.readFileSync('docs/tenant-support-consultations.js','utf8');
 const base='/api/platform/ai/dialog-consultations',ok=result=>({ok:true,json:async()=>({success:true,result})});
 const ticket={id:'case-a',lead_id:41,channel_id:'source-channel',conversation_id:'customer',status:'new',agent_id:'assigned-agent'};
 const messages=['text','audio','video'].map((kind,index)=>({id:'message-'+index,public_sender_version:'b'.repeat(64),source_version:'v'+index,external_id:'connect:'+index,message_type:kind,direction:'incoming',public_speaker:'Müştəri',public_text:kind==='text'?'Printer problem':'',media_shareable:kind!=='text',body:kind==='text'?'Printer problem':'',happened_at:'2026-11-01T12:0'+index+':00Z'}));
-async function setup({dialogs=true,agent=true}={}){
+async function setup({dialogs=true,agent=true,language='ru'}={}){
  const dom=new JSDOM('<div id="host"></div><p id="notice"></p>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'company-a',telegram_id:11,role:dialogs?'owner':'operator'};
- w.tenantI18n={language:'ru',date:value=>String(value)};w.tenantOperator={hasRight:right=>right==='dialogs'?dialogs:true};
+ w.tenantI18n={language,date:value=>String(value)};w.tenantOperator={hasRight:right=>right==='dialogs'?dialogs:true};
  const state={autoDispatches:[],consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body,options});
@@ -35,6 +35,16 @@ async function setup({dialogs=true,agent=true}={}){
 async function form(ctx){ctx.d.querySelector('#consultCreate').click();await settle();return ctx.d.querySelector('#caseDeveloperForm');}
 function fill(ctx,node){const summary=node.querySelector('#consultReason');summary.value='Printer cannot connect';node.querySelector('#caseConsultFirst').value='message-0';node.querySelector('#caseConsultLast').value='message-2';node.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));for(const toggle of node.querySelectorAll('[data-case-media-check]'))if(toggle.getAttribute('aria-pressed')!=='true')toggle.click();summary.dispatchEvent(new ctx.w.Event('input',{bubbles:true}));}
 (async()=>{
+ // Persisted sent is a provider submission receipt, never proof of delivery.
+ for(const [language,label] of Object.entries({ru:'Передано провайдеру; доставка не подтверждена.',az:'Provayderə ötürülüb; çatdırılma təsdiqlənməyib.',en:'Submitted to provider; delivery unconfirmed.'})){
+  const receipt=await setup({language});
+  receipt.state.consultations=[{id:'legacy-sent',state:'sent',recipient:'Developer',created_at:'2026-11-01',can_send:false}];
+  receipt.state.autoDispatches=[{id:'auto-sent',state:'sent',recipient:'Developer'}];
+  receipt.controller.refreshMaterials();await settle();
+  assert.equal(receipt.d.querySelector('#consultRows').textContent.split(label).length-1,2,language+' manual and automatic receipts distinguish submission from delivery');
+  assert.equal(receipt.calls.filter(call=>call.options.method==='POST').length,0,'rendering legacy receipts never retries or mutates history');
+  receipt.close();
+ }
  const ctx=await setup();
  assert.equal(ctx.calls.filter(call=>call.options.method==='POST').length,0,'reading does not send or run AI');
  const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');assert.equal(request.querySelector('#caseConsultIdentityConsent'),null,'public identity control is removed');assert.match(request.textContent,/имена отправителей и клиента.*7 дней/);
