@@ -57,7 +57,7 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
 
     def test_domain_and_expiry_are_strict(self):
         self.assertEqual(callback_domain("HTTPS://Demo.Kommo.com/path", StoreError), "demo.kommo.com")
-        for value in ("", "evil.example", "kommo.com.evil.example"):
+        for value in ("", "evil.example", "kommo.com.evil.example", "https://demo.kommo.com@evil.example", "https://demo.kommo.com:443", "https://-bad.kommo.com"):
             with self.assertRaises(StoreError): callback_domain(value, StoreError)
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.assertTrue(token_is_expiring("bad", now=now))
