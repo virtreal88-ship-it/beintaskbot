@@ -42,6 +42,11 @@ html.instruction-editor-mode #instructions{max-width:1500px;margin:0 auto;paddin
 .catalog-main-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .catalog-main-header h2{margin:0 0 8px;font-size:24px;line-height:1.25}
 #catalogCount{color:#69859b;font-size:12px}
+.catalog-global-notice{max-width:980px;margin:12px auto;padding:10px 14px;border:1px solid #d6b36a;border-radius:10px;background:#fff8e6;color:#5c4514;font-size:13px;line-height:1.5}
+.catalog-more-controls{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 0}
+.catalog-more-controls p{margin:0;color:#526c80;font-size:13px;text-align:center}
+#catalogLoadMore{min-height:42px;padding:8px 16px;border:1px solid #9bb5c7;border-radius:10px;background:#fff;color:#143b55;font:inherit;font-weight:700;cursor:pointer}
+#catalogLoadMore:disabled{opacity:.6;cursor:wait}
 .catalog-detail{grid-column:1/-1;min-width:0}
 .catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}
 .catalog-card{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:17px;border:1px solid #d3e2ef;border-radius:14px;background:#f8fbfe}
@@ -84,7 +89,7 @@ html.instruction-editor-mode #instructions{max-width:1500px;margin:0 auto;paddin
 <header class="catalog-top"><div class="catalog-brand" id="catalogBrand">AKUL / ИНСТРУКЦИИ</div><a href="/webapp">← BeinSystems</a></header>
 <section class="catalog-hero"><div class="catalog-hero-inner">
 <p class="catalog-eyebrow" id="catalogEyebrow">BEIN SYSTEMS · СПРАВОЧНЫЙ ЦЕНТР</p>
-<h1 id="catalogTitle">Инструкции для вашей команды</h1><p class="catalog-intro" id="catalogIntro">Статьи справочника и пошаговые уроки — в одном каталоге.</p>
+<h1 id="catalogTitle">Инструкции для вашей команды</h1><p class="catalog-intro" id="catalogIntro">Статьи справочника и пошаговые уроки — в одном каталоге.</p><p id="catalogGlobalNotice" class="catalog-global-notice" role="note"></p>
 <div class="catalog-toolbar">
 <input id="catalogSearch" type="search" placeholder="Поиск по инструкциям" aria-label="Поиск по инструкциям" autocomplete="off">
 <select id="catalogState" aria-label="Все статусы" hidden></select>
@@ -96,7 +101,7 @@ html.instruction-editor-mode #instructions{max-width:1500px;margin:0 auto;paddin
 </div></section>
 <main id="instructions"><div id="catalogShell" class="catalog-layout">
 <aside class="catalog-tree-panel" aria-labelledby="catalogTreeTitle"><h2 id="catalogTreeTitle">Разделы</h2><nav id="catalogTree" aria-label="Разделы инструкций"></nav></aside>
-<section class="catalog-main-panel" aria-labelledby="catalogHeading"><div class="catalog-main-header"><div><h2 id="catalogHeading">Все инструкции</h2><span id="catalogCount"></span></div></div><div id="catalogResults" class="catalog-grid" aria-live="polite"></div></section>
+<section class="catalog-main-panel" aria-labelledby="catalogHeading"><div class="catalog-main-header"><div><h2 id="catalogHeading">Все инструкции</h2><span id="catalogCount"></span></div></div><div id="catalogResults" class="catalog-grid" aria-live="polite"></div><div id="catalogMoreControls" class="catalog-more-controls"><p id="catalogMoreStatus" role="status" aria-live="polite"></p><button id="catalogLoadMore" type="button" hidden></button></div></section>
 </div></main>
 <dialog id="instructionEditor" aria-label="Редактор инструкции"><button id="closeInstructionEditor" type="button" aria-label="Закрыть редактор">×</button><iframe id="instructionEditorFrame" title="Редактор инструкции" referrerpolicy="no-referrer"></iframe></dialog>
 <script src="/assets/tenant-instructor-lesson.js"></script>
