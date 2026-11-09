@@ -44,6 +44,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.authority=Authority();session.lease=Lease();session.fence=1
         session.response_inflight=True;session.response_pending=False;session.cancel_requested=True
         session.provider_response_id='cancelled-response';session.finished_response_ids=set()
+        session.assistant_response_ids={}
         session.current_reservation={'request_id':'synthetic'};session.current_response_usage_microusd=None
         session.current_input_item_id='input-1';session.current_response_kind='user'
         session.lock=asyncio.Lock();session._send_client=AsyncMock()
@@ -326,6 +327,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.closed=False;session.scope=('synthetic-tenant',7,'synthetic-channel','synthetic-dialog')
         session.authority=Authority();session.lease=Lease();session.fence=1
         session.client_event_lock=asyncio.Lock();session.item='synthetic-item'
+        session.truncated_playback_items=set()
         await session._receive_client({'type':'playback_scheduled','item_id':'synthetic-item','context_state':'running'})
         await session._receive_client({'type':'playback_failed','item_id':'synthetic-item'})
         with self.assertRaises(Refused) as caught:

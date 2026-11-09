@@ -29,6 +29,7 @@ _SAFE_FAILURE_CODES=frozenset({
     'provider_audio_delta_invalid','provider_audio_delta_too_large',
     'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
     'input_turn_queue_full','multiple_commits_for_input_turn','assistant_item_response_conflict',
+    'audio_after_completion','overlapping_output_items',
 })
 _SAFE_FAILURE_STAGES=frozenset({'provider_receive','provider_event'})
 _SAFE_PROVIDER_EVENT_TYPES=frozenset({
@@ -154,6 +155,13 @@ async def _enqueue_client_message(incoming, message):
     await incoming.put(message)
 
 
+def _log_playback_queue_latency(event, received_at):
+    """Measure only server-side time after a frame was read from the socket."""
+    if isinstance(event,dict) and event.get('type') in ('played','played_all','playback_scheduled','playback_failed'):
+        from tenant_operator_voice_session import _log_voice_latency
+        _log_voice_latency('playback_ack_server_queue',received_at,time.monotonic())
+
+
 def _expected_close_after_session_end(session,exc):
     return (session is not None and session.closed is True and
             getattr(exc,'diagnostic_code',None)=='websocket_closed')
@@ -246,7 +254,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         # briefly slower than the browser, pause this reader
                         # and let TCP flow control catch up instead of closing
                         # a healthy session and discarding queued speech.
-                        await _enqueue_client_message(incoming,message)
+                        await _enqueue_client_message(incoming,(message,time.monotonic()))
                 finally:
                     close_code=ws.close_code
                     activity['client_close_code']=(close_code if type(close_code) is int else None)
@@ -300,9 +308,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 provider_reader=asyncio.create_task(read_provider())
             session_ready=True
             while True:
-                message=await incoming.get()
-                if message is None:
+                queued=await incoming.get()
+                if queued is None:
                     break
+                message,received_at=queued
                 if session.closed:
                     activity['client_reader_exit']='session_closed'
                     break
@@ -321,6 +330,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     except (ValueError,TypeError): break
                     if not isinstance(event,dict) or event.get('type') not in ('end','mute','talk_start','stop_response','talk_end','played','played_all','playback_scheduled','playback_failed'):
                         break
+                    _log_playback_queue_latency(event,received_at)
                     try:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
