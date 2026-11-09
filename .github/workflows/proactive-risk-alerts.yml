@@ -17,6 +17,9 @@ on:
       - 'beintaskbot-main/docs/tenant-risk-alert-detail.css'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_ui.cjs'
       - 'beintaskbot-main/tests/test_tenant_proactive_risk_detail_browser.cjs'
+      - 'beintaskbot-main/tests/test_risk_bell_modal_*.cjs'
+      - 'beintaskbot-main/tests/notification_case_targets_fixture.cjs'
+      - 'beintaskbot-main/docs/tenant-dialog-consultations.js'
   workflow_dispatch:
 permissions:
   contents: read
@@ -69,3 +72,7 @@ jobs:
       - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Mobile risk detail
         run: node tests/test_tenant_proactive_risk_detail_browser.cjs
+      - name: Bell modal integration
+        run: |
+          node tests/test_risk_bell_modal_ui.cjs
+          node tests/test_risk_bell_modal_browser.cjs
