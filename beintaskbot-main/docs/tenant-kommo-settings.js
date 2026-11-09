@@ -114,7 +114,7 @@
     $("tkDisconnect").onclick = () => {
       if (!window.confirm("Kommo bağlantısını bu şirkətdən ayırmaq istəyirsiniz?")) return;
       perform(async current => {
-        await api("/api/platform/integrations/disconnect", { provider: "kommo" });
+        await api("/api/platform/integrations/disconnect", { provider: "kommo_manual" });
         if (current === generation) await load(current);
       });
     };
