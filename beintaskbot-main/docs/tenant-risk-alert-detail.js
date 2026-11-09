@@ -25,10 +25,10 @@
   };
   const language=()=>{const l=window.tenantI18n?.language||document.documentElement.lang||'az';return copy[l]?l:'az';};
   const t=key=>copy[language()][key];
-  let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null,fromRoute=false;
+  let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null,fromRoute=false,returnFocus=null;
   const memberOf=data=>data?.member||null;
   const scopeOf=data=>{const m=memberOf(data);return m?`${m.tenant_id||''}:${m.telegram_id||''}:${m.role||''}:${m.active===true}`:'';};
-  function close(removeParam=false){epoch++;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}}
+  function close(removeParam=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus;returnFocus=null;if(removeParam&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
   function addText(parent,tag,value,cls){const node=document.createElement(tag);node.textContent=String(value??'');if(cls)node.className=cls;parent.append(node);return node;}
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
@@ -103,15 +103,16 @@
     try{const response=await fetch(`/api/platform/risks/alerts/${encodeURIComponent(id)}`,{credentials:'same-origin',headers:{'Accept':'application/json','X-Tenant-Id':String(owner.tenant_id||''),'X-User-Id':String(owner.telegram_id||'')}});const data=await response.json();if(token!==epoch||scope!==scopeOf(profile)||!overlay?.isConnected)return;if(response.ok||response.status===404)document.dispatchEvent(new CustomEvent('tenant-risk-alert-read',{detail:{alert_id:id}}));if(!response.ok||!data.success||!data.alert){showMessage(response.status===404?'gone':'error');return;}showAlert(data.alert);
     }catch{if(token===epoch&&scope===scopeOf(profile)&&overlay?.isConnected)showMessage('error');}
   }
-  function open(id,routeOrigin=false){
+  function open(id,routeOrigin=false,focusTarget=null){
     const owner=memberOf(profile);if(!uuid.test(id)||owner?.role!=='owner'||owner.active!==true)return false;
+    if(!overlay)returnFocus=focusTarget;
     void loadAlert(id,routeOrigin);return true;
   }
   function route(){
     const id=new URL(location.href).searchParams.get('risk_alert_id');if(!id){if(overlay)close(false);return;}
     if(!open(id,true))close(false);
   }
-  window.tenantRiskAlert={open:id=>open(id,false)};
+  window.tenantRiskAlert={open:(id,focusTarget=null)=>open(id,false,focusTarget)};
   function apply(data){const next=scopeOf(data);if(identity&&identity!==next)close(true);profile=data;identity=next;if(memberOf(data)?.role!=='owner'||memberOf(data)?.active!==true)close(false);else if(!overlay||fromRoute)void route();}
   document.addEventListener('tenant-profile',event=>apply(event.detail));
   document.addEventListener('tenant-language',()=>{if(display&&overlay?.isConnected)showAlert(display);});

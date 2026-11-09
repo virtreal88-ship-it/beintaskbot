@@ -129,7 +129,7 @@
         if(!item.read_at)await readNotification(item,receipt);if(owner===identity()&&epoch===generation)closeNotificationMenu(false);
       }else if(String(item.event_key||'').startsWith('proactive_risk:')){
         const id=target.searchParams.get('risk_alert_id');
-        if(!uuid(id)||item.event_key!=='proactive_risk:'+id||!window.tenantRiskAlert?.open(id))throw Error(notificationCopy('openFailure'));
+        if(!uuid(id)||item.event_key!=='proactive_risk:'+id||!window.tenantRiskAlert?.open(id,bell))throw Error(notificationCopy('openFailure'));
         closeNotificationMenu(false);
       }else if(item.reply_id&&target.searchParams.get('view')==='dialogs'){
         await openReply({id:item.reply_id,url:item.target_url},false);
