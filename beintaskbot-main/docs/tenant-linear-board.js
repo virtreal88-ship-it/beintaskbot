@@ -112,7 +112,7 @@
   function apply(data){const next=data.member;const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.workflow,data.capabilities]);
     const changed=!profile||identity!==profile.identity;profile={...next,identity};const allowed=!!data.capabilities?.modules?.linear;
     $('tlNav').hidden=!allowed;$('tlNav').style.display=allowed?'':'none';
-    if(changed||!allowed){epoch++;selectedState=null;rows=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
+    if(changed||!allowed){epoch++;selectedState=null;rows=[];statuses=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
       try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved&&String(saved.expected_tenant_id)===String(next.tenant_id)&&String(saved.expected_user_id)===String(next.telegram_id))pending=saved;}catch{}
       $('tlRecover').hidden=!pending;if(!allowed){$('view-linear').classList.remove('active');return;}}
     return changed&&allowed;
