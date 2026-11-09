@@ -281,6 +281,40 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn('next_page=1', update)
 
 
+class PolicyStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.conn=MagicMock()
+        self.conn.__enter__.return_value=self.conn
+        self.cur=self.conn.cursor.return_value.__enter__.return_value
+        connect=MagicMock(return_value=self.conn)
+        self.module=load_module('tenant_crm_sync_policy', {
+            '_connect':connect,'_ensure_schema':Mock(),'_json':json.dumps,'uuid':uuid,
+        }, {'tenant_platform_core'})
+        self.profile={'tenant_id':'00000000-0000-0000-0000-000000000001',
+                      'telegram_id':20,'active':True,'role':'owner'}
+
+    def read(self, integrations):
+        self.cur.fetchall.side_effect=[[],[],[],integrations]
+        return self.module.read_settings(self.profile)
+
+    def test_manual_connection_is_shown_as_active_with_oauth_waiting(self):
+        result=self.read([
+            {'provider':'kommo','status':'awaiting_oauth'},
+            {'provider':'kommo_manual','status':'connected'},
+        ])
+        self.assertEqual(result['integrations'],{'kommo':'connected'})
+        self.assertEqual(result['settings'],[])
+        self.assertNotIn('kommo_manual',result['integrations'])
+
+    def test_connected_oauth_remains_preferred_when_manual_row_is_also_connected(self):
+        result=self.read([
+            {'provider':'kommo','status':'connected'},
+            {'provider':'kommo_manual','status':'connected'},
+            {'provider':'beinsystems','status':'connected'},
+        ])
+        self.assertEqual(result['integrations'],{'kommo':'connected','beinsystems':'connected'})
+
+
 class SchemaTests(unittest.TestCase):
     def test_additive_schema_and_index_are_initialized_once_after_commit(self):
         module = load_module('tenant_crm_sync_schema', {'_ensure_schema':Mock()}, {'tenant_platform'})
