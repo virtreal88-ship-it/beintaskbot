@@ -104,9 +104,8 @@ class TenantKommo:
 
     async def request(self, tenant_id: str, method: str, path: str, *,
                       params: dict | None = None, json_body: dict | list | None = None) -> dict:
-        client_id, client_secret, redirect_uri = self.settings()
-
         def refresh(credentials: dict) -> dict:
+            client_id, client_secret, redirect_uri = self.settings()
             response = requests.post(
                 f"https://{credentials['account_domain']}/oauth2/access_token",
                 json={"client_id": client_id, "client_secret": client_secret,
@@ -126,7 +125,7 @@ class TenantKommo:
         def run() -> dict:
             credentials = self.context.credentials(tenant_id=tenant_id)
             message_send = method.upper() == "POST" and path.strip("/").startswith("talks/") and path.strip("/").endswith("/send_message")
-            if token_is_expiring(credentials.get("token_expires_at") or ""):
+            if credentials.get("auth_mode") != "manual" and token_is_expiring(credentials.get("token_expires_at") or ""):
                 credentials = refresh(credentials)
 
             def send(active: dict):
@@ -139,7 +138,7 @@ class TenantKommo:
                 )
 
             response = send(credentials)
-            if response.status_code == 401:
+            if response.status_code == 401 and credentials.get("auth_mode") != "manual":
                 credentials = refresh(credentials)
                 response = send(credentials)
             # The chat send endpoint is accepted only on HTTP 202. A generic
