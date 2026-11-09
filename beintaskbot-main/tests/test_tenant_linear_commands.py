@@ -14,7 +14,7 @@ class CommandTests(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.provider_issue=Mock(return_value=issue());self.mutate=Mock(return_value={'id':OTHER,'updatedAt':'new'})
+        self.provider_issue=Mock(return_value=issue());self.mutate=Mock(return_value={'id':OTHER,'updatedAt':'new','state':{'id':TARGET}})
         self.comment=Mock();self.context=Mock(return_value=(PERSON,config(),'secret','cfg'))
         self.module=loaders.load('tenant_linear_commands',{'_connect':self.connect,'ensure_commands_schema':Mock(),'context':self.context,
             'issue':self.provider_issue,'mutate':self.mutate,'ensure_comment':self.comment,'text':text,
@@ -34,12 +34,43 @@ class CommandTests(unittest.TestCase):
     def test_intent_committed_before_remote_write_and_reason_comment(self):
         events=[];self.conn.commit.side_effect=lambda:events.append('commit')
         def mutate(*args,**kw):
-            self.assertEqual(events,['commit']);events.append('provider');return {'id':OTHER,'updatedAt':'new'}
+            self.assertEqual(events,['commit']);events.append('provider');return {'id':OTHER,'updatedAt':'new','state':{'id':TARGET}}
         self.mutate.side_effect=mutate
         result=self.module.execute(PERSON,self.data)
         self.assertEqual(events,['commit','provider','commit']);self.assertEqual(result['issue_id'],OTHER)
         self.assertEqual(self.comment.call_args.args[2:],(OTHER,'Bug still exists'))
         self.assertEqual(len(self.comment.call_args.args[1]),36)
+
+    def test_app_status_action_sends_state_id_and_confirms_linear_result(self):
+        owner={**PERSON,'role':'owner'}
+        self.context.return_value=(owner,config(),'secret','cfg')
+        data={'action':'status','state_id':TARGET,'issue_id':OTHER,'request_id':STATE,
+            'expected_updated_at':'version','config_version':'cfg'}
+        result=self.module.execute(PERSON,data)
+        self.assertEqual(self.mutate.call_args.args[2],{'stateId':TARGET})
+        self.assertEqual(result['issue_id'],OTHER)
+        self.assertTrue(self.mutate.return_value['state']['id']==TARGET)
+
+    def test_app_status_noop_is_not_reported_as_success(self):
+        owner={**PERSON,'role':'owner'}
+        self.context.return_value=(owner,config(),'secret','cfg')
+        self.mutate.return_value={'id':OTHER,'updatedAt':'new','state':{'id':STATE}}
+        data={'action':'status','state_id':TARGET,'issue_id':OTHER,'request_id':STATE,
+            'expected_updated_at':'version','config_version':'cfg'}
+        with self.assertRaises(TenantLinearError) as caught:self.module.execute(PERSON,data)
+        self.assertEqual(caught.exception.status,502)
+        self.assertEqual(self.mutate.call_args.args[2],{'stateId':TARGET})
+
+    def test_app_status_response_without_state_is_verified_by_linear_read(self):
+        owner={**PERSON,'role':'owner'}
+        self.context.return_value=(owner,config(),'secret','cfg')
+        self.mutate.return_value={'id':OTHER,'updatedAt':'new'}
+        self.provider_issue.side_effect=[issue(),issue(),issue(state={'id':TARGET},updatedAt='new')]
+        data={'action':'status','state_id':TARGET,'issue_id':OTHER,'request_id':STATE,
+            'expected_updated_at':'version','config_version':'cfg'}
+        result=self.module.execute(PERSON,data)
+        self.assertEqual(result['updated_at'],'new')
+        self.assertEqual(self.provider_issue.call_count,3)
 
     def test_staff_cannot_edit_change_status_or_use_unassigned_button(self):
         for data in ({**self.data,'action':'edit'},{**self.data,'action':'status','state_id':TARGET},
