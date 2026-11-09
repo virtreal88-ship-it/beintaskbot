@@ -2,8 +2,8 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const elements=new Map(),events={};
 class Element {
-  constructor(id=''){this.id=id;this.value='';this.hidden=false;this.disabled=false;this.style={};this.dataset={};this.options=[];this.listeners={};const names=new Set();this.classList={add:n=>names.add(n),remove:n=>names.delete(n),contains:n=>names.has(n),toggle:(n,on)=>on?names.add(n):names.delete(n)};if(id)elements.set(id,this);}
-  set innerHTML(html){this.html=html;if(this.id==='tlStateFilter')this.value='';for(const match of html.matchAll(/id="([^"]+)"/g))if(!elements.has(match[1]))new Element(match[1]);}
+  constructor(id=''){this.id=id;this.value='';this.hidden=false;this.disabled=false;this.style={};this.dataset={};this.options=[];this.listeners={};Object.defineProperty(this,'selectedOptions',{get:()=>this.options.filter(option=>option.selected)});const names=new Set();this.classList={add:n=>names.add(n),remove:n=>names.delete(n),contains:n=>names.has(n),toggle:(n,on)=>on?names.add(n):names.delete(n)};if(id)elements.set(id,this);}
+  set innerHTML(html){this.html=html;if(this.id==='tlStateFilter')this.value='';if(this.id==='tlStateFilter'||this.id==='tlColumnFilter')this.options=[...html.matchAll(/<option value="([^"]+)"([^>]*)>(.*?)<\/option>/g)].map(match=>({value:match[1],selected:/\bselected\b/.test(match[2]),text:match[3]}));for(const match of html.matchAll(/id="([^"]+)"/g))if(!elements.has(match[1]))new Element(match[1]);}
   get innerHTML(){return this.html||'';}
   replaceChildren(){this.html='';}
   insertAdjacentHTML(position,html){this.innerHTML=(this.html||'')+html;}
@@ -16,9 +16,9 @@ const document={getElementById:$,head,querySelector:selector=>selector==='.nav'?
   querySelectorAll:selector=>selector==='.view'?[$('view-linear')]:selector==='.nav button'?[$('tlNav')]:[],
   addEventListener:(name,listener)=>events[name]=listener};
 const person=(tenant='company-a',role='worker',user=20)=>({member:{tenant_id:tenant,telegram_id:user,role,permissions:['linear']},capabilities:{modules:{linear:true}}});
-let profile=person(),deferred=null,fail=true,uuid=0;const requests=[],posts=[],session=new Map(),pages=[];
+let profile=person(),deferred=null,fail=true,uuid=0;const requests=[],posts=[],session=new Map(),local=new Map(),pages=[];
 const reply=(data,status=200)=>({ok:status===200,status,json:async()=>data});
-const row={id:'issue',identifier:'BS-1',title:'<Private title>',account:'<Customer>',operator:'operator',description:'text',body:'<Details>',priority:2,
+const row={id:'issue',identifier:'BS-1',url:'https://linear.app/acme/BS-1',title:'<Private title>',account:'<Customer>',operator:'operator',description:'text',body:'<Details>',priority:2,
   state:{id:'done',name:'Done'},project:{name:'Project'},createdAt:'2026-10-08T10:00:00Z',updatedAt:'old',
   capabilities:{can_edit:false,can_change_status:false,buttons:[{id:'pass',label:'Test olundu',require_reason:false}]}};
 async function fetch(url,options={}){requests.push(url);if(url.endsWith('/me'))return reply(profile);
@@ -26,23 +26,24 @@ async function fetch(url,options={}){requests.push(url);if(url.endsWith('/me'))r
   if(options.body){posts.push(JSON.parse(options.body));return reply(fail?{success:false,error:'Uncertain'}:{success:true,issue_id:'issue'},fail?503:200);}
   if(pages.length)return pages.shift();
   if(deferred){const saved=deferred;deferred=null;return saved;}
-  return reply({success:true,issues:[row],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:!url.includes('&after='),endCursor:'cursor'}});
+  return reply({success:true,issues:[row,{...row,id:'accountless',identifier:'BS-2',account:'',state:{id:'testiq',name:'Testiq'}},{...row,id:'account-placeholder',identifier:'BS-3',account:'Account göstərilməyib',state:{id:'testiq',name:'Testiq'}}],statuses:[{id:'testiq',name:'Testiq',position:10},{id:'triage',name:'Triage',position:20},{id:'done',name:'Done',position:30}],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:!url.includes('&after='),endCursor:'cursor'}});
 }
-vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../docs/tenant-linear-board.js'),'utf8'),{window:{},URLSearchParams,document,fetch,JSON,Date,Map,Set,encodeURIComponent,
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../docs/tenant-linear-board.js'),'utf8'),{window:{},URLSearchParams,document,fetch,JSON,Date,Map,Set,encodeURIComponent,localStorage:{getItem:key=>local.get(key)||null,setItem:(key,value)=>local.set(key,value)},
   crypto:{randomUUID:()=>`uuid-${++uuid}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
   await flush();assert.equal($('tlNav').hidden,false);await $('tlNav').click();await flush();
-  assert($('tlBoard').innerHTML.includes('&lt;Private title&gt;'));assert($('tlBoard').innerHTML.includes('&lt;Customer&gt;'));
+  assert($('tlBoard').innerHTML.includes('&lt;Private title&gt;'));assert($('tlBoard').innerHTML.includes('&lt;Customer&gt;'));assert(!$('tlBoard').innerHTML.includes('accountless'),'accountless tasks are hidden');assert(!$('tlBoard').innerHTML.includes('account-placeholder'),'account placeholders are hidden');assert($('tlBoard').innerHTML.includes('href="https://linear.app/acme/BS-1"'),'task links open Linear');assert($('tlBoard').innerHTML.indexOf('data-state-id="testiq"')<$('tlBoard').innerHTML.indexOf('data-state-id="done"'),'columns follow the Linear workflow catalog');
   assert(!$('tlBoard').innerHTML.includes('data-edit'));assert(!$('tlBoard').innerHTML.includes('data-status'));
   assert($('tlBoard').innerHTML.includes('data-button-id="pass"'));assert.equal($('tlCreate').hidden,true);
   assert(requests.some(url=>url.includes('&after=cursor')), 'loads remaining pages without a click');
   assert.equal($('tlNext').hidden,true);
+  const columnFilter=$('tlColumnFilter');columnFilter.options.forEach(option=>{option.selected=option.value==='triage';});columnFilter.onchange();assert($('tlBoard').innerHTML.includes('data-state-id="triage"'));assert(!$('tlBoard').innerHTML.includes('data-state-id="testiq"'));assert.deepEqual(JSON.parse(local.get('tenant-linear-columns:company-a:20')),['testiq','done']);$('tlColumnsAll').onclick();assert($('tlBoard').innerHTML.includes('data-state-id="testiq"'));
   const before=requests.length;$('tlSearch').value='changed';await $('tlNext').click();assert.equal(requests.length,before);
   $('tlSearch').value='';
   $('tlStateFilter').value='done';$('tlStateFilter').onchange();await $('tlRefresh').click();assert.equal($('tlStateFilter').value,'done','refresh preserves selected status');
   $('tlStateFilter').value='';$('tlStateFilter').onchange();
-  const page=(issues,info={},config='cfg')=>reply({success:true,issues,tenant_id:profile.member.tenant_id,user_id:20,config_version:config,capabilities:{can_create:false},pageInfo:info});
+  const page=(issues,info={},config='cfg')=>reply({success:true,issues,statuses:[{id:'testiq',name:'Testiq',position:10},{id:'triage',name:'Triage',position:20},{id:'done',name:'Done',position:30}],tenant_id:profile.member.tenant_id,user_id:20,config_version:config,capabilities:{can_create:false},pageInfo:info});
   pages.push(page([row],{hasNextPage:true,endCursor:'first'}),page([],{hasNextPage:true,endCursor:'empty'}),page([{...row,id:'second',state:{id:'todo',name:'Todo'}}]));
   await $('tlRefresh').click();assert($('tlBoard').innerHTML.includes('Todo'));assert($('tlStateFilter').innerHTML.includes('Todo'));assert.equal($('tlNext').hidden,true);
   pages.push(page([row],{hasNextPage:true,endCursor:'retry'}),reply({success:false,error:'Try again'},503));

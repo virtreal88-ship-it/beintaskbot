@@ -35,6 +35,6 @@ def catalog(key, after=None):
 
 def team_catalog(key, team_id):
     return query(key, '''query($id:String!) { team(id:$id) { id name
-      states(first:50) { nodes { id name type } pageInfo { hasNextPage } }
+      states(first:50) { nodes { id name type position } pageInfo { hasNextPage } }
       projects(first:50) { nodes { id name } pageInfo { hasNextPage } }
     } }''', {'id': team_id}).get('team')
