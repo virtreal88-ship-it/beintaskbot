@@ -1485,6 +1485,7 @@
             <div><div class="text-sm font-extrabold text-gray-800">Linear tapşırıqları</div><div id="linear-page-meta" class="text-[10px] text-gray-400 font-medium mt-0.5">İcazəli mərhələlər</div></div>
             <div class="flex items-center gap-2">
                 <select id="linear-status-filter" class="toolbar-select" aria-label="Mərhələ filtri" onchange="filterLinearBoard()"><option value="all">Bütün mərhələlər</option></select>
+                <details class="relative"><summary class="toolbar-select cursor-pointer list-none">Sütunlar ▾</summary><div class="absolute right-0 z-20 mt-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg"><select id="linear-column-filter" multiple size="7" class="min-w-[190px] text-xs" aria-label="Göstərilən status sütunları" onchange="saveLinearBoardColumns()"></select><button type="button" class="mt-1 w-full rounded-lg border px-2 py-1 text-xs font-semibold" onclick="resetLinearBoardColumns()">Bütün sütunları göstər</button></div></details>
                 <select id="linear-operator-filter" class="toolbar-select max-w-[150px]" aria-label="Operator filtri" onchange="filterLinearBoard()"><option value="all">Bütün operatorlar</option></select>
                 <button id="linear-page-search-toggle" type="button" onclick="toggleLinearBoardSearch()" class="icon-action-btn" aria-label="Linear-da axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
                 <button id="linear-page-create" type="button" onclick="openLinearCreateModal()" class="icon-action-btn primary labeled" aria-label="Linear tapşırığı yarat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button>
@@ -3444,7 +3445,22 @@ function linearBoardOperatorMatches(item, operator) {
 
 function linearBoardHasAccount(item) {
     const account = String(item?.client || '').trim();
-    return !!account && !['göstərilməyib', 'gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
+    return !!account && !['göstərilməyib', 'gosterilmeyib', 'account göstərilməyib', 'account gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
+}
+
+function saveLinearBoardColumns() {
+    const filter = document.getElementById('linear-column-filter');
+    if(!filter) return;
+    const hidden = [...filter.options].filter(option => !option.selected).map(option => String(option.value));
+    try { localStorage.setItem('linear-board-hidden-columns:' + CURRENT_USER_ID, JSON.stringify(hidden)); } catch {}
+    renderLinearBoard();
+}
+
+function resetLinearBoardColumns() {
+    const filter = document.getElementById('linear-column-filter');
+    if(filter) [...filter.options].forEach(option => { option.selected = true; });
+    try { localStorage.setItem('linear-board-hidden-columns:' + CURRENT_USER_ID, '[]'); } catch {}
+    renderLinearBoard();
 }
 
 function formatLinearTimestamp(value) {
@@ -3503,6 +3519,12 @@ function renderLinearBoard() {
     if(!statuses.length) statuses = linearBoardRows.map(row => row.status || {}).filter(row => row.id);
     const unique = []; const seen = new Set();
     statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
+    const columnFilter = document.getElementById('linear-column-filter');
+    const hiddenColumns = (() => { try { return new Set(JSON.parse(localStorage.getItem('linear-board-hidden-columns:' + CURRENT_USER_ID) || '[]').map(String)); } catch { return new Set(); } })();
+    if(columnFilter) {
+        columnFilter.innerHTML = unique.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')}</option>`).join('');
+        [...columnFilter.options].forEach(option => { option.selected = !hiddenColumns.has(String(option.value)); });
+    }
     const countRows = linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     const statusCounts = countRows.reduce((counts, row) => {
         const key = String((row.status || {}).id || '');
@@ -3515,7 +3537,7 @@ function renderLinearBoard() {
         statusFilter.innerHTML = `<option value="all">Bütün mərhələlər (${countRows.length})</option>` + unique.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')} (${statusCounts.get(String(row.id)) || 0})</option>`).join('');
         if([...statusFilter.options].some(option => option.value === current)) statusFilter.value = current;
     }
-    const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
+    const visibleStatuses = unique.filter(row => !hiddenColumns.has(String(row.id)) && (isDesktop ? true : filter === 'all' || row.id === filter));
     const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     board.className = 'samil-kanban-board';
     board.innerHTML = visibleStatuses.map(state => {
