@@ -105,4 +105,4 @@ jobs:
           done
           test "$ready" -eq 1
           docker exec realtime-voice-lease-pg createdb -U postgres voice_lease_test
-          python -m unittest test_voice_lease test_pilot_admission test_voice_lease_postgres -v
+          python -m unittest test_voice_browser_revocation_postgres test_voice_lease test_pilot_admission test_voice_lease_postgres -v
