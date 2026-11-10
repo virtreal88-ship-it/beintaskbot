@@ -59,6 +59,8 @@ def test_provider_runs_bounded_read_only_function_loop_without_retries(monkeypat
     assert all(item[1]['allow_redirects'] is False for item in calls)
     assert all(item[1]['json']['store'] is False for item in calls)
     assert all(item[1]['json']['parallel_tool_calls'] is False for item in calls)
+    assert dispatches[0][1]['tool_choice']=='required'
+    assert dispatches[1][1]['tool_choice']=='auto'
     assert dispatches[1][1]['input'][-2]['type']=='function_call'
     assert dispatches[1][1]['input'][-1]['type']=='function_call_output'
     assert dispatches[1][1]['input'][1]['type']=='reasoning'
