@@ -24,6 +24,17 @@ _ACTIVE = ('starting', 'active')
 _LOG = logging.getLogger(__name__)
 
 
+def bound_authority_and_lease(authority, lease, scope, session_id):
+    """Only the exact production pair can combine authority and lease checks."""
+    if type(lease) is not VoiceSessionLease:return False
+    from tenant_operator_voice_orchestration import ScopedAuthority
+    if type(authority) is not ScopedAuthority:return False
+    if (lease.authority is not authority or lease.scope!=scope or
+        authority.session_scope!=scope or lease.session_id!=session_id):
+        raise TenantLinearError('Область голосового сеанса не совпадает.',403)
+    return True
+
+
 class VoiceSessionLease:
     def __init__(self, authority, session_id, *, owner_id=None):
         if not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id:

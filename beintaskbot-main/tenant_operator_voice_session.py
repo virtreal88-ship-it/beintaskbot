@@ -20,11 +20,12 @@ class LeaseAlreadyActive(Refused):
 
 
 _SAFE_RESPONSE_REJECTION_CODES=frozenset({
-    'session_closed','output_authorization_rejected','voice_lease_rejected',
+    'session_closed','output_authorization_rejected','voice_lease_rejected','output_authority_or_lease_rejected',
     'response_not_inflight','response_id_mismatch',
     'unreserved_response','audio_after_completion','overlapping_output_items','session_output_limit',
 })
-_SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected'})
+_SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provider_lease_rejected',
+                                             'provider_authority_or_lease_rejected'})
 _TERMINAL_RESPONSE_EVENT_TYPES=frozenset({
     'response.done','response.output_item.added','response.output_item.done',
     'response.content_part.added','response.content_part.done',
@@ -420,8 +421,7 @@ class Session:
                     # the write lock. Otherwise a revoked session or lost
                     # fence could still dispatch while queued on this lock.
                     await self.context.revalidate(self.scope)
-                    await self.authority.check(self.scope,'response_dispatch')
-                    await self.lease.assert_current(self.scope,self.fence)
+                    await self._check_dispatch_authority_and_lease()
                     self._check_provider_send(event)
                     if not dispatch_guard():return False
                     return await send_prepared(ticket,dispatch_guard)
@@ -653,8 +653,7 @@ class Session:
         self.response_inflight = True
         self.cancel_requested = False
         try:
-            await self.authority.check(self.scope, 'response_dispatch')
-            await self.lease.assert_current(self.scope, self.fence)
+            await self._check_dispatch_authority_and_lease()
             await self.context.revalidate(self.scope)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
@@ -845,14 +844,20 @@ class Session:
         # Only this exact server-owned pair guarantees that lease renewal
         # rechecks live identity, pilot access, route and configuration in its
         # transaction. All other dependencies retain the separate checks.
-        from tenant_operator_voice_lease import VoiceSessionLease
-        if type(self.lease) is not VoiceSessionLease:return False
-        from tenant_operator_voice_orchestration import ScopedAuthority
-        if type(self.authority) is not ScopedAuthority:return False
-        if (self.lease.authority is not self.authority or self.lease.scope!=self.scope or
-            self.authority.session_scope!=self.scope or self.lease.session_id!=self.session_id):
-            raise Refused('client_scope_binding_rejected')
-        return True
+        from tenant_operator_voice_lease import bound_authority_and_lease
+        try:return bound_authority_and_lease(self.authority,self.lease,self.scope,getattr(self,'session_id',None))
+        except Exception:raise Refused('client_scope_binding_rejected') from None
+
+    async def _check_dispatch_authority_and_lease(self):
+        if getattr(self,'duplex',False) and self._transactional_audio_binding():
+            fence=self.fence
+            await self.lease.assert_current(self.scope,fence)
+            if (self.fence!=fence or self.lease.fence!=fence or
+                not self._transactional_audio_binding()):
+                raise Refused('voice_lease_rejected')
+        else:
+            await self.authority.check(self.scope,'response_dispatch')
+            await self.lease.assert_current(self.scope,self.fence)
 
     async def _receive_transactional_audio(self,event):
         # Check under the same lock as provider send, so a revoke or fence
@@ -1140,14 +1145,28 @@ class Session:
         if self.closed or not isinstance(event, dict):
             if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')
-        try:await self.authority.check(self.scope, 'output')
+        try:combined=getattr(self,'duplex',False) and self._transactional_audio_binding()
         except Exception:
-            if response_transcript_delta:raise response_rejection('output_authorization_rejected') from None
-            raise ProviderEventGuardRejected('provider_authority_rejected') from None
-        try:await self.lease.assert_current(self.scope, self.fence)
-        except Exception:
-            if response_transcript_delta:raise response_rejection('voice_lease_rejected') from None
-            raise ProviderEventGuardRejected('provider_lease_rejected') from None
+            if response_transcript_delta:raise response_rejection('output_authority_or_lease_rejected') from None
+            raise ProviderEventGuardRejected('provider_authority_or_lease_rejected') from None
+        if combined:
+            try:
+                fence=self.fence
+                await self.lease.assert_current(self.scope,fence)
+                if (self.fence!=fence or self.lease.fence!=fence or not self._transactional_audio_binding()):
+                    raise Refused('voice_lease_rejected')
+            except Exception:
+                if response_transcript_delta:raise response_rejection('output_authority_or_lease_rejected') from None
+                raise ProviderEventGuardRejected('provider_authority_or_lease_rejected') from None
+        else:
+            try:await self.authority.check(self.scope, 'output')
+            except Exception:
+                if response_transcript_delta:raise response_rejection('output_authorization_rejected') from None
+                raise ProviderEventGuardRejected('provider_authority_rejected') from None
+            try:await self.lease.assert_current(self.scope, self.fence)
+            except Exception:
+                if response_transcript_delta:raise response_rejection('voice_lease_rejected') from None
+                raise ProviderEventGuardRejected('provider_lease_rejected') from None
         if self.closed:
             if response_transcript_delta:raise response_rejection('session_closed')
             raise Refused('session_closed')
