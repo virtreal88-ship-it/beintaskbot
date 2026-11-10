@@ -43,7 +43,14 @@ def handler(member_from_request,origin,logger):
             require_json_post(request,origin)
             data=await request.json()
             if not isinstance(data,dict): return web.json_response({'success':False,'error':'invalid_body'},status=400)
-            permission_action='delete' if data.get('action')=='archive' else ('create' if not deal_id else 'update')
+            action = data.get('action')
+            # Resolve a valid operation before choosing its permission. An
+            # item-only archive on the collection must never fall through to
+            # create under a delete grant.
+            allowed_actions = (None, 'update', 'archive') if deal_id else (None, 'create')
+            if action not in allowed_actions:
+                return web.json_response({'success': False, 'error': 'invalid_action'}, status=400)
+            permission_action='delete' if action=='archive' else ('create' if not deal_id else 'update')
             if not policy.allows_action('deals',permission_action):
                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
             if data.get('action')=='archive' and deal_id:

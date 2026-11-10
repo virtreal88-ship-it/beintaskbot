@@ -155,9 +155,58 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await closed();
       await openEmployee(actor);
       form = page.locator('#staffEditForm');
+      // Native operation overrides do not rewrite integration grants.
+      const beforeAccess=(await readRows(page.request)).find(row=>row.telegram_id===actor);
+      assert.deepEqual(beforeAccess.permissions,[],'Creation starts with explicitly empty grants');
+      assert.equal(beforeAccess.access_settings.actions.tasks.view,false,'First native access save is a real change');
+      await form.locator('[data-staff-pane-tab=rights]').click();
+      await form.locator('[data-access-action=view][data-access-module=tasks]').check();
+      await save(form,'update_member_card');await closed();
+      const afterActions=(await readRows(page.request)).find(row=>row.telegram_id===actor);
+      assert.deepEqual(afterActions.permissions,beforeAccess.permissions,'Native CRUD does not rewrite legacy/provider grants');
+      assert.equal(afterActions.access_settings.actions.tasks.view,true);
+      await openEmployee(actor);form=page.locator('#staffEditForm');
+      await form.locator('[data-staff-pane-tab=settings]').click();
+      await form.locator('[data-access-page=tasks]').selectOption('false');
+      await save(form,'update_member_card');await closed();
+      const afterPage=(await readRows(page.request)).find(row=>row.telegram_id===actor);
+      assert.deepEqual(afterPage.permissions,afterActions.permissions,'Page hide does not revoke grants');
+      assert.deepEqual(afterPage.access_settings.actions,afterActions.access_settings.actions,'Page hide does not revoke operations');
+      assert.equal(afterPage.access_settings.page_visibility.tasks,false);
+      await openEmployee(actor);form=page.locator('#staffEditForm');
+      await form.locator('[data-staff-pane-tab=settings]').click();
+      assert.equal(await form.locator('[data-access-page=tasks]').inputValue(),'false','Saved visibility reopens accurately');
+      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR){
+        for(const tab of ['details','rights','settings']){
+          await form.locator('[data-staff-pane-tab='+tab+']').click();
+          const layout=await form.evaluate((node,tab)=>{
+            const footer=node.querySelector('.staff-modal-actions').getBoundingClientRect();
+            const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
+            const boxes=[...panel.querySelectorAll('[data-access-operations]>fieldset:not(.staff-rights)')].map(group=>[...group.querySelectorAll('input')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
+            const pageHeights=[...panel.querySelectorAll('[data-access-page]')].map(input=>input.closest('label').getBoundingClientRect().height);
+            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights};
+          },tab);
+          assert(!layout.overflow,'Employee tab fits viewport');
+          assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
+          for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
+          assert(layout.pageHeights.every(height=>height<110),'Page preferences stay compact');
+          await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+width+'-'+language+'.png'});
+        }
+      }
+      await form.locator('[data-access-page=tasks]').selectOption('inherit');
+      await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=display_name]').fill('Local employee alias');
+      await form.locator('[data-staff-pane-tab=rights]').click();
       await form.locator('[name=role]').selectOption('manager');
       await form.locator('[data-permission][value=support]').check();
+      await form.locator('[data-permission][value=finance]').check();
+      await form.locator('[data-staff-pane-tab=settings]').click();
+      if(!(await form.locator('details.staff-section').evaluate(node=>node.open)))await form.locator('details.staff-section > summary').click();
+      await form.locator('[data-work-setting=completion_requires_admin]').selectOption('true');
+      await form.locator('[data-work-event=task_assigned][data-work-channel=push]').check();
+      assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Expanded settings fit viewport');
+      if (process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR) await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-settings-'+width+'.png'});
+      await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=active]').uncheck();
       const updated = await save(form, 'update_member_card');
       assert.notEqual(updated.applied.card_version, whatsapp.applied.card_version);
@@ -170,11 +219,35 @@ assert(origin && mode && width && login && tenantA && tenantB);
       assert.equal(await form.locator('[name=role]').inputValue(), 'manager');
       assert.equal(await form.locator('[name=active]').isChecked(), false);
       assert.equal(await form.locator('[data-permission][value=support]').isChecked(), true);
+      assert.equal(await form.locator('[data-permission][value=finance]').isChecked(), true);
+      await form.locator('[data-staff-pane-tab=settings]').click();
+      assert.equal(await form.locator('[data-work-setting=completion_requires_admin]').inputValue(), 'true');
+      assert.equal(await form.locator('[data-work-event=task_assigned][data-work-channel=push]').isChecked(), true);
+      await form.locator('[data-staff-pane-tab=details]').click();
       assert((await form.innerText()).includes('+994501231234'), 'Explicit WA binding is separate from contact phone');
       await page.evaluate(() => window.tenantReloadProfile());
       await page.keyboard.press('Escape');
       await closed();
       await page.waitForFunction(actor => document.activeElement?.dataset.staffEdit === String(actor), actor);
+
+      // A real separate employee cookie sees native Tasks without a coarse Kommo module grant.
+      const granular=(await readRows(page.request)).find(row=>row.telegram_id===62);
+      const granted=await page.request.post(origin+'/api/platform/members',{headers:{Origin:origin},data:{
+        action:'update_member_card',telegram_id:62,expected_tenant_id:tenantA,expected_user_id:11,
+        expected_version:granular.card_version,changes:{access_settings:{expected_version:granular.access_settings.version,
+          changes:{actions:{tasks:{view:true}}}}}}});
+      assert.equal(granted.status(),200,await granted.text());
+      const employeeContext=await browser.newContext({viewport:{width,height:900}});
+      try{
+        await employeeContext.route(url=>['http:','https:'].includes(url.protocol)&&url.origin!==origin,route=>route.abort());
+        const session=await employeeContext.request.get(origin+'/test/session?identity=granular');assert.equal(session.status(),200);
+        const employee=await employeeContext.newPage();await employee.goto(origin+'/app?view=tasks&lang='+language);
+        await employee.locator('#view-tasks.active').waitFor();
+        await employee.locator('.nav [data-view=tasks]').waitFor({state:'visible'});
+        const actual=await (await employeeContext.request.get(origin+'/api/platform/me')).json();
+        assert.equal(actual.capabilities.modules.tasks,false);assert.equal(actual.capabilities.pages.tasks,true);
+        assert.equal(actual.capabilities.actions.tasks.view,true);
+      }finally{await employeeContext.close();}
 
       await page.locator('#staffAdd').click();
       form = page.locator('#staffInviteForm');
@@ -186,7 +259,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-staff-cancel]').click();
       await closed();
       assert.equal(await page.locator('input[type=password]').evaluateAll(nodes => nodes.every(node => node.value === '')), true);
-      assert.equal((await control('state')).posts, 6, 'Create, email, password, WA, local update and one rejected duplicate');
+      assert.equal((await control('state')).posts, 9, 'Create, email, password, WA, native actions, page visibility, local update, granular employee grant and one rejected duplicate');
     } else if (mode === 'conflict') {
       await openEmployee(62);
       const form = page.locator('#staffEditForm');

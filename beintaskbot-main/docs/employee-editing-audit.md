@@ -37,8 +37,8 @@ This module is integrated with the direct-password work through the owner-only
 API action and server-provided profile capability. The existing Save action
 saves changed profile fields and then any membership edits using the returned
 card version. The existing supported role choices are now shown distinctly.
-Permission and workflow consolidation remain follow-up work and must not delay
-the email/password fix.
+The credentials/profile correction shipped in PR #584. The next patch below
+consolidates the remaining company-local employee settings.
 
 ## Acceptance
 
@@ -49,3 +49,68 @@ the email/password fix.
 - Another company, a shared identity, or a non-owner cannot edit the account.
 - No actual employee credentials, messages, rewards or integration settings are
   changed by the tests.
+
+## Unified employee settings (after PR #584)
+
+Baseline: main `07e8416f`. The employee card now exposes owner-controlled module
+switches, AI use, task/deal/order approval overrides, order service eligibility,
+and notification channel preferences. Optional work settings remain collapsed
+until needed. Each override supports inheriting the company rule. Account
+credentials, integration scope and company membership remain separate concepts.
+
+Updates are sparse and target one membership. They preserve other employees,
+inactive employees, unknown legacy grants, provider bindings and Linear/risk
+notification preferences. Explicitly toggling a module off also removes its
+older action-level grants; untouched scoped grants are not broadened. A separate
+settings version prevents an old card overwriting newer workflow preferences.
+The existing tenant policy continues to decide effective access by role and
+company modules. This patch does not grant any real employee new permissions.
+
+The workflow screen no longer duplicates role, grants or work settings. Its
+remaining employee section changes manager pipeline scope only, with an exact
+prior-scope check and a sparse merge. The browser API rejects an obsolete bulk
+employee form instead of silently replacing newer employee settings. Programmatic
+legacy workflow calls retain their compatibility contract.
+
+Remaining structural boundary: pipeline scope is still in the existing workflow
+screen, not yet moved into a unified multi-provider integration editor. Linear
+page access and notification preferences remain editable in the existing Linear
+integration panel, independently for each employee. Observer behavior is unchanged. Company owners
+cannot take over a shared global identity, transfer ownership, or turn a
+company-only switch into global account deletion through this employee form.
+
+Tests use disposable local PostgreSQL and synthetic accounts only. New tests
+cover sparse settings, stale versions, concurrent scope/settings writes,
+foreign-tenant isolation, partial grants, retained services, and RU/AZ/EN UI.
+The real cookie/Chromium CRUD scenario additionally saves and reopens module
+permissions and work preferences at 360/390/768/1440 px. Its local browser launch
+is blocked by the execution environment's Unix socket restriction. The first
+remote CI run passed all 254 tests including these scenarios; the final copy is
+checked again in CI before release.
+
+## Independent pages and actions
+
+Employee cards now separate identity, permissions, and personal settings into
+three tabs. The personal settings tab controls page visibility without changing
+operation rights. Profile remains available; the list includes the standalone
+Instructions link and dynamically mounted navigation. Page preferences persist
+per company membership, with an independent version and sparse patch.
+
+The native CRM exposes separate view/create/update/delete controls for tasks,
+deals and contacts (companies share contact rights). Native action overrides
+are stored separately from legacy module grants so changing one native action
+cannot disable Kommo or expand its provider scope. Other existing product
+modules retain explicitly labelled all-actions access switches; this release
+does not pretend that every older API has four independent CRUD operations.
+Provider scopes, including Linear and Kommo pipelines, remain separate.
+
+New page capabilities fix the specific mismatch where granular native view
+permission allowed the API but the sidebar recognized only a broad legacy
+module grant. Visibility alone cannot supply a missing view/prerequisite.
+Hiding a page is a navigation preference, not a substitute for API authorization.
+No real employee's rights are changed automatically by this release.
+
+During this work, native deal and company collection action dispatch was also
+corrected: an item-only archive/link request cannot fall through to creation
+using delete/assign authority. Regression tests cover these permission/action
+mismatches independently of UI controls.

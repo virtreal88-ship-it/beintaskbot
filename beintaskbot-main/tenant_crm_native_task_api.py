@@ -33,7 +33,9 @@ def handler(member_from_request,origin,logger):
         profile=member_from_request(request)
         profile=native_policy_profile(profile) if profile else None
         policy=TenantPolicy(profile or {})
-        if not profile or not (policy.allows('tasks') or any(str(item).startswith('tasks:') for item in (profile.get('permissions') or []))):
+        if not profile or not (policy.allows('tasks') or
+                any(str(item).startswith('tasks:') for item in (profile.get('permissions') or [])) or
+                any(policy.allows_action('tasks', action) for action in ('view', 'create', 'update', 'delete'))):
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
         tenant=str(profile['tenant_id']); actor=int(profile['telegram_id']); task_id=request.match_info.get('id')
         if task_id:

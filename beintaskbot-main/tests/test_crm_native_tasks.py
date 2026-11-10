@@ -23,8 +23,31 @@ class NativeTaskTests(unittest.TestCase):
         person['permissions']=['tasks']
         self.assertTrue(tasks._eligible(person,{}))
         for denied in ({'active':False},{'modules':{'tasks':False}},
-                       {'permissions':['tasks','tasks:view']},{'permissions':['tasks:view','tasks:update']}):
+                       {'permissions':['tasks','tasks:view']}):
             with self.subTest(denied=denied):self.assertFalse(tasks._eligible({**person,**denied},{}))
+
+
+    def test_native_granular_and_override_assignees_require_visible_page_and_view_update(self):
+        person={'tenant_id':'a','telegram_id':20,'role':'worker','active':True,
+                'permissions':[],'modules':{'tasks':False},
+                'workflow':{'policies':{'members':{'20':{'native_crm_actions':{'tasks':{'view':True,'update':True}}}}}}}
+        self.assertTrue(tasks._eligible(person,{}))
+        settings=person['workflow']['policies']['members']['20']
+        settings['page_visibility']={'tasks':False}
+        self.assertFalse(tasks._eligible(person,{}))
+        self.assertTrue(tasks.TenantPolicy(person).allows_action('tasks','update'))
+        settings['page_visibility']={}
+        settings['native_crm_actions']['tasks']['update']=False
+        self.assertFalse(tasks._eligible(person,{}))
+        settings['native_crm_actions']['tasks']['update']=True
+        person['active']=False
+        self.assertFalse(tasks._eligible(person,{}))
+        person['active']=True
+        person['workflow']={}
+        person['permissions']=['tasks:view','tasks:update']
+        self.assertTrue(tasks._eligible(person,{}))
+        person['role']='manager'
+        self.assertFalse(tasks._eligible(person,{'pipeline_id':'1','stage_id':'10'}))
 
 
 if __name__=='__main__':unittest.main()

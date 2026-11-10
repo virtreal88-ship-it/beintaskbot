@@ -75,7 +75,7 @@ async function integrations(){
   open('telegram');await tick();assert.equal(b.nonProfile().length,1);assert.equal(b.w.document.getElementById('tnChannelAddress').value,'unsaved');
   open('openai');await tick();assert.ok(host.querySelector('#tcAiPanel'));assert.ok(host.querySelector('#tnAiPanel'));assert.equal(b.nonProfile().length,3);
   open('linear');await tick();assert.ok(host.querySelector('#tenantLinearPanel'));assert.equal(b.nonProfile().length,3,'Linear catalog remains explicit');
-  b.w.document.getElementById('tlLoad').click();await tick();assert.equal(b.nonProfile().length,4);
+  b.w.document.getElementById('tlLoad').click();await tick();assert.equal(b.nonProfile().length,5,'explicit Linear load reads provider config and scoped employee controls');assert.equal(b.nonProfile().filter(r=>r.url==='/api/platform/members').length,1,'employee controls are read once and only on explicit load');
   b.emit('tenant-integration-panel',{open:false});assert.ok(b.requests.every(r=>(r.options.method||'GET')==='GET'),'opening/closing never saves, probes or sends');
   // Delayed placement cannot run after Close, even when the host appears later.
   b.emit('tenant-integration-panel',{provider:'telegram',hostId:'late-host',open:true});b.emit('tenant-integration-panel',{open:false});

@@ -55,12 +55,18 @@ class WorkflowApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_post_passes_only_workflow_fields(self):
         payload = {"pipelines": [1], "stages": [2], "policies": {"x": True},
-                   "members": [3], "tenant_id": "other"}
+                   "member_pipeline_changes": [3], "tenant_id": "other"}
         response = await self.api["config"](Request("POST", payload))
         self.assertEqual(response.status, 200)
         self.save.assert_called_once_with(
             tenant_id="company-a", owner_id=10, pipelines=[1], stages=[2],
-            policies={"x": True}, members=[3])
+            policies={"x": True}, member_pipeline_changes=[3])
+
+    async def test_bulk_member_settings_are_rejected(self):
+        for payload in ({'members': []}, {'policies': {'members': {}}}, {'policies': {' members ': {}}}):
+            response = await self.api['config'](Request('POST', payload))
+            self.assertEqual(response.status, 400)
+        self.save.assert_not_called()
 
     async def test_invalid_body_and_platform_error_are_client_errors(self):
         self.assertEqual((await self.api["config"](Request("POST", []))).status, 400)

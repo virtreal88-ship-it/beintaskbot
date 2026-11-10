@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime,timedelta,timezone
 from tenant_platform_core import _connect
 from tenant_policy import TenantPolicy
+from tenant_member_access import page_capabilities
 from tenant_workflow_store import _read_tenant_workflow
 
 
@@ -60,7 +61,7 @@ def _profiles(cur,tenant_id,company,ids=None,*,lock=False):
 def _actor(profiles,actor_id,action):
     policy=TenantPolicy(profiles.get(int(actor_id)) or {})
     # API creator authority retains its existing granular-action contract.
-    # Work eligibility below separately requires the actual /app task module.
+    # Work eligibility separately requires a visible Tasks page and view/update.
     if not policy.allows_action('tasks',action):
         raise NativeTaskAccessError('task_access_revoked')
     return policy
@@ -74,7 +75,7 @@ def _in_manager_scope(policy,deal):
 
 def _eligible(profile,deal):
     policy=TenantPolicy(profile or {})
-    return bool(profile and policy.allows('tasks') and policy.allows_action('tasks','view')
+    return bool(profile and page_capabilities(profile)['tasks'] and policy.allows_action('tasks','view')
         and policy.allows_action('tasks','update')
         and (profile.get('role')!='manager' or _in_manager_scope(policy,deal)))
 
