@@ -119,19 +119,46 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       if (mode === 'auth_pending') {
         await page.locator('[data-staff-edit="41"]').click();
         await page.locator('#staffMemberModal.show').waitFor();
+        const retainedForm = await page.locator('#staffEditForm').elementHandle();
+        const draftName = 'UNSAVED-PENDING-EMPLOYEE';
+        await page.locator('#staffEditForm [name=display_name]').fill(draftName);
         await control('hold-me');
         await page.evaluate(() => { void window.tenantRequestCoordinator.revalidateProfile().catch(() => {}); });
         await waitState('pending_me');
-        await accessDenied();
+        // Pending verification is a privacy curtain, not a destructive denial.
+        await page.locator('#employeesAccessNotice').waitFor();
+        assert.equal(await page.locator('#employeesAccessNotice').getAttribute('aria-busy'), 'true');
+        assert.equal(await page.locator('#companyEmployeesNav').isVisible(), false);
+        assert.equal(await page.locator('#staffManagement').isVisible(), false);
+        assert.equal(await page.locator('#staffMemberModal').isVisible(), false);
+        assert.equal(await page.locator('#staffMemberModal').evaluate(node => node.inert), true);
+        assert(!((await page.locator('#view-employees').innerText()).includes('PRIVATE-EMPLOYEE')));
+        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffEditForm')), true);
+        assert.equal(await page.locator('#staffEditForm [name=display_name]').inputValue(), draftName);
+        assert.equal(await page.locator('#staffEditForm [name=display_name]').evaluate(node => {
+          node.focus(); return document.getElementById('staffMemberModal').contains(document.activeElement);
+        }), false, 'The retained form cannot receive focus while authority is pending');
         await control('release');
         await visibleStaff(tenantA);
+        await page.locator('#staffMemberModal.show').waitFor();
+        assert.equal(await page.locator('#staffMemberModal').evaluate(node => node.inert), false);
+        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffEditForm')), true);
+        assert.equal(await page.locator('#staffEditForm [name=display_name]').inputValue(), draftName);
       } else if (['revoked', 'tenant_switch', 'actor_switch'].includes(mode)) {
         await page.locator('[data-staff-edit="41"]').click();
         await page.locator('#staffMemberModal.show').waitFor();
+        await page.keyboard.press('Escape');
+        assert.equal(await page.locator('#staffMemberModal.show').count(), 0);
         const membersBeforeHold = memberRequests.length;
         await control('hold-members');
-        await page.evaluate(() => window.tenantRequestCoordinator.revalidateProfile());
+        // Selecting Members explicitly reloads its list. Same-profile reads now
+        // correctly preserve it, so they must not be used to manufacture a read.
+        await page.locator('[data-staff-tab=members]').click();
         await waitState('pending_members');
+        await page.locator('#staffAdd').click();
+        await page.locator('#staffInviteForm').waitFor();
+        await page.locator('#staffInviteForm [name=first_name]').fill('A-PRIVATE-DRAFT');
+        const oldForm = await page.locator('#staffInviteForm').elementHandle();
         const heldRequests = memberRequests.slice(membersBeforeHold);
         assert(heldRequests.length > 0, 'The server barrier holds an observed real member request');
         if (mode === 'revoked') await control('revoke');
@@ -146,6 +173,8 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
           if (mode === 'actor_switch') await current(tenantA, 32);
           await accessDenied();
         }
+        assert.equal(await oldForm.evaluate(node => node.isConnected), false, 'Changed authority removes the old form, not just its curtain');
+        assert.equal(await page.locator('#staffModalBody').textContent(), '', 'Changed authority clears all old form fields');
         await control('release');
         await waitState('released_members');
         await Promise.all(heldRequests.map(async request => {
@@ -155,6 +184,8 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         if (mode === 'tenant_switch') await visibleStaff(tenantB);
         else await accessDenied();
+        assert.equal(await page.locator('#staffMemberModal.show').count(), 0);
+        assert.equal(await page.locator('#staffModalBody').textContent(), '', 'The released stale read cannot recreate the old form');
       } else {
         if (actor === 34 && width === 1440) {
           await openProfile();
@@ -176,11 +207,11 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
         const originalOpener = await opener.elementHandle();
         await opener.click();
         await page.locator('#staffMemberModal.show').waitFor();
-        // A same-identity profile read legitimately refreshes the employee
-        // list while this form stays open. Closing must find the current
-        // logical opener even if its previous DOM node was replaced.
+        // A same-identity profile read preserves both the form and its opener.
+        // Closing must restore focus without a needless employee list redraw.
         await page.evaluate(() => window.tenantReloadProfile());
         await page.locator('#staffMemberModal.show').waitFor();
+        assert.equal(await originalOpener.evaluate(node => node.isConnected), true);
         await page.keyboard.press('Escape');
         assert.equal(await page.locator('#staffMemberModal.show').count(), 0);
         assert.equal(await opener.evaluate(node => node === document.activeElement), true,

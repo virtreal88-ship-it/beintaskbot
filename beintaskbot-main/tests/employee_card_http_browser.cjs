@@ -183,15 +183,20 @@ assert(origin && mode && width && login && tenantA && tenantB);
           const layout=await form.evaluate((node,tab)=>{
             const footer=node.querySelector('.staff-modal-actions').getBoundingClientRect();
             const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
-            const boxes=[...panel.querySelectorAll('[data-access-operations]>.staff-native-permission')].map(group=>[...group.querySelectorAll('[data-access-action]')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
+            const boxes=[...panel.querySelectorAll('[data-access-operations]>.staff-native-permission')].map(group=>[...group.querySelectorAll('[data-access-action]')].map(input=>{const r=input.getBoundingClientRect(),label=input.closest('label');return {x:r.x,y:r.y,captionOverflow:label.scrollWidth>label.clientWidth+1}}));
             const broad=[...panel.querySelectorAll('.staff-section-permission')].map(card=>({controls:card.querySelectorAll('[data-permission]').length,fakeActions:card.querySelectorAll('[data-access-action]').length,overflow:card.scrollWidth>card.clientWidth+1}));
             return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,broad};
           },tab);
           assert(!layout.overflow,'Employee tab fits viewport');
           assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
-          for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
+          for(const boxes of layout.boxes){assert.equal(boxes.length,4);const columns=new Set(boxes.map(box=>Math.round(box.x))).size,rows=new Set(boxes.map(box=>Math.round(box.y))).size;assert.equal(columns,viewportWidth<=420?2:4,'CRUD columns adapt to narrow phones');assert.equal(rows,viewportWidth<=420?2:1,'Narrow phones use a readable 2×2 CRUD grid');assert(boxes.every(box=>!box.captionOverflow),'Localized CRUD captions stay within their cells');}
           for(const card of layout.broad){assert.equal(card.controls,1);assert.equal(card.fakeActions,0);assert(!card.overflow,'Broad permission card fits viewport');}
-          if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+viewportWidth+'-'+language+'.png'});
+          if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR){
+            await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+viewportWidth+'-'+language+'.png'});
+            const originalTheme=await page.evaluate(()=>{const root=document.documentElement,theme=root.getAttribute('data-app-theme');root.setAttribute('data-app-theme','dark');return theme});
+            try{await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+viewportWidth+'-'+language+'-dark.png'});}
+            finally{await page.evaluate(theme=>{if(theme===null)document.documentElement.removeAttribute('data-app-theme');else document.documentElement.setAttribute('data-app-theme',theme)},originalTheme);}
+          }
         }
       }
       await page.setViewportSize({width,height:900});

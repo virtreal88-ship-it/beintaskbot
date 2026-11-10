@@ -1,5 +1,6 @@
 """EMP01: actual cookie/API/PostgreSQL writes, conflicts and authority fences."""
 import asyncio
+from collections import Counter
 import json
 import os
 import socket
@@ -822,7 +823,13 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
                             assert new['updated_at'] != old['updated_at']
                         else:
                             assert new == old
-            assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 8
+            # The removed page-preference save no longer creates an eighth
+            # event. Assert the actual commands instead of an obsolete count.
+            new_audits = set(after['saas_tenant_audit_events']) - set(before['saas_tenant_audit_events'])
+            assert Counter(json.loads(item)['action'] for item in new_audits) == {
+                'employee.provisioned': 1, 'employee.email.assigned': 1,
+                'employee.password.assigned': 1, 'employee.card.updated': 4,
+            }
             assert len(after['saas_tenant_member_whatsapp_numbers']) == len(before['saas_tenant_member_whatsapp_numbers']) + 1
             unchanged = set(before) - {'saas_auth_users', 'saas_user_profiles', 'saas_tenant_members',
                 'saas_tenant_audit_events', 'saas_tenant_member_whatsapp_numbers', 'saas_tenant_workflow_policies'}
