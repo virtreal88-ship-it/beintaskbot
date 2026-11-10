@@ -6,20 +6,55 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function pcm(ms,voiced=false){const samples=new Int16Array(ms*24);if(voiced)for(let i=0;i<samples.length;i++)samples[i]=Math.round(2000*Math.sin(i*.2));return new Uint8Array(samples.buffer);}
 async function setup({greeting=false,deferredPlayback=false,language='ru',duplex=false}={}){
  const dom=new JSDOM('<button data-voice-orb type="button" disabled></button><div id="voice"></div>');const root=dom.window.document.querySelector('#voice');
- const sent=[],mutes=[],plays=[],states=[];let capture,emit,finishPlayback,released=0,closed=0,interrupts=0;
+ const sent=[],mutes=[],plays=[],states=[];let capture,emit,finishPlayback,released=0,closed=0,interrupts=0,stopped=0;
  const playback=new Promise(resolve=>finishPlayback=resolve);
  const voice=mountVoice(root,{language,duplex,onState:value=>states.push(value),acquireMicrophone:async()=>()=>released++,
   openAudio:async fn=>{capture=fn;return{play:(id)=>plays.push(id),contextState:()=> 'running',
    finished:async()=>deferredPlayback?playback:true,interrupt:()=>{interrupts++;return 0;},
    interruptForTalk:()=>{interrupts++;return plays.length?{item_id:plays.at(-1),audio_end_ms:120}:null;},
-   mute:value=>mutes.push(value),flush(){},stopNow(){},close:async()=>{closed++;}};},
+   mute:value=>mutes.push(value),flush(){},stopNow(){stopped++;},close:async()=>{closed++;}};},
   connect:async callback=>{emit=callback;await callback({type:'ready',greeting_pending:greeting});return{send:event=>sent.push(event),close:async()=>{}};},
   interruptTarget:dom.window.document.querySelector('[data-voice-orb]'),
   lifecycle:{visibilityState:'visible',addEventListener(){},removeEventListener(){}}});
  await voice.start();
  return{dom,root,voice,sent,mutes,plays,states,capture:(ms,voiced=false)=>{for(let n=0;n<ms;n+=20)capture(pcm(Math.min(20,ms-n),voiced));},
-  emit:event=>emit(event),finishPlayback,counts:()=>({released,closed,interrupts}),destroy:async()=>{await voice.destroy();dom.window.close();}};
+  emit:event=>emit(event),finishPlayback,counts:()=>({released,closed,interrupts,stopped}),destroy:async()=>{await voice.destroy();dom.window.close();}};
 }
+test('delayed end confirmation stops the microphone immediately and permits another start',async()=>{
+ const h=await setup({duplex:true});try{
+  const finished=h.voice.end();assert.equal(h.counts().stopped,1);
+  assert.equal(h.sent.at(-1).type,'end');
+  await new Promise(resolve=>setTimeout(resolve,2300));
+  assert.match(h.root.querySelector('[role=status]').textContent,/Завершение разговора/i);
+  await h.emit({type:'ended'});assert.equal(await finished,true);await tick();
+  assert.equal(h.root.querySelector('.voice-session-start').disabled,false);
+  await h.voice.start();assert.equal(h.voice.isActive(),true);
+ }finally{await h.destroy();}
+});
+test('missing end confirmation reaches a bounded failure and blocks restart',async()=>{
+ const h=await setup({duplex:true});try{
+  const finished=h.voice.end();assert.equal(h.counts().stopped,1);
+  assert.equal(await finished,false);await tick();
+  assert.match(h.root.querySelector('[role=status]').textContent,/не подтверждено/i);
+  assert.equal(h.root.querySelector('.voice-session-start').disabled,true);
+  await h.voice.start();assert.equal(h.voice.isActive(),false);
+ }finally{await h.destroy();}
+});
+test('disposing the voice screen waits beyond two seconds for actual end confirmation',async()=>{
+ const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/'});
+ const win=dom.window,host=win.document.querySelector('#host');let emit,stopped=0;
+ win.mountExperimentalCopilotVoice=mountVoice;win.acquireTenantMicrophone=async()=>()=>{};
+ win.openExperimentalCopilotAudio=async()=>({mute(){},flush(){},stopNow(){stopped++;},close:async()=>{}});
+ win.connectExperimentalCopilotVoice=async (_path,cb)=>{emit=cb;await cb({type:'ready'});return{send(){},close:async()=>{}};};
+ const mountScreen=require('../docs/tenant-operator-copilot-voice.js');
+ const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
+ try{
+  await screen.startVoice();await tick();const disposed=screen.disposeVoice();
+  assert.equal(stopped,1);await new Promise(resolve=>setTimeout(resolve,2300));
+  assert.equal(screen.isConnected,true,'cleanup must not close the socket before confirmation');
+  await emit({type:'ended'});await disposed;assert.equal(screen.isConnected,false);
+ }finally{await screen.disposeVoice();dom.window.close();}
+});
 test('duplex streams PCM while speaking and stops old playback on server interruption',async()=>{
  const h=await setup({duplex:true,deferredPlayback:true});try{
   assert.equal(h.sent.some(x=>x.type==='talk_start'),false);

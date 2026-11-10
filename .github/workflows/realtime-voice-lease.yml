@@ -9,6 +9,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
+      - 'beintaskbot-main/docs/tenant-operator-copilot-voice.js'
       - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_greeting.cjs'
       - 'beintaskbot-main/tests/test_tenant_voice_start_failure.py'
@@ -58,6 +59,7 @@ jobs:
           tests/test_tenant_operator_voice_stale_ack.py
           tests/test_tenant_operator_voice_duplex.py
           tests/test_tenant_operator_voice_queue_load.py
+          tests/test_tenant_operator_voice_terminal_socket.py
           tests/test_tenant_operator_voice_orchestration.py
           tests/test_tenant_operator_voice.py
           tests/test_tenant_operator_voice_api.py

@@ -62,7 +62,8 @@
     document.removeEventListener?.('tenant-chat-close',abort);
     if(controller){
       if(controller.isActive?.()){
-        try{await Promise.race([Promise.resolve(controller.end?.()),new Promise(resolve=>setTimeout(resolve,2200))]);}catch(_){}
+        // Outlive the controller's 8s confirmation window before destroying it.
+        try{await Promise.race([Promise.resolve(controller.end?.()),new Promise(resolve=>setTimeout(resolve,8500))]);}catch(_){}
       }
       await controller.destroy();
     }

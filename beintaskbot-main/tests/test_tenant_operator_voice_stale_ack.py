@@ -81,11 +81,13 @@ class StalePlaybackAckTest(unittest.IsolatedAsyncioTestCase):
     async def test_gateway_preserves_audio_ack_end_order_and_logs_only_duration(self):
         from aiohttp import web
         from aiohttp.test_utils import TestClient, TestServer
-        seen=[]
+        seen=[];ack_processed=asyncio.Event()
         class FakeSession:
             def __init__(self):self.closed=False;self.provider=object()
             async def start(self):pass
-            async def receive_client(self,event):seen.append(event['type'])
+            async def receive_client(self,event,**_kwargs):
+                seen.append(event['type'])
+                if event['type']=='playback_scheduled':ack_processed.set()
             async def end(self,reason):self.closed=True
         session=FakeSession()
         async def authenticate(request):return ('tenant','actor','channel','dialog')
@@ -98,6 +100,9 @@ class StalePlaybackAckTest(unittest.IsolatedAsyncioTestCase):
                 ws=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
                 await ws.send_bytes(b'private audio')
                 await ws.send_json({'type':'playback_scheduled','item_id':'private id','context_state':'running'})
+                # Explicit end may discard queued audio and ACKs. Verify this
+                # ACK reached the session before asking to end the session.
+                await asyncio.wait_for(ack_processed.wait(),1)
                 await ws.send_json({'type':'end'})
                 await ws.receive()
             self.assertEqual(seen,['audio','playback_scheduled','end'])

@@ -8,7 +8,8 @@ import unittest
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
-from aiohttp import WSMessage, WSMsgType
+from aiohttp import web, WSMessage, WSMsgType
+from aiohttp.test_utils import TestClient, TestServer
 
 from tenant_operator_voice_session import Session, Refused
 from tenant_operator_voice_pilot import PilotAdmission
@@ -141,6 +142,43 @@ async def make_pilot(authority=None,lease=None,socket=None):
 
 
 class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_end_preempts_pcm_backlog_but_waits_for_inflight_before_lease_release(self):
+        class BackloggedSession(Session):
+            async def start(self):self.closed=False;self.started=time.monotonic();self.fence=1
+            async def _receive_client(self,event):
+                if event.get('type')=='audio':
+                    self.audio_entered.set();await self.audio_release.wait()
+                return await super()._receive_client(event)
+            async def end(self,reason):
+                if reason=='user_end':self.user_end_seen.set()
+                return await super().end(reason)
+        provider=BufferedProvider();lease=TrackedLease();scope=('tenant',7,'channel','dialog')
+        s=BackloggedSession(scope,authority=Authority(),ledger=Ledger(),lease=lease,context=Context(),
+                            provider=provider,client=Client(),duplex=True)
+        s.audio_entered=asyncio.Event();s.audio_release=asyncio.Event();s.user_end_seen=asyncio.Event()
+        async def authenticate(_):return scope
+        def build(_,client):s.client=client;return s
+        app=web.Application();app.router.add_get('/voice',make_handler(
+            allowed_origins=['https://test.local'],authenticate=authenticate,build_session=build))
+        client=TestClient(TestServer(app));await client.start_server()
+        try:
+            ws=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
+            await ws.send_bytes(bytes(2048));await asyncio.wait_for(s.audio_entered.wait(),1)
+            for _ in range(16):await ws.send_bytes(bytes(2048))
+            await ws.send_json({'type':'end'})
+            # A user end must be noticed while the first PCM operation is
+            # still blocked and without releasing ownership prematurely.
+            await asyncio.wait_for(s.user_end_seen.wait(),.3)
+            self.assertTrue(s.closed)
+            self.assertEqual(lease.released,0)
+            s.audio_release.set()
+            event=await asyncio.wait_for(ws.receive_json(),1.5)
+            self.assertEqual(event,{'type':'ended','reason':'user_end'})
+            self.assertEqual(lease.released,1)
+            self.assertFalse(any(e['type']=='input_audio_buffer.append' for e in provider.events))
+        finally:
+            s.audio_release.set();await client.close()
+
     async def test_observed_provider_vad_drops_queued_old_audio_before_handler_catches_up(self):
         s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.01
         try:
