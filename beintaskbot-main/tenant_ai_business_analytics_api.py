@@ -39,3 +39,39 @@ def handler(member_from_request, canonical_origin, logger=None):
                                      status=503, headers=headers)
 
     return handle
+
+
+def analyst_handler(member_from_request, canonical_origin, logger=None):
+    """Authenticated single-turn owner analyst; the server owns all tool execution."""
+    log=logger or logging.getLogger(__name__)
+
+    async def handle(request):
+        headers={'Cache-Control':'no-store'}
+        try:
+            if request.headers.get('Origin','').rstrip('/')!=canonical_origin.rstrip('/'):
+                raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.',403)
+            if request.content_type!='application/json':
+                raise TenantLinearError('Invalid analyst request.',400)
+            profile=member_from_request(request)
+            if not profile:raise TenantLinearError('İcazə yoxdur.',403)
+            data=await request.json()
+            required={'expected_tenant_id','expected_user_id','request_id','prompt'}
+            if not isinstance(data,dict) or set(data)!=required:
+                raise TenantLinearError('Invalid analyst request.',400)
+            if (str(data['expected_tenant_id'] or '')!=str(profile.get('tenant_id'))
+                    or str(data['expected_user_id'] or '')!=str(profile.get('telegram_id'))):
+                raise TenantLinearError('Kabinet dəyişib. Yeniləyin.',409)
+            if not isinstance(data['request_id'],str) or not isinstance(data['prompt'],str):
+                raise TenantLinearError('Invalid analyst request.',400)
+            from tenant_ai_business_analyst import run
+            result=await asyncio.to_thread(run,profile,prompt=data['prompt'],request_id=data['request_id'])
+            return web.json_response({'success':True,'result':result},headers=headers)
+        except TenantLinearError as error:
+            return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
+        except Exception as error:
+            from tenant_chat_ai_provider import safe_failure_code
+            log.error('Business analyst request failed code=%s',safe_failure_code(error))
+            return web.json_response({'success':False,'error':'Business analyst is temporarily unavailable.'},
+                                     status=503,headers=headers)
+
+    return handle

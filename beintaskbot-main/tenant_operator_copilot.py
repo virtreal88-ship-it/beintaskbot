@@ -629,7 +629,8 @@ def run(profile, data, *, consultation_reply_id=None, developer_question=None):
             if int((cur.fetchone() or {}).get('used') or 0) >= int(config.get('daily_limit') or 50):
                 raise TenantLinearError('Дневной лимит AI компании исчерпан.', 429)
             cur.execute("""SELECT COALESCE(sum(reserved_calls),0) AS used FROM saas_chat_ai_runs
-              WHERE tenant_id=%s::uuid AND provider='connect' AND usage_day=(now() AT TIME ZONE 'UTC')::date""", (tenant,))
+              WHERE tenant_id=%s::uuid AND provider IN ('connect','business_analyst')
+              AND usage_day=(now() AT TIME ZONE 'UTC')::date""", (tenant,))
             if int((cur.fetchone() or {}).get('used') or 0) >= int(config.get('copilot_daily_limit') or 50):
                 raise TenantLinearError('Дневной лимит запросов AI Copilot исчерпан.', 429)
             cur.execute('''SELECT count(*) AS used FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND requested_by=%s

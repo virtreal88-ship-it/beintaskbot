@@ -42,7 +42,7 @@ from tenant_night_report_api import handler as night_report_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
 from tenant_ai_administrator_api import handler as administrator_handler
 from tenant_ai_learning_mcp import routes as learning_mcp_routes
-from tenant_ai_business_analytics_api import handler as business_analytics_handler
+from tenant_ai_business_analytics_api import handler as business_analytics_handler, analyst_handler as business_analyst_handler
 from tenant_notification_center_api import handler as notification_center_handler
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -151,6 +151,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/asr-comparison', owner_asr_comparison_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('GET', 'POST')),
         ('analytics/tools', business_analytics_handler(member, origin, logger), ('POST',)),
+        ('analytics/ask', business_analyst_handler(member, origin, logger), ('POST',)),
         ('dialogs/copilot-voice/preflight', operator_voice_handler(member, origin, logger, 'preflight'), ('POST',)),
         ('dialogs/copilot-voice/ws', operator_voice_handler(member, origin, logger, 'ws'), ('GET',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),
