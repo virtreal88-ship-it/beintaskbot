@@ -34,7 +34,8 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
             self.accept, self.requests, self.decide, StoreError,
             accept_email_invite=self.accept_email,add_member_whatsapp_number=self.add_whatsapp,
             provision_employee_account=self.provision,
-            issue_session=lambda tenant_id,actor_id:f'{tenant_id}:{actor_id}'))
+            source_session=lambda request:{'tenant_id':'company','actor_id':1,'session_id':'synthetic'},
+            issue_session=lambda tenant_id,actor_id,**kwargs:f'{tenant_id}:{actor_id}'))
 
     def request(self, method="POST", data=None):
         request = Mock(method=method)
@@ -109,7 +110,7 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         request=self.request(data={'token':'one-use-token'});request.headers={'Origin':'https://crm.pro.az'}
         response=await self.api['accept_email_invite'](request)
         self.assertEqual(response.status,200)
-        self.accept_email.assert_called_once_with(token='one-use-token',actor_id=1,email='worker@example.com',display_name='')
+        self.accept_email.assert_called_once_with(token='one-use-token',actor_id=1,email='worker@example.com',display_name='',source_session={'tenant_id':'company','actor_id':1,'session_id':'synthetic'})
         self.assertIn('csa_tenant_session',response.cookies)
 
     async def test_access_decision_notifies_exact_request_identity(self):
