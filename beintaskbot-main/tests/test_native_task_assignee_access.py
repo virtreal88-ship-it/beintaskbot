@@ -577,7 +577,7 @@ def test_numeric_member_alias_sort_preserves_last_update_for_the_same_employee(n
     assert native['db'].execute('SELECT count(*) AS n FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=41', (A,))[0]['n'] == 1
 
 
-@pytest.mark.parametrize('revocation', ['update', 'page', 'inactive'])
+@pytest.mark.parametrize('revocation', ['update', 'view', 'inactive'])
 def test_native_overrides_enable_assignee_and_live_revocation_blocks_write(native, revocation):
     f = native
     settings = {'native_crm_actions': {'tasks': {'view': True, 'update': True}}}
@@ -593,8 +593,8 @@ def test_native_overrides_enable_assignee_and_live_revocation_blocks_write(nativ
             assert not TenantPolicy(members.member(A,46)).allows('tasks')
             if revocation == 'update':
                 settings['native_crm_actions']['tasks']['update'] = False
-            elif revocation == 'page':
-                settings['page_visibility'] = {'tasks': False}
+            elif revocation == 'view':
+                settings['native_crm_actions']['tasks']['view'] = False
             else:
                 f['db'].execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=46',(A,))
             f['db'].execute("UPDATE saas_tenant_workflow_policies SET value=%s::jsonb WHERE tenant_id=%s::uuid AND policy_key='members'",(json.dumps({'46':settings}),A))

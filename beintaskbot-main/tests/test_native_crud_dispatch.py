@@ -87,3 +87,93 @@ def test_valid_native_create_still_dispatches(module, prefix, create_name):
         response = invoke(module, prefix + ':create', {'title': 'Deal', 'name': 'Company'})
     assert response.status == 200
     assert create.call_count == 1
+
+
+def relation_profile(grants, overrides=None):
+    return {'tenant_id': 'company-a', 'telegram_id': 20, 'role': 'manager', 'active': True,
+            'permissions': grants, 'modules': {'customers': True, 'deals': True},
+            'workflow': {'policies': {'members': {'20': {'native_crm_actions': overrides or {}}}}}}
+
+
+def invoke_relation(profile, action):
+    return asyncio.run(companies.handler(lambda _: profile, ORIGIN, Mock())(
+        request({'action': action, 'entity_id': IDENT}, IDENT)))
+
+
+@pytest.mark.parametrize('action', ['link_contact', 'link_deal', 'unlink_contact', 'unlink_deal'])
+@pytest.mark.parametrize('grants', [['customers', 'deals'], ['customers:assign', 'customers:delete', 'deals:manage']])
+def test_explicit_readonly_vetoes_legacy_relation_mutations(action, grants):
+    profile = relation_profile(grants, {module: {'view': True, 'update': False, 'delete': False}
+                                       for module in ('customers', 'deals')})
+    with patch.object(companies, 'link_entity') as link, patch.object(companies, 'unlink_entity') as unlink:
+        assert invoke_relation(profile, action).status == 403
+    link.assert_not_called()
+    unlink.assert_not_called()
+    assert not companies.relation_actions(companies.TenantPolicy(profile))[action]
+
+
+@pytest.mark.parametrize('action', ['link_contact', 'link_deal'])
+def test_explicit_update_allows_relations_without_legacy_assign_or_delete(action):
+    profile = relation_profile([], {module: {'update': True, 'delete': False}
+                                    for module in ('customers', 'deals')})
+    operation = 'unlink_entity' if action.startswith('unlink') else 'link_entity'
+    with patch.object(companies, operation, return_value=True) as mutate:
+        assert invoke_relation(profile, action).status == 200
+    mutate.assert_called_once_with('company-a', IDENT, action.split('_')[1], IDENT)
+
+
+@pytest.mark.parametrize('action', ['link_contact', 'link_deal'])
+def test_assign_only_no_longer_authorizes_native_relationship_editing(action):
+    with patch.object(companies, 'link_entity') as mutate:
+        assert invoke_relation(relation_profile(['customers:assign']), action).status == 403
+    mutate.assert_not_called()
+
+
+@pytest.mark.parametrize('action', ['unlink_contact', 'unlink_deal'])
+def test_unlink_retains_delete_contract(action):
+    with patch.object(companies, 'unlink_entity', return_value=True) as mutate:
+        assert invoke_relation(relation_profile(['customers:delete']), action).status == 200
+    assert mutate.call_count == 1
+    with patch.object(companies, 'unlink_entity') as mutate:
+        assert invoke_relation(relation_profile([], {'customers': {'update': True, 'delete': False},
+                                                  'deals': {'update': True}}), action).status == 403
+    mutate.assert_not_called()
+
+
+@pytest.mark.parametrize('action', ['link_deal'])
+@pytest.mark.parametrize('overrides', [
+    {'customers': {'update': True}, 'deals': {'update': False}},
+    {'customers': {'update': False}, 'deals': {'update': True}},
+    {'customers': {'update': True}},
+])
+def test_native_deal_relations_require_update_on_both_entities(action, overrides):
+    profile = relation_profile(['customers:assign', 'customers:delete'], overrides)
+    with patch.object(companies, 'link_entity') as link, patch.object(companies, 'unlink_entity') as unlink:
+        assert invoke_relation(profile, action).status == 403
+    link.assert_not_called()
+    unlink.assert_not_called()
+
+
+@pytest.mark.parametrize('action', ['assign', 'delete', 'link_task', 'link_deal ', '', None])
+def test_company_forged_actions_never_dispatch(action):
+    with patch.object(companies, 'link_entity') as link, patch.object(companies, 'update_company') as update:
+        assert invoke_relation(relation_profile(['customers', 'deals']), action).status == 400
+    link.assert_not_called()
+    update.assert_not_called()
+
+
+@pytest.mark.parametrize('action', ['link_contact', 'link_deal'])
+@pytest.mark.parametrize('grants', [['customers', 'deals'], ['customers:update', 'deals:update']])
+def test_existing_update_grants_authorize_company_links(action, grants):
+    with patch.object(companies, 'link_entity', return_value=True) as mutate:
+        assert invoke_relation(relation_profile(grants), action).status == 200
+    assert mutate.call_count == 1
+
+
+@pytest.mark.parametrize('role,active,status', [('owner', True, 200), ('owner', False, 403), ('manager', False, 403)])
+def test_company_relation_owner_and_inactive_contract(role, active, status):
+    profile = {**relation_profile(['customers', 'deals'], {'customers': {'update': False}}),
+               'role': role, 'active': active}
+    with patch.object(companies, 'link_entity', return_value=True) as mutate:
+        assert invoke_relation(profile, 'link_deal').status == status
+    assert mutate.call_count == (1 if status == 200 else 0)

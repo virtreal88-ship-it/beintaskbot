@@ -21,7 +21,6 @@ def profile(**overrides):
 def with_result(person, result):
     updated = deepcopy(person)
     updated['permissions'] = result['permissions']
-    updated['workflow']['policies']['members']['20']['page_visibility'] = result['page_visibility']
     updated['workflow']['policies']['members']['20']['native_crm_actions'] = result['native_crm_actions']
     return updated
 
@@ -35,50 +34,34 @@ def test_granular_native_view_is_navigable_without_enabling_external_module():
     assert page_capabilities(profile(permissions=['tasks:create']))['tasks'] is False
 
 
-def test_hidden_page_does_not_change_permissions_or_action_authority():
+def test_retired_page_preferences_do_not_hide_allowed_pages_or_change_grants():
     person = profile(permissions=['tasks:view', 'tasks:update', 'tasks:assign', 'custom:retained'])
     before = deepcopy(person)
-    result = apply_access_patch(person, {'pages': {'tasks': False}})
-    changed = with_result(person, result)
-    assert result['permissions'] == person['permissions']
-    assert action_capabilities(changed) == action_capabilities(person)
-    assert page_capabilities(changed)['tasks'] is False
-    assert access_snapshot(changed)['page_prerequisites']['tasks'] is True
-    assert person == before
-    inherited = apply_access_patch(changed, {'pages': {'tasks': None}})
-    assert inherited['page_visibility'] == {}
-    assert page_capabilities(with_result(changed, inherited))['tasks'] is True
+    person['workflow']['policies']['members']['20']['page_visibility'] = {'tasks': False, 'finance': True}
+    assert page_capabilities(person)['tasks'] is True
+    assert page_capabilities(person)['finance'] is False
+    assert action_capabilities(person) == action_capabilities(before)
+    assert access_snapshot(person)['version'] == access_snapshot(before)['version']
+    assert 'page_visibility' not in access_snapshot(person)
+    assert 'page_visibility' not in TenantPolicy(person).public_capabilities()
 
-
-def test_public_visibility_only_exposes_own_sanitized_preferences():
+def test_retired_preferences_never_exposed_or_used_as_permission():
     person = profile(permissions=[])
     person['workflow']['policies']['members']['20'].update({
-        'page_visibility': {'tasks': False, 'customers': True, 'profile': False,
-                            'invented': True, 'employees': 1},
+        'page_visibility': {'tasks': True, 'profile': False, 'employees': True},
         'private_other_setting': 'not-public'})
-    person['workflow']['policies']['members']['21'] = {'page_visibility': {'deals': False}}
     caps = TenantPolicy(person).public_capabilities()
-    assert caps['page_visibility'] == {'tasks': False, 'customers': True}
-    assert not caps['pages']['tasks']
-    assert not caps['pages']['customers']
-    assert 'workflow' not in caps
-    assert TenantPolicy({**person, 'role': 'owner'}).public_capabilities()['page_visibility'] == {}
-    denied = TenantPolicy(profile(permissions=[])).public_capabilities()
-    assert denied['page_visibility'] == {}
-    assert not denied['pages']['tasks']
-
+    assert 'page_visibility' not in caps and 'workflow' not in caps
+    assert not caps['pages']['tasks'] and not caps['pages']['employees']
+    assert caps['pages']['profile']
 
 def test_instructions_catalog_visibility_requires_member_not_ai_management():
     person = profile(permissions=[], modules={})
+    person['workflow']['policies']['members']['20']['page_visibility'] = {'instructions': False}
     assert page_capabilities(person)['instructions']
-    result = apply_access_patch(person, {'pages': {'instructions': False}})
-    assert not page_capabilities(with_result(person, result))['instructions']
-    assert result['permissions'] == []
-    assert access_snapshot(with_result(person, result))['page_prerequisites']['instructions']
     for denied in (profile(active=False), profile(tenant_status='suspended'),
                    profile(tenant_id=''), profile(telegram_id=0)):
         assert not page_capabilities(denied)['instructions']
-
 
 @pytest.mark.parametrize('person,page', [
     (profile(permissions=[]), 'tasks'),
@@ -90,8 +73,8 @@ def test_instructions_catalog_visibility_requires_member_not_ai_management():
     (profile(role='admin', permissions=['ai_agents']), 'ai_administrator'),
 ])
 def test_explicit_show_never_grants_access(person, page):
-    result = apply_access_patch(person, {'pages': {page: True}})
-    assert not page_capabilities(with_result(person, result))[page]
+    person['workflow']['policies']['members']['20']['page_visibility'] = {page: True}
+    assert not page_capabilities(person)[page]
 
 
 def test_owner_and_profile_protection_and_inactive_membership():
@@ -101,7 +84,7 @@ def test_owner_and_profile_protection_and_inactive_membership():
     assert all(page_capabilities(owner).values())
     assert all(all(values.values()) for values in action_capabilities(owner).values())
     with pytest.raises(ValueError, match='owner_protected'):
-        apply_access_patch(owner, {'pages': {'tasks': False}})
+        apply_access_patch(owner, {'actions': {'tasks': {'view': False}}})
     inactive = page_capabilities(profile(active=False, permissions=['tasks:manage']))
     assert inactive['profile'] is True
     assert not any(value for page, value in inactive.items() if page != 'profile')
@@ -138,8 +121,6 @@ def test_sparse_crud_change_preserves_legacy_rights_and_external_scope():
 
 def test_manage_is_preserved_but_cannot_override_native_false():
     person = profile(permissions=['tasks:manage', 'deals:manage', 'custom:retained'])
-    unchanged = apply_access_patch(person, {'pages': {'tasks': False}})
-    assert unchanged['permissions'] == person['permissions']
     noop = apply_access_patch(person, {'actions': {'tasks': {'create': True}}})
     assert noop['permissions'] == person['permissions']
     result = apply_access_patch(person, {'actions': {'tasks': {'create': False}}})
@@ -171,7 +152,7 @@ def test_explicit_native_view_without_any_grants_is_navigable_but_not_external()
 
 
 @pytest.mark.parametrize('module', ['tasks', 'deals', 'customers'])
-def test_native_view_disabled_preserves_external_page_until_explicitly_hidden(module):
+def test_native_view_disabled_preserves_external_authority_without_menu_overrides(module):
     person = profile(role='manager', permissions=[module], modules={module: True})
     person['workflow']['pipelines'] = [{'pipeline_id': 10, 'owner_telegram_id': 20, 'active': True}]
     changed = with_result(person, apply_access_patch(person, {'actions': {module: {'view': False}}}))
@@ -180,9 +161,9 @@ def test_native_view_disabled_preserves_external_page_until_explicitly_hidden(mo
     assert page_capabilities(changed)[module]
     if module == 'customers':
         assert not page_capabilities(changed)['companies']
-    hidden = with_result(changed, apply_access_patch(changed, {'pages': {module: False}}))
-    assert not page_capabilities(hidden)[module]
-    assert TenantPolicy(hidden).allows(module)
+    changed['workflow']['policies']['members']['20']['page_visibility'] = {module: False}
+    assert page_capabilities(changed)[module]
+    assert TenantPolicy(changed).allows(module)
 
 
 def test_deals_only_admin_with_scope_sees_kommo_contacts_without_native_rights():
@@ -194,10 +175,10 @@ def test_deals_only_admin_with_scope_sees_kommo_contacts_without_native_rights()
     assert not page_capabilities(person)['companies']
     assert not any(action_capabilities(person)['customers'].values())
     assert not policy.allows('customers')
-    hidden = with_result(person, apply_access_patch(person, {'pages': {'customers': False}}))
-    assert not page_capabilities(hidden)['customers']
-    assert TenantPolicy(hidden).allows('deals')
-    assert hidden['permissions'] == ['deals']
+    person['workflow']['policies']['members']['20']['page_visibility'] = {'customers': False}
+    assert page_capabilities(person)['customers']
+    assert TenantPolicy(person).allows('deals')
+    assert person['permissions'] == ['deals']
 
 
 def test_deals_only_contacts_prerequisite_requires_pipeline_scope():
@@ -244,7 +225,7 @@ def test_version_is_access_specific_and_tenant_and_actor_scoped():
         assert access_snapshot(changed)['version'] != version
     changed = deepcopy(person)
     changed['workflow']['policies']['members']['20']['page_visibility'] = {'tasks': False}
-    assert access_snapshot(changed)['version'] != version
+    assert access_snapshot(changed)['version'] == version
     changed = deepcopy(person)
     changed['workflow']['policies']['members']['20']['native_crm_actions'] = {'tasks': {'delete': False}}
     assert access_snapshot(changed)['version'] != version
@@ -258,15 +239,17 @@ def test_catalog_only_offers_supported_native_crud_and_real_routes():
     snapshot = access_snapshot(profile())
     assert set(snapshot['action_catalog']) == set(ACTION_MODULES)
     assert snapshot['action_scope'] == 'native_crm'
-    assert {row['id'] for row in snapshot['page_catalog']} == set(PAGE_MODULES)
+    assert set(snapshot['pages']) == set(PAGE_MODULES)
+    assert 'page_catalog' not in snapshot and 'page_prerequisites' not in snapshot
     assert {'linear', 'news', 'night_report', 'companies', 'ai_administrator'} <= set(PAGE_MODULES)
-    assert next(row for row in snapshot['page_catalog'] if row['id'] == 'profile')['editable'] is False
+    assert snapshot['pages']['profile'] is True
 
 
 @pytest.mark.parametrize('patch', [None, {}, [], {'permissions': []},
-    {'pages': {}}, {'pages': []}, {'pages': {'profile': False}},
+    {'pages': {}}, {'pages': {'tasks': True}}, {'pages': {'tasks': False}},
+    {'pages': {'tasks': None}}, {'pages': []}, {'pages': {'profile': False}},
     {'pages': {'invented': True}}, {'pages': {'tasks': 1}},
-    {'actions': []}, {'actions': {'finance': {'delete': True}}},
+    {'actions': {}}, {'actions': []}, {'actions': {'finance': {'delete': True}}},
     {'actions': {'tasks': {}}}, {'actions': {'tasks': {'manage': True}}},
     {'actions': {'tasks': {'view': None}}}, {'actions': {'tasks': {'view': 1}}},
 ])
@@ -275,17 +258,14 @@ def test_invalid_patches_fail_closed(patch):
         validate_access_patch(patch)
 
 
-def test_workflow_validation_checks_page_visibility_but_not_unrelated_settings():
-    validate_workflow_patch(None, None, {'members': {'20': {'page_visibility': {'tasks': False}}}})
-    with pytest.raises(ValueError):
-        validate_workflow_patch(None, None, {'members': {'20': {'page_visibility': {'tasks': None}}}})
+def test_workflow_validation_checks_actions_and_preserves_ignored_legacy_values():
+    validate_workflow_patch(None, None, {'members': {'20': {'page_visibility': {'tasks': None}}}})
     validate_workflow_patch(None, None, {'members': {'20': {'native_crm_actions': {'tasks': {'delete': False}}}}})
     with pytest.raises(ValueError):
         validate_workflow_patch(None, None, {'members': {'20': {'native_crm_actions': {'finance': {'delete': False}}}}})
 
-
 def test_member_page_visibility_never_grants_other_company_deal_access():
     person = profile(role='manager', permissions=['deals'], modules={'deals': True})
-    result = apply_access_patch(person, {'pages': {'deals': True}})
-    policy = TenantPolicy(with_result(person, result))
+    person['workflow']['policies']['members']['20']['page_visibility'] = {'deals': True}
+    policy = TenantPolicy(person)
     assert not policy.can_access_deal({'tenant_id': 'company-b', 'pipeline_id': 10, 'status_id': 100})
