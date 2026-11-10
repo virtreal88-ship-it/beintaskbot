@@ -156,10 +156,10 @@ def test_kommo_search_uses_tenant_scoped_literal_query(task_flow, needle):
             ('slash', 'Kommo \\\\ marker'), ('ordinary', 'Kommo ordinary marker')]
     ids = {label: str(80000 + index) for index, (label, _text) in enumerate(rows)}
     with f['factory']() as conn:
-        conn.executemany('''INSERT INTO saas_crm_tasks
-          (tenant_id,kommo_task_id,kommo_lead_id,text,responsible_id,due_at)
-          VALUES(%s::uuid,%s,101,%s,999,'2090-01-01T00:00:00Z')''',
-          [(A, ids[label], text) for label, text in rows])
+        for label, text in rows:
+            conn.execute('''INSERT INTO saas_crm_tasks
+              (tenant_id,kommo_task_id,kommo_lead_id,text,responsible_id,due_at)
+              VALUES(%s::uuid,%s,101,%s,999,'2090-01-01T00:00:00Z')''', (A, ids[label], text))
     cookie = f['session'].issue(A, 11)
     expected = next(ids[label] for label, text in rows if needle.casefold() in text.casefold())
     before = _state(f)
