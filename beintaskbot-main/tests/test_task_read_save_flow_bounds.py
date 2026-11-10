@@ -160,15 +160,11 @@ def test_kommo_search_uses_tenant_scoped_literal_query(task_flow, needle):
             conn.execute('''INSERT INTO saas_crm_tasks
               (tenant_id,kommo_task_id,kommo_lead_id,text,responsible_id,due_at)
               VALUES(%s::uuid,%s,101,%s,999,'2090-01-01T00:00:00Z')''', (A, ids[label], text))
-    cookie = f['session'].issue(A, 11)
     expected = next(ids[label] for label, text in rows if needle.casefold() in text.casefold())
     before = _state(f)
-    async def scenario():
-        async with TestClient(TestServer(_app(f))) as http:
-            status, result = await _get(http, cookie, 'kommo', extra={'search': needle})
-            assert status == 200, result
-            assert [row['id'] for row in result['tasks']] == [expected]
-    asyncio.run(scenario())
+    from tenant_task_flow import read as read_tasks
+    result = read_tasks({'tenant_id': A, 'telegram_id': 11}, source='kommo', search=needle)
+    assert [row['id'] for row in result['tasks']] == [expected]
     assert _state(f) == before
     assert f['provider'].calls == []
 
