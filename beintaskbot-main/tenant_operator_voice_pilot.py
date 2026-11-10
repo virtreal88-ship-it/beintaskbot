@@ -45,8 +45,7 @@ class PilotAdmission:
             self.validate_binding(scope,session_id,self.authority,self.lease)
             if self._fence is None:
                 raise PilotAdmissionError('admission_invalid')
-            await self.authority.check(scope,'pilot_live_admission')
-            await self.lease.assert_current(scope,self._fence)
+            await self._check_dispatch_authority_and_lease(scope,'pilot_live_admission')
             return True
 
     async def _check_dispatch_authority_and_lease(self,scope,stage):

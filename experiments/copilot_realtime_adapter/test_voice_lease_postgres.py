@@ -54,6 +54,7 @@ class RealPostgresLeaseTests(unittest.IsolatedAsyncioTestCase):
             conn.execute('CREATE TABLE saas_tenants (id uuid PRIMARY KEY)')
             conn.execute(Path(__file__).with_name('voice_session_lease.sql').read_text())
             conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_open.sql').read_text())
+            conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_kind.sql').read_text())
 
     @classmethod
     def tearDownClass(cls):
@@ -76,11 +77,15 @@ class RealPostgresLeaseTests(unittest.IsolatedAsyncioTestCase):
     def expire(self,actor,*,provider_age=False):
         with self.connect() as conn:
             if provider_age:
+                # Isolated synthetic clock fixture only: real workers cannot
+                # modify a confirmed marker after the migration.
+                conn.execute('ALTER TABLE saas_operator_voice_lease DISABLE TRIGGER protect_voice_lease_provider_kind')
                 conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second', provider_opened_at=now()-interval '66 minutes' WHERE tenant_id=%s AND actor_id=%s",(self.tenant,actor))
+                conn.execute('ALTER TABLE saas_operator_voice_lease ENABLE TRIGGER protect_voice_lease_provider_kind')
             else:
                 conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND actor_id=%s",(self.tenant,actor))
 
-    def crash_after_claim(self,authority,active):
+    def crash_after_claim(self,authority,active,provider_kind="openai_realtime"):
         source='''
 import asyncio, os, sys, types, uuid
 import psycopg
@@ -92,7 +97,7 @@ class Authority:
     def recheck(self,cur):pass
 module._connect=lambda:psycopg.connect(os.environ['TEST_DATABASE_URL'],options='-csearch_path='+sys.argv[3],row_factory=dict_row)
 async def run():
-    authority=Authority();lease=module.VoiceSessionLease(authority,str(uuid.uuid4()))
+    authority=Authority();lease=module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind=sys.argv[5])
     fence=await lease.claim(authority.session_scope)
     if fence!=1:raise RuntimeError('claim failed')
     if sys.argv[4]=='active':
@@ -102,9 +107,107 @@ asyncio.run(run())
 os._exit(0)
 '''
         result=subprocess.run([sys.executable,'-c',source,self.tenant,authority.session_scope[2],self.schema,
-                               'active' if active else 'starting'],capture_output=True,text=True,timeout=10,
+                               'active' if active else 'starting',provider_kind],capture_output=True,text=True,timeout=10,
                               env={'TEST_DATABASE_URL':self.dsn,'PYTHONPATH':os.environ['PYTHONPATH']})
         self.assertEqual(result.returncode,0,result.stderr)
+
+    async def test_hybrid_owner_process_exit_remains_fail_closed_after_lifetime(self):
+        authority=Authority(self.tenant)
+        self.crash_after_claim(authority,True,'openai_elevenlabs_tts')
+        self.expire(7,provider_age=True)
+        contender=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        self.assertIsNone(await contender.claim(authority.session_scope))
+        with self.assertRaises(psycopg.Error):
+            with self.connect() as conn:
+                conn.execute("UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7",(str(uuid.uuid4()),str(uuid.uuid4()),self.tenant))
+
+    async def test_hybrid_crash_is_not_reclaimed_by_new_or_legacy_worker(self):
+        authority=Authority(self.tenant)
+        for active in (False,True):
+            with self.subTest(active=active):
+                owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+                fence=await owner.claim(authority.session_scope)
+                self.assertIsNotNone(fence)
+                if active:
+                    await owner.confirm_provider_open(authority.session_scope,fence)
+                    self.expire(7,provider_age=True)
+                else:
+                    self.expire(7)
+                contender=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+                self.assertIsNone(await contender.claim(authority.session_scope))
+                with self.assertRaises(psycopg.Error):
+                    with self.connect() as conn:
+                        conn.execute("""UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,
+                          fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7""",
+                          (str(uuid.uuid4()),str(uuid.uuid4()),self.tenant))
+                self.assertTrue(await owner.release(authority.session_scope,fence))
+
+    async def test_legacy_closed_claim_clears_hybrid_kind_and_old_marker(self):
+        authority=Authority(self.tenant)
+        owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+        fence=await owner.claim(authority.session_scope)
+        await owner.confirm_provider_open(authority.session_scope,fence)
+        self.assertTrue(await owner.release(authority.session_scope,fence))
+        old_session,old_owner=str(uuid.uuid4()),str(uuid.uuid4())
+        with self.connect() as conn:
+            row=conn.execute("""UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,
+              fence=fence+1,state='starting',lease_until=now()+interval '15 seconds'
+              WHERE tenant_id=%s AND actor_id=7 RETURNING provider_kind,provider_opened_at,fence""",
+              (old_session,old_owner,self.tenant)).fetchone()
+        self.assertEqual(row,('unknown',None,fence+1))
+        with self.connect() as conn:
+            conn.execute("UPDATE saas_operator_voice_lease SET state='active',provider_opened_at=now() WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+        self.expire(7,provider_age=True)
+        contender=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        self.assertIsNone(await contender.claim(authority.session_scope))
+        with self.assertRaises(psycopg.Error):
+            with self.connect() as conn:
+                conn.execute("UPDATE saas_operator_voice_lease SET fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+
+    async def test_provider_kind_is_immutable_after_claim_and_reclaim_sets_new_kind(self):
+        authority=Authority(self.tenant)
+        owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+        fence=await owner.claim(authority.session_scope)
+        with self.assertRaises(psycopg.Error):
+            with self.connect() as conn:
+                conn.execute("UPDATE saas_operator_voice_lease SET provider_kind='openai_realtime' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+        self.assertTrue(await owner.release(authority.session_scope,fence))
+        replacement=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
+        next_fence=await replacement.claim(authority.session_scope)
+        self.assertEqual(next_fence,fence+1)
+        self.assertFalse(await owner.release(authority.session_scope,fence))
+        with self.connect() as conn:
+            kind,marker=conn.execute("SELECT provider_kind,provider_opened_at FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=7",(self.tenant,)).fetchone()
+        self.assertEqual((kind,marker),('openai_realtime',None))
+        self.assertTrue(await replacement.release(authority.session_scope,next_fence))
+
+    async def test_confirmed_marker_cannot_be_backdated_reset_or_refreshed(self):
+        authority=Authority(self.tenant)
+        owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+        fence=await owner.claim(authority.session_scope)
+        # A claimed but unopened session cannot fabricate a past marker.
+        with self.assertRaises(psycopg.Error):
+            with self.connect() as conn:
+                conn.execute("UPDATE saas_operator_voice_lease SET state='active',provider_opened_at=now()-interval '66 minutes' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+        self.assertTrue(await owner.confirm_provider_open(authority.session_scope,fence))
+        self.assertTrue(await owner.confirm_provider_open(authority.session_scope,fence))
+        for value in ("NULL", "now()-interval '66 minutes'", "now()+interval '1 minute'"):
+            with self.subTest(value=value), self.assertRaises(psycopg.Error):
+                with self.connect() as conn:
+                    conn.execute('UPDATE saas_operator_voice_lease SET provider_opened_at='+value+' WHERE tenant_id=%s AND actor_id=7',(self.tenant,))
+        self.assertTrue(await owner.release(authority.session_scope,fence))
+
+    async def test_scope_immutable_and_migration_is_repeatable(self):
+        migration=(Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_kind.sql').read_text()
+        with self.connect(autocommit=True) as conn:conn.execute(migration)
+        authority=Authority(self.tenant)
+        owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+        fence=await owner.claim(authority.session_scope)
+        for column,value in (('channel_id',str(uuid.uuid4())),('conversation_id','new-synthetic'),('actor_id',8)):
+            with self.subTest(column=column), self.assertRaises(psycopg.Error):
+                with self.connect() as conn:
+                    conn.execute(sql.SQL('UPDATE saas_operator_voice_lease SET {}=%s WHERE tenant_id=%s AND actor_id=7').format(sql.Identifier(column)),(value,self.tenant))
+        self.assertTrue(await owner.release(authority.session_scope,fence))
 
     async def test_parallel_claims_across_connections_and_dialogs(self):
         authorities=[Authority(self.tenant,conversation=f'dialog-{i}') for i in range(8)]
@@ -187,8 +290,7 @@ asyncio.run(run())
         await first.assert_current(authority.session_scope,1)
         await first.confirm_provider_open(authority.session_scope,1)
         self.assertTrue(await first.release(authority.session_scope,1))
-        with self.connect() as conn:
-            conn.execute("UPDATE saas_operator_voice_lease SET provider_opened_at=now()-interval '66 minutes' WHERE tenant_id=%s AND actor_id=7",(self.tenant,))
+        self.expire(7,provider_age=True)
         # The old main writer reuses a closed row but does not mention the new
         # provider_opened_at column. The trigger must clear the previous
         # session's marker when its identity/fence changes.

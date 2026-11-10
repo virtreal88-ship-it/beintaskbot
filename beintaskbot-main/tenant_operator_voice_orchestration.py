@@ -21,6 +21,17 @@ from tenant_assigned_agent_prompt import assigned_guidance
 
 _EXECUTOR='copilot-voice-server'
 
+
+def configured_voice_provider_kind():
+    """Server-only selection; an incomplete rollout must not start a paid call."""
+    selected=os.environ.get('COPILOT_VOICE_TTS_PROVIDER','openai')
+    if selected=='openai':return 'openai_realtime'
+    if selected=='elevenlabs_ali':
+        key=os.environ.get('ELEVENLABS_API_KEY','')
+        if 1<=len(key)<=4096 and not any(ord(c)<33 or ord(c)>126 for c in key):
+            return 'openai_elevenlabs_tts'
+    raise TenantLinearError('Голосовой провайдер пока не настроен.',503)
+
 VOICE_INSTRUCTIONS = (
     'You are a private voice assistant to a customer-support employee. '
     'Never send messages, call tools, modify CRM, or perform external actions. '
@@ -48,6 +59,7 @@ def require_pilot(scope):
         raise TenantLinearError('Голосовой режим пока недоступен.',503) from None
     if scope.tenant!=tenant or type(scope.actor) is not int or scope.actor!=actor_id:
         raise TenantLinearError('Голосовой режим недоступен.',403)
+    configured_voice_provider_kind()
 
 
 def require_voice_budget_ready():
@@ -137,7 +149,9 @@ class CopilotContext:
         prompt+=('\n\n# Voice conversation\n'
                  'Have a natural, continuous spoken conversation with the employee. Listen and answer each turn; '
                  'continue until the employee presses Stop or the server-enforced session limit is reached. '
-                 'Do not speak first or give a greeting.\n\n'
+                 'Do not speak first or give a greeting. Answer briefly, usually in one or two sentences, '
+                 'unless the employee asks for detail. Use natural spoken wording without Markdown, '
+                 'stage directions or language labels.\n\n'
                  '# Language\n'
                  'The supported conversation languages are Russian and Azerbaijani. For each clearly understood '
                  'utterance, answer in that utterance’s language, including short questions, even when the previous '
@@ -279,7 +293,15 @@ def _compose_server_session(authority,client,lease,session_id):
 
 def _compose_pilot_session(authority,client,lease,session_id):
     policy=PilotAdmission(authority,lease,authority.session_scope,session_id)
-    provider=create_pilot_provider(policy,ServerCredentialLoader(authority))
+    if lease.provider_kind=='openai_elevenlabs_tts':
+        from tenant_operator_realtime_wire import create_hybrid_pilot_provider
+        from tenant_operator_elevenlabs_voice import ElevenServerCredentialLoader
+        provider=create_hybrid_pilot_provider(policy,ServerCredentialLoader(authority),
+                                             ElevenServerCredentialLoader(authority))
+    elif lease.provider_kind=='openai_realtime':
+        provider=create_pilot_provider(policy,ServerCredentialLoader(authority))
+    else:
+        raise TenantLinearError('Голосовой провайдер пока не настроен.',503)
     return Session(authority.session_scope,authority=authority,ledger=None,lease=lease,
                    context=CopilotContext(authority),provider=provider,client=client,history=None,
                    executor=_EXECUTOR,session_id=session_id,pilot_policy=policy,max_seconds=600,duplex=True)
@@ -297,7 +319,7 @@ def _create_server_lease(_authority,_session_id):
     # all fail closed before provider I/O.
     from tenant_operator_voice_lease import VoiceSessionLease
     try:
-        return VoiceSessionLease(_authority,_session_id)
+        return VoiceSessionLease(_authority,_session_id,provider_kind=configured_voice_provider_kind())
     except (TypeError,ValueError,AttributeError):
         raise TenantLinearError('Голосовой режим пока недоступен.',503) from None
 

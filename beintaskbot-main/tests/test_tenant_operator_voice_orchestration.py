@@ -21,6 +21,28 @@ class FakeConnection:
 
 
 class Orchestration(unittest.IsolatedAsyncioTestCase):
+    def test_tts_diagnostics_expose_only_allowlisted_codes(self):
+        from tenant_operator_voice_gateway import _provider_failure_fields
+        for code in ('tts_provider_error','tts_close_unconfirmed','tts_timeout',
+                     'hybrid_unsolicited_response','hybrid_response_mismatch'):
+            self.assertEqual(_provider_failure_fields('provider_receive',None,ValueError(code))[0],code)
+        fields=_provider_failure_fields('provider_receive',None,
+                                        ValueError('tts_provider_error: private speech and secret'))
+        self.assertEqual(fields[0],'provider_error')
+        self.assertNotIn('private',str(fields))
+
+    def test_voice_provider_selection_is_server_only_and_incomplete_config_fails_closed(self):
+        with patch.dict('os.environ',{},clear=True):
+            self.assertEqual(service.configured_voice_provider_kind(),'openai_realtime')
+        for settings in ({'COPILOT_VOICE_TTS_PROVIDER':'unknown'},
+                         {'COPILOT_VOICE_TTS_PROVIDER':'elevenlabs_ali'},
+                         {'COPILOT_VOICE_TTS_PROVIDER':'elevenlabs_ali','ELEVENLABS_API_KEY':'invalid\nvalue'}):
+            with patch.dict('os.environ',settings,clear=True):
+                with self.assertRaises(TenantLinearError):service.configured_voice_provider_kind()
+        with patch.dict('os.environ',{'COPILOT_VOICE_TTS_PROVIDER':'elevenlabs_ali',
+                                      'ELEVENLABS_API_KEY':'synthetic-test-only'},clear=True):
+            self.assertEqual(service.configured_voice_provider_kind(),'openai_elevenlabs_tts')
+
     def test_pilot_is_exactly_one_server_configured_user_and_tenant(self):
         tenant=str(uuid.uuid4());scope=SimpleNamespace(tenant=tenant,actor=7)
         with patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':tenant,'COPILOT_VOICE_PILOT_ACTOR_ID':'7'},clear=True):

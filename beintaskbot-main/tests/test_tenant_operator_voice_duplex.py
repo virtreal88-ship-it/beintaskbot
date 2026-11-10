@@ -63,6 +63,21 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
                                         'item':{'id':item_id,'type':'message','role':'user'}})
         await session.receive_provider({'type':'input_audio_buffer.committed','item_id':item_id})
 
+    async def test_external_tts_interruption_excludes_entire_unaligned_text_item(self):
+        s=self.s
+        self.provider.text_output=True
+        s.item='spoken_item';s.produced=48000
+        s.response_inflight=True;s.provider_response_id='reply'
+        s.assistant_response_ids['spoken_item']='reply'
+        s._remember_context_item('spoken_item',usable=False,role='assistant')
+        await s.receive_client({'type':'stop_response','item_id':'spoken_item','audio_end_ms':500})
+        self.assertEqual(s.truncate_pending_audio_end_ms,0)
+        self.assertEqual(self.provider.events[-1],{'type':'conversation.item.truncate',
+                         'item_id':'spoken_item','content_index':0,'audio_end_ms':0})
+        await s.receive_provider({'type':'conversation.item.truncated','item_id':'spoken_item',
+                                   'content_index':0,'audio_end_ms':0})
+        self.assertNotIn('spoken_item',s._context_usable)
+
     async def test_pcm_before_vad_then_interrupt_cancel_truncate_commit_and_dispatch(self):
         s=self.s
         await s.receive_client({'type':'audio','pcm':bytes(480)})

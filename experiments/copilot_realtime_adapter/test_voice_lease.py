@@ -43,20 +43,27 @@ class Cursor:
             key=tuple(args[-2:])
             self.row=dict(self.store.rows[key]) if key in self.store.rows else None
             if self.row:
-                self.row['provider_session_expired']=self.row.get('provider_session_expired',False)
+                self.row['provider_session_expired']=(self.row.get('provider_session_expired',False) and self.row.get('provider_kind')=='openai_realtime')
         elif sql.lstrip().startswith('INSERT INTO saas_operator_voice_lease'):
             tenant,actor,channel,conversation,session,owner,fence,ttl=args
             key=(tenant,actor)
             self.store.rows[key]={'session_id':session,'actor_id':actor,'channel':channel,'conversation':conversation,'owner_id':owner,'fence':fence,
-                                  'state':'starting','live':True,'provider_opened_at':None,'provider_session_expired':False}
+                                  'state':'starting','live':True,'provider_opened_at':None,'provider_kind':'unknown','provider_session_expired':False}
             self.row={'fence':fence}
         elif "SET session_id=%s::uuid" in sql:
             session,channel,conversation,owner,fence,ttl,tenant,actor,expected=args
             key=(tenant,actor);old=self.store.rows[key]
             if old['fence']==expected:
                 self.store.rows[key]={'session_id':session,'actor_id':actor,'channel':channel,'conversation':conversation,'owner_id':owner,'fence':fence,
-                                      'state':'starting','live':True,'provider_opened_at':None,'provider_session_expired':False}
+                                      'state':'starting','live':True,'provider_opened_at':None,'provider_kind':'unknown','provider_session_expired':False}
                 self.row={'fence':fence}
+            else:self.row=None
+        elif 'SET provider_kind=%s' in sql:
+            kind,tenant,actor,session,owner,fence=args
+            old=self.store.rows.get((tenant,actor))
+            if (old and old['session_id']==session and old['owner_id']==owner and old['fence']==fence
+                and old['state']=='starting' and old['provider_kind']=='unknown' and old['provider_opened_at'] is None):
+                old['provider_kind']=kind;self.row={'fence':fence}
             else:self.row=None
         elif "provider_opened_at=COALESCE(provider_opened_at,now())" in sql:
             ttl,tenant,actor,channel,conversation,session,owner,fence=args

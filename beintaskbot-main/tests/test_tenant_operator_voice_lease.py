@@ -90,6 +90,7 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
             'provider_session_expired': True,
         },
         {'fence': 5},
+        {'fence': 5},
     ])
     conn = Connection(cursor)
     lease = _lease()
@@ -97,7 +98,7 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
     with patch('tenant_operator_voice_lease._connect', return_value=conn):
         assert lease._transaction('claim') == 5
 
-    update, params = cursor.statements[-1]
+    update, params = cursor.statements[-2]
     assert "state='starting'" in update
     assert params[4] == 5  # new fencing token
     assert params[-1] == 4  # compare-and-swap against the old token
@@ -121,3 +122,25 @@ def test_old_starting_lease_is_never_reclaimed_without_confirmed_provider_open(c
     assert 'state=starting lease_live=False provider_lifetime_elapsed=False' in caplog.text
     assert cursor.rows == []
     assert 'dialog-1' not in caplog.text
+
+
+def test_constructor_accepts_only_known_provider_kind():
+    for kind in ('openai_realtime', 'openai_elevenlabs_tts', 'unknown'):
+        assert VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind=kind).provider_kind == kind
+    import pytest
+    with pytest.raises(ValueError):
+        VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='other')
+
+
+def test_claim_uses_provider_kind_and_transactional_exact_fence():
+    cursor = Cursor([None, {'fence': 1}, {'fence': 1}])
+    conn = Connection(cursor)
+    lease = VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='openai_elevenlabs_tts')
+    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+        assert lease._transaction('claim') == 1
+    statement, params = cursor.statements[-1]
+    assert "provider_kind='unknown'" in statement
+    assert "provider_opened_at IS NULL" in statement
+    assert params[0] == 'openai_elevenlabs_tts'
+    assert params[-3:] == (lease.session_id, lease.owner_id, 1)
+    assert conn.commits == 1

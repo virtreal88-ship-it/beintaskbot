@@ -5,8 +5,10 @@ on:
     paths:
       - 'beintaskbot-main/tenant_operator_voice_*.py'
       - 'beintaskbot-main/tenant_operator_realtime_*.py'
+      - 'beintaskbot-main/tenant_operator_elevenlabs_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
+      - 'beintaskbot-main/tests/test_tenant_operator_elevenlabs_*.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
       - 'beintaskbot-main/docs/tenant-operator-copilot-voice.js'
@@ -18,6 +20,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_voice_pilot_browser.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/migrations/voice_lease_provider_open.sql'
+      - 'beintaskbot-main/migrations/voice_lease_provider_kind.sql'
       - 'experiments/copilot_realtime_adapter/**'
       - '.github/workflows/realtime-voice-lease.yml'
 
@@ -57,6 +60,8 @@ jobs:
           tests/test_tenant_operator_voice_duration.py
           tests/test_tenant_operator_realtime_wire.py
           tests/test_tenant_operator_realtime_aiohttp.py
+          tests/test_tenant_operator_elevenlabs_voice.py
+          tests/test_tenant_operator_voice_ali_session.py
           tests/test_tenant_operator_voice_latency.py
           tests/test_tenant_operator_voice_stale_ack.py
           tests/test_tenant_operator_voice_duplex.py

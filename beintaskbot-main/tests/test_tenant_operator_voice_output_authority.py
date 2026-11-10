@@ -138,6 +138,26 @@ class OutputDispatchAuthorityTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await policy.consume(s.scope,receipt))
         self.assertEqual(self.database.authorizations,2)
 
+    async def test_tts_live_admission_rechecks_each_send_in_one_authorized_transaction(self):
+        s,policy,_,_,_=await self.make_session()
+        await policy.assert_live(s.scope,s.session_id)
+        await policy.assert_live(s.scope,s.session_id)
+        self.assertEqual(self.database.connects,2)
+        self.assertEqual(self.database.authorizations,2)
+        for mode in ('identity','route','config','fence','owner','expired','state'):
+            with self.subTest(mode=mode):
+                self.identity['value']={'tenant_id':self.scope.tenant,'telegram_id':self.scope.actor}
+                self.database.route_valid=True;self.config_changed=False;self.database.fence=9
+                self.database.owner=self.lease.owner_id;self.database.expired=False;self.database.active=True
+                if mode=='identity':self.identity['value']=None
+                if mode=='route':self.database.route_valid=False
+                if mode=='config':self.config_changed=True
+                if mode=='fence':self.database.fence=10
+                if mode=='owner':self.database.owner=str(uuid.uuid4())
+                if mode=='expired':self.database.expired=True
+                if mode=='state':self.database.active=False
+                with self.assertRaises(Exception):await policy.assert_live(s.scope,s.session_id)
+
     async def test_revocation_during_consumption_cannot_reuse_the_permit(self):
         s,policy,_,_,_=await self.make_session();request_id=str(uuid.uuid4())
         receipt=await policy.issue(s.scope,request_id);self.identity['value']=None
