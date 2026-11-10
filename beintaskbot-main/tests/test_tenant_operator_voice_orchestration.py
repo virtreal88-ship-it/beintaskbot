@@ -35,7 +35,7 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
 
     async def test_revoked_pilot_is_denied_before_live_authority_check(self):
         tenant=str(uuid.uuid4());scope=SimpleNamespace(tenant=tenant,actor=7,channel_id='c',conversation_id='d')
-        authority=service.ScopedAuthority({}, {}, scope)
+        authority=service.ScopedAuthority({}, {}, scope,lambda:{'tenant_id':tenant,'telegram_id':7})
         with patch.dict('os.environ',{},clear=True),patch.object(service.voice,'check') as check:
             with self.assertRaises(TenantLinearError):await authority.check(authority.session_scope,'ongoing')
             check.assert_not_called()
@@ -110,7 +110,7 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
              patch.object(service,'_create_server_lease',return_value=lease) as lease_factory, \
              patch('tenant_operator_voice_gateway.make_handler',return_value=gateway) as make_handler, \
              patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':'t','COPILOT_VOICE_PILOT_ACTOR_ID':'7'}):
-            result=await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example')
+            result=await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example',member_from_request=lambda _:{'tenant_id':'t','telegram_id':7})
         self.assertEqual(result,'opened');gateway.assert_awaited_once_with(request)
         create.assert_awaited_once();lease_factory.assert_called_once()
         make_handler.assert_called_once()
@@ -120,7 +120,7 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         def slow(*_args,**_kwargs):
             entered.set();release.wait(3);completed.set();return SimpleNamespace(tenant='t',actor=1,channel_id='c',conversation_id='d')
         with patch.object(service.voice,'check',slow),patch.object(service,'create_production_provider') as provider:
-            task=asyncio.create_task(service.ScopedAuthority.create({'tenant_id':'t','telegram_id':1},{}))
+            task=asyncio.create_task(service.ScopedAuthority.create({'tenant_id':'t','telegram_id':1},{},lambda:{'tenant_id':'t','telegram_id':1}))
             self.assertTrue(await asyncio.to_thread(entered.wait,1))
             ticks=0
             for _ in range(3):await asyncio.sleep(.01);ticks+=1
@@ -131,10 +131,47 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
 
     async def test_changed_session_scope_refused_before_database(self):
         scope=SimpleNamespace(tenant='t',actor=1,channel_id='c',conversation_id='d')
-        authority=service.ScopedAuthority({}, {}, scope)
+        authority=service.ScopedAuthority({}, {}, scope,lambda:{'tenant_id':'t','telegram_id':1})
         with patch.object(service.voice,'check') as check:
             with self.assertRaises(TenantLinearError):await authority.check(('t',1,'other','d'),'input')
             check.assert_not_called()
+
+    async def test_live_identity_is_rechecked_for_input_output_and_transaction(self):
+        scope=SimpleNamespace(tenant='t',actor=1,channel_id='c',conversation_id='d')
+        current={'value':{'tenant_id':'t','telegram_id':1}}
+        authority=service.ScopedAuthority({}, {}, scope,lambda:current['value'])
+        with patch.object(service,'require_pilot'),patch.object(service.voice,'check') as check, \
+             patch.object(service.voice,'authorize',return_value=scope) as authorize:
+            await authority.check(authority.session_scope,'input');check.assert_called_once()
+            for invalid in (None,{'tenant_id':'other','telegram_id':1},{'tenant_id':'t','telegram_id':2}):
+                current['value']=invalid
+                with self.assertRaises(TenantLinearError):await authority.check(authority.session_scope,'output')
+                with self.assertRaises(TenantLinearError):authority.recheck(object())
+            self.assertEqual(check.call_count,1);authorize.assert_not_called()
+
+    async def test_missing_live_identity_never_creates_authority(self):
+        with patch.object(service.voice,'check') as check:
+            with self.assertRaises(TenantLinearError):await service.ScopedAuthority.create({'tenant_id':'t','telegram_id':1},{})
+            check.assert_not_called()
+
+    async def test_revoked_browser_identity_blocks_next_audio_and_output(self):
+        scope=SimpleNamespace(tenant='t',actor=1,channel_id='c',conversation_id='d')
+        identity={'current':{'tenant_id':'t','telegram_id':1}}
+        authority=service.ScopedAuthority({}, {}, scope,lambda:identity['current'])
+        session=object.__new__(service.Session)
+        session.closed=False;session.scope=authority.session_scope;session.authority=authority
+        session.lease=SimpleNamespace(assert_current=AsyncMock());session.fence=1
+        session.muted=False;session.duplex=True;session.input_bytes=0;session.max_input_bytes=9600
+        session._send_provider=AsyncMock();session._send_client=AsyncMock()
+        session.response_inflight=True;session.provider_response_id='synthetic-response'
+        with patch.object(service,'require_pilot'),patch.object(service.voice,'check'):
+            await session._receive_client({'type':'audio','pcm':bytes(2)})
+            identity['current']=None
+            with self.assertRaisesRegex(Exception,'client_authority_rejected'):
+                await session._receive_client({'type':'audio','pcm':bytes(2)})
+            with self.assertRaisesRegex(Exception,'provider_authority_rejected'):
+                await session._receive_provider({'type':'response.output_audio.delta','response_id':'synthetic-response'})
+        session._send_provider.assert_awaited_once();session._send_client.assert_not_awaited()
 
 
 if __name__=='__main__':unittest.main()

@@ -46,23 +46,37 @@ def require_voice_budget_ready():
 
 
 class ScopedAuthority:
-    def __init__(self,profile,route,scope):
+    def __init__(self,profile,route,scope,live_identity):
+        if not callable(live_identity):raise TenantLinearError('Нет доступа.',403)
         self.profile={'tenant_id':scope.tenant,'telegram_id':scope.actor}
         self.route=dict(route)
         self.scope=scope
+        self._live_identity=live_identity
         self.session_scope=(scope.tenant,scope.actor,scope.channel_id,scope.conversation_id)
 
     @classmethod
-    async def create(cls,profile,route):
+    async def create(cls,profile,route,live_identity=None):
         # Sync DB work gets a dedicated connection in a worker thread.
-        if not isinstance(profile,dict) or not isinstance(route,dict):
+        if not isinstance(profile,dict) or not isinstance(route,dict) or not callable(live_identity):
             raise TenantLinearError('Нет доступа.',403)
         profile=dict(profile);route=dict(route)
         scope=await asyncio.to_thread(voice.check,profile,route)
         require_pilot(scope)
-        return cls(profile,route,scope)
+        authority=cls(profile,route,scope,live_identity)
+        await asyncio.to_thread(authority._check_live_identity)
+        return authority
+
+    def _check_live_identity(self):
+        try:
+            current=self._live_identity()
+            if (not isinstance(current,dict) or str(current.get('tenant_id'))!=self.scope.tenant or
+                type(current.get('telegram_id')) is not int or current['telegram_id']!=self.scope.actor):
+                raise ValueError
+        except Exception:
+            raise TenantLinearError('Доступ или настройки изменились.',403) from None
 
     def recheck(self,cur):
+        self._check_live_identity()
         require_pilot(self.scope)
         actual=voice.authorize(cur,self.profile,self.route)
         if actual!=self.scope:raise TenantLinearError('Доступ или настройки изменились.',409)
@@ -71,7 +85,10 @@ class ScopedAuthority:
     async def check(self,session_scope,_stage):
         if session_scope!=self.session_scope:raise TenantLinearError('Диалог недоступен.',403)
         require_pilot(self.scope)
-        await asyncio.to_thread(voice.check,self.profile,self.route,expected=self.scope)
+        def current():
+            self._check_live_identity()
+            voice.check(self.profile,self.route,expected=self.scope)
+        await asyncio.to_thread(current)
 
 
 class CopilotContext:
@@ -251,9 +268,9 @@ def _compose_pilot_session(authority,client,lease,session_id):
                    executor=_EXECUTOR,session_id=session_id,pilot_policy=policy,max_seconds=600,duplex=True)
 
 
-async def prepare_server_session(profile,route,client,lease):
+async def prepare_server_session(profile,route,client,lease,*,live_identity=None):
     # Internal server/test entry; never bind client or lease to request data.
-    authority=await ScopedAuthority.create(profile,route)
+    authority=await ScopedAuthority.create(profile,route,live_identity)
     return _compose_server_session(authority,client,lease,str(uuid.uuid4()))
 
 
@@ -268,12 +285,13 @@ def _create_server_lease(_authority,_session_id):
         raise TenantLinearError('Голосовой режим пока недоступен.',503) from None
 
 
-async def open_server_session(request,profile,origin=None):
+async def open_server_session(request,profile,origin=None,*,member_from_request=None):
     # Fail before WS upgrade, microphone streaming or context loading. The
     # serving path must not accept dependency-injection callbacks from HTTP.
+    if not callable(member_from_request):raise TenantLinearError('Нет доступа.',403)
     route={'provider':'connect','lead_id':request.query.get('lead_id'),
            'channel_id':request.query.get('channel_id'),'conversation_id':request.query.get('conversation_id')}
-    authority=await ScopedAuthority.create(profile,route)
+    authority=await ScopedAuthority.create(profile,route,lambda:member_from_request(request))
     session_id=str(uuid.uuid4())
     lease=_create_server_lease(authority,session_id)
     from tenant_operator_voice_gateway import make_handler

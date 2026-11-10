@@ -71,7 +71,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
                 [{'role':'employee','text':'synthetic text','agent_binding':initial.agent_binding}])
 
         async def execute():
-            authority=await production.ScopedAuthority.create(profile,self.route)
+            authority=await production.ScopedAuthority.create(profile,self.route,lambda:profile)
             context=production.CopilotContext(authority)
             # Internal diagnostic only; the public read refuses until source
             # versions are sealed, so no prompt is delivered to a provider.
@@ -86,7 +86,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
             await authority.check(authority.session_scope,'response_dispatch')
             with self.assertRaises(TenantLinearError):await context.read_authorized(authority.session_scope)
             with self.assertRaises(TenantLinearError):await production.VoiceHistory(authority).append({'text':'synthetic voice'})
-            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None)
+            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None,live_identity=lambda:profile)
             with self.scoped() as conn:
                 self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
 
@@ -118,7 +118,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
             if not release.wait(3):raise RuntimeError('synthetic test timeout')
             return row
         async def execute():
-            authority=await production.ScopedAuthority.create(profile,self.route)
+            authority=await production.ScopedAuthority.create(profile,self.route,lambda:profile)
             session_id=str(uuid.uuid4());budget=production.ScopedBudget(authority,session_id)
             request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
                      'channel_id':self.channel,'conversation_id':self.conversation,'response_number':1,'executor':'copilot-voice-server'}
@@ -136,7 +136,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
             self.assertEqual(state,'claimed')
             self.assertIsNone(await budget.claim(request))
             # No provider exists in the production orchestrator path.
-            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None)
+            with self.assertRaises(TenantLinearError):await production.prepare_server_session(profile,self.route,None,None,live_identity=lambda:profile)
 
         try:
             with patch.object(voice,'_connect',self.scoped),patch.object(production,'_connect',self.scoped),\

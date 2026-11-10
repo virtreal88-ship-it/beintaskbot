@@ -16,7 +16,7 @@ class PilotDuration(unittest.IsolatedAsyncioTestCase):
         scope=(str(uuid.uuid4()),7,str(uuid.uuid4()),'synthetic-duration')
         sid=str(uuid.uuid4())
         authority=orchestration.ScopedAuthority({}, {}, SimpleNamespace(
-            tenant=scope[0],actor=scope[1],channel_id=scope[2],conversation_id=scope[3]))
+            tenant=scope[0],actor=scope[1],channel_id=scope[2],conversation_id=scope[3]),lambda:{'tenant_id':scope[0],'telegram_id':scope[1]})
         authority.check=AsyncMock()
         lease=SimpleNamespace(claim=AsyncMock(),assert_current=AsyncMock(),release=AsyncMock())
         provider=SimpleNamespace(mock_only=True,bind_pilot_claim=AsyncMock(),bind_claim=AsyncMock(),send=AsyncMock())

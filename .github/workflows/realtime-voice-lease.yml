@@ -36,7 +36,7 @@ jobs:
       - name: Install test dependencies
         working-directory: beintaskbot-main
         run: |
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt pytest pytest-asyncio==1.4.1.post1
           npm install --prefix .support-test-deps --no-save playwright@1.62.1 jsdom@26.1.0
       - name: Install Chromium for voice interruption browser test
         working-directory: beintaskbot-main
@@ -56,6 +56,13 @@ jobs:
           tests/test_tenant_operator_voice_latency.py
           tests/test_tenant_operator_voice_stale_ack.py
           tests/test_tenant_operator_voice_duplex.py
+          tests/test_tenant_operator_voice_queue_load.py
+          tests/test_tenant_operator_voice_orchestration.py
+          tests/test_tenant_operator_voice.py
+          tests/test_tenant_operator_voice_api.py
+          tests/test_tenant_auth_api.py
+          tests/test_tenant_browser_session.py
+          tests/test_employee_account_assign_api.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
         run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs tests/test_tenant_voice_channel_timeout.cjs
@@ -98,4 +105,4 @@ jobs:
           done
           test "$ready" -eq 1
           docker exec realtime-voice-lease-pg createdb -U postgres voice_lease_test
-          python -m unittest test_voice_lease test_pilot_admission test_voice_lease_postgres -v
+          python -m unittest test_voice_browser_revocation_postgres test_voice_lease test_pilot_admission test_voice_lease_postgres -v

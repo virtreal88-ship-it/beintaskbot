@@ -21,7 +21,7 @@ class SourceSnapshot(fixture.IntegratedSynthetic):
             return asyncio.run(fn())
 
     async def context(self):
-        authority=await service.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+        authority=await service.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
         ctx=service.CopilotContext(authority)
         projection,sealed=await asyncio.to_thread(ctx._seal)
         self.assertTrue(await ctx.revalidate(authority.session_scope))

@@ -45,7 +45,13 @@ class VoiceSessionLease:
         try:
             with _connect() as conn:
                 with conn.cursor() as cur:
-                    self.authority.recheck(cur)
+                    # Cleanup is an internal server operation. Once the
+                    # provider and in-flight work are confirmed drained,
+                    # revocation must not strand the exact owned lease.
+                    # Claim, renewal and open confirmation still require live
+                    # authority; release remains fenced by every identity
+                    # field, owner, session, fence and the advisory lock.
+                    if operation!='release':self.authority.recheck(cur)
                     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                                 ('copilot-voice-lease:' + ':'.join(map(str,self.key)),))
                     if operation == 'claim':

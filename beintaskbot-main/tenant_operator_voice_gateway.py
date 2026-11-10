@@ -60,6 +60,7 @@ _VOICE_ACTIVITY_COUNTERS=(
     'interrupt_notices_sent','vad_cancelled_responses','playback_interrupt_acks',
     'playback_completion_acks','audio_frames_ws_sent','browser_playback_scheduled',
     'browser_playback_failed','playback_context_running','playback_context_suspended',
+    'input_audio_batches','input_audio_process_ms',
 )
 
 
@@ -140,7 +141,7 @@ def _log_voice_activity(ready,activity):
               'vad_interrupt_candidates=%d interrupt_notices_sent=%d vad_cancelled_responses=%d '
               'playback_interrupt_acks=%d playback_completion_acks=%d audio_frames_ws_sent=%d '
               'browser_playback_scheduled=%d browser_playback_failed=%d playback_context_running=%d '
-              'playback_context_suspended=%d',*fields)
+              'playback_context_suspended=%d input_audio_batches=%d input_audio_process_ms=%d',*fields)
 
 
 def _safe_client_transport_kind(error):
@@ -307,8 +308,13 @@ def make_handler(*, allowed_origins, authenticate, build_session):
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
             session_ready=True
+            deferred=None
+            has_deferred=False
             while True:
-                queued=await incoming.get()
+                if has_deferred:
+                    queued=deferred;deferred=None;has_deferred=False
+                else:
+                    queued=await incoming.get()
                 if queued is None:
                     break
                 message,received_at=queued
@@ -316,13 +322,35 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     activity['client_reader_exit']='session_closed'
                     break
                 if message.type == WSMsgType.BINARY:
-                    event={'type':'audio','pcm':bytes(message.data)}
+                    pcm=bytes(message.data)
+                    frame_count=1
+                    # Coalesce only adjacent, already queued valid PCM frames.
+                    # Never wait for more audio or move it across a control
+                    # frame; one full authority/lease check protects the
+                    # resulting single provider operation.
+                    if (getattr(session,'duplex',False) and pcm and len(pcm)<=session.MAX_FRAME and len(pcm)%2==0):
+                        while len(pcm)<session.MAX_FRAME:
+                            try:next_queued=incoming.get_nowait()
+                            except asyncio.QueueEmpty:break
+                            if next_queued is None:
+                                deferred=next_queued;has_deferred=True;break
+                            next_message,_=next_queued
+                            if next_message.type!=WSMsgType.BINARY:
+                                deferred=next_queued;has_deferred=True;break
+                            part=bytes(next_message.data)
+                            if not part or len(part)%2 or len(pcm)+len(part)>session.MAX_FRAME:
+                                deferred=next_queued;has_deferred=True;break
+                            pcm+=part;frame_count+=1
+                    event={'type':'audio','pcm':pcm}
+                    audio_started=time.monotonic()
                     try:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
-                    activity['input_audio_frames']+=1
-                    activity['input_audio_bytes']+=len(message.data)
+                    activity['input_audio_frames']+=frame_count
+                    activity['input_audio_bytes']+=len(pcm)
+                    activity['input_audio_batches']+=1
+                    activity['input_audio_process_ms']+=int(min(time.monotonic()-audio_started,600)*1000)
                 elif message.type == WSMsgType.TEXT:
                     if len(message.data)>512:
                         break
