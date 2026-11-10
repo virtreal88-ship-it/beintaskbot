@@ -180,6 +180,7 @@ def _startup_failure_code(exc, session, session_ready):
 class SocketClient:
     def __init__(self, ws, activity=None):
         self.ws=ws;self.activity=activity;self.close_task=None;self.terminal_sent=False
+        self.send_lock=asyncio.Lock()
 
     @staticmethod
     def _consume_close(task):
@@ -196,6 +197,10 @@ class SocketClient:
         await asyncio.shield(self.start_close())
 
     async def send(self, event):
+        async with self.send_lock:
+            await self._send_locked(event)
+
+    async def _send_locked(self, event):
         terminal=event.get('type') in ('ended','end_unconfirmed')
         if self.terminal_sent:
             if terminal:return
@@ -378,7 +383,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 # Report only the server's precise, pre-open lease refusal.  A
                 # generic provider error must never be mistaken for proof that
                 # no other voice session exists or that one has ended.
-                await ws.send_json({'type':'error','code':_startup_failure_code(exc,session,session_ready)})
+                await socket_client.send({'type':'error','code':_startup_failure_code(exc,session,session_ready)})
         finally:
             try:
                 if session is not None:

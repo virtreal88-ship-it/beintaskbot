@@ -9,6 +9,37 @@ from tenant_operator_voice_session import Session
 
 
 class TerminalSocketTest(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_user_provider_and_disconnect_share_one_end_operation(self):
+        entered=asyncio.Event();release=asyncio.Event();calls=[]
+        async def finish(reason):calls.append(reason);entered.set();await release.wait();return True
+        session=object.__new__(Session)
+        session._opening=False;session._end_task=None;session.closed=False;session.output_finished=False
+        session.watchdog=None;session._latency_commit_times={};session._finish_end=finish
+        tasks=[asyncio.create_task(session.end(reason)) for reason in ('user_end','provider_disconnected','disconnected')]
+        await asyncio.wait_for(entered.wait(),1);release.set()
+        self.assertEqual(await asyncio.gather(*tasks),[True,True,True])
+        self.assertEqual(calls,['user_end'])
+
+    async def test_error_and_duplicate_terminals_cannot_pass_inflight_terminal(self):
+        entered=asyncio.Event();release=asyncio.Event();close_release=asyncio.Event()
+        class WS:
+            closed=False
+            def __init__(self):self.sent=[]
+            async def send_json(self,event):
+                if event['type']=='ended':entered.set();await release.wait()
+                self.sent.append(event)
+            async def close(self):await close_release.wait();self.closed=True
+        ws=WS();client=SocketClient(ws)
+        first=asyncio.create_task(client.send({'type':'ended','reason':'user_end'}))
+        await asyncio.wait_for(entered.wait(),1)
+        error=asyncio.create_task(client.send({'type':'error','code':'voice_unavailable'}))
+        duplicate=asyncio.create_task(client.send({'type':'end_unconfirmed'}))
+        release.set();await asyncio.wait_for(first,1)
+        with self.assertRaises(ConnectionError):await asyncio.wait_for(error,1)
+        await asyncio.wait_for(duplicate,1)
+        self.assertEqual(ws.sent,[{'type':'ended','reason':'user_end'}])
+        close_release.set();await asyncio.wait_for(client.close(),1)
+
     async def test_real_finish_end_does_not_weaken_provider_or_lease_gates(self):
         for outcome in ('success','provider_failure','lease_failure'):
             with self.subTest(outcome=outcome):
