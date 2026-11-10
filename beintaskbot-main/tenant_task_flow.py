@@ -204,6 +204,10 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
         where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).task_scope())
         if task_id:
             where += ' AND kommo_task_id=%s'; args.append(_positive(task_id))
+        if search:
+            needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
+            where += " AND text ILIKE %s ESCAPE '\\'"
+            args.append(needle)
         sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at
           FROM saas_crm_tasks WHERE '''+where+' ORDER BY completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
     if limit is not None:

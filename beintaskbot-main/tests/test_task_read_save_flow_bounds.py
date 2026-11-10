@@ -149,6 +149,30 @@ def test_native_existing_search_keeps_literal_semantics_with_or_without_browser_
     assert f['provider'].calls == []
 
 
+@pytest.mark.parametrize('needle', ['Kommo % marker', 'Kommo _ marker', 'Kommo \\\\ marker', 'Kommo ordinary marker'])
+def test_kommo_search_uses_tenant_scoped_literal_query(task_flow, needle):
+    f = task_flow
+    rows = [('percent', 'Kommo % marker'), ('underscore', 'Kommo _ marker'),
+            ('slash', 'Kommo \\\\ marker'), ('ordinary', 'Kommo ordinary marker')]
+    ids = {label: str(80000 + index) for index, (label, _text) in enumerate(rows)}
+    with f['factory']() as conn:
+        conn.executemany('''INSERT INTO saas_crm_tasks
+          (tenant_id,kommo_task_id,kommo_lead_id,text,responsible_id,due_at)
+          VALUES(%s::uuid,%s,101,%s,999,'2090-01-01T00:00:00Z')''',
+          [(A, ids[label], text) for label, text in rows])
+    cookie = f['session'].issue(A, 11)
+    expected = next(ids[label] for label, text in rows if needle.casefold() in text.casefold())
+    before = _state(f)
+    async def scenario():
+        async with TestClient(TestServer(_app(f))) as http:
+            status, result = await _get(http, cookie, 'kommo', extra={'search': needle})
+            assert status == 200, result
+            assert [row['id'] for row in result['tasks']] == [expected]
+    asyncio.run(scenario())
+    assert _state(f) == before
+    assert f['provider'].calls == []
+
+
 def test_task_reader_never_combines_old_pipeline_owner_with_new_stage_visibility(task_flow, monkeypatch):
     import tenant_task_flow as reader
     import tenant_workflow_store as workflow

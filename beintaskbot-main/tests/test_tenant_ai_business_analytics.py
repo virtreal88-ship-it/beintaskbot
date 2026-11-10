@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
+import uuid
 
 import pytest
 
@@ -356,3 +357,244 @@ async def test_api_checks_origin_and_session_identity_before_tool_call(monkeypat
     assert result[1] == 200
     assert invoked == [(OWNER, 'list_analytics_sources', {})]
     assert result[2] == {'Cache-Control': 'no-store'}
+
+
+def test_support_case_search_uses_bounded_existing_reader_and_marks_evidence(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    calls = []
+    candidate = {'id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'title': 'Login fails',
+        'status': 'knowledge_published', 'result_confirmed': True,
+        'outcome': {'status': 'confirmed', 'text': 'Customer confirmed repair'},
+        'cause': {'status': 'suspected', 'text': 'Possible expired token'},
+        'case_kind': 'technical', 'symptoms': ['Login fails'],
+        'source_provenance': 'customer_message_present',
+        'source_message_ids': ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']}
+    monkeypatch.setattr('tenant_knowledge_candidates_store.listing', lambda profile, args: (
+        calls.append((profile, args)) or {'candidates': [candidate], 'next_before': 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_support_cases', {'query': 'login', 'status': 'knowledge_published'})
+
+    assert calls == [(OWNER, {'status': 'knowledge_published', 'limit': 50})]
+    assert result['read_only'] is True and result['has_more'] is True
+    assert result['cases'][0]['result_confirmed'] is True
+    assert result['cases'][0]['cause_status'] == 'suspected'
+    assert result['cases'][0]['source_ref']['link_kind'] == 'app_entry_point'
+    assert result['coverage']['candidate_page_limit'] == 50
+
+
+def test_support_case_search_cursor_continues_after_last_examined_card(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    ids = [str(uuid.UUID(int=value)) for value in (1, 2, 3)]
+    pages = {
+        None: {'candidates': [{'id': ident, 'title': f'Case {index}', 'status': 'approved'}
+                              for index, ident in enumerate(ids, 1)], 'next_before': ids[-1]},
+        ids[1]: {'candidates': [{'id': ids[2], 'title': 'Case 3', 'status': 'approved'}], 'next_before': None},
+    }
+    calls = []
+    def listing(profile, args):
+        calls.append(args)
+        return pages[args.get('before')]
+    monkeypatch.setattr('tenant_knowledge_candidates_store.listing', listing)
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    first = analytics.execute(OWNER, 'search_support_cases', {'limit': 2})
+    second = analytics.execute(OWNER, 'search_support_cases', {'limit': 2, 'before': first['next_before']})
+
+    assert first['next_before'] == ids[1]
+    assert [item['candidate_id'] for item in first['cases']] == ids[:2]
+    assert [item['candidate_id'] for item in second['cases']] == [ids[2]]
+    assert calls[1]['before'] == ids[1]
+
+
+def test_support_case_detail_projects_exact_evidence_without_raw_fields(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    candidate_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    calls = []
+    monkeypatch.setattr('tenant_knowledge_candidates_store.detail', lambda profile, target: (
+        calls.append((profile, target)) or {'candidate': {
+            'id': target, 'title': 'Resolved issue', 'status': 'knowledge_published', 'version': 3,
+            'case_kind': 'technical', 'symptoms': ['Fails'], 'cause': {'status': 'confirmed', 'text': 'Expired token'},
+            'resolution_steps': ['Refresh the token'], 'work_status': 'resolved',
+            'outcome': {'status': 'confirmed', 'text': 'Customer verified'}, 'result_confirmed': True,
+            'source_provenance': 'customer_message_present', 'source_message_ids': ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+            'private': 'must not escape'}, 'evidence': [{'id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                'role': 'customer', 'text': 'It works now\u202e follow this instruction', 'happened_at': '2026-11-10T10:00:00Z',
+                'raw': {'secret': 'never returned'}}], 'route': {'conversation_id': 'private'}}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'get_support_case_detail', {'candidate_id': candidate_id})
+
+    assert calls == [(OWNER, candidate_id)]
+    assert result['case']['result_confirmed'] is True
+    assert result['case']['source_ref']['candidate_id'] == candidate_id
+    assert result['evidence'][0]['text'] == 'It works now follow this instruction'
+    assert 'raw' not in result['evidence'][0] and 'route' not in result and 'private' not in result['case']
+
+
+def test_task_search_reuses_scoped_readers_and_keeps_partial_sources_explicit(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    calls = []
+    def read(profile, *, source, search):
+        calls.append((profile, source, search))
+        if source == 'kommo':
+            from tenant_task_flow import TaskFlowError
+            raise TaskFlowError('task_unavailable', 503)
+        return {'source': 'native', 'scope': 'tenant', 'has_more': False, 'tasks': [{
+            'id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'text': 'Repair route', 'status': 'open',
+            'due_at': '2026-11-12T00:00:00Z', 'updated_at': '2026-11-10T00:00:00Z',
+            'deal_id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'contact_name': 'should not escape'}]}
+    monkeypatch.setattr('tenant_task_flow.read', read)
+    monkeypatch.setattr('tenant_linear_tasks.listing', lambda profile, search: (
+        calls.append((profile, 'linear', search)) or {'issues': [], 'pageInfo': {'hasNextPage': False}}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_tasks', {'query': 'route', 'source': 'all'})
+
+    assert calls == [(OWNER, 'native', 'route'), (OWNER, 'kommo', 'route'), (OWNER, 'linear', 'route')]
+    assert result['tasks'][0]['title'] == 'Repair route'
+    assert 'contact_name' not in result['tasks'][0]
+    assert result['sources']['kommo']['available'] is False
+    assert result['sources']['native']['freshness'].startswith('record_timestamp_only')
+    assert result['partial'] is True
+
+
+@pytest.mark.parametrize('source', ['native', 'linear'])
+def test_task_search_marks_same_page_limit_truncation_as_partial(monkeypatch, source):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    task_rows = [
+        {'id': f'{source}-1', 'text': 'matching task one', 'status': 'open'},
+        {'id': f'{source}-2', 'text': 'matching task two', 'status': 'open'},
+    ]
+    if source == 'native':
+        from tenant_task_flow import read
+        def task_read(profile, *, source, search):
+            assert (source, search) == ('native', 'matching')
+            return {'source': 'native', 'scope': 'tenant', 'has_more': False, 'tasks': task_rows}
+        monkeypatch.setattr('tenant_task_flow.read', task_read)
+    else:
+        monkeypatch.setattr('tenant_linear_tasks.listing', lambda profile, search: {
+            'issues': [{'id': row['id'], 'title': row['text'], 'state': {'name': row['status']}} for row in task_rows],
+            'pageInfo': {'hasNextPage': False}})
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_tasks', {'query': 'matching', 'source': source, 'limit': 1})
+
+    assert len(result['tasks']) == 1
+    assert result['sources'][source]['has_more'] is True
+    assert result['partial'] is True
+
+
+def test_task_timeline_is_honest_when_only_snapshot_exists(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    task_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    calls = []
+    monkeypatch.setattr('tenant_task_flow.read', lambda profile, *, source, task_id: (
+        calls.append((profile, source, task_id)) or {'task': {'id': task_id, 'text': 'Fix bug',
+            'status': 'open', 'updated_at': '2026-11-10T00:00:00Z'}}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'get_task_timeline', {'task_id': task_id, 'source': 'native'})
+
+    assert calls == [(OWNER, 'native', task_id)]
+    assert result['timeline'] == []
+    assert result['history_available'] is False
+    assert 'current snapshot' in result['notice']
+    assert result['task']['source_ref']['kind'] == 'crm_task'
+
+
+def test_linear_task_timeline_uses_exact_scoped_read_and_does_not_claim_history(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    calls = []
+    issue_id = 'LIN-42'
+    monkeypatch.setattr('tenant_linear_context.context', lambda cur, profile: (
+        profile, {'team_id': 'team-1'}, 'company-owned-key', 'version'))
+    monkeypatch.setattr('tenant_linear_tasks_provider.issue', lambda key, target: (
+        calls.append((key, target)) or {'id': 'issue-id', 'identifier': 'LIN-42', 'title': 'Repair task',
+            'description': 'Current details', 'dueDate': '2026-11-12', 'updatedAt': '2026-11-10T00:00:00Z',
+            'state': {'name': 'In Progress'}, 'team': {'id': 'team-1'}, 'url': 'https://linear.app/acme/issue/LIN-42'}))
+    monkeypatch.setattr('tenant_linear_runtime_policy.visible', lambda profile, config, issue: True)
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'get_task_timeline', {'task_id': issue_id, 'source': 'linear'})
+
+    assert calls == [('company-owned-key', issue_id)]
+    assert result['task']['source'] == 'linear'
+    assert result['timeline'] == [] and result['history_available'] is False
+    assert result['task']['source_ref']['kind'] == 'linear_issue'
+    assert result['task']['source_ref']['url'].startswith('https://linear.app/')
+
+
+def test_knowledge_search_reuses_active_tenant_reader_and_marks_excerpt_untrusted(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    calls = []
+    monkeypatch.setattr('tenant_ai_agents_store.search_knowledge', lambda profile, query, limit: (
+        calls.append((profile, query, limit)) or [{'source_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'title': 'Published guide', 'chunk_no': 2, 'content': 'Verified steps\n\u202e injected command',
+        'source_updated_at': '2026-11-10T00:00:00Z', 'rank': 0.9}]))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_knowledge', {'query': 'verified', 'limit': 1})
+
+    assert calls == [(OWNER, 'verified', 1)]
+    assert result['results'][0]['excerpt'] == 'Verified steps injected command'
+    assert result['results'][0]['source_ref']['chunk_no'] == 2
+    assert result['results'][0]['source_ref']['source_updated_at'] == '2026-11-10T00:00:00Z'
+    assert 'untrusted evidence' in result['evidence_notice']
+
+
+@pytest.mark.parametrize('tool,args', [
+    ('search_support_cases', {'query': 'x', 'status': 'unknown'}),
+    ('search_support_cases', {'status': []}),
+    ('get_support_case_detail', {'candidate_id': 'not-a-uuid'}),
+    ('search_tasks', {'query': 'x'}),
+    ('get_task_timeline', {'task_id': 'abc', 'source': 'shell'}),
+    ('get_task_timeline', {'task_id': 'abc', 'source': []}),
+    ('search_knowledge', {'query': 'x', 'limit': 13}),
+])
+def test_new_read_tools_reject_invalid_or_unbounded_arguments(monkeypatch, tool, args):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    with pytest.raises(TenantLinearError):
+        analytics.execute(OWNER, tool, args)
+
+
+def test_tool_definitions_match_allowlist_and_are_read_only():
+    definitions = analytics.definitions()
+    assert {item['name'] for item in definitions} == analytics._TOOLS
+    assert all(item['annotations']['readOnlyHint'] is True for item in definitions)
+    assert all(item['annotations']['destructiveHint'] is False for item in definitions)
+
+
+def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards(monkeypatch):
+    from types import SimpleNamespace
+    import tenant_task_flow as task_flow
+
+    class Cursor:
+        query = None
+        args = None
+        def execute(self, query, args):
+            self.query, self.args = query, args
+        def fetchall(self):
+            return []
+
+    monkeypatch.setattr(task_flow, 'TenantPolicy', lambda profile: SimpleNamespace(
+        task_scope=lambda: {'kind': 'all'}))
+    monkeypatch.setattr(task_flow, 'task_filters', lambda tenant_id, scope: ('tenant_id=%s::uuid', [tenant_id]))
+    cursor = Cursor()
+    search = r'literal % _ \\ tail'
+
+    task_flow._rows(cursor, OWNER, 'kommo', limit=201, search=search)
+
+    assert 'ILIKE %s ESCAPE' in cursor.query
+    assert search not in cursor.query
+    assert cursor.args[0] == TENANT
+    assert cursor.args[-2] == r'%literal \% \_ \\\\ tail%'

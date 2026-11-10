@@ -1371,7 +1371,7 @@ def search_knowledge(profile, query, *, limit=6):
             from tenant_knowledge_search import tsquery, patterns
             semantic_query=tsquery(query)
             semantic_patterns=patterns(query)
-            cur.execute('''SELECT s.id AS source_id,s.title,c.chunk_no,c.content,
+            cur.execute('''SELECT s.id AS source_id,s.title,s.updated_at AS source_updated_at,c.chunk_no,c.content,
               ts_rank(c.search_vector,to_tsquery('simple',%s)) AS rank
               FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
                 ON s.tenant_id=c.tenant_id AND s.id=c.source_id
