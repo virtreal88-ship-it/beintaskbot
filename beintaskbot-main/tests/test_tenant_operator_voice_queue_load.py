@@ -84,6 +84,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 await ws.send_bytes(bytes([12])*2048)
                 await asyncio.wait_for(queued.wait(),3);release.set()
                 await ws.send_json({'type':'end'});await asyncio.wait_for(ws.receive(),3)
+                await asyncio.wait_for(ws.close(),3)
                 await asyncio.wait_for(logged.wait(),3)
             audio=[payload for kind,payload in seen if kind=='audio']
             self.assertEqual(b''.join(audio),b''.join(bytes([i])*2048 for i in range(1,13)))
