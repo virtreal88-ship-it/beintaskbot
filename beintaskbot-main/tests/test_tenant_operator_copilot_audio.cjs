@@ -149,3 +149,46 @@ test('half-duplex output ignores speech and gently boosts quiet PCM without clip
   assert.equal(stops,0);assert.equal(speech,0,'speech never cancels half-duplex output');
   await audio.close();
 });
+
+test('duplex forwards quiet varying microphone samples across interruption without a local speech gate', async () => {
+  let processor, speechStarts=0, stopped=0;
+  class FakeAudioContext {
+    constructor(options){this.sampleRate=options.sampleRate;this.state='running';this.destination={};this.currentTime=1;}
+    async resume(){}
+    createMediaStreamSource(){return{connect(){},disconnect(){}};}
+    createScriptProcessor(){processor={connect(){},disconnect(){},onaudioprocess:null};return processor;}
+    createGain(){return{gain:{value:1},connect(){},disconnect(){}};}
+    createBuffer(_channels,length){return{getChannelData:()=>new Float32Array(length)};}
+    createBufferSource(){return{connect(){},start(){},stop(){stopped++;}};}
+    async close(){this.state='closed';}
+  }
+  const deps={AudioContext:FakeAudioContext,navigator:{mediaDevices:{getUserMedia:async()=>(
+    {getTracks:()=>[{stop(){}}],getAudioTracks:()=>[]}
+  )}}};
+  const frames=[];
+  const audio=await openAudio(frame=>frames.push(Uint8Array.from(frame)),deps,()=>{speechStarts++;});
+  const feed=samples=>processor.onaudioprocess({inputBuffer:{getChannelData:()=>samples}});
+  // Synthetic speech-like harmonics stay far below the 0.035 local mute threshold.
+  const quiet=phase=>Float32Array.from({length:1024},(_,i)=>
+    0.002*Math.sin((i+phase)*2*Math.PI*190/24000)+0.0007*Math.sin((i+phase)*2*Math.PI*460/24000));
+  const loud=Float32Array.from({length:1024},(_,i)=>0.12*Math.sin(i*2*Math.PI*220/24000));
+  const before=quiet(0),after=quiet(1024),next=quiet(2048);
+  audio.play('assistant-item',new Uint8Array([0,0,0,0]));
+  feed(before);
+  assert.equal(speechStarts,0,'quiet samples do not trigger local barge-in');
+  feed(loud);feed(loud);
+  assert.equal(speechStarts,1);assert.equal(stopped,1,'sustained speech triggers local barge-in');
+  feed(after); // leading samples while locally muted, before the provider interrupt
+  audio.interrupt('assistant-item');
+  feed(next); // first samples after the provider interrupt
+  assert.equal(frames.length,5,'all input callbacks are forwarded during playback and interruption');
+  for(const [index,samples] of [before,loud,loud,after,next].entries()){
+    const expected=new Uint8Array(samples.length*2),view=new DataView(expected.buffer);
+    for(let i=0;i<samples.length;i++){
+      const sample=Math.max(-1,Math.min(1,samples[i]));
+      view.setInt16(i*2,Math.trunc(sample<0?sample*32768:sample*32767),true);
+    }
+    assert.deepEqual(frames[index],expected,`frame ${index} keeps every quantized sample in order`);
+  }
+  await audio.close();
+});
