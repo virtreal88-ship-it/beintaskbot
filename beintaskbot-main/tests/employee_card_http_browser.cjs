@@ -11,6 +11,11 @@ const tenantB = process.env.EMPLOYEE_CARD_RUNTIME_TENANT_B;
 const login = process.env.EMPLOYEE_CARD_RUNTIME_LOGIN;
 const password = 'Synthetic-initial-password!42';
 assert(origin && mode && width && login && tenantA && tenantB);
+const visibilityLabels={ru:{open:'По правам: открыта',unavailable:'По правам: недоступна',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: giriş yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: unavailable',pending:'By rights: pending'}}[language];
+const assertPageState=async(form,page,state,label)=>{
+  assert.equal(await form.locator('[data-access-hint='+page+']').getAttribute('data-access-state'),state,page+' effective visibility');
+  if(label)assert.equal(await form.locator('[data-access-page='+page+'] option:checked').textContent(),label);
+};
 
 (async () => {
   const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || (fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
@@ -24,7 +29,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
   page.on('request', request => {
     if (!['GET', 'HEAD'].includes(request.method())) {
       const data = request.postDataJSON();
-      writes.push({ path: new URL(request.url()).pathname, action: data?.action });
+      writes.push({ path: new URL(request.url()).pathname, action: data?.action, access: data?.changes?.access_settings });
     }
   });
   const control = async path => {
@@ -159,16 +164,35 @@ assert(origin && mode && width && login && tenantA && tenantB);
       const beforeAccess=(await readRows(page.request)).find(row=>row.telegram_id===actor);
       assert.deepEqual(beforeAccess.permissions,[],'Creation starts with explicitly empty grants');
       assert.equal(beforeAccess.access_settings.actions.tasks.view,false,'First native access save is a real change');
+      await form.locator('[data-staff-pane-tab=settings]').click();
+      await assertPageState(form,'tasks','unavailable',visibilityLabels.unavailable);
+      const beforeNoop=(await control('state')).posts;
+      await form.locator('[type=submit]').click();
+      assert.equal((await control('state')).posts,beforeNoop,'Inherited preferences do not write on no-op save');
       await form.locator('[data-staff-pane-tab=rights]').click();
-      await form.locator('[data-access-action=view][data-access-module=tasks]').check();
+      for(const module of ['tasks','customers','deals'])await form.locator('[data-access-action=view][data-access-module='+module+']').check();
+      await assertPageState(form,'tasks','pending',visibilityLabels.pending);
       await save(form,'update_member_card');await closed();
+      assert.deepEqual(writes.at(-1).access,{expected_version:beforeAccess.access_settings.version,changes:{actions:{tasks:{view:true},deals:{view:true},customers:{view:true}}}},'Only changed operations are submitted');
       const afterActions=(await readRows(page.request)).find(row=>row.telegram_id===actor);
       assert.deepEqual(afterActions.permissions,beforeAccess.permissions,'Native CRUD does not rewrite legacy/provider grants');
       assert.equal(afterActions.access_settings.actions.tasks.view,true);
       await openEmployee(actor);form=page.locator('#staffEditForm');
       await form.locator('[data-staff-pane-tab=settings]').click();
+      assert.deepEqual(afterActions.access_settings.page_visibility,{},'Native grants preserve sparse page inheritance');
+      for(const pageId of ['tasks','customers','companies','deals']){
+        assert.equal(afterActions.access_settings.pages[pageId],true);
+        assert.equal(await form.locator('[data-access-page='+pageId+']').inputValue(),'inherit');
+        await assertPageState(form,pageId,'visible',visibilityLabels.open);
+      }
+      const beforeOpenNoop=(await control('state')).posts;
+      await form.locator('[type=submit]').click();
+      assert.equal((await control('state')).posts,beforeOpenNoop,'Four inherited open pages remain a no-op');
+      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-inherited-pages-'+width+'-'+language+'.png'});
       await form.locator('[data-access-page=tasks]').selectOption('false');
+      await assertPageState(form,'tasks','hidden');
       await save(form,'update_member_card');await closed();
+      assert.deepEqual(writes.at(-1).access,{expected_version:afterActions.access_settings.version,changes:{pages:{tasks:false}}},'Hiding one page does not materialize inherited preferences');
       const afterPage=(await readRows(page.request)).find(row=>row.telegram_id===actor);
       assert.deepEqual(afterPage.permissions,afterActions.permissions,'Page hide does not revoke grants');
       assert.deepEqual(afterPage.access_settings.actions,afterActions.access_settings.actions,'Page hide does not revoke operations');
@@ -176,6 +200,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await openEmployee(actor);form=page.locator('#staffEditForm');
       await form.locator('[data-staff-pane-tab=settings]').click();
       assert.equal(await form.locator('[data-access-page=tasks]').inputValue(),'false','Saved visibility reopens accurately');
+      await assertPageState(form,'tasks','hidden');
       if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR){
         for(const tab of ['details','rights','settings']){
           await form.locator('[data-staff-pane-tab='+tab+']').click();
@@ -184,20 +209,25 @@ assert(origin && mode && width && login && tenantA && tenantB);
             const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
             const boxes=[...panel.querySelectorAll('[data-access-operations]>fieldset:not(.staff-rights)')].map(group=>[...group.querySelectorAll('input')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
             const pageHeights=[...panel.querySelectorAll('[data-access-page]')].map(input=>input.closest('label').getBoundingClientRect().height);
-            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights};
+            const canvas=document.createElement('canvas'),measure=canvas.getContext('2d');
+            const optionFits=[...panel.querySelectorAll('[data-access-page]')].map(input=>{const css=getComputedStyle(input);measure.font=css.font;return measure.measureText(input.selectedOptions[0].textContent).width<=input.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight)-20});
+            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights,optionFits};
           },tab);
           assert(!layout.overflow,'Employee tab fits viewport');
           assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
           for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
           assert(layout.pageHeights.every(height=>height<110),'Page preferences stay compact');
+          assert(layout.optionFits.every(Boolean),'Effective visibility labels fit their dropdown at '+width+'px in '+language);
           await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+width+'-'+language+'.png'});
         }
       }
       await form.locator('[data-access-page=tasks]').selectOption('inherit');
+      await assertPageState(form,'tasks','visible',visibilityLabels.open);
       await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=display_name]').fill('Local employee alias');
       await form.locator('[data-staff-pane-tab=rights]').click();
       await form.locator('[name=role]').selectOption('manager');
+      await assertPageState(form,'tasks','pending',visibilityLabels.pending);
       await form.locator('[data-permission][value=support]').check();
       await form.locator('[data-permission][value=finance]').check();
       await form.locator('[data-staff-pane-tab=settings]').click();
@@ -209,6 +239,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=active]').uncheck();
       const updated = await save(form, 'update_member_card');
+      assert.deepEqual(writes.at(-1).access,{expected_version:afterPage.access_settings.version,changes:{pages:{tasks:null}}},'Mixed card save retains other inherited pages and native operations');
       assert.notEqual(updated.applied.card_version, whatsapp.applied.card_version);
       await closed();
       await page.reload();

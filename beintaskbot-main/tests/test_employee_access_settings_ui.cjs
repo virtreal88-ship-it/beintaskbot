@@ -1,12 +1,29 @@
 const assert=require('node:assert/strict');
 const {mount,settle,writes,edit,input,submit}=require('./employee_card_fixture.cjs');
-const access={version:'access-v1',page_catalog:[{id:'tasks',module:'tasks'},{id:'finance',module:'finance'},{id:'profile',module:null}],action_catalog:{tasks:['view','create','update','delete']},page_visibility:{},page_prerequisites:{tasks:true,finance:false,profile:true},pages:{tasks:true,finance:false,profile:true},actions:{tasks:{view:true,create:false,update:false,delete:false}}};
+const crmPages=['tasks','customers','companies','deals'];
+const nativeActions={view:true,create:false,update:false,delete:false};
+const labels={ru:{open:'По правам: открыта',unavailable:'По правам: недоступна',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: giriş yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: unavailable',pending:'By rights: pending'}};
+const pageInput=(form,page)=>form.querySelector('[data-access-page='+page+']');
+const pageState=(form,page)=>form.querySelector('[data-access-hint='+page+']').dataset.accessState;
+const selectedLabel=(form,page)=>pageInput(form,page).selectedOptions[0].textContent;
+const access={version:'access-v1',page_catalog:[...crmPages.map(id=>({id,module:id==='companies'?'customers':id})),{id:'finance',module:'finance'},{id:'profile',module:null}],action_catalog:Object.fromEntries(['tasks','customers','deals'].map(module=>[module,Object.keys(nativeActions)])),page_visibility:{},page_prerequisites:{...Object.fromEntries(crmPages.map(id=>[id,true])),finance:false,profile:true},pages:{...Object.fromEntries(crmPages.map(id=>[id,true])),finance:false,profile:true},actions:Object.fromEntries(['tasks','customers','deals'].map(module=>[module,{...nativeActions}]))};
 const row={editable_fields:['display_name','role','permissions','active','access_settings'],access_settings:access,permissions:['tasks:view','legacy:retained'],explicit_permissions:['tasks:view','legacy:retained']};
 const change=(b,node,value)=>{if(node.type==='checkbox')node.checked=value;else node.value=value;node.dispatchEvent(new b.w.Event('change',{bubbles:true}));};
 (async()=>{
  for(const language of ['ru','az','en']){
   const b=await mount({role:'owner',language,row});try{
    const form=edit(b);assert(form.querySelector('[data-access-settings]'));
+   for(const page of crmPages){
+    assert.equal(pageInput(form,page).value,'inherit','Existing pages retain automatic inheritance');
+    assert.equal(selectedLabel(form,page),labels[language].open,'Inherited open state is explicit in '+language);
+    assert.equal(pageState(form,page),'visible');
+    assert.equal(pageInput(form,page).getAttribute('aria-describedby'),form.querySelector('[data-access-hint='+page+']').id);
+   }
+   assert.equal(selectedLabel(form,'finance'),labels[language].unavailable);
+   assert.equal(pageState(form,'finance'),'unavailable','Missing access is not manual hiding');
+   change(b,pageInput(form,'finance'),'true');
+   assert.equal(pageState(form,'finance'),'unavailable','Show cannot grant missing authority');
+   change(b,pageInput(form,'finance'),'inherit');
    assert.equal(form.querySelector('[name=first_name]').closest('[data-staff-pane]').dataset.staffPane,'details');
    assert.equal(form.querySelector('[name=active]').closest('[data-staff-pane]').dataset.staffPane,'details');
    assert.equal(form.querySelector('[name=role]').closest('[data-staff-pane]').dataset.staffPane,'rights');
@@ -19,8 +36,55 @@ assert.equal(form.querySelector('[data-permission][value=tasks]'),null);
    assert(form.querySelector('[data-access-page=profile]').disabled);assert(form.querySelector('[data-access-hint=finance]').textContent);
    assert.equal(form.querySelector('[data-access-action=create]').checked,false);
    submit(b,form);await settle();assert.equal(writes(b).length,0,'No migration or broadening on unchanged save');
-   change(b,form.querySelector('[data-access-page=tasks]'),'false');submit(b,form);await settle();
+   change(b,pageInput(form,'tasks'),'false');assert.equal(pageState(form,'tasks'),'hidden');submit(b,form);await settle();
    assert.deepEqual(writes(b)[0].body.changes,{access_settings:{expected_version:'access-v1',changes:{pages:{tasks:false}}}});
+  }finally{b.close()}
+ }
+ for(const language of ['ru','az','en']){
+  // Three provider-backed pages remain open even when native CRM operations are denied.
+  const providerAccess={...access,actions:Object.fromEntries(['tasks','customers','deals'].map(module=>[module,{...nativeActions,view:false}])),page_prerequisites:{...access.page_prerequisites,companies:false},pages:{...access.pages,companies:false}};
+  const b=await mount({role:'owner',language,row:{...row,access_settings:providerAccess}});try{
+   const original=JSON.stringify(providerAccess),form=edit(b);
+   assert([...form.querySelectorAll('[data-access-action=view]')].every(node=>!node.checked));
+   for(const page of ['tasks','customers','deals']){assert.equal(pageState(form,page),'visible');assert.equal(selectedLabel(form,page),labels[language].open)}
+   assert.equal(pageState(form,'companies'),'unavailable','Native-only company page follows its own server state');
+   submit(b,form);await settle();assert.equal(writes(b).length,0,'Provider-backed no-op save does not materialize grants');
+   const view=form.querySelector('[data-access-action=view][data-access-module=tasks]');
+   change(b,view,true);assert.equal(pageState(form,'tasks'),'pending');assert.equal(selectedLabel(form,'tasks'),labels[language].pending);
+   change(b,pageInput(form,'tasks'),'false');assert.equal(pageState(form,'tasks'),'hidden','Manual hide is clear even with pending rights');
+   change(b,pageInput(form,'tasks'),'inherit');assert.equal(pageState(form,'tasks'),'pending');
+   change(b,view,false);assert.equal(pageState(form,'tasks'),'visible','Undo restores the provider-backed snapshot');
+   submit(b,form);await settle();assert.equal(writes(b).length,0);assert.equal(JSON.stringify(providerAccess),original);
+  }finally{b.close()}
+  const hidden=await mount({role:'owner',language,row:{...row,access_settings:{...access,page_visibility:{tasks:false,finance:false},pages:{...access.pages,tasks:false}}}});try{
+   const form=edit(hidden);assert.equal(pageInput(form,'tasks').value,'false');assert.equal(pageState(form,'tasks'),'hidden');
+   assert.equal(pageState(form,'finance'),'hidden','An explicit hide is not presented as missing permission');
+   submit(hidden,form);await settle();assert.equal(writes(hidden).length,0,'Existing false overrides survive no-op');
+   change(hidden,pageInput(form,'tasks'),'inherit');assert.equal(selectedLabel(form,'tasks'),labels[language].open);assert.equal(pageState(form,'tasks'),'visible');
+   change(hidden,pageInput(form,'finance'),'inherit');assert.equal(pageState(form,'finance'),'unavailable','Restoring inheritance does not grant rights');
+   submit(hidden,form);await settle();assert.deepEqual(writes(hidden)[0].body.changes,{access_settings:{expected_version:'access-v1',changes:{pages:{tasks:null,finance:null}}}});
+  }finally{hidden.close()}
+ }
+ {
+  const b=await mount({role:'owner',row:{...row,permission_modules:['finance'],editable_fields:[...row.editable_fields,'permission_changes','work_settings'],work_settings:{version:'work-v1',values:{},defaults:{},notifications:[],services:[]}}});try{
+   const form=edit(b);
+   for(const [selector,value,original] of [
+    ['[name=role]','manager','worker'],['[name=active]',false,true],
+    ['[data-permission][value=finance]',true,false],['[data-work-setting=ai_agents_manage]','true','inherit'],
+    ['[data-access-action=update][data-access-module=tasks]',true,false]
+   ]){
+    change(b,form.querySelector(selector),value);assert.equal(pageState(form,'tasks'),'pending',selector+' invalidates the saved authority snapshot');
+    assert.equal(selectedLabel(form,'tasks'),labels.en.pending);assert.equal(pageState(form,'profile'),'visible','Profile stays available');
+    change(b,form.querySelector(selector),original);assert.equal(pageState(form,'tasks'),'visible',selector+' can be undone');
+   }
+   submit(b,form);await settle();assert.equal(writes(b).length,0,'Undoing all authority edits stays a no-op');
+  }finally{b.close()}
+ }
+ {
+  const b=await mount({role:'owner',row:{...row,access_settings:{...access,page_visibility:{finance:false}}}});try{
+   const form=edit(b);change(b,pageInput(form,'tasks'),'false');change(b,pageInput(form,'customers'),'false');change(b,pageInput(form,'finance'),'inherit');
+   change(b,form.querySelector('[data-access-action=update][data-access-module=tasks]'),true);submit(b,form);await settle();
+   assert.deepEqual(writes(b)[0].body.changes,{access_settings:{expected_version:'access-v1',changes:{pages:{tasks:false,customers:false,finance:null},actions:{tasks:{update:true}}}}},'Mixed save includes only changed preferences/operations and retains sparse inheritance');
   }finally{b.close()}
  }
  {
@@ -65,5 +129,5 @@ assert.equal(form.querySelector('[data-permission][value=tasks]'),null);
    assert.equal(b.errors.length,0,b.errors.join('\n'));
   }finally{b.close()}
  }
- console.log('PASS: separate RU/AZ/EN page visibility and native CRUD, sparse exact versions, owner/dirty guards, navigation independent of module grants');
+ console.log('PASS: RU/AZ/EN inherited effective visibility, provider/native separation, pending authority changes, sparse/no-op saves and navigation guards');
 })().catch(error=>{console.error(error.stack);process.exitCode=1});

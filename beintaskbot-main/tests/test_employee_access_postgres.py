@@ -13,6 +13,34 @@ def access(row, changes):
     return {'access_settings': {'expected_version': row['access_settings']['version'], 'changes': changes}}
 
 
+def test_inherited_four_crm_pages_match_member_session_without_explicit_overrides(cards):
+    """Missing personal switches means inheritance, not all pages disabled."""
+    from tenant_policy import TenantPolicy
+    grants = ['tasks', 'deals', 'customers']
+    with cards['factory']() as conn:
+        conn.execute("UPDATE saas_tenant_members SET role='manager',permissions=%s::jsonb WHERE tenant_id=%s AND telegram_id=61",
+                     (json.dumps(grants), A))
+        conn.execute("UPDATE saas_tenants SET modules=%s::jsonb WHERE id=%s", (json.dumps({key: True for key in grants}), A))
+    before = get(cards)
+    snapshot = before['access_settings']
+    session = TenantPolicy(members.member(A, 61)).public_capabilities()
+    assert snapshot['page_visibility'] == {}
+    assert session['page_visibility'] == {}
+    assert snapshot['pages'] == session['pages']
+    for page in ('tasks', 'customers', 'companies', 'deals'):
+        assert snapshot['pages'][page] is True
+        assert snapshot['page_prerequisites'][page] is True
+    for module in grants:
+        assert all(snapshot['actions'][module].values())
+    assert snapshot['pages']['finance'] is False
+    # Reading, or saving an unrelated field, never materializes inherited rights.
+    assert get(cards)['card_version'] == before['card_version']
+    apply(cards, before, {'display_name': 'Unrelated local alias'})
+    fresh = get(cards)
+    assert fresh['access_settings'] == snapshot
+    assert fresh['explicit_permissions'] == grants
+
+
 def test_pages_only_never_change_grants_or_other_employee_settings(cards):
     seed(cards);row=get(cards);before=policy(cards);permissions=row['explicit_permissions']
     apply(cards,row,access(row,{'pages':{'tasks':False,'finance':False}}))
