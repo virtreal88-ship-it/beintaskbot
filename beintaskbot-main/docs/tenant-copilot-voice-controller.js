@@ -39,6 +39,9 @@
   }
 
   let speechSamples=0, silenceSamples=0, turnSamples=0, candidate=[], candidateSamples=0, stopAwaiting=false;
+  // Allow headroom for the 6s audio boundary and server cleanup. A delayed
+  // transport can exceed this window: the deadline never implies success.
+  const END_CONFIRM_WAIT_MS=8000;
   const SAMPLE_RATE=24000, END_SILENCE_MS=1000, MIN_END_SILENCE_MS=750, MAX_END_SILENCE_MS=2000;
   const END_SILENCE_SAMPLES=Math.round(SAMPLE_RATE*Math.max(MIN_END_SILENCE_MS,Math.min(MAX_END_SILENCE_MS,END_SILENCE_MS))/1000);
   const MAX_PENDING_MIC_BYTES=SAMPLE_RATE*2*2;
@@ -265,7 +268,7 @@
     try{audio?.flush?.();audio?.stopNow?.();}catch(_){}
     muted=true;ending=true;setVoiceState('stopping');end.disabled=true;status.textContent=labels.ending;
     const endingVersion=generation;
-    send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},2000);
+    send({type:'end'});endTimer=setTimeout(()=>{if(ending && endingVersion===generation)void stop(uncertain);},END_CONFIRM_WAIT_MS);
     return endPromise;
   }
   end.addEventListener('click',()=>finish());

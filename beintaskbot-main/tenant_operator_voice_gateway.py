@@ -179,21 +179,48 @@ def _startup_failure_code(exc, session, session_ready):
 
 
 class SocketClient:
-    def __init__(self, ws, activity=None): self.ws=ws; self.activity=activity
+    def __init__(self, ws, activity=None):
+        self.ws=ws;self.activity=activity;self.close_task=None;self.terminal_sent=False
+        self.send_lock=asyncio.Lock()
+
+    @staticmethod
+    def _consume_close(task):
+        try:task.exception()
+        except BaseException:pass
+
+    def start_close(self):
+        if self.close_task is None:
+            self.close_task=asyncio.create_task(self.ws.close())
+            self.close_task.add_done_callback(self._consume_close)
+        return self.close_task
+
+    async def close(self):
+        await asyncio.shield(self.start_close())
+
     async def send(self, event):
+        async with self.send_lock:
+            await self._send_locked(event)
+
+    async def _send_locked(self, event):
+        terminal=event.get('type') in ('ended','end_unconfirmed')
+        if self.terminal_sent:
+            if terminal:return
+            raise ConnectionError('voice_socket_closed')
         if event.get('type') == 'audio':
             event={'type':'audio','item_id':event['item_id'],
                    'pcm_base64':base64.b64encode(event['pcm']).decode('ascii')}
         if self.ws.closed:
-            if event.get('type') in ('ended','end_unconfirmed'):
-                return  # already disconnected; no client notification possible
             raise ConnectionError('voice_socket_closed')
-        await self.ws.send_json(event)
+        try:await self.ws.send_json(event)
+        except Exception:
+            if terminal:self.start_close()
+            raise
         if isinstance(self.activity,dict):
             if event.get('type')=='audio':self.activity['audio_frames_ws_sent']+=1
             elif event.get('type')=='interrupt':self.activity['interrupt_notices_sent']+=1
-        if event.get('type') in ('ended','end_unconfirmed'):
-            await self.ws.close()
+        if terminal:
+            self.terminal_sent=True
+            self.start_close()
 
 
 def make_handler(*, allowed_origins, authenticate, build_session):
@@ -225,8 +252,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         activity.update(client_reader_exit='unavailable',client_close_code=None,
                         client_transport_kind='none',client_end_received=False)
         session_ready=False
+        socket_client=SocketClient(ws,activity)
         try:
-            session=build_session(scope, SocketClient(ws,activity))
+            session=build_session(scope, socket_client)
             async def read_frames():
                 count=0;window=time.monotonic()
                 try:
@@ -250,6 +278,26 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         if session.closed:
                             activity['client_reader_exit']='session_closed'
                             break
+                        if message.type==WSMsgType.BINARY:
+                            observer=getattr(session,'observe_client_audio',None)
+                            if callable(observer):observer(bytes(message.data))
+                        elif message.type==WSMsgType.TEXT:
+                            observer=getattr(session,'observe_client_control',None)
+                            if callable(observer):observer()
+                            # A user-requested end is terminal: do not leave it
+                            # behind buffered PCM that will no longer be used.
+                            # Session.end still drains in-flight provider I/O
+                            # and releases only the exact fenced lease.
+                            try:control=json.loads(message.data) if len(message.data)<=512 else None
+                            except (ValueError,TypeError):control=None
+                            if isinstance(control,dict) and control=={'type':'end'}:
+                                activity['client_end_received']=True
+                                try:
+                                    if callable(observer) and getattr(session,'duplex',False):
+                                        await session.receive_client(control,control_observed=True)
+                                    else:await session.receive_client(control)
+                                except Exception as exc:_log_client_failure(control,exc)
+                                break
                         # The audio consumer performs live authorization and
                         # lease checks before forwarding each frame. If it is
                         # briefly slower than the browser, pause this reader
@@ -262,7 +310,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     activity['client_transport_kind']=_safe_client_transport_kind(ws.exception())
                     if activity['client_reader_exit']=='unavailable':activity['client_reader_exit']='stream_ended'
                     await session.end('disconnected')
-                    await ws.close()
+                    socket_client.start_close()
                     while incoming.full(): incoming.get_nowait()
                     incoming.put_nowait(None)
             # A dedicated single reader detects disconnect even while open is
@@ -272,13 +320,34 @@ def make_handler(*, allowed_origins, authenticate, build_session):
             async def read_provider():
                 stage='provider_receive'
                 event=None
+                duplex=getattr(session,'duplex',False)
+                incoming_provider=asyncio.Queue(maxsize=128) if duplex else None
+                observer=getattr(session,'observe_provider_event',None) if duplex else None
+                async def receive_ahead():
+                    try:
+                        while not session.closed:
+                            incoming=await session.next_provider_event()
+                            # Observe VAD promptly even when handling an older
+                            # event is waiting for authorization or lease IO.
+                            if callable(observer):observer(incoming)
+                            await incoming_provider.put((True,incoming))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        await incoming_provider.put((False,exc))
+                provider_receiver=asyncio.create_task(receive_ahead()) if duplex else None
                 try:
                     while not session.closed:
-                        event=await session.next_provider_event()
+                        if duplex:
+                            ok,event=await incoming_provider.get()
+                            if not ok:raise event
+                        else:
+                            event=await session.next_provider_event()
                         stage='provider_event'
                         response_inflight_before=session.response_inflight
                         output_playing_before=bool(session.item)
-                        await session.receive_provider(event)
+                        if callable(observer):await session.receive_provider(event,already_observed=True)
+                        else:await session.receive_provider(event)
                         if isinstance(event,dict):
                             kind=event.get('type')
                             if kind=='input_audio_buffer.speech_started':
@@ -303,8 +372,18 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 except Exception as exc:
                     if not _expected_close_after_session_end(session,exc):
                         _log_provider_failure(stage,event,exc)
-                    if not session.closed:await session.end('provider_disconnected')
-                    await ws.close()
+                    # Even when another task has already marked the session
+                    # closed, wait for its shared end task to finish before
+                    # closing the browser socket and racing the terminal frame.
+                    await session.end('provider_disconnected')
+                    socket_client.start_close()
+                finally:
+                    if provider_receiver is not None:
+                        provider_receiver.cancel()
+                        # Cancellation does not prove that a socket read ended.
+                        # Session shutdown still drains receive_lock before lease
+                        # release and retains its lease on an uncertain drain.
+                        provider_receiver.add_done_callback(session._consume_task)
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
             session_ready=True
@@ -343,7 +422,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                             pcm+=part;frame_count+=1
                     event={'type':'audio','pcm':pcm}
                     audio_started=time.monotonic()
-                    try:await session.receive_client(event)
+                    try:
+                        if callable(getattr(session,'observe_client_audio',None)) and getattr(session,'duplex',False):
+                            await session.receive_client(event,audio_observed=True)
+                        else:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
@@ -359,7 +441,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     if not isinstance(event,dict) or event.get('type') not in ('end','mute','talk_start','stop_response','talk_end','played','played_all','playback_scheduled','playback_failed'):
                         break
                     _log_playback_queue_latency(event,received_at)
-                    try:await session.receive_client(event)
+                    try:
+                        if callable(getattr(session,'observe_client_control',None)) and getattr(session,'duplex',False):
+                            await session.receive_client(event,control_observed=True)
+                        else:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
@@ -379,17 +464,16 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     break
         except Exception as exc:
             # Deliberately do not log request content, audio, or exception text.
-            if not ws.closed:
+            if not ws.closed and not (session_ready and session is not None and session.closed):
                 # Report only the server's precise, pre-open lease refusal.  A
                 # generic provider error must never be mistaken for proof that
                 # no other voice session exists or that one has ended.
-                await ws.send_json({'type':'error','code':_startup_failure_code(exc,session,session_ready)})
+                await socket_client.send({'type':'error','code':_startup_failure_code(exc,session,session_ready)})
         finally:
             try:
                 if session is not None:
                     await session.end('disconnected')
             finally:
-                await ws.close()
                 if reader is not None:
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
@@ -400,6 +484,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     # unless its receive lock and socket were drained.
                     done,pending=await asyncio.wait({provider_reader},timeout=.5)
                     for task in pending:task.add_done_callback(session._consume_task)
-            _log_voice_activity(session_ready,activity)
+                try:
+                    await socket_client.close()
+                finally:
+                    _log_voice_activity(session_ready,activity)
         return ws
     return handler

@@ -9,9 +9,11 @@ on:
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
+      - 'beintaskbot-main/docs/tenant-operator-copilot-voice.js'
       - 'beintaskbot-main/tests/test_tenant_operator_copilot_audio.cjs'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_greeting.cjs'
       - 'beintaskbot-main/tests/test_tenant_voice_start_failure.py'
+      - 'beintaskbot-main/tests/test_voice_causality_repro_local.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-channel.js'
       - 'beintaskbot-main/tests/test_tenant_voice_pilot_browser.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
@@ -57,12 +59,14 @@ jobs:
           tests/test_tenant_operator_voice_stale_ack.py
           tests/test_tenant_operator_voice_duplex.py
           tests/test_tenant_operator_voice_queue_load.py
+          tests/test_tenant_operator_voice_terminal_socket.py
           tests/test_tenant_operator_voice_orchestration.py
           tests/test_tenant_operator_voice.py
           tests/test_tenant_operator_voice_api.py
           tests/test_tenant_auth_api.py
           tests/test_tenant_browser_session.py
           tests/test_employee_account_assign_api.py
+          tests/test_voice_causality_repro_local.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
         run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs tests/test_tenant_voice_channel_timeout.cjs

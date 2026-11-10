@@ -210,7 +210,7 @@ class _RealtimeWire:
         if not callable(getattr(claim_guard,'consume',None)):
             raise ValueError('claim_guard_required')
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
-        self.duplex=False;self._cancel_events={};self._completed_responses=set();self._pending_cancel_races={}
+        self.duplex=False;self.context_id=None;self._prepared_response=None;self._cancel_events={};self._completed_responses=set();self._pending_cancel_races={}
 
     def _note_conversation(self,event,session_id=None):
         conversation=event.get('conversation')
@@ -222,7 +222,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect,duplex=False):
-        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
+        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not duplex or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -241,12 +241,11 @@ class _RealtimeWire:
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
                             'noise_reduction':{'type':'near_field','strength':1},
-                            # Click-to-talk owns turn boundaries. The server
-                            # commits input only after the employee presses
-                            # Send, so VAD cannot auto-submit a pause or noise.
+                            # Provider VAD may interrupt ongoing speech but
+                            # must never create a response without our permit.
                             'turn_detection':({'type':'server_vad','threshold':0.5,'prefix_padding_ms':300,
                                                'silence_duration_ms':500,'create_response':False,
-                                               'interrupt_response':False} if duplex else None)},
+                                               'interrupt_response':True} if duplex else None)},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -277,7 +276,7 @@ class _RealtimeWire:
             ('status' in item and item['status']!='completed') or
             item.get('content')!=[{'type':'input_text','text':context_text}]):
             raise ValueError('provider_context_unconfirmed')
-        self.config=config;self.session_id=session_id;self.duplex=duplex;self.ready=True
+        self.config=config;self.session_id=session_id;self.context_id=context_id;self.duplex=duplex;self.ready=True
 
     @staticmethod
     def _turn_detection_matches(actual,expected):
@@ -286,7 +285,7 @@ class _RealtimeWire:
         allowed=set(expected)|{'idle_timeout_ms'}
         return (set(actual)<=allowed and actual.get('idle_timeout_ms') is None and
                 actual.get('type')=='server_vad' and actual.get('create_response') is False and
-                actual.get('interrupt_response') is False and
+                actual.get('interrupt_response') is expected.get('interrupt_response') and
                 type(actual.get('threshold')) in (int,float) and actual.get('threshold')==expected['threshold'] and
                 type(actual.get('prefix_padding_ms')) is int and actual.get('prefix_padding_ms')==expected['prefix_padding_ms'] and
                 type(actual.get('silence_duration_ms')) is int and actual.get('silence_duration_ms')==expected['silence_duration_ms'])
@@ -320,7 +319,7 @@ class _RealtimeWire:
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
 
     async def bind_claim(self,scope,receipt):
-        if not self.ready or self.bound is not None or not isinstance(scope,dict) or not isinstance(receipt,dict):
+        if not self.ready or self.bound is not None or self._prepared_response is not None or not isinstance(scope,dict) or not isinstance(receipt,dict):
             raise ValueError('claim_not_available')
         required={'request_id','tenant_id','session_id','actor_id','channel_id','conversation_id','response_number','executor'}
         if set(scope)!=required or receipt.get('state')!='claimed' or any(str(receipt.get(k))!=str(v) for k,v in scope.items()):
@@ -336,7 +335,7 @@ class _RealtimeWire:
         # No financial reservation is represented by a pilot permit. This
         # path still requires the exact server-owned policy and one-use guard.
         from tenant_operator_voice_pilot import PilotAdmission
-        if type(self.guard) is not PilotAdmission or not self.ready or self.bound is not None:
+        if type(self.guard) is not PilotAdmission or not self.ready or self.bound is not None or self._prepared_response is not None:
             raise ValueError('pilot_claim_not_available')
         if not isinstance(scope,dict) or not isinstance(receipt,dict):raise ValueError('pilot_claim_invalid')
         expected=(scope.get('tenant_id'),scope.get('actor_id'),scope.get('channel_id'),scope.get('conversation_id'))
@@ -346,23 +345,68 @@ class _RealtimeWire:
         self.bound=(dict(scope),dict(receipt))
 
     async def send(self,event):
+        return await self._send(event)
+
+    async def send_guarded_response(self,event,dispatch_guard):
+        if not callable(dispatch_guard):raise ValueError('response_guard_required')
+        return await self._send(event,dispatch_guard=dispatch_guard)
+
+    async def prepare_guarded_response(self,event,dispatch_guard):
+        if not callable(dispatch_guard):raise ValueError('response_guard_required')
+        return await self._prepare_response(event,dispatch_guard)
+
+    async def _prepare_response(self,event,dispatch_guard=None):
+        if not self.ready or not isinstance(event,dict):raise ValueError('session_not_ready')
+        if event.get('type')!='response.create' or self._prepared_response is not None:
+            raise ValueError('response_prepare_invalid')
+        if not self.bound:raise ValueError('claim_missing')
+        from tenant_operator_voice_pilot import PilotAdmission
+        if self.duplex and (dispatch_guard is not None or type(self.guard) is PilotAdmission):
+            response=event.get('response')
+            refs=response.get('input') if isinstance(response,dict) else None
+            if (set(event)!={'type','response'} or not isinstance(response,dict) or set(response)!={'input'} or
+                not isinstance(refs,list) or not 2<=len(refs)<=1024 or
+                any(not isinstance(item,dict) or set(item)!={'type','id'} or
+                    item.get('type')!='item_reference' or not isinstance(item.get('id'),str) or
+                    not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item['id']) for item in refs) or
+                refs[0]['id']!=self.context_id or len({item['id'] for item in refs})!=len(refs)):
+                raise ValueError('response_context_invalid')
+        elif set(event)!={'type'}:
+            raise ValueError('response_context_invalid')
+        scope,receipt=self.bound;self.bound=None
+        if type(self.guard) is PilotAdmission:
+            admitted_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
+            consumed=await self.guard.consume(admitted_scope,receipt)
+        else:
+            consumed=await self.guard.consume(scope,receipt)
+        if consumed is not True:raise ValueError('claim_not_consumed')
+        self.seen.add(scope['request_id'])
+        if not self.ready or (dispatch_guard is not None and not dispatch_guard()):return None
+        token=object()
+        self._prepared_response=(token,event)
+        return token
+
+    def discard_prepared_response(self,token):
+        if self._prepared_response is not None and self._prepared_response[0] is token:
+            self._prepared_response=None
+
+    async def send_prepared_response(self,token,dispatch_guard=None):
+        if self._prepared_response is None or self._prepared_response[0] is not token:
+            if not self.ready:return False
+            raise ValueError('response_prepare_invalid')
+        _,event=self._prepared_response;self._prepared_response=None
+        if not self.ready or (dispatch_guard is not None and not dispatch_guard()):return False
+        await self.socket.send_json(event)
+        return True
+
+    async def _send(self,event,dispatch_guard=None):
         if not self.ready or not isinstance(event,dict):raise ValueError('session_not_ready')
         kind=event.get('type')
-        if kind=='response.create' and set(event)=={'type'}:
-            if not self.bound:raise ValueError('claim_missing')
-            scope,receipt=self.bound;self.bound=None
-            # This test callback must model an atomic, committed, globally
-            # one-use dispatch capability; current production ledger has no
-            # such reviewed integration, so the live factory stays blocked.
-            from tenant_operator_voice_pilot import PilotAdmission
-            if type(self.guard) is PilotAdmission:
-                admitted_scope=(scope['tenant_id'],scope['actor_id'],scope['channel_id'],scope['conversation_id'])
-                consumed=await self.guard.consume(admitted_scope,receipt)
-            else:
-                consumed=await self.guard.consume(scope,receipt)
-            if consumed is not True:raise ValueError('claim_not_consumed')
-            self.seen.add(scope['request_id'])
-        elif kind=='input_audio_buffer.append' and set(event)=={'type','audio'}:
+        if kind=='response.create':
+            token=await self._prepare_response(event,dispatch_guard)
+            if token is None:return False
+            return await self.send_prepared_response(token,dispatch_guard)
+        if kind=='input_audio_buffer.append' and set(event)=={'type','audio'}:
             try:audio=base64.b64decode(event['audio'],validate=True)
             except (ValueError,TypeError,binascii.Error):raise ValueError('audio_invalid') from None
             if not audio or len(audio)>9600 or len(audio)%2:raise ValueError('audio_invalid')
@@ -386,6 +430,7 @@ class _RealtimeWire:
                 raise ValueError('truncate_invalid')
         else:raise ValueError('provider_event_forbidden')
         await self.socket.send_json(event)
+        return True
 
     async def receive(self):
         if not self.ready:raise ValueError('session_not_ready')
@@ -414,7 +459,10 @@ class _RealtimeWire:
             self._pending_cancel_races[event_id]=(response_id,asyncio.get_running_loop().time()+CANCEL_RACE_DEADLINE)
         if event.get('type')=='response.done':
             response=event.get('response');response_id=response.get('id') if isinstance(response,dict) else None
-            if isinstance(response_id,str) and response_id in self._cancel_events.values():
+            if isinstance(response_id,str) and 0<len(response_id)<=128 and (
+                    self.duplex or response_id in self._cancel_events.values()):
+                if response_id not in self._completed_responses and len(self._completed_responses)>=256:
+                    raise SafeRealtimeFailure('provider_error',event_type='response.done')
                 self._completed_responses.add(response_id)
                 for event_id,(pending_response,_) in list(self._pending_cancel_races.items()):
                     if pending_response==response_id:
@@ -429,7 +477,7 @@ class _RealtimeWire:
         return event
 
     async def close(self):
-        self.ready=False;self.bound=None;self._cancel_events.clear();self._completed_responses.clear();self._pending_cancel_races.clear()
+        self.ready=False;self.bound=None;self.context_id=None;self._prepared_response=None;self._cancel_events.clear();self._completed_responses.clear();self._pending_cancel_races.clear()
         await self.socket.close()
 
 

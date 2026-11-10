@@ -47,7 +47,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                     release.set();await client.close()
 
     async def test_queued_pcm_is_coalesced_without_crossing_ack_barrier(self):
-        entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event();processed=asyncio.Event()
+        entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event();processed=asyncio.Event();drained=asyncio.Event()
         seen=[];checks=[];count=0
         class FakeSession:
             def __init__(self):
@@ -58,6 +58,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 if event['type']=='audio':
                     if not entered.is_set():entered.set();await release.wait()
                     seen.append(('audio',event['pcm']))
+                    if len(seen)==7:drained.set()
                 else:
                     seen.append((event['type'],None))
                     if event['type']=='end':
@@ -84,6 +85,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 await ws.send_json({'type':'stop_response','item_id':'synthetic','audio_end_ms':0})
                 await ws.send_bytes(bytes([12])*2048)
                 await asyncio.wait_for(queued.wait(),3);release.set()
+                await asyncio.wait_for(drained.wait(),3)
                 await ws.send_json({'type':'end'})
                 await asyncio.wait_for(processed.wait(),3)
             audio=[payload for kind,payload in seen if kind=='audio']
