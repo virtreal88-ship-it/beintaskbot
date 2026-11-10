@@ -1,0 +1,26 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const supportDeps=process.env.TEST_SUPPORT_DEPS||path.join(__dirname,'..','.support-test-deps','node_modules');
+const {JSDOM}=require(path.join(supportDeps,'jsdom'));
+const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(root,name),'utf8');
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=ai_dashboard',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
+ w.tenantI18n={language:'ru'};w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'admin'},capabilities:{}};
+ Object.defineProperty(w.crypto,'randomUUID',{value:()=> '22222222-2222-4222-8222-222222222222'});
+ w.fetch=async(url,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({url,options,body});return{ok:true,status:200,json:async()=>({success:true,result:{text:'<img src=x onerror=alert(1)>',read_only:true,source_refs:[{kind:'linear_task',task_id:'ABC-1',inbox_url:'/app?view=linear'},{kind:'case',candidate_id:'id',inbox_url:'https://evil.example'}]}})}};
+ w.eval(read('docs/tenant-ai-business-analyst.js'));
+ assert.equal(d.querySelector('#aiBusinessAnalystHost form'),null,'non-owner never sees the analyst form');
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'},capabilities:{}}}));
+ const form=d.querySelector('#aiBusinessAnalystHost form');assert.ok(form,'owner gets the isolated management analyst');
+ const input=form.querySelector('textarea');input.value='Which task is overdue?';form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+ for(let i=0;i<20&&calls.length===0;i++)await new Promise(resolve=>setImmediate(resolve));
+ for(let i=0;i<20&&d.querySelector('.analyst-answer')?.hidden!==false;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/platform/ai/analytics/ask');
+ assert.deepEqual(calls[0].body,{expected_tenant_id:'tenant-a',expected_user_id:'7',request_id:'22222222-2222-4222-8222-222222222222',prompt:'Which task is overdue?'});
+ assert.equal(calls[0].options.credentials,'same-origin');assert.equal(calls[0].options.cache,'no-store');
+ const answer=d.querySelector('.analyst-answer');assert.equal(answer.textContent,'<img src=x onerror=alert(1)>');assert.equal(answer.querySelector('img'),null,'model output is rendered as text');
+ assert.equal(d.querySelectorAll('.analyst-sources a').length,1,'only same-origin /app references are linked');
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'tenant-a',telegram_id:7,role:'admin'},capabilities:{}}}));
+ assert.equal(d.querySelector('#aiBusinessAnalystHost').children.length,0,'role change clears the owner-only result');
+ assert.equal(calls.length,1,'no customer-message, CRM-write, or automatic retry request was made');
+ dom.window.close();console.log('Business Analyst UI: owner-only, read-only submit, safe rendering, and role-change clearing passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});

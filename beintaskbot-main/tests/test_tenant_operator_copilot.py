@@ -156,7 +156,7 @@ def test_copilot_uses_assigned_model_and_never_sends_a_message(monkeypatch):
     assert knowledge_context.call_args.kwargs['agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
     assert finish.called
     sql=' '.join(call.args[0] for call in cur.execute.call_args_list)
-    assert "provider='connect' AND usage_day" in sql
+    assert "provider IN ('connect','business_analyst') AND usage_day" in ' '.join(sql.split())
     assert 'tenant-chat-ai:'+tenant in str(cur.execute.call_args_list)
 
 
