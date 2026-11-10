@@ -43,7 +43,7 @@
  #staffMemberModal .staff-tab-panel{padding:12px 14px}
  #staffMemberModal .grid{grid-template-columns:minmax(0,1fr);gap:10px}
  #staffMemberModal fieldset.staff-rights{grid-template-columns:1fr}
- #staffMemberModal [data-access-pages]>.grid>label{grid-template-columns:minmax(0,1fr) minmax(120px,47%);gap:2px 8px;padding:8px 0}
+ #staffMemberModal [data-access-pages]>.grid>label{grid-template-columns:minmax(0,1fr) minmax(150px,57%);gap:2px 8px;padding:8px 0}
  #staffMemberModal [data-access-pages] select{font-size:11px;padding:6px;min-height:34px}
  #staffMemberModal [data-access-pages] [data-access-hint]{font-size:10px;line-height:1.3}
  #staffMemberModal .staff-tabbed-form>.staff-modal-actions{padding:10px 14px;gap:6px}
