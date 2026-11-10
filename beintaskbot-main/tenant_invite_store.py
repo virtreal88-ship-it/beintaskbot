@@ -8,6 +8,7 @@ from tenant_member_store import member
 from tenant_platform_common import _invite_token, _permissions, _role
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 from tenant_policy import TenantPolicy
+from tenant_account_store import _lock_source_session, _lock_verified_credential
 
 def _may_manage(current: dict | None) -> bool:
     return bool(current and TenantPolicy(current).allows_action('employees','manage'))
@@ -52,19 +53,42 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
             "expires_at": expires.isoformat()}
 
 
-def accept_email_invite(*, token: str, actor_id: int, email: str, display_name: str = '') -> dict:
-    """Accept an invitation using an already verified email account session."""
+def accept_email_invite(*, token: str, actor_id: int, email: str, display_name: str = '',
+                        credential_fingerprint: str | None = None, source_session: dict | None = None) -> dict:
+    """Accept with current account authentication; activation is not mailbox proof."""
     token_hash = hashlib.sha256(_invite_token(token).encode('utf-8')).hexdigest()
     address = str(email or '').strip().casefold()
     if not address or int(actor_id) <= 0: raise TenantPlatformError('Email hesabı ilə giriş edin.')
+    if credential_fingerprint is None and source_session is None:
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            if source_session is not None:
+                _lock_source_session(cur, actor_id, source_session)
+            if credential_fingerprint is not None:
+                # Login proof must cover the membership side effect as well
+                # as the later cookie. Serialize with owner recovery before
+                # taking the membership write lock or any account row lock.
+                cur.execute("SET LOCAL lock_timeout='3s'")
+                cur.execute('SELECT pg_advisory_xact_lock(1852404781)')
+                cur.execute('LOCK TABLE saas_tenant_members IN ROW EXCLUSIVE MODE')
+                account = _lock_verified_credential(cur, actor_id, credential_fingerprint)
+                if str(account.get('email') or '').strip().casefold() != address:
+                    raise TenantPlatformError('Giriş məlumatları dəyişib. Yenidən daxil olun.')
             cur.execute('''SELECT i.*,t.name AS tenant_name FROM saas_tenant_invites i JOIN saas_tenants t ON t.id=i.tenant_id
                            WHERE i.token_hash=%s FOR UPDATE OF i''',(token_hash,))
             invite=cur.fetchone()
             if not invite or invite.get('accepted_at') or invite.get('expires_at')<=datetime.now(timezone.utc):
                 raise TenantPlatformError('Dəvət linki etibarlı deyil və ya müddəti bitib.')
+            # Company-managed credentials do not prove the employee owns the
+            # assigned mailbox. Do not use them to enter another workspace.
+            cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_tenant_audit_events
+                  WHERE entity_type='employee' AND entity_id=%s
+                    AND action='employee.provisioned' AND tenant_id<>%s::uuid) AS managed_elsewhere''',
+                (str(actor_id), invite['tenant_id']))
+            if (cur.fetchone() or {}).get('managed_elsewhere'):
+                raise TenantPlatformError('Şirkət tərəfindən idarə olunan hesab başqa şirkətin email dəvətini qəbul edə bilməz.')
             allowed=str(invite.get('invited_email') or '').casefold()
             if allowed and allowed != address: raise TenantPlatformError('Bu dəvət başqa email ünvanı üçün yaradılıb.')
             if not allowed: cur.execute('UPDATE saas_tenant_invites SET invited_email=%s WHERE id=%s',(address,invite['id']))

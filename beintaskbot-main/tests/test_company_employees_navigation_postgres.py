@@ -52,7 +52,8 @@ def staff(db, monkeypatch):
     factory = lambda: psycopg.connect(db.dsn, row_factory=dict_row)
     for name in ('tenant_platform', 'tenant_platform_core', 'tenant_member_store',
                  'tenant_workflow_store', 'tenant_account_store', 'tenant_integration_store',
-                 'tenant_invite_store', 'tenant_push', 'tenant_crm_native_tasks'):
+                 'tenant_invite_store', 'tenant_push', 'tenant_crm_native_tasks',
+                 'tenant_member_email_assign', 'tenant_member_password_assign', 'tenant_member_profile_assign'):
         module = importlib.import_module(name)
         if hasattr(module, '_connect'):
             monkeypatch.setattr(module, '_connect', factory)
@@ -120,7 +121,7 @@ def _apis(f, origin=ORIGIN):
         origin=origin, cookie_name=COOKIE_NAME, cookie_ttl=TTL_SECONDS,
         base_dir=str(ROOT), logger=LOGGER, account_profile=accounts.profile,
         list_sessions=accounts.list_sessions, revoke_session=accounts.revoke_session,
-        session_id=f['session'].session_id))
+        session_id=f['session'].session_id, source_session=f['session'].source))
     employee = member_handlers(MemberApiContext(
         member=principal, telegram_identity=f['forbidden'], telegram_name=auth_api.telegram_display_name,
         send_telegram=f['forbidden'], origin=origin, list_members=members.list_members,
@@ -130,7 +131,11 @@ def _apis(f, origin=ORIGIN):
         platform_error=TenantPlatformError, provision_employee_account=members.provision_employee_account,
         can_manage=lambda profile: TenantPolicy(profile).allows_action('employees', 'manage'),
         set_member_whatsapp_numbers=members.set_member_whatsapp_numbers,
-        add_member_whatsapp_number=members.add_member_whatsapp_number))
+        add_member_whatsapp_number=members.add_member_whatsapp_number,
+        source_session=f['session'].source,
+        assign_member_email=importlib.import_module('tenant_member_email_assign').assign_member_email,
+        assign_member_password=importlib.import_module('tenant_member_password_assign').assign_member_password,
+        assign_member_profile=importlib.import_module('tenant_member_profile_assign').assign_member_profile))
     return auth, employee
 
 

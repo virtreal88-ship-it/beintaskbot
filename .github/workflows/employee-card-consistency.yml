@@ -3,6 +3,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/employee-card-consistency.yml'
+      - 'beintaskbot-main/tenant_member*_assign.py'
+      - 'beintaskbot-main/tenant_email_auth.py'
+      - 'beintaskbot-main/tenant_auth_api.py'
+      - 'beintaskbot-main/tenant_platform_schema_identity.py'
+      - 'beintaskbot-main/tenant_invite_store.py'
+      - 'beintaskbot-main/tests/test_*assign*'
       - 'beintaskbot-main/tenant_member_store.py'
       - 'beintaskbot-main/tenant_members_api.py'
       - 'beintaskbot-main/tenant_account_store.py'
@@ -65,11 +71,21 @@ jobs:
           tests/test_employee_card_consistency_postgres.py
           tests/test_tenant_member_store.py
           tests/test_tenant_members_api.py
+          tests/test_tenant_auth_api.py
+          tests/test_tenant_browser_session.py
+          tests/test_tenant_email_auth.py
+          tests/test_employee_account_assign_api.py
+          tests/test_member_email_assign_postgres.py
+          tests/test_member_password_assign_postgres.py
+          tests/test_member_profile_assign_postgres.py
+          tests/test_employee_profile_assign_api.py
           tests/test_tenant_support_inbox.py::test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email
           tests/test_tenant_support_inbox.py::test_employee_rights_round_trip_preserves_hidden_and_legacy_grants
       - name: Current employee forms and retained navigation lifecycle
         run: |
           node tests/test_employee_card_ui.cjs
+          node tests/test_employee_account_assign_ui.cjs
+          node tests/test_employee_profile_assign_ui.cjs
           node tests/test_company_employees_entry_ui.cjs
           node tests/test_tenant_members_ui.cjs
           node tests/test_tenant_members_invite_ui.cjs

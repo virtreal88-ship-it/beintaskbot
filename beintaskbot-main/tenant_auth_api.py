@@ -1,6 +1,7 @@
 """Tenant registration, login, session profile, logout, and auth pages."""
 import asyncio
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
@@ -17,7 +18,7 @@ def telegram_display_name(payload: dict) -> str:
 class AuthApiContext:
     member: Callable[..., dict | None]
     telegram_identity: Callable[[dict], int | None]
-    issue_session: Callable[[str, int], str]
+    issue_session: Callable[..., str]
     tenants_for_user: Callable[[int], list]
     create_tenant: Callable[..., dict]
     list_integrations: Callable[..., list]
@@ -41,11 +42,27 @@ class AuthApiContext:
     session_id: Callable[..., str | None] | None = None
     record_login: Callable[..., object] | None = None
     accept_email_invite: Callable[..., dict] | None = None
+    source_session: Callable[..., dict | None] | None = None
 
 
-def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int) -> None:
+def _credential_fingerprint(context: AuthApiContext, credentials: dict) -> str:
+    fingerprint = credentials.get('_credential_fingerprint')
+    if not isinstance(fingerprint, str) or not re.fullmatch(r'[a-f0-9]{64}', fingerprint):
+        raise context.platform_error('Giriş məlumatları dəyişib. Yenidən daxil olun.')
+    return fingerprint
+
+
+def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int,
+                 *, credentials: dict | None = None, source_session: dict | None = None,
+                 revoke_source: bool = False) -> None:
+    session_options = ({'credential_fingerprint': _credential_fingerprint(context, credentials)}
+                       if credentials is not None else {})
+    if source_session is not None:
+        session_options['source_session'] = source_session
+    if revoke_source:
+        session_options['revoke_source'] = True
     response.set_cookie(
-        context.cookie_name, context.issue_session(str(tenant_id), chat_id),
+        context.cookie_name, context.issue_session(str(tenant_id), chat_id, **session_options),
         max_age=context.cookie_ttl, httponly=True, secure=True, samesite="Lax", path="/",
     )
 
@@ -61,6 +78,11 @@ def _page(context: AuthApiContext, filename: str, missing: str) -> web.Response:
         return web.Response(status=404, text=missing)
     response = web.FileResponse(html_path)
     response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    if filename == 'auth-confirm.html':
+        # One-time credentials are carried in this page's URL. Do not cache
+        # the document or leak its URL to navigation/subresource requests.
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
 
@@ -157,7 +179,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         try:
             data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_confirmation, token=(data or {}).get('token'), password=(data or {}).get('password'))
             response = web.json_response({'success': True, 'redirect': _product_destination(result.get('destination_product'))})
-            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -168,6 +190,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             data = await request.json(); data = data if isinstance(data, dict) else {}
             result = await asyncio.to_thread(context.email_auth.login, email=data.get('email'), password=data.get('password'), request_ip=request_ip(request))
             if not result: return web.json_response({'success': False, 'error': 'Email və ya parol düzgün deyil.'}, status=401)
+            credential_fingerprint = _credential_fingerprint(context, result)
             companies = await asyncio.to_thread(context.tenants_for_user, int(result['actor_id']))
             requested_tenant = str(data.get('tenant_id') or '').strip()
             invite_accepted = False
@@ -175,7 +198,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 account=await asyncio.to_thread(context.account_profile,actor_id=int(result['actor_id']))
                 invitation=await asyncio.to_thread(context.accept_email_invite,token=str(data.get('invite_token')),
                     actor_id=int(result['actor_id']),email=str(account.get('email') or ''),
-                    display_name=str(account.get('display_name') or ''))
+                    display_name=str(account.get('display_name') or ''), credential_fingerprint=credential_fingerprint)
                 requested_tenant=str(invitation['tenant_id'])
                 invite_accepted = True
                 companies=await asyncio.to_thread(context.tenants_for_user,int(result['actor_id']))
@@ -193,7 +216,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 'password_change_required': password_change_required,
                 'invite_accepted': invite_accepted})
             if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=int(result['actor_id']))
-            _set_session(response, context, str(tenant['id']), result['actor_id'])
+            _set_session(response, context, str(tenant['id']), result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -228,9 +251,13 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if not profile:
             return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         try:
+            source = context.source_session(request) if context.source_session else None
+            if not source:
+                return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
             data = await request.json(); data = data if isinstance(data, dict) else {}
             await asyncio.to_thread(context.email_auth.change_password,
-                tenant_id=str(profile['tenant_id']), actor_id=int(profile['telegram_id']), password=data.get('password'))
+                tenant_id=str(profile['tenant_id']), actor_id=int(profile['telegram_id']), password=data.get('password'),
+                source_session=source)
             return web.json_response({'success': True, 'redirect': '/app'})
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -295,7 +322,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             result = await asyncio.to_thread(context.email_auth.complete_email_link,
                 token=(data or {}).get('token'), password=(data or {}).get('password'))
             response = web.json_response({'success': True, 'redirect': '/app'})
-            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -453,15 +480,19 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        source = context.source_session(request) if context.source_session else None
+        if not source:
+            return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         data = await request.json(); data = data if isinstance(data, dict) else {}
         companies = await asyncio.to_thread(context.tenants_for_user, int(profile['telegram_id']))
         tenant = next((item for item in companies if str(item.get('id')) == str(data.get('tenant_id') or '')), None)
         if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
-        previous=context.session_id(request) if context.session_id else None
-        if context.revoke_session and previous:
-            await asyncio.to_thread(context.revoke_session,tenant_id=str(profile['tenant_id']),actor_id=int(profile['telegram_id']),session_id=previous)
         response = web.json_response({'success': True, 'tenant': {'id': tenant['id'], 'name': tenant['name']}, 'redirect': '/app'})
-        _set_session(response, context, str(tenant['id']), int(profile['telegram_id']))
+        try:
+            _set_session(response, context, str(tenant['id']), int(profile['telegram_id']),
+                         source_session=source, revoke_source=True)
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=401)
         return response
 
     return {

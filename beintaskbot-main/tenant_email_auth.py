@@ -84,6 +84,45 @@ def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _credential_fingerprint(actor_id, email, password_hash, login=None):
+    return _token_hash(str(actor_id) + '\0' + str(email or '').casefold() + '\0' + str(password_hash or '') + '\0' + str(login or '').casefold())
+
+
+def _consume_password_setting_tokens(cur, user_id) -> None:
+    """Consume every older one-time password-setting capability atomically."""
+    cur.execute('''UPDATE saas_auth_tokens SET used_at=now()
+          WHERE user_id=%s AND purpose IN ('confirm','link_email','reset')
+            AND used_at IS NULL''', (user_id,))
+
+
+def _lock_password_setting_token(cur, raw_token: str, purpose: str) -> dict | None:
+    """Always lock account before token so concurrent capabilities cannot deadlock.
+
+    The first lookup only finds the account to lock. Its result never authorizes
+    an effect: expiry, purpose, ownership and one-time use are rechecked after
+    the account lock, immediately before any expensive password computation.
+    """
+    digest = _token_hash(raw_token)
+    cur.execute('''SELECT user_id FROM saas_auth_tokens
+          WHERE token_hash=%s AND purpose=%s AND used_at IS NULL
+            AND expires_at>clock_timestamp()''', (digest, purpose))
+    routing = cur.fetchone()
+    if not routing:
+        return None
+    cur.execute('SELECT * FROM saas_auth_users WHERE id=%s FOR UPDATE', (routing['user_id'],))
+    account = cur.fetchone()
+    if not account:
+        return None
+    cur.execute('''SELECT id,destination_product FROM saas_auth_tokens
+          WHERE token_hash=%s AND purpose=%s AND user_id=%s AND used_at IS NULL
+            AND expires_at>clock_timestamp() FOR UPDATE''', (digest, purpose, account['id']))
+    capability = cur.fetchone()
+    if not capability:
+        return None
+    return {**account, 'user_id': account['id'], 'token_id': capability['id'],
+            'destination_product': capability.get('destination_product')}
+
+
 def _origin() -> str:
     return str(os.environ.get('CANONICAL_WEB_ORIGIN') or '').rstrip('/')
 
@@ -231,9 +270,7 @@ def complete_confirmation(*, token: object, password: object) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT t.id AS token_id,t.destination_product,u.* FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
-                WHERE t.token_hash=%s AND t.purpose='confirm' AND t.used_at IS NULL AND t.expires_at>now() FOR UPDATE OF t,u''', (_token_hash(raw_token),))
-            user = cur.fetchone()
+            user = _lock_password_setting_token(cur, raw_token, 'confirm')
             if not user:
                 raise TenantPlatformError('Təsdiq keçidi etibarsızdır və ya müddəti bitib.')
             destination_product = _product(user.get('destination_product'))
@@ -264,10 +301,12 @@ def complete_confirmation(*, token: object, password: object) -> dict:
                   (tenant_id, _slug(user['company_name']), user['company_name'], user['actor_id'], _json(_DEFAULT_MODULES), _json(_DEFAULT_NOTIFICATIONS), _json(onboarding)))
                 cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,permissions)
                   VALUES(%s,%s,%s,'owner',%s::jsonb)''', (tenant_id, user['actor_id'], user['display_name'], _json(_ROLE_PERMISSIONS['owner'])))
-            cur.execute('''UPDATE saas_auth_users SET password_hash=%s,verified_at=COALESCE(verified_at,now()),tenant_id=%s,updated_at=now() WHERE id=%s''', (_hash_password(plain), tenant_id, user['id']))
-            cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (user['token_id'],))
+            password_hash = _hash_password(plain)
+            cur.execute('''UPDATE saas_auth_users SET password_hash=%s,verified_at=COALESCE(verified_at,now()),tenant_id=%s,updated_at=now() WHERE id=%s''', (password_hash, tenant_id, user['id']))
+            _consume_password_setting_tokens(cur, user['id'])
         conn.commit()
-    return {'tenant_id': str(tenant_id), 'actor_id': int(user['actor_id']), 'destination_product': destination_product}
+    return {'tenant_id': str(tenant_id), 'actor_id': int(user['actor_id']), 'destination_product': destination_product,
+            '_credential_fingerprint': _credential_fingerprint(user['actor_id'], user.get('email'), password_hash, user.get('login'))}
 
 
 def login(*, email: object, password: object, request_ip: str) -> dict | None:
@@ -289,22 +328,36 @@ def login(*, email: object, password: object, request_ip: str) -> dict | None:
     if not accepted or not user or not user.get('tenant_id'):
         return None
     return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id']),
+            '_credential_fingerprint': _credential_fingerprint(user['actor_id'], user.get('email'), user.get('password_hash'), user.get('login')),
             'force_password_change': bool(user.get('force_password_change'))}
 
 
-def change_password(*, tenant_id: str, actor_id: int, password: object) -> dict:
+def change_password(*, tenant_id: str, actor_id: int, password: object,
+                    source_session: dict | None = None) -> dict:
     """Complete the mandatory first-password rotation for a signed-in account."""
+    from tenant_account_store import _lock_source_session
+    if not isinstance(source_session, dict) or str(source_session.get('tenant_id')) != str(tenant_id):
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
     plain = _password(password)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT id FROM saas_auth_users WHERE tenant_id=%s::uuid AND actor_id=%s
-              AND disabled_at IS NULL AND status='active' FOR UPDATE''', (tenant_id, int(actor_id)))
+            # A profile checked before this transaction can become stale while
+            # owner recovery runs. Keep the source auth/session locks through
+            # the credential write; a revoked SID or targeted legacy marker
+            # must win before any password hashing or mutation occurs.
+            _lock_source_session(cur, int(actor_id), source_session)
+            # The account is global. The source proof above establishes this
+            # actor's active membership in the selected company, even when
+            # the account's original/home company is another active workspace.
+            cur.execute('''SELECT id FROM saas_auth_users WHERE actor_id=%s
+              AND disabled_at IS NULL AND status='active' FOR UPDATE''', (int(actor_id),))
             row = cur.fetchone()
             if not row:
                 raise TenantPlatformError('Hesab əlçatan deyil.')
             cur.execute('''UPDATE saas_auth_users SET password_hash=%s,force_password_change=FALSE,
               updated_at=now() WHERE id=%s''', (_hash_password(plain), row['id']))
+            _consume_password_setting_tokens(cur, row['id'])
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,payload)
               VALUES(%s,%s::uuid,%s,'account.password.changed','account','{}'::jsonb)''',
                         (uuid.uuid4(), tenant_id, int(actor_id)))
@@ -333,17 +386,21 @@ def complete_password_reset(*, token: object, password: object) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT t.id AS token_id,t.destination_product,u.id AS user_id FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
-              WHERE t.token_hash=%s AND t.purpose='reset' AND t.used_at IS NULL AND t.expires_at>now() FOR UPDATE OF t,u''', (_token_hash(raw_token),))
-            row = cur.fetchone()
+            row = _lock_password_setting_token(cur, raw_token, 'reset')
             if not row: raise TenantPlatformError('Parol keçidi etibarsızdır və ya müddəti bitib.')
-            cur.execute('UPDATE saas_auth_users SET password_hash=%s,updated_at=now() WHERE id=%s', (_hash_password(plain), row['user_id']))
+            # Stateless legacy cookies cannot be revoked via session rows.
+            # Persist the same actor-specific fence as owner recovery, within
+            # the password/session revocation transaction, without affecting
+            # other accounts or clearing it on a later modern login.
+            cur.execute('''UPDATE saas_auth_users SET password_hash=%s,
+              legacy_sessions_revoked=TRUE,updated_at=now() WHERE id=%s''',
+                        (_hash_password(plain), row['user_id']))
             cur.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE actor_id=(SELECT actor_id FROM saas_auth_users WHERE id=%s) AND revoked_at IS NULL', (row['user_id'],))
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,payload)
-                           SELECT %s,m.tenant_id,m.telegram_id,'account.password.reset','account','{}'::jsonb
+                           SELECT gen_random_uuid(),m.tenant_id,m.telegram_id,'account.password.reset','account','{}'::jsonb
                            FROM saas_auth_users u JOIN saas_tenant_members m ON m.telegram_id=u.actor_id AND m.active=TRUE
-                           WHERE u.id=%s''',(uuid.uuid4(),row['user_id']))
-            cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (row['token_id'],))
+                           WHERE u.id=%s''',(row['user_id'],))
+            _consume_password_setting_tokens(cur, row['user_id'])
         conn.commit()
     return {'destination_product': _product(row.get('destination_product'))}
 
@@ -403,16 +460,14 @@ def complete_email_link(*, token: object, password: object) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT t.id AS token_id,u.* FROM saas_auth_tokens t
-                JOIN saas_auth_users u ON u.id=t.user_id
-                WHERE t.token_hash=%s AND t.purpose='link_email' AND t.used_at IS NULL
-                  AND t.expires_at>now() FOR UPDATE OF t,u''', (_token_hash(raw_token),))
-            user = cur.fetchone()
+            user = _lock_password_setting_token(cur, raw_token, 'link_email')
             if not user or not user.get('tenant_id'):
                 raise TenantPlatformError('Təsdiq keçidi etibarsızdır və ya müddəti bitib.')
+            password_hash = _hash_password(plain)
             cur.execute('''UPDATE saas_auth_users
                 SET password_hash=%s,verified_at=COALESCE(verified_at,now()),updated_at=now()
-                WHERE id=%s''', (_hash_password(plain), user['id']))
-            cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (user['token_id'],))
+                WHERE id=%s''', (password_hash, user['id']))
+            _consume_password_setting_tokens(cur, user['id'])
         conn.commit()
-    return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id'])}
+    return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id']),
+            '_credential_fingerprint': _credential_fingerprint(user['actor_id'], user.get('email'), password_hash, user.get('login'))}

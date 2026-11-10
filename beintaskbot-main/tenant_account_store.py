@@ -1,6 +1,8 @@
 """Tenant-scoped account profiles and revocable browser sessions."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -30,6 +32,9 @@ def profile(*, actor_id: int) -> dict:
                                   COALESCE(NULLIF(au.login,''),up.login,'') AS login,
                                   COALESCE(up.avatar_url,au.avatar_url,'') AS avatar_url,
                                   COALESCE(au.status,'active') AS status,au.verified_at,
+                                  COALESCE(au.status='active' AND au.disabled_at IS NULL
+                                      AND au.verified_at IS NOT NULL AND NULLIF(au.password_hash,'') IS NOT NULL,
+                                      FALSE) AS password_change_available,
                                   COALESCE(au.last_login_at,m.last_login_at) AS last_login_at
                            FROM (SELECT %s::bigint AS actor_id) x
                            LEFT JOIN saas_auth_users au ON au.actor_id=x.actor_id
@@ -40,7 +45,8 @@ def profile(*, actor_id: int) -> dict:
     if not row:
         return {'actor_id': int(actor_id), 'display_name': '', 'email': '', 'phone': '',
                 'first_name': '', 'last_name': '', 'login': '', 'avatar_url': '',
-                'status': 'active', 'verified': False, 'last_login_at': None}
+                'status': 'active', 'verified': False, 'last_login_at': None,
+                'password_change_available': False}
     result = dict(row)
     result['verified'] = bool(result.pop('verified_at'))
     for key in ('last_login_at',):
@@ -84,26 +90,108 @@ def update_profile(*, actor_id: int, first_name: object, last_name: object,
                         (int(actor_id),mobile,display,first,last,username,avatar,int(actor_id),int(actor_id),mobile,display,first,last,username,avatar,int(actor_id),int(actor_id)))
             row = cur.fetchone()
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-                           SELECT %s,m.tenant_id,%s,'account.profile.updated','account',%s,%s::jsonb
+                           SELECT gen_random_uuid(),m.tenant_id,%s,'account.profile.updated','account',%s,%s::jsonb
                            FROM saas_tenant_members m WHERE m.telegram_id=%s AND m.active=TRUE''',
-                        (uuid.uuid4(),int(actor_id),str(actor_id),_json({'phone_changed': bool(mobile)}),int(actor_id)))
+                        (int(actor_id),str(actor_id),_json({'phone_changed': bool(mobile)}),int(actor_id)))
         conn.commit()
     result = dict(row); result['verified'] = bool(result.pop('verified_at'))
     if result.get('last_login_at'): result['last_login_at'] = result['last_login_at'].isoformat()
     return result
 
 
-def create_session(*, session_id: str, tenant_id: str, actor_id: int, expires_at: int) -> None:
+def _lock_verified_credential(cur, actor_id: int, credential_fingerprint: str) -> dict:
+    """Fence a credential-authenticated effect against password rotation."""
+    if not isinstance(credential_fingerprint, str) or not re.fullmatch(r'[a-f0-9]{64}', credential_fingerprint):
+        raise TenantPlatformError('Giriş məlumatları dəyişib. Yenidən daxil olun.')
+    cur.execute('''SELECT password_hash,verified_at,disabled_at,status,email,login
+          FROM saas_auth_users WHERE actor_id=%s FOR UPDATE''', (int(actor_id),))
+    account = cur.fetchone()
+    if (not account or not account.get('verified_at') or account.get('disabled_at')
+            or account.get('status') != 'active'
+            or not hmac.compare_digest(credential_fingerprint,
+                hashlib.sha256((str(actor_id) + '\0' + str(account.get('email') or '').casefold() + '\0' + str(account.get('password_hash') or '') + '\0' + str(account.get('login') or '').casefold()).encode()).hexdigest())):
+        raise TenantPlatformError('Giriş məlumatları dəyişib. Yenidən daxil olun.')
+    return account
+
+
+def _lock_source_session(cur, actor_id: int, source: dict) -> None:
+    """Revalidate a signed browser session before a dependent session/effect."""
+    try:
+        if not isinstance(source, dict) or int(source.get('actor_id') or 0) != int(actor_id):
+            raise ValueError
+        tenant_id = str(uuid.UUID(str(source['tenant_id'])))
+        sid = source['session_id']
+        if not isinstance(sid, str):
+            raise ValueError
+        session_id = uuid.UUID(sid) if sid else None
+    except (KeyError, TypeError, ValueError):
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.') from None
+    # This order matches owner recovery, including the missing-auth-row case
+    # of a Telegram-only account. A stale checked profile is never sufficient.
+    cur.execute("SET LOCAL lock_timeout='3s'")
+    cur.execute('SELECT pg_advisory_xact_lock(1852404781)')
+    cur.execute('''SELECT legacy_sessions_revoked,disabled_at,status
+          FROM saas_auth_users WHERE actor_id=%s FOR UPDATE''', (int(actor_id),))
+    account = cur.fetchone()
+    if account and (account.get('disabled_at') or account.get('status') != 'active'):
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
+    cur.execute('''SELECT telegram_id FROM saas_tenant_members
+          WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE FOR SHARE''',
+        (tenant_id, int(actor_id)))
+    if not cur.fetchone():
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
+    if session_id:
+        cur.execute('''SELECT id FROM saas_tenant_browser_sessions
+              WHERE id=%s AND tenant_id=%s::uuid AND actor_id=%s
+                AND revoked_at IS NULL AND expires_at>clock_timestamp() FOR UPDATE''',
+            (session_id, tenant_id, int(actor_id)))
+        if not cur.fetchone():
+            raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
+    elif account and account.get('legacy_sessions_revoked') is not False:
+        raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
+
+
+def create_session(*, session_id: str, tenant_id: str, actor_id: int, expires_at: int,
+                   credential_fingerprint: str | None = None, source_session: dict | None = None,
+                   revoke_source: bool = False) -> None:
     if int(actor_id) <= 0: return  # signed demo identities remain non-persistent and tenant-limited
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            if source_session is not None:
+                _lock_source_session(cur, actor_id, source_session)
+            elif revoke_source:
+                raise TenantPlatformError('Sessiya etibarlı deyil. Yenidən daxil olun.')
+            if credential_fingerprint is not None:
+                # Password checking and cookie creation are separated by company
+                # selection/invitation handling. Fence the final session INSERT
+                # against the exact credential checked, under the same auth-row
+                # lock as password reset. Reset either revokes an already-created
+                # session or wins first and makes this stale login fail closed.
+                _lock_verified_credential(cur, actor_id, credential_fingerprint)
             cur.execute('''INSERT INTO saas_tenant_browser_sessions(id,tenant_id,actor_id,expires_at)
                            SELECT %s,%s::uuid,%s,to_timestamp(%s)
                            WHERE EXISTS (SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE)''',
                         (uuid.UUID(session_id),tenant_id,int(actor_id),int(expires_at),tenant_id,int(actor_id)))
             if cur.rowcount != 1: raise TenantPlatformError('Şirkət üzvlüyü aktiv deyil.')
+            if revoke_source and source_session.get('session_id'):
+                cur.execute('''UPDATE saas_tenant_browser_sessions SET revoked_at=now()
+                      WHERE id=%s AND actor_id=%s''',
+                    (uuid.UUID(source_session['session_id']), int(actor_id)))
         conn.commit()
+
+
+def legacy_session_is_allowed(*, actor_id: int) -> bool:
+    """Check live account eligibility and the actor-specific recovery fence."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('SELECT legacy_sessions_revoked,disabled_at,status FROM saas_auth_users WHERE actor_id=%s',
+                        (int(actor_id),))
+            account = cur.fetchone()
+    # Telegram-only accounts have no auth row and retain existing behavior.
+    return not account or (account.get('legacy_sessions_revoked') is False
+                           and account.get('disabled_at') is None and account.get('status') == 'active')
 
 
 def session_is_active(*, session_id: str, tenant_id: str, actor_id: int) -> bool:
@@ -114,7 +202,10 @@ def session_is_active(*, session_id: str, tenant_id: str, actor_id: int) -> bool
         with conn.cursor() as cur:
             cur.execute('''SELECT 1 FROM saas_tenant_browser_sessions s JOIN saas_tenant_members m
                            ON m.tenant_id=s.tenant_id AND m.telegram_id=s.actor_id AND m.active=TRUE
-                           WHERE s.id=%s AND s.tenant_id=%s::uuid AND s.actor_id=%s AND s.revoked_at IS NULL AND s.expires_at>now()''',
+                           LEFT JOIN saas_auth_users au ON au.actor_id=s.actor_id
+                           WHERE s.id=%s AND s.tenant_id=%s::uuid AND s.actor_id=%s
+                             AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
+                             AND (au.id IS NULL OR (au.disabled_at IS NULL AND au.status='active'))''',
                         (sid,tenant_id,int(actor_id)))
             return bool(cur.fetchone())
 
@@ -146,9 +237,9 @@ def revoke_session(*, tenant_id: str, actor_id: int, session_id: str | None = No
                 cur.execute('''UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE actor_id=%s AND revoked_at IS NULL''',(int(actor_id),))
             count=cur.rowcount
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,payload)
-                           SELECT %s,m.tenant_id,%s,'account.sessions.revoked','session',%s::jsonb
+                           SELECT gen_random_uuid(),m.tenant_id,%s,'account.sessions.revoked','session',%s::jsonb
                            FROM saas_tenant_members m WHERE m.telegram_id=%s AND m.active=TRUE''',
-                        (uuid.uuid4(),int(actor_id),_json({'count':count,'all':not bool(session_id)}),int(actor_id)))
+                        (int(actor_id),_json({'count':count,'all':not bool(session_id)}),int(actor_id)))
         conn.commit()
     return count
 

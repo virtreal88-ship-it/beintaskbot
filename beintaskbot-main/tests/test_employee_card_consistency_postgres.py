@@ -24,7 +24,8 @@ INITIAL_PASSWORD = 'Synthetic-initial-password!42'
 LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers'}
 GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 ALLOWED_ACTIONS = {'update_member_card', 'provision_member_account', 'upsert', 'deactivate',
-                   'whatsapp_numbers', 'add_whatsapp_number', 'provision_account'}
+                   'whatsapp_numbers', 'add_whatsapp_number', 'provision_account',
+                   'assign_member_email', 'assign_member_password', 'assign_member_profile'}
 
 
 @pytest.fixture
@@ -586,6 +587,11 @@ def test_password_link_availability_is_real_read_only_self_account_scope(cards, 
     before = _snapshot(f)
     async def scenario():
         async with TestClient(TestServer(_app(f))) as http:
+            if identity == 'disabled':
+                response = await http.get('/api/platform/members', headers={'Cookie': COOKIE_NAME + '=' + cookie})
+                assert response.status == 403, 'Disabled accounts cannot use an old cookie'
+                assert _snapshot(f) == before
+                return
             rows = await _list(http, cookie)
             current = next(row for row in rows if row['telegram_id'] == actor)
             assert current['password_change_available'] is (identity == 'home_active')
@@ -803,7 +809,7 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
             for table in ('saas_auth_users', 'saas_user_profiles', 'saas_tenant_members'):
                 assert len(after[table]) == len(before[table]) + 1
                 assert set(before[table]) <= set(after[table]), table
-            assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 3
+            assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 5
             assert len(after['saas_tenant_member_whatsapp_numbers']) == len(before['saas_tenant_member_whatsapp_numbers']) + 1
             unchanged = set(before) - {'saas_auth_users', 'saas_user_profiles', 'saas_tenant_members',
                 'saas_tenant_audit_events', 'saas_tenant_member_whatsapp_numbers'}
@@ -827,3 +833,42 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
         thread.join(10)
         loop.close()
         assert not thread.is_alive()
+
+
+def test_managed_account_changes_use_real_signed_cookie_http_and_postgres(cards, monkeypatch):
+    import tenant_email_auth as email_auth
+    f=cards
+    monkeypatch.setattr(email_auth, '_connect', f['factory'])
+    monkeypatch.setattr(email_auth, '_send_mail', lambda *a, **k: pytest.fail('No mail allowed'))
+    cookie=f['session'].issue(A,11)
+    async def scenario():
+        async with TestClient(TestServer(_app(f))) as http:
+            command=_create()
+            status,created=await _post(http,cookie,command)
+            assert status==200,created
+            actor=created['applied']['telegram_id']
+            target_cookie=f['session'].issue(A,actor)
+            row=await _card(http,cookie,actor)
+            assert row['email_assign_available'] and row['password_assign_available'] and row['profile_assign_available']
+            changed_email='changed.'+command['email']
+            base={'expected_tenant_id':A,'expected_user_id':11,'telegram_id':actor}
+            status,result=await _post(http,cookie,{**base,'action':'assign_member_email','expected_version':row['card_version'],'email':changed_email})
+            assert status==200 and result['applied']['email_changed'],result
+            assert f['session'].profile(type('R',(),{'cookies':{COOKIE_NAME:target_cookie}})()) is None
+            row=await _card(http,cookie,actor)
+            assert row['email']==changed_email
+            new_password='New-synthetic-password-93!'
+            status,result=await _post(http,cookie,{**base,'action':'assign_member_password','expected_version':row['card_version'],'password':new_password,'confirm_password':new_password})
+            assert status==200 and result['applied']['password_changed'],result
+            assert email_auth.login(email=changed_email,password=INITIAL_PASSWORD,request_ip='127.0.0.1') is None
+            credentials=email_auth.login(email=changed_email,password=new_password,request_ip='127.0.0.1')
+            assert credentials['actor_id']==actor
+            row=await _card(http,cookie,actor)
+            status,result=await _post(http,cookie,{**base,'action':'assign_member_profile','expected_version':row['card_version'],'changes':{'first_name':'Updated','login':'changed.'+command['login']}})
+            assert status==200 and result['applied']['profile_changed'],result
+            assert (await _card(http,cookie,actor))['first_name']=='Updated'
+            import tenant_account_store as account_store
+            from tenant_platform_core import TenantPlatformError
+            with pytest.raises(TenantPlatformError):
+                account_store.create_session(session_id=str(uuid.uuid4()),tenant_id=A,actor_id=actor,expires_at=9999999999,credential_fingerprint=credentials['_credential_fingerprint'])
+    asyncio.run(scenario())
