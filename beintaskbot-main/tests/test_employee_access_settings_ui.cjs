@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const {mount,settle,writes,edit,input,submit}=require('./employee_card_fixture.cjs');
 const crmPages=['tasks','customers','companies','deals'];
 const nativeActions={view:true,create:false,update:false,delete:false};
-const labels={ru:{open:'По правам: открыта',unavailable:'По правам: недоступна',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: giriş yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: unavailable',pending:'By rights: pending'}};
+const labels={ru:{open:'По правам: открыта',unavailable:'По правам: нет',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: no',pending:'By rights: pending'}};
 const pageInput=(form,page)=>form.querySelector('[data-access-page='+page+']');
 const pageState=(form,page)=>form.querySelector('[data-access-hint='+page+']').dataset.accessState;
 const selectedLabel=(form,page)=>pageInput(form,page).selectedOptions[0].textContent;

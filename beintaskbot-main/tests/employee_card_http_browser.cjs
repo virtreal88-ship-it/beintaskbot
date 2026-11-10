@@ -11,10 +11,33 @@ const tenantB = process.env.EMPLOYEE_CARD_RUNTIME_TENANT_B;
 const login = process.env.EMPLOYEE_CARD_RUNTIME_LOGIN;
 const password = 'Synthetic-initial-password!42';
 assert(origin && mode && width && login && tenantA && tenantB);
-const visibilityLabels={ru:{open:'По правам: открыта',unavailable:'По правам: недоступна',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: giriş yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: unavailable',pending:'By rights: pending'}}[language];
+const visibilityLabels={ru:{open:'По правам: открыта',unavailable:'По правам: нет',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: no',pending:'By rights: pending'}}[language];
 const assertPageState=async(form,page,state,label)=>{
   assert.equal(await form.locator('[data-access-hint='+page+']').getAttribute('data-access-state'),state,page+' effective visibility');
   if(label)assert.equal(await form.locator('[data-access-page='+page+'] option:checked').textContent(),label);
+};
+const assertVisibilityFits=async(form,viewportWidth)=>{
+  const measurements=await form.evaluate(async(node,labels)=>{
+    await document.fonts.ready;
+    return [...node.querySelectorAll('[data-access-page]')].filter(input=>input.getClientRects().length).flatMap(input=>{
+      const texts=new Set([...input.options].map(option=>option.textContent).concat(Object.values(labels)));
+      return [...texts].map(text=>{
+        // A native max-content clone measures the browser's actual font, padding,
+        // arrow and internal text inset. Canvas misses select chrome and can
+        // silently fall back when the computed font shorthand is empty.
+        const probe=input.cloneNode(false),option=document.createElement('option');
+        probe.removeAttribute('id');probe.removeAttribute('aria-describedby');
+        option.textContent=text;probe.append(option);
+        for(const [key,value] of Object.entries({position:'fixed',visibility:'hidden',left:'-10000px',width:'max-content','min-width':'0','max-width':'none'}))probe.style.setProperty(key,value,'important');
+        input.parentElement.append(probe);
+        const result={page:input.dataset.accessPage,text,required:probe.getBoundingClientRect().width,available:input.getBoundingClientRect().width};
+        probe.remove();return result;
+      });
+    });
+  },visibilityLabels);
+  assert(measurements.length,'Visible page dropdowns must be measured');
+  assert.deepEqual(measurements.filter(item=>item.required>item.available+0.5),[],
+    'Native select labels fit without clipping at '+viewportWidth+'px in '+language);
 };
 
 (async () => {
@@ -188,7 +211,14 @@ const assertPageState=async(form,page,state,label)=>{
       const beforeOpenNoop=(await control('state')).posts;
       await form.locator('[type=submit]').click();
       assert.equal((await control('state')).posts,beforeOpenNoop,'Four inherited open pages remain a no-op');
+      await assertVisibilityFits(form,width);
       if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-inherited-pages-'+width+'-'+language+'.png'});
+      // All RU/AZ/EN complete-mode runs also verify the narrowest mobile width,
+      // including open, unavailable and pending captions without changing data.
+      await page.setViewportSize({width:360,height:900});
+      await assertVisibilityFits(form,360);
+      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-inherited-pages-360-'+language+'.png'});
+      await page.setViewportSize({width,height:900});
       await form.locator('[data-access-page=tasks]').selectOption('false');
       await assertPageState(form,'tasks','hidden');
       await save(form,'update_member_card');await closed();
@@ -209,15 +239,13 @@ const assertPageState=async(form,page,state,label)=>{
             const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
             const boxes=[...panel.querySelectorAll('[data-access-operations]>fieldset:not(.staff-rights)')].map(group=>[...group.querySelectorAll('input')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
             const pageHeights=[...panel.querySelectorAll('[data-access-page]')].map(input=>input.closest('label').getBoundingClientRect().height);
-            const canvas=document.createElement('canvas'),measure=canvas.getContext('2d');
-            const optionFits=[...panel.querySelectorAll('[data-access-page]')].map(input=>{const css=getComputedStyle(input);measure.font=css.font;return measure.measureText(input.selectedOptions[0].textContent).width<=input.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight)-20});
-            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights,optionFits};
+            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights};
           },tab);
           assert(!layout.overflow,'Employee tab fits viewport');
           assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
           for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
           assert(layout.pageHeights.every(height=>height<110),'Page preferences stay compact');
-          assert(layout.optionFits.every(Boolean),'Effective visibility labels fit their dropdown at '+width+'px in '+language);
+          if(tab==='settings')await assertVisibilityFits(form,width);
           await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+width+'-'+language+'.png'});
         }
       }
