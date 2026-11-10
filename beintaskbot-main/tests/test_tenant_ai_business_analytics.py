@@ -138,6 +138,190 @@ def test_company_risks_reuses_owner_reader_and_removes_identity_fields(monkeypat
     assert events[0]['payload'] == {'tool': 'get_company_risks', 'read_only': True}
 
 
+def test_search_conversations_uses_bounded_exact_dialog_sample_and_returns_source_refs(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    monkeypatch.setattr('tenant_platform._ensure_schema', lambda conn: None)
+    route = {'provider': 'connect', 'channel_id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+             'lead_id': 42, 'conversation_id': 'chat-42'}
+    listing_calls = []
+    history_calls = []
+    monkeypatch.setattr('tenant_operator_dialogs.listing', lambda profile, all_rows=False: (
+        listing_calls.append((profile, all_rows)) or {'dialogs': [route], 'total_count': 25, 'next_offset': None}))
+    monkeypatch.setattr('tenant_operator_dialogs.history', lambda profile, provider, lead, channel, conversation: (
+        history_calls.append((profile, provider, lead, channel, conversation)) or {
+            'dialog': route,
+            'messages': [{
+                'id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'direction': 'incoming',
+                'message_type': 'text', 'body': 'issue with service\n\u202e hidden order',
+                'created_at': '2026-11-10T00:00:00Z'}],
+            'next_before': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}))
+    events = []
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: events.append(event))
+
+    result = analytics.execute(OWNER, 'search_conversations', {'query': 'issue', 'days': 12, 'limit': 4})
+
+    assert listing_calls == [(OWNER, False)]
+    assert history_calls == [(OWNER, 'connect', 42, route['channel_id'], 'chat-42')]
+    assert result['read_only'] is True and result['window_days'] == 12
+    assert result['messages'][0]['excerpt'] == 'issue with service hidden order'
+    assert result['messages'][0]['source_ref'] == {
+        'kind': 'conversation_message', 'message_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'provider': 'connect', 'channel_id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        'lead_id': 42, 'conversation_id': 'chat-42', 'inbox_url': '/app?view=dialogs',
+        'link_kind': 'inbox_entry_point'}
+    assert result['messages'][0]['cross_channel_identity'] == 'not_joined'
+    assert result['messages'][0]['author_attribution'] == 'direction_only'
+    assert result['coverage']['candidate_dialog_limit'] == 20
+    assert result['coverage']['message_limit_per_dialog'] == 50
+    assert result['coverage']['dialog_candidates_examined'] == 1
+    assert result['coverage']['message_candidates_examined'] == 1
+    assert result['coverage']['unsearched_dialogs'] == 24
+    assert result['has_more'] is True
+    assert events[0]['entity_id'] == 'search_conversations'
+
+
+@pytest.mark.parametrize('args', [
+    {'query': 'a'}, {'query': 'service', 'days': 91}, {'query': 'service', 'limit': 26},
+    {'query': 'service', 'customer_id': 'untrusted'},
+])
+def test_search_conversations_rejects_unbounded_or_extra_arguments(monkeypatch, args):
+    _owner_access(monkeypatch)
+    cursor = _Cursor()
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(cursor))
+    monkeypatch.setattr('tenant_platform._ensure_schema', lambda conn: None)
+
+    with pytest.raises(TenantLinearError):
+        analytics.execute(OWNER, 'search_conversations', args)
+
+    assert cursor.calls == []
+
+
+def test_search_conversations_stops_at_twenty_exact_routes(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    routes = [{'provider': 'connect', 'channel_id': f'channel-{index}', 'lead_id': index + 1,
+               'conversation_id': f'conversation-{index}'} for index in range(25)]
+    calls = []
+    monkeypatch.setattr('tenant_operator_dialogs.listing', lambda profile, all_rows=False: {
+        'dialogs': routes, 'total_count': 25, 'next_offset': None})
+    monkeypatch.setattr('tenant_operator_dialogs.history', lambda profile, provider, lead, channel, conversation: (
+        calls.append((provider, lead, channel, conversation)) or {'dialog': {
+            'provider': provider, 'lead_id': lead, 'channel_id': channel, 'conversation_id': conversation},
+            'messages': [], 'next_before': None}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_conversations', {'query': 'support'})
+
+    assert len(calls) == 20
+    assert result['coverage']['dialog_candidates_examined'] == 20
+    assert result['coverage']['unsearched_dialogs'] == 5
+    assert result['has_more'] is True
+
+
+def test_search_coverage_counts_only_work_completed_before_limit_stop(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    routes = [{'provider': 'connect', 'channel_id': f'channel-{index}', 'lead_id': index + 1,
+               'conversation_id': f'conversation-{index}'} for index in range(25)]
+    calls = []
+    monkeypatch.setattr('tenant_operator_dialogs.listing', lambda profile, all_rows=False: {
+        'dialogs': routes, 'total_count': 25, 'next_offset': None})
+    monkeypatch.setattr('tenant_operator_dialogs.history', lambda profile, provider, lead, channel, conversation: (
+        calls.append(lead) or {'dialog': {'provider': provider, 'lead_id': lead, 'channel_id': channel,
+            'conversation_id': conversation}, 'messages': [{'id': f'message-{lead}', 'direction': 'incoming',
+            'message_type': 'text', 'body': 'service issue', 'created_at': '2026-11-10T00:00:00Z'}],
+            'next_before': None}))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_conversations', {'query': 'service', 'limit': 2})
+
+    assert calls == [1, 2, 3]
+    assert len(result['messages']) == 2
+    assert result['coverage']['dialog_candidates_examined'] == 3
+    assert result['coverage']['message_candidates_examined'] == 3
+    assert result['coverage']['unsearched_dialogs'] == 22
+    assert result['has_more'] is True
+
+
+def test_search_marks_incomplete_coverage_when_a_route_is_unavailable(monkeypatch):
+    _owner_access(monkeypatch)
+    monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
+    route = {'provider': 'connect', 'channel_id': 'channel-1', 'lead_id': 1,
+             'conversation_id': 'conversation-1'}
+    monkeypatch.setattr('tenant_operator_dialogs.listing', lambda profile, all_rows=False: {
+        'dialogs': [route], 'total_count': 1, 'next_offset': None})
+
+    def unavailable(*args, **kwargs):
+        raise TenantLinearError('Dialog unavailable.', 404)
+
+    monkeypatch.setattr('tenant_operator_dialogs.history', unavailable)
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'search_conversations', {'query': 'service'})
+
+    assert result['coverage']['dialog_candidates_examined'] == 1
+    assert result['coverage']['unavailable_routes'] == 1
+    assert result['has_more'] is True
+
+
+def test_conversation_timeline_reuses_exact_history_and_drops_transport_fields(monkeypatch):
+    route = {'provider': 'connect', 'lead_id': 42, 'channel_id': 'channel-1', 'conversation_id': 'chat-1'}
+    calls = []
+    monkeypatch.setattr('tenant_operator_dialogs.history', lambda profile, provider, lead, channel, conversation, before=None: (
+        calls.append((profile, provider, lead, channel, conversation, before)) or {
+            'dialog': {'channel_id': channel, 'lead_id': lead, 'conversation_id': conversation,
+                       'customer_name': 'Customer', 'identity_conflict': False},
+            'messages': [
+                {'id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'direction': 'incoming',
+                 'message_type': 'text', 'body': 'hello\u202e there', 'created_at': '2026-11-10T12:00:00Z',
+                 'raw': {'private': 'secret'}, 'media_url': 'https://private.invalid/file'},
+                {'id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'direction': 'outgoing',
+                 'message_type': 'audio', 'body': '', 'audio_transcript': 'hello back',
+                 'happened_at': '2026-11-10T12:01:00Z'},
+            ], 'next_before': 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}))
+    monkeypatch.setattr(analytics, '_authorized_owner', lambda profile: (TENANT, 7))
+    monkeypatch.setattr('tenant_platform.append_audit_event', lambda **event: None)
+
+    result = analytics.execute(OWNER, 'get_conversation_timeline', {**route, 'before': None, 'limit': 1})
+
+    assert calls == [(OWNER, 'connect', 42, 'channel-1', 'chat-1', None)]
+    assert result['conversation']['display_label'] == 'Customer'
+    assert result['conversation']['display_label_untrusted'] is True
+    assert result['conversation']['link_kind'] == 'inbox_entry_point'
+    assert result['has_more'] is True
+    assert result['next_before'] == 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    assert len(result['messages']) == 1
+    assert result['messages'][0]['text'] == ''
+    assert result['messages'][0]['transcript'] == 'hello back'
+    assert result['messages'][0]['source_ref']['inbox_url'] == '/app?view=dialogs'
+    assert result['messages'][0]['source_ref']['link_kind'] == 'inbox_entry_point'
+    assert 'raw' not in result['messages'][0] and 'media_url' not in result['messages'][0]
+
+
+def test_conversation_timeline_discards_read_if_owner_role_changes(monkeypatch):
+    calls = []
+    monkeypatch.setattr('tenant_operator_dialogs.history', lambda *args, **kwargs: (
+        calls.append('history') or {'dialog': {}, 'messages': [{'id': 'x', 'body': 'not returned'}]}))
+    auth_calls = []
+
+    def authorize(profile):
+        auth_calls.append(True)
+        if len(auth_calls) == 1:
+            return TENANT, 7
+        raise TenantLinearError('Company owner access required.', 403)
+
+    monkeypatch.setattr(analytics, '_authorized_owner', authorize)
+
+    with pytest.raises(TenantLinearError) as error:
+        analytics.execute(OWNER, 'get_conversation_timeline', {
+            'provider': 'kommo', 'lead_id': 1, 'channel_id': 'kommo:1'})
+
+    assert error.value.status == 403
+    assert calls == ['history']
+    assert len(auth_calls) == 2
+
+
 class _Request:
     def __init__(self, *, origin='https://crm.pro.az', content_type='application/json', data=None):
         self.headers = {'Origin': origin}
