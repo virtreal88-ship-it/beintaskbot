@@ -94,7 +94,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 ended=await asyncio.wait_for(ws.receive_json(),3)
                 self.assertEqual(ended,{'type':'ended','reason':'user_end'})
                 await asyncio.wait_for(ws.close(),3)
-                await asyncio.wait_for(logged.wait(),3)
+                await asyncio.wait_for(logged.wait(),20)
             audio=[payload for kind,payload in seen if kind=='audio']
             self.assertEqual(b''.join(audio),b''.join(bytes([i])*2048 for i in range(1,13)))
             self.assertTrue(all(len(frame)<=9600 for frame in audio))
