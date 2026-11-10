@@ -239,7 +239,10 @@ def generate_with_tools(key, model, prompt, *, instructions, tools, execute_tool
     for call_index in range(max(1,min(3,int(max_provider_calls)))):
         wire={'model':model,'store':False,'max_output_tokens':max(16,min(1800,int(max_output_tokens))),
               'instructions':instructions,'input':input_items,'tools':definitions,
-              'tool_choice':'auto','parallel_tool_calls':False}
+              # The first turn must read at least one actual source before the
+              # analyst can answer. Follow-up turns may finish without another
+              # tool call once evidence has been collected.
+              'tool_choice':'required' if call_index==0 else 'auto','parallel_tool_calls':False}
         reservation=before_dispatch(call_index,wire)
         accepted=False
         try:
