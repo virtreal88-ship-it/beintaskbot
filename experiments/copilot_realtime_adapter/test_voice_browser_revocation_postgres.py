@@ -66,11 +66,13 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 cookie=payload+'.'+browser._signature(payload)
                 scope=SimpleNamespace(tenant=tenant,actor=actor,channel_id='channel',conversation_id='dialog',
                                       lead_id=1,agent_binding='synthetic',config_version='v1')
-                sent=[];first=asyncio.Event();closed=asyncio.Event();sessions=[]
+                sent=[];first=asyncio.Event();second=asyncio.Event();closed=asyncio.Event();sessions=[]
                 class Provider:
                     mock_only=True
                     async def bind_claim(self,*_):pass
-                    async def send(self,event):sent.append(event['type']);first.set()
+                    async def send(self,event):
+                        sent.append(event['type']);first.set()
+                        if len(sent)>1:second.set()
                 provider=Provider()
                 lease=SimpleNamespace(assert_current=AsyncMock())
                 def compose(authority,client,_lease,session_id):
@@ -94,7 +96,14 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                                 if mode=='session_revoked':conn.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE id=%s',(sid,))
                                 else:conn.execute("UPDATE saas_auth_users SET disabled_at=now() WHERE actor_id=%s",(actor,))
                         await asyncio.to_thread(revoke)
-                        await ws.send_bytes(bytes(2));await asyncio.wait_for(closed.wait(),3)
+                        await ws.send_bytes(bytes(2))
+                        waits=[asyncio.create_task(closed.wait()),asyncio.create_task(second.wait())]
+                        try:
+                            done,_=await asyncio.wait(waits,timeout=3,return_when=asyncio.FIRST_COMPLETED)
+                            self.assertTrue(done,'neither denial nor provider append completed')
+                            self.assertTrue(closed.is_set(),'revoked browser session still forwarded audio')
+                        finally:
+                            for task in waits:task.cancel()
                         self.assertEqual(sent,['input_audio_buffer.append'])
                         self.assertTrue(sessions[0].closed)
                         await ws.close()
