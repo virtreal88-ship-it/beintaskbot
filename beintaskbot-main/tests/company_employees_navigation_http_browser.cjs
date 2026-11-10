@@ -117,11 +117,11 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
         await page.keyboard.press('Escape');
       }
       if (mode === 'auth_pending') {
-        await page.locator('[data-staff-edit="41"]').click();
+        await page.locator('#staffAdd').click();
         await page.locator('#staffMemberModal.show').waitFor();
-        const retainedForm = await page.locator('#staffEditForm').elementHandle();
+        const retainedForm = await page.locator('#staffInviteForm').elementHandle();
         const draftName = 'UNSAVED-PENDING-EMPLOYEE';
-        await page.locator('#staffEditForm [name=display_name]').fill(draftName);
+        await page.locator('#staffInviteForm [name=first_name]').fill(draftName);
         await control('hold-me');
         await page.evaluate(() => { void window.tenantRequestCoordinator.revalidateProfile().catch(() => {}); });
         await waitState('pending_me');
@@ -133,17 +133,17 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
         assert.equal(await page.locator('#staffMemberModal').isVisible(), false);
         assert.equal(await page.locator('#staffMemberModal').evaluate(node => node.inert), true);
         assert(!((await page.locator('#view-employees').innerText()).includes('PRIVATE-EMPLOYEE')));
-        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffEditForm')), true);
-        assert.equal(await page.locator('#staffEditForm [name=display_name]').inputValue(), draftName);
-        assert.equal(await page.locator('#staffEditForm [name=display_name]').evaluate(node => {
+        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffInviteForm')), true);
+        assert.equal(await page.locator('#staffInviteForm [name=first_name]').inputValue(), draftName);
+        assert.equal(await page.locator('#staffInviteForm [name=first_name]').evaluate(node => {
           node.focus(); return document.getElementById('staffMemberModal').contains(document.activeElement);
         }), false, 'The retained form cannot receive focus while authority is pending');
         await control('release');
         await visibleStaff(tenantA);
         await page.locator('#staffMemberModal.show').waitFor();
         assert.equal(await page.locator('#staffMemberModal').evaluate(node => node.inert), false);
-        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffEditForm')), true);
-        assert.equal(await page.locator('#staffEditForm [name=display_name]').inputValue(), draftName);
+        assert.equal(await retainedForm.evaluate(node => node === document.getElementById('staffInviteForm')), true);
+        assert.equal(await page.locator('#staffInviteForm [name=first_name]').inputValue(), draftName);
       } else if (['revoked', 'tenant_switch', 'actor_switch'].includes(mode)) {
         await page.locator('[data-staff-edit="41"]').click();
         await page.locator('#staffMemberModal.show').waitFor();
