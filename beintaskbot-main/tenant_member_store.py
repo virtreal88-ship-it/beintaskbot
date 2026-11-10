@@ -489,10 +489,10 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                     # change work settings; neither patch replaces the other.
                     cur.execute('''UPDATE saas_tenant_workflow_policies
                       SET value=jsonb_set(value,ARRAY[%s::text],
-                        COALESCE(value->%s::text,'{}'::jsonb) || jsonb_build_object('page_visibility',%s::jsonb,'native_crm_actions',%s::jsonb),TRUE),
+                        COALESCE(value->%s::text,'{}'::jsonb) || jsonb_build_object('native_crm_actions',%s::jsonb),TRUE),
                         updated_by=%s,updated_at=now()
                       WHERE tenant_id=%s::uuid AND policy_key='members' ''',
-                      (str(telegram_id),str(telegram_id),_json(applied['page_visibility']),_json(applied['native_crm_actions']),int(owner_id),tenant_id))
+                      (str(telegram_id),str(telegram_id),_json(applied['native_crm_actions']),int(owner_id),tenant_id))
                 if 'work_settings' in changes:
                     from tenant_member_settings import apply_settings_patch
                     apply_settings_patch(cur, tenant_id=tenant_id, owner_id=owner_id, target=existing,

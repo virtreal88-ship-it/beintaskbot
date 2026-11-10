@@ -1,7 +1,7 @@
 /* Page/session-local UI retention. Background workers and API authorization are unchanged. */
 (() => {
   const subscriptions = new Set(), inertNodes = new Map();
-  let profile = window.tenantProfileSnapshot || null, identity = '', generation = 0, bootstrap;
+  let profile = window.tenantProfileSnapshot || null, generation = 0, bootstrap;
   let integration = '', paused = false;
   const binding = data => (Array.isArray(data?.integrations) ? data.integrations : []).find(row => row?.provider === 'linear')
     ?.metadata?.settings?.members?.[String(data?.member?.telegram_id)];
@@ -14,6 +14,21 @@
     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])),
     binding(data)?.can_review_news === true]));
   const snapshot = data => JSON.stringify([data?.member, data?.integrations]);
+  const employees = item => item.host === 'staffManagement';
+  // Employee drafts do not depend on integration health or news-review bindings.
+  // Keep their security scope explicit, and their data freshness separate.
+  const employeeIdentity = data => JSON.stringify(stable([data?.member?.tenant_id, data?.member?.telegram_id,
+    data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
+    data?.capabilities?.can_manage_employees, data?.capabilities?.pages?.employees,
+    data?.capabilities?.actions?.employees,
+    Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]))]));
+  const memberData = member => member && Object.fromEntries(Object.entries(member).filter(([key]) =>
+    !['created_at', 'updated_at', 'last_login_at', 'account_last_login_at', 'last_seen_at'].includes(key))
+    .map(([key, value]) => [key, key === 'permissions' && Array.isArray(value) ? [...value].sort() : value]));
+  const itemIdentity = (item, data) => employees(item) ? employeeIdentity(data) : fingerprint(data);
+  const freshness = (item, data) => employees(item) ? JSON.stringify(stable([
+    memberData(data?.member), Array.isArray(data?.members) ? data.members.map(memberData) : undefined
+  ])) : snapshot(data);
   const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
     data.member.role === 'owner' || binding(data)?.can_review_news === true));
   const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
@@ -46,7 +61,7 @@
   const dirty = item => item.dirty || (item.preserveProviderDrafts && [...subscriptions].some(other => other.provider === integration && other.dirty));
   function reset(item, data) {
     item.started = 0; item.dirty = false; item.reset();
-    if (data) { item.freshness = snapshot(data); item.prepare?.(data); }
+    if (data) { item.freshness = freshness(item, data); item.prepare?.(data); }
   }
   function refresh(item) {
     if (!profile || paused) return;
@@ -63,18 +78,20 @@
   }
   function apply(data) {
     if (!data?.member) return;
-    const next = fingerprint(data), changed = next !== identity, reauthorized = paused;
-    profile = data; identity = next;
+    const reauthorized = paused;
+    profile = data;
     // Keep the curtain in place until old-context roots and callbacks have been reset.
     for (const item of subscriptions) {
-      if (changed || (!dirty(item) && (reauthorized || item.freshness !== snapshot(data)))) reset(item, data);
+      const next = itemIdentity(item, data), changed = next !== item.identity;
+      item.identity = next;
+      if (changed || (!dirty(item) && ((reauthorized && !employees(item)) || item.freshness !== freshness(item, data)))) reset(item, data);
     }
     conceal(false);
     for (const item of subscriptions) refresh(item);
   }
   function invalidate() {
-    generation++; profile = null; identity = ''; integration = '';
-    for (const item of subscriptions) { item.visible = false; reset(item); }
+    generation++; profile = null; integration = '';
+    for (const item of subscriptions) { item.identity = undefined; item.visible = false; reset(item); }
     conceal(false);
   }
   document.addEventListener('tenant-profile', event => apply(event.detail));
@@ -93,7 +110,7 @@
       const node = document.getElementById(id);
       if (node) observer.observe(node, {attributes: true, attributeFilter: ['class', 'hidden']});
     }
-    if (profile) { identity = fingerprint(profile); item.freshness = snapshot(profile); item.prepare?.(profile); refresh(item); }
+    if (profile) { item.identity = itemIdentity(item, profile); item.freshness = freshness(item, profile); item.prepare?.(profile); refresh(item); }
     else if (!bootstrap && !paused) {
       const current = generation;
       bootstrap = fetch('/api/platform/me', {credentials: 'same-origin', cache: 'no-store'})

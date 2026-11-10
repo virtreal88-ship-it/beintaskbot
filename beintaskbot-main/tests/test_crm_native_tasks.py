@@ -34,7 +34,7 @@ class NativeTaskTests(unittest.TestCase):
         self.assertTrue(tasks._eligible(person,{}))
         settings=person['workflow']['policies']['members']['20']
         settings['page_visibility']={'tasks':False}
-        self.assertFalse(tasks._eligible(person,{}))
+        self.assertTrue(tasks._eligible(person,{}))
         self.assertTrue(tasks.TenantPolicy(person).allows_action('tasks','update'))
         settings['page_visibility']={}
         settings['native_crm_actions']['tasks']['update']=False

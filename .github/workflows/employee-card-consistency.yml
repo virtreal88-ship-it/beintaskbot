@@ -12,6 +12,11 @@ on:
       - 'beintaskbot-main/tenant_member_store.py'
       - 'beintaskbot-main/tenant_member_settings.py'
       - 'beintaskbot-main/tenant_member_access.py'
+      - 'beintaskbot-main/tenant_crm_native_company_api.py'
+      - 'beintaskbot-main/docs/tenant-view-demand.js'
+      - 'beintaskbot-main/tests/test_employee_demand_lifecycle.cjs'
+      - 'beintaskbot-main/tests/test_native_company_relation_ui.cjs'
+      - 'beintaskbot-main/tests/test_native_crud_dispatch.py'
       - 'beintaskbot-main/tests/test_tenant_member_access.py'
       - 'beintaskbot-main/tests/test_employee_access*'
       - 'beintaskbot-main/tenant_workflow_api.py'
@@ -85,6 +90,8 @@ jobs:
           tests/test_employee_access_postgres.py
           tests/test_tenant_member_access.py
           tests/test_native_crud_dispatch.py
+          tests/test_crm_native_tasks.py
+          tests/test_native_task_assignee_access.py
           tests/test_tenant_workflow_sparse_postgres.py
           tests/test_tenant_workflow_api.py
           tests/test_tenant_workflow_storage.py
@@ -106,6 +113,8 @@ jobs:
           node tests/test_employee_settings_ui.cjs
           node tests/test_employee_access_settings_ui.cjs
           node tests/test_employee_card_layout.cjs
+          node tests/test_employee_demand_lifecycle.cjs
+          node tests/test_native_company_relation_ui.cjs
           node tests/test_tenant_workflow_ui.cjs
           node tests/test_tenant_linear_employee_settings.cjs
           node tests/test_tenant_linear_settings.cjs

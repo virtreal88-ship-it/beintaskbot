@@ -203,10 +203,9 @@ class TenantPolicy:
                     (self.policies.get('deal_completion') or {}).get('requires_admin', False)))
 
     def public_capabilities(self) -> dict:
-        from tenant_member_access import page_capabilities, action_capabilities, page_visibility
+        from tenant_member_access import page_capabilities, action_capabilities
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
                 'pages': page_capabilities(self.profile),
-                'page_visibility': page_visibility(self.profile),
                 'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
                 'chat_ai': self.can_use_chat_ai(),
@@ -294,9 +293,6 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
         if 'notifications' in item:
             validate_notification_preferences(item['notifications'])
-        if 'page_visibility' in item:
-            from tenant_member_access import validate_page_visibility
-            validate_page_visibility(item['page_visibility'])
         if 'native_crm_actions' in item:
             from tenant_member_access import validate_native_crm_actions
             validate_native_crm_actions(item['native_crm_actions'])
