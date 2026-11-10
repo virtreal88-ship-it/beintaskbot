@@ -8,6 +8,7 @@ import re
 import time
 
 from tenant_linear_policy import TenantLinearError
+from tenant_operator_voice_pilot import PilotAdmissionError
 
 VOICE_ID='UM9h0wiwZVQwUByy82ad'
 TTD_URL=('wss://api.elevenlabs.io/v1/text-to-dialogue/stream-input'
@@ -24,6 +25,44 @@ FIRST_PCM_TIMEOUT=10
 NEXT_PCM_TIMEOUT=5
 FINAL_DRAIN_TIMEOUT=120
 _LOG=logging.getLogger(__name__)
+_SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','voice_not_found',
+                                  'quota_exceeded','max_character_limit_exceeded'})
+_SAFE_TRANSPORT_CODES=frozenset({'websocket_closed','websocket_error','websocket_nontext_frame',
+                                 'provider_message_too_large','provider_json_invalid','provider_event_invalid'})
+_SAFE_TRANSPORT_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
+
+
+def _safe_close_code(value):
+    if type(value) is int and (1000<=value<=1015 or 3000<=value<=4999):return value
+    return 'none'
+
+
+class _TTDProviderError(ValueError):
+    """Only safe fields from a terminal ElevenLabs error event."""
+    def __init__(self,event):
+        code=event.get('error')
+        self.safe_code=code if isinstance(code,str) and code in _SAFE_TTD_ERROR_CODES else 'tts_provider_error'
+        self.declared_close_code=_safe_close_code(event.get('code'))
+        super().__init__('tts_provider_error')
+
+
+def _log_tts_failure(stage,error):
+    from tenant_operator_realtime_wire import SafeRealtimeFailure
+    code='tts_provider_error';close_code='none';declared_close_code='none';transport='none'
+    provider_error_event=isinstance(error,_TTDProviderError)
+    if provider_error_event:
+        code=error.safe_code;declared_close_code=error.declared_close_code
+    elif isinstance(error,SafeRealtimeFailure):
+        if isinstance(error.diagnostic_code,str) and error.diagnostic_code in _SAFE_TRANSPORT_CODES:code=error.diagnostic_code
+        close_code=_safe_close_code(error.diagnostic_close_code)
+        if isinstance(error.diagnostic_transport_kind,str) and error.diagnostic_transport_kind in _SAFE_TRANSPORT_KINDS:
+            transport=error.diagnostic_transport_kind
+    elif error.args and error.args[0] in ('tts_timeout','tts_close_unconfirmed','tts_admission_rejected'):
+        code=error.args[0]
+    if stage not in ('connect','receive','send'):stage='unknown'
+    _LOG.warning('realtime_tts_failure provider=elevenlabs_ali stage=%s code=%s close_code=%s '
+                 'provider_error_event=%s declared_close_code=%s transport_kind=%s',
+                 stage,code,close_code,provider_error_event,declared_close_code,transport)
 
 
 def _credential_valid(value):
@@ -92,7 +131,7 @@ class ElevenTTDStream:
         self.text_chars=0;self.audio_bytes=0;self._input_finished=False;self._started=False;self._cleaning=False
         self.close_unconfirmed=False;self.attempted_chars=0;self.pcm_chunks=0
         self.first_text_at=None;self.first_pcm_at=None
-        self._text_submitted=asyncio.Event()
+        self._text_submitted=asyncio.Event();self._pending_receive=None
 
     def start(self):
         if self.task is not None:raise ValueError('tts_started')
@@ -124,13 +163,14 @@ class ElevenTTDStream:
         if self.close_unconfirmed:raise ValueError('tts_close_unconfirmed')
 
     def _current(self):
-        return not self.cancelled and self.is_current(self.epoch)
+        return not self.cancelled and not self._cleaning and self.is_current(self.epoch)
 
     async def _send(self,event):
         # Every text/flush operation may incur cost. Recheck the same live
         # identity, scoped authority and exact fenced lease before each send.
         if not self._current():raise asyncio.CancelledError()
-        await self.guard.assert_live(self.guard.scope,self.guard.session_id)
+        try:await self.guard.assert_live(self.guard.scope,self.guard.session_id)
+        except (TenantLinearError,PilotAdmissionError):raise ValueError('tts_admission_rejected') from None
         if not self._current():raise asyncio.CancelledError()
         inputs=event.get('inputs')
         if isinstance(inputs,list):self.attempted_chars+=sum(len(item['text']) for item in inputs)
@@ -188,7 +228,8 @@ class ElevenTTDStream:
                     if pending:await send_audio(len(pending));continue
                     raise ValueError('tts_timeout')
                 event=await next_event;next_event=None
-                if not isinstance(event,dict) or event.get('error') is not None:raise ValueError('tts_provider_error')
+                if not isinstance(event,dict):raise ValueError('tts_provider_error')
+                if event.get('error') is not None:raise _TTDProviderError(event)
                 encoded=event.get('audio')
                 if encoded is not None:
                     if not isinstance(encoded,str) or not encoded or len(encoded)>4*((MAX_AUDIO_BYTES+2)//3):
@@ -204,12 +245,13 @@ class ElevenTTDStream:
                     if pending:await send_audio(len(pending))
                     return
         finally:
-            if next_event is not None:
-                next_event.cancel();await asyncio.gather(next_event,return_exceptions=True)
+            # In particular on a PCM timeout, leave the pending aiohttp read
+            # alive until _run closes the socket and can confirm its handshake.
+            self._pending_receive=next_event
 
     async def _run(self):
         self._started=True
-        reader=writer=None;result='error';failure=None
+        reader=writer=None;result='error';failure=None;stage='connect'
         try:
             if not self._current():raise asyncio.CancelledError()
             self.socket=await self.connector(self.guard,self.loader,self._current)
@@ -217,28 +259,39 @@ class ElevenTTDStream:
             reader=asyncio.create_task(self._read());writer=asyncio.create_task(self._write())
             done,_=await asyncio.wait({reader,writer},return_when=asyncio.FIRST_COMPLETED)
             if reader in done:
+                stage='receive'
                 await reader
                 if not writer.done():raise ValueError('tts_ended_early')
+            stage='send'
             await writer
+            stage='receive'
             try:await asyncio.wait_for(asyncio.shield(reader),FINAL_DRAIN_TIMEOUT)
             except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
             result='done'
         except asyncio.CancelledError:
             self.cancelled=True;result='cancelled'
         except Exception as error:
+            _log_tts_failure(stage,error)
             failure=str(error) if str(error) in ('tts_close_unconfirmed','tts_timeout') else 'tts_provider_error'
             if failure=='tts_close_unconfirmed':self.close_unconfirmed=True
         finally:
             self._cleaning=True
-            # Stop further sends before closing; a successful WS close is
-            # required, but does not prove remote compute was cancelled.
-            for task in (writer,reader):
-                if task is not None and not task.done():task.cancel()
+            # Drain the writer first to stop further paid sends. Keep the
+            # reader alive for the WS close handshake: cancelling aiohttp's
+            # pending receive prematurely records close code 1006 even when
+            # the peer closes normally, making confirmation impossible.
+            if writer is not None:
+                if not writer.done():writer.cancel()
+                await asyncio.gather(writer,return_exceptions=True)
             if self.socket is not None:
                 try:await self.socket.close()
                 except Exception:failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
-            tasks=[task for task in (writer,reader) if task is not None]
-            if tasks:await asyncio.gather(*tasks,return_exceptions=True)
+            if reader is not None:
+                if not reader.done():reader.cancel()
+                await asyncio.gather(reader,return_exceptions=True)
+            if self._pending_receive is not None:
+                if not self._pending_receive.done():self._pending_receive.cancel()
+                await asyncio.gather(self._pending_receive,return_exceptions=True)
             self.finished=True
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
