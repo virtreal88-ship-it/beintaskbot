@@ -44,7 +44,7 @@ def handler(member_from_request,origin,logger,resource):
                 _expected(request.query,profile)
                 # Authentication and single-user policy are checked by the
                 # server-owned orchestrator before the WebSocket upgrade.
-                return await open_server_session(request,profile,origin)
+                return await open_server_session(request,profile,origin,member_from_request=member_from_request)
             raise TenantLinearError('Метод не поддерживается.',405)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)

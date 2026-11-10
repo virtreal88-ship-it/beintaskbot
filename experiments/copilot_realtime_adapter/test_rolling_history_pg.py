@@ -293,7 +293,7 @@ class RollingHistory(IntegratedSynthetic):
         with self.scoped() as conn:
             conn.execute("UPDATE saas_operator_copilot_threads SET updated_at=now()-interval '61 days' WHERE tenant_id=%s",(self.tenant,))
         async def run():
-            authority=await voice_orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await voice_orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             session_id=str(uuid.uuid4());history=voice_orchestration.VoiceHistory(authority,session_id)
             entry={'role':'employee','text':'synthetic voice','agent_binding':authority.scope.agent_binding,
                    'voice_session_id':session_id,'turn_sequence':0,'transcript_status':'partial',

@@ -25,7 +25,7 @@ class GuardPG(IntegratedSynthetic):
         sql=Path(__file__).with_name('voice_history_candidate.sql').read_text()
         self.conn.execute(sql);self.conn.commit()
         async def run():
-            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             session_id=str(uuid.uuid4());history=orchestration.VoiceHistory(authority,session_id)
             entry={'role':'employee','text':'synthetic partial','agent_binding':authority.scope.agent_binding,
                    'voice_session_id':session_id,'turn_sequence':0,'transcript_status':'partial',
@@ -133,7 +133,7 @@ class GuardPG(IntegratedSynthetic):
                 return json.dumps({'tenant_id':self_outer.tenant,'provider':'chat_ai','api_key':'synthetic-only'}).encode()
         self_outer=self
         async def run():
-            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             loader=orchestration.ServerCredentialLoader(authority)
             self.assertEqual(await loader.load(),'synthetic-only')
             with self.scoped() as conn:
@@ -160,7 +160,7 @@ class GuardPG(IntegratedSynthetic):
 
     def test_guard_rejects_forged_receipts_and_revoked_actor(self):
         async def run():
-            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             session_id=str(uuid.uuid4());budget=orchestration.ScopedBudget(authority,session_id)
             guard=orchestration.ScopedDispatchGuard(budget)
             request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
@@ -181,7 +181,7 @@ class GuardPG(IntegratedSynthetic):
 
     def test_mismatched_hold_id_never_authorizes_send(self):
         async def run():
-            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             session_id=str(uuid.uuid4());budget=orchestration.ScopedBudget(authority,session_id)
             guard=orchestration.ScopedDispatchGuard(budget)
             request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
@@ -202,7 +202,7 @@ class GuardPG(IntegratedSynthetic):
             if not release.wait(3):raise RuntimeError('synthetic timeout')
             return row
         async def run():
-            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route)
+            authority=await orchestration.ScopedAuthority.create({'tenant_id':self.tenant,'telegram_id':7},self.route,lambda:{'tenant_id':self.tenant,'telegram_id':7})
             session_id=str(uuid.uuid4());budget=orchestration.ScopedBudget(authority,session_id)
             guard=orchestration.ScopedDispatchGuard(budget)
             request={'request_id':str(uuid.uuid4()),'tenant_id':self.tenant,'session_id':session_id,'actor_id':7,
@@ -248,7 +248,7 @@ class GuardPG(IntegratedSynthetic):
                 self.events.append(event)
             async def close(self):pass
         async def run():
-            authority=await orchestration.ScopedAuthority.create(profile,self.route)
+            authority=await orchestration.ScopedAuthority.create(profile,self.route,lambda:profile)
             session_id=str(uuid.uuid4());budget=orchestration.ScopedBudget(authority,session_id)
             guard=orchestration.ScopedDispatchGuard(budget);socket=Socket()
             provider=SyntheticRealtimeWire(socket,guard);client=Client();lease=Lease()

@@ -56,6 +56,8 @@ jobs:
           tests/test_tenant_operator_voice_latency.py
           tests/test_tenant_operator_voice_stale_ack.py
           tests/test_tenant_operator_voice_duplex.py
+          tests/test_tenant_operator_voice_orchestration.py
+          tests/test_tenant_operator_voice_api.py
       - name: Test bounded browser microphone batching
         working-directory: beintaskbot-main
         run: node --test tests/test_tenant_operator_copilot_audio.cjs tests/test_tenant_operator_voice_greeting.cjs tests/test_tenant_voice_channel_timeout.cjs
@@ -98,4 +100,4 @@ jobs:
           done
           test "$ready" -eq 1
           docker exec realtime-voice-lease-pg createdb -U postgres voice_lease_test
-          python -m unittest test_voice_lease test_pilot_admission test_voice_lease_postgres -v
+          python -m unittest test_voice_browser_revocation_postgres test_voice_lease test_pilot_admission test_voice_lease_postgres -v
