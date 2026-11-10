@@ -21,7 +21,7 @@ from tenant_email_auth import _hash_password, _password_matches
 
 
 INITIAL_PASSWORD = 'Synthetic-initial-password!42'
-LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings'}
+LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings'}
 GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 ALLOWED_ACTIONS = {'update_member_card', 'provision_member_account', 'upsert', 'deactivate',
                    'whatsapp_numbers', 'add_whatsapp_number', 'provision_account',
@@ -698,7 +698,7 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
     assert (ROOT / '.support-test-deps/node_modules/playwright').exists(), 'Required actual Chromium bridge is missing'
     actor = 37 if mode == 'switch_after_write' else 38 if mode in {'revoked', 'postwrite_read_denied'} else 11
     tokens = {name: f['session'].issue(tenant, identity) for name, tenant, identity in (
-        ('initial', A, actor), ('editor', A, 38), ('company_b', B, 37))}
+        ('initial', A, actor), ('editor', A, 38), ('company_b', B, 37), ('granular', A, 62))}
     before = _snapshot(f)
     state = {'pending_write': False, 'revoked': False, 'post_results': []}
     sock = socket.socket()
@@ -808,8 +808,21 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
         if mode == 'complete':
             for table in ('saas_auth_users', 'saas_user_profiles', 'saas_tenant_members'):
                 assert len(after[table]) == len(before[table]) + 1
-                assert set(before[table]) <= set(after[table]), table
-            assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 5
+                if table != 'saas_tenant_members':
+                    assert set(before[table]) <= set(after[table]), table
+                else:
+                    old_rows = [json.loads(item) for item in before[table]]
+                    new_rows = [json.loads(item) for item in after[table]]
+                    for old in old_rows:
+                        new = next(item for item in new_rows if item['tenant_id'] == old['tenant_id']
+                                   and item['telegram_id'] == old['telegram_id'])
+                        if old['tenant_id'] == A and old['telegram_id'] == 62:
+                            assert new['permissions'] == old['permissions'] == []
+                            assert {k:v for k,v in new.items() if k != 'updated_at'} == {k:v for k,v in old.items() if k != 'updated_at'}
+                            assert new['updated_at'] != old['updated_at']
+                        else:
+                            assert new == old
+            assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 8
             assert len(after['saas_tenant_member_whatsapp_numbers']) == len(before['saas_tenant_member_whatsapp_numbers']) + 1
             unchanged = set(before) - {'saas_auth_users', 'saas_user_profiles', 'saas_tenant_members',
                 'saas_tenant_audit_events', 'saas_tenant_member_whatsapp_numbers', 'saas_tenant_workflow_policies'}

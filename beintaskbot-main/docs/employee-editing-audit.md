@@ -87,3 +87,30 @@ permissions and work preferences at 360/390/768/1440 px. Its local browser launc
 is blocked by the execution environment's Unix socket restriction. The first
 remote CI run passed all 254 tests including these scenarios; the final copy is
 checked again in CI before release.
+
+## Independent pages and actions
+
+Employee cards now separate identity, permissions, and personal settings into
+three tabs. The personal settings tab controls page visibility without changing
+operation rights. Profile remains available; the list includes the standalone
+Instructions link and dynamically mounted navigation. Page preferences persist
+per company membership, with an independent version and sparse patch.
+
+The native CRM exposes separate view/create/update/delete controls for tasks,
+deals and contacts (companies share contact rights). Native action overrides
+are stored separately from legacy module grants so changing one native action
+cannot disable Kommo or expand its provider scope. Other existing product
+modules retain explicitly labelled all-actions access switches; this release
+does not pretend that every older API has four independent CRUD operations.
+Provider scopes, including Linear and Kommo pipelines, remain separate.
+
+New page capabilities fix the specific mismatch where granular native view
+permission allowed the API but the sidebar recognized only a broad legacy
+module grant. Visibility alone cannot supply a missing view/prerequisite.
+Hiding a page is a navigation preference, not a substitute for API authorization.
+No real employee's rights are changed automatically by this release.
+
+During this work, native deal and company collection action dispatch was also
+corrected: an item-only archive/link request cannot fall through to creation
+using delete/assign authority. Regression tests cover these permission/action
+mismatches independently of UI controls.

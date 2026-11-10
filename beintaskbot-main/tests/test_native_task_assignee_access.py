@@ -112,7 +112,7 @@ def _no_tasks(f):
     assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 0
 
 
-@pytest.mark.parametrize('actor,target', [(11, 11), (11, 31), (11, 41), (11, 42), (31, 42), (32, 41)])
+@pytest.mark.parametrize('actor,target', [(11, 11), (11, 31), (11, 41), (11, 42), (11, 50), (31, 42), (32, 41)])
 def test_real_options_and_create_accept_only_current_usable_task_assignees(native, actor, target):
     f = native
     async def scenario():
@@ -120,7 +120,7 @@ def test_real_options_and_create_accept_only_current_usable_task_assignees(nativ
             status, options = await _get(http, actor=actor, options='1', deal_id=f['deals'][0])
             assert status == 200, options
             eligible = {row['telegram_id'] for row in options['members']}
-            assert eligible == {11, 31, 32, 34, 35, 41, 42}
+            assert eligible == {11, 31, 32, 34, 35, 41, 42, 50}
             assert options['assignment']['criterion'] == 'active_tasks_view_update'
             assert options['selected_deal_id'] == f['deals'][0]
             status, created = await _post(http, _command(f, target), actor=actor)
@@ -132,7 +132,7 @@ def test_real_options_and_create_accept_only_current_usable_task_assignees(nativ
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('target', [43, 44, 45, 46, 47, 48, 49, 50, 22])
+@pytest.mark.parametrize('target', [43, 44, 45, 46, 47, 48, 49, 22])
 def test_task_read_create_update_only_unknown_master_inactive_and_foreign_targets_are_excluded(native, target):
     f = native
     async def scenario():
@@ -158,7 +158,7 @@ def test_module_disabled_effective_policy_excludes_flat_grants_but_preserves_own
     async def scenario():
         async with TestClient(TestServer(_app())) as http:
             status, options = await _get(http, options='1', deal_id=f['deals'][0])
-            assert status == 200 and [row['telegram_id'] for row in options['members']] == [11]
+            assert status == 200 and {row['telegram_id'] for row in options['members']} == {11,32,42,50}
             status, rejected = await _post(http, _command(f, 41))
             assert status == 409 and rejected['error'] == 'assignee_unavailable'
             status, created = await _post(http, _command(f, 11))
@@ -575,3 +575,36 @@ def test_numeric_member_alias_sort_preserves_last_update_for_the_same_employee(n
     assert current['display_name'] == 'Final synthetic edit'
     assert current['role'] == 'worker' and current['permissions'] == final
     assert native['db'].execute('SELECT count(*) AS n FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=41', (A,))[0]['n'] == 1
+
+
+@pytest.mark.parametrize('revocation', ['update', 'page', 'inactive'])
+def test_native_overrides_enable_assignee_and_live_revocation_blocks_write(native, revocation):
+    f = native
+    settings = {'native_crm_actions': {'tasks': {'view': True, 'update': True}}}
+    f['db'].execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'members',%s::jsonb,11) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",
+                    (A, json.dumps({'46': settings})))
+    f['db'].commit()
+    async def scenario():
+        async with TestClient(TestServer(_app())) as http:
+            status, options = await _get(http, options='1', deal_id=f['deals'][0])
+            assert status == 200 and 46 in {row['telegram_id'] for row in options['members']}
+            status, created = await _post(http, _command(f, 46))
+            assert status == 200 and created['task']['responsible_id'] == 46
+            assert not TenantPolicy(members.member(A,46)).allows('tasks')
+            if revocation == 'update':
+                settings['native_crm_actions']['tasks']['update'] = False
+            elif revocation == 'page':
+                settings['page_visibility'] = {'tasks': False}
+            else:
+                f['db'].execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=46',(A,))
+            f['db'].execute("UPDATE saas_tenant_workflow_policies SET value=%s::jsonb WHERE tenant_id=%s::uuid AND policy_key='members'",(json.dumps({'46':settings}),A))
+            f['db'].commit()
+            status, rejected = await _post(http, _command(f,46))
+            assert status == 409 and rejected['error'] == 'assignee_unavailable'
+            status, options = await _get(http, options='1', deal_id=f['deals'][0])
+            assert status == 200 and 46 not in {row['telegram_id'] for row in options['members']}
+            status, foreign = await _post(http, _command(f,46), tenant=B, actor=22)
+            assert status in (404,409)
+    asyncio.run(scenario())
+    assert f['db'].execute('SELECT permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=46',(A,))[0]['permissions'] == []
+    assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 1

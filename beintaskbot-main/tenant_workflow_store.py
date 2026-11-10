@@ -127,10 +127,32 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                 policies = {key: value for key, value in policies.items() if key != 'summary_language'}
             # Validate links against this company's current membership before
             # writing grants. IDs from another company must never grant access.
-            cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id FOR UPDATE", (str(tenant_id),))
-            active_members=cur.fetchall()
-            if not any(int(row['telegram_id']) == int(owner_id) and row['role'] == 'owner' for row in active_members):
+            # Lock only actors whose authority or grants this write uses.
+            # Unrelated directory readers hold membership SHARE locks; taking
+            # every employee here would block independent pipeline updates.
+            actor_ids = {int(owner_id)}
+            actor_ids.update(int(item['telegram_id']) for item in members)
+            actor_ids.update(int(item['telegram_id']) for item in changes)
+            actor_ids.update(int(key) for key in (policies.get('members') or {}))
+            actor_ids.update(int(item['owner_telegram_id']) for item in pipelines if item.get('owner_telegram_id'))
+            for item in stages:
+                trigger = (item.get('settings') or {}).get('native_task') or {}
+                if trigger.get('responsible_id'):
+                    actor_ids.add(int(trigger['responsible_id']))
+            updated_actor_ids = {int(item['telegram_id']) for item in members}
+            locked_members = []
+            for actor_id in sorted(actor_ids):
+                mode = 'UPDATE' if actor_id in updated_actor_ids else 'SHARE'
+                cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members "
+                            "WHERE tenant_id=%s::uuid AND active=TRUE AND telegram_id=%s FOR " + mode,
+                            (str(tenant_id), actor_id))
+                actor = cur.fetchone()
+                if actor:
+                    locked_members.append(actor)
+            if not any(int(row['telegram_id']) == int(owner_id) and row['role'] == 'owner' for row in locked_members):
                 raise TenantPlatformError('Yalnız şirkət sahibi ayarları dəyişə bilər.')
+            cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))
+            active_members = cur.fetchall()
             member_roles = {int(row['telegram_id']): row['role'] for row in active_members}
             task_members = {int(row['telegram_id']) for row in active_members if row['role']=='owner' or 'tasks' in (row.get('permissions') or [])}
             member_ids = set(member_roles)
