@@ -45,7 +45,7 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.context = AuthApiContext(
             member=self.member, telegram_identity=self.identity,
-            issue_session=lambda tenant_id, chat_id: f"{tenant_id}:{chat_id}",
+            issue_session=lambda tenant_id, chat_id, **_kwargs: f"{tenant_id}:{chat_id}",
             tenants_for_user=self.tenants, create_tenant=self.create,
             list_integrations=self.integrations, list_members=self.members,
             capabilities=lambda profile: {"role": profile["role"]},
@@ -58,6 +58,12 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    async def test_confirmation_page_does_not_cache_or_forward_token_url(self):
+        Path(self.temp.name, 'auth-confirm.html').write_text('confirmation', encoding='utf-8')
+        response = self.api['confirm_page'](Request())
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual(response.headers['Referrer-Policy'], 'no-referrer')
 
     async def test_register_reuses_draft_and_preserves_cookie_contract(self):
         self.tenants.return_value = [{"id": "draft", "name": "Draft", "role": "owner", "status": "onboarding"}]
@@ -106,7 +112,8 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload(response)["redirect"], "/setup")
 
     async def test_existing_email_user_accepts_invite_during_login(self):
-        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a"}))
+        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a",
+                                                            "_credential_fingerprint": "a" * 64}))
         accept_invite = Mock(return_value={"tenant_id": "company-b", "tenant_name": "Other"})
         account = Mock(return_value={"email": "person@example.com", "display_name": "Person"})
         companies = Mock(side_effect=[
@@ -121,20 +128,81 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertTrue(payload(response)["invite_accepted"])
         self.assertIn("company-b:123", response.cookies["tenant_session"].value)
-        accept_invite.assert_called_once_with(token="once", actor_id=123, email="person@example.com", display_name="Person")
+        accept_invite.assert_called_once_with(token="once", actor_id=123, email="person@example.com", display_name="Person",
+                                             credential_fingerprint="a" * 64)
         record_login.assert_called_once_with(tenant_id="company-b", actor_id=123)
 
     async def test_direct_employee_login_requires_password_rotation_then_can_change_it(self):
-        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a", "force_password_change": True}),
+        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a", "force_password_change": True,
+                                                            "_credential_fingerprint": "a" * 64}),
                                      change_password=Mock(return_value={"changed": True}))
-        api = handlers(replace(self.context, email_auth=email_auth))
+        source = {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'synthetic-source'}
+        api = handlers(replace(self.context, email_auth=email_auth, source_session=lambda _request: source))
         response = await api['email_login'](Request({'email':'developer','password':'temporary-password'}))
         self.assertEqual(payload(response)['redirect'], '/auth/password/change')
         self.assertTrue(payload(response)['password_change_required'])
         self.assertIn('company-a:123', response.cookies['tenant_session'].value)
         response = await api['password_change'](Request({'password':'a-safe-replacement-password'}))
         self.assertEqual(response.status, 200)
-        email_auth.change_password.assert_called_once_with(tenant_id='company-a',actor_id=7,password='a-safe-replacement-password')
+        email_auth.change_password.assert_called_once_with(tenant_id='company-a',actor_id=7,
+            password='a-safe-replacement-password',source_session=source)
+
+    async def test_password_login_binds_session_to_private_credential_fingerprint(self):
+        fingerprint = 'b' * 64
+        email_auth = SimpleNamespace(login=Mock(return_value={
+            'actor_id': 123, 'tenant_id': 'company-a', '_credential_fingerprint': fingerprint}))
+        issue = Mock(return_value='synthetic-cookie')
+        api = handlers(replace(self.context, email_auth=email_auth, issue_session=issue))
+        response = await api['email_login'](Request({'email': 'employee@isolated.example', 'password': 'synthetic-password'}))
+        self.assertEqual(response.status, 200)
+        issue.assert_called_once_with('company-a', 123, credential_fingerprint=fingerprint)
+        self.assertNotIn(fingerprint, response.text)
+        self.assertNotIn('_credential_fingerprint', response.text)
+
+    async def test_password_login_does_not_fall_back_when_credential_proof_is_missing(self):
+        email_auth = SimpleNamespace(login=Mock(return_value={'actor_id': 123, 'tenant_id': 'company-a'}))
+        issue = Mock()
+        api = handlers(replace(self.context, email_auth=email_auth, issue_session=issue))
+        response = await api['email_login'](Request({'email': 'employee@isolated.example', 'password': 'synthetic-password'}))
+        self.assertEqual(response.status, 400)
+        self.assertNotIn('tenant_session', response.cookies)
+        issue.assert_not_called()
+
+    async def test_confirmation_and_email_link_bind_new_sessions_without_exposing_proof(self):
+        for handler_name, method in (('email_confirm', 'complete_confirmation'), ('email_link_confirm', 'complete_email_link')):
+            with self.subTest(handler_name=handler_name):
+                fingerprint = 'c' * 64
+                email_auth = SimpleNamespace(**{method: Mock(return_value={
+                    'actor_id': 123, 'tenant_id': 'company-a', '_credential_fingerprint': fingerprint})})
+                issue = Mock(return_value='synthetic-cookie')
+                api = handlers(replace(self.context, email_auth=email_auth, issue_session=issue))
+                response = await api[handler_name](Request({'token': 'synthetic-token', 'password': 'synthetic-password'}))
+                self.assertEqual(response.status, 200)
+                issue.assert_called_once_with('company-a', 123, credential_fingerprint=fingerprint)
+                self.assertNotIn(fingerprint, response.text)
+
+    async def test_workspace_switch_passes_source_proof_and_does_not_revoke_outside_transaction(self):
+        source = {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'synthetic-source'}
+        issue, revoke = Mock(return_value='synthetic-cookie'), Mock()
+        api = handlers(replace(self.context, issue_session=issue, revoke_session=revoke,
+                               source_session=lambda _request: source))
+        response = await api['switch_workspace'](Request({'tenant_id': 'company-a'}))
+        self.assertEqual(response.status, 200)
+        issue.assert_called_once_with('company-a', 7, source_session=source, revoke_source=True)
+        revoke.assert_not_called()
+
+    async def test_workspace_switch_requires_protected_source_and_rejects_racing_revocation(self):
+        issue = Mock(return_value='synthetic-cookie')
+        api = handlers(replace(self.context, issue_session=issue))
+        response = await api['switch_workspace'](Request({'tenant_id': 'company-a'}))
+        self.assertEqual(response.status, 401)
+        issue.assert_not_called()
+        issue.side_effect = PlatformError('Source session revoked')
+        api = handlers(replace(self.context, issue_session=issue,
+            source_session=lambda _request: {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'source'}))
+        response = await api['switch_workspace'](Request({'tenant_id': 'company-a'}))
+        self.assertEqual(response.status, 401)
+        self.assertNotIn('tenant_session', response.cookies)
 
     async def test_password_change_requires_same_origin_and_session(self):
         email_auth = SimpleNamespace(change_password=Mock())
@@ -143,6 +211,38 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.member.return_value=None
         self.assertEqual((await api['password_change'](Request({'password':'a-safe-replacement-password'}))).status,401)
         email_auth.change_password.assert_not_called()
+
+    async def test_password_change_requires_server_source_proof_even_with_a_profile(self):
+        email_auth = SimpleNamespace(change_password=Mock())
+        api = handlers(replace(self.context, email_auth=email_auth))
+        response = await api['password_change'](Request({'password': 'synthetic-new-password',
+            'source_session': {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'client-forgery'}}))
+        self.assertEqual(response.status, 401)
+        email_auth.change_password.assert_not_called()
+
+    async def test_password_change_ignores_client_identity_and_source_and_does_not_echo_password(self):
+        password = 'synthetic-private-new-password'
+        source = {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'signed-source'}
+        email_auth = SimpleNamespace(change_password=Mock(return_value={'changed': True}))
+        api = handlers(replace(self.context, email_auth=email_auth, source_session=lambda _request: source))
+        response = await api['password_change'](Request({'password': password,
+            'actor_id': 999, 'tenant_id': 'other-company', 'source_session': {'session_id': 'forged'}}))
+        self.assertEqual(response.status, 200)
+        email_auth.change_password.assert_called_once_with(tenant_id='company-a', actor_id=7,
+                                                          password=password, source_session=source)
+        self.assertNotIn(password, response.text)
+        self.assertNotIn('signed-source', response.text)
+        self.log.exception.assert_not_called()
+
+    async def test_password_change_reports_source_revoked_during_request_without_cookie(self):
+        source = {'actor_id': 7, 'tenant_id': 'company-a', 'session_id': 'signed-source'}
+        email_auth = SimpleNamespace(change_password=Mock(side_effect=PlatformError('Session expired')))
+        api = handlers(replace(self.context, email_auth=email_auth, source_session=lambda _request: source))
+        response = await api['password_change'](Request({'password': 'synthetic-new-password'}))
+        self.assertEqual(response.status, 400)
+        self.assertFalse(payload(response)['success'])
+        self.assertNotIn('tenant_session', response.cookies)
+        self.assertNotIn('synthetic-new-password', response.text)
 
     async def test_login_denies_unknown_user_and_reports_platform_outage(self):
         self.tenants.return_value = []

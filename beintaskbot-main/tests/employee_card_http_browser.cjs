@@ -74,14 +74,17 @@ assert(origin && mode && width && login && tenantA && tenantB);
     await form.locator('[name=password]').fill(password);
     await form.locator('[name=confirm_password]').fill(password);
   };
-  const readonlyIdentity = async (form, values) => {
+  const readonlyIdentity = async (form, values, managed = false) => {
     for (const key of ['first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status']) {
-      assert.equal(await form.locator(`[name=${key}]`).evaluate(node => node.readOnly), true, key);
-      assert((await form.locator('#staffFieldHelp-' + key).innerText()).trim(), key + ' has a human read-only reason');
-      assert(!((await form.locator('#staffFieldHelp-' + key).innerText()).includes('global_account_identity')));
+      const editable = managed && ['first_name','last_name','login','phone','avatar_url'].includes(key);
+      assert.equal(await form.locator(`[name=${key}]`).evaluate(node => node.readOnly), !editable, key);
+      if (!editable) {
+        assert((await form.locator('#staffFieldHelp-' + key).innerText()).trim(), key + ' has a human read-only reason');
+        assert(!((await form.locator('#staffFieldHelp-' + key).innerText()).includes('global_account_identity')));
+      }
       if (Object.hasOwn(values, key)) assert.equal(await form.locator(`[name=${key}]`).inputValue(), values[key]);
     }
-    assert.equal(await form.locator('input[type=password]').count(), 0, 'A saved employee never exposes a password field');
+    assert.equal(await form.locator('input[type=password]').evaluateAll(nodes=>nodes.every(n=>n.value==='')), true, 'No stored password is exposed');
     assert.equal(await form.locator('a[href="/auth/password/change"]').count(), 0, 'Another employee has no owner password-reset action');
     assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Card fits ' + width);
   };
@@ -110,12 +113,38 @@ assert(origin && mode && width && login && tenantA && tenantB);
       form = page.locator('#staffEditForm');
       const identity = { first_name: 'Synthetic', last_name: 'Employee', login,
         email: login + '@isolated.example', phone: '+994500001234' };
-      await readonlyIdentity(form, identity);
+      await readonlyIdentity(form, identity, true);
       await form.locator('[name=display_name]').fill('Canceled local draft');
       await form.locator('[data-staff-cancel]').click();
       await closed();
       assert.equal((await control('state')).posts, 1, 'Cancel sends no mutation');
       assert.equal((await readRows(page.request)).find(row => row.telegram_id === actor).display_name, 'Synthetic Employee');
+
+      await openEmployee(actor);
+      form = page.locator('#staffEditForm');
+      await form.locator('[name=display_name]').fill('Unsaved local alias');
+      identity.email = 'new.' + login + '@isolated.example';
+      await form.locator('[name=new_email]').fill(identity.email);
+      let pendingAccount = postResponse('assign_member_email');
+      await form.locator('#staffAssignEmail').click();
+      let responseAccount = await pendingAccount;
+      assert.equal(responseAccount.status(), 200, await responseAccount.text());
+      await settleResponse(responseAccount);
+      assert.equal(await form.locator('[name=display_name]').inputValue(), 'Unsaved local alias', 'Partial email save preserves local draft');
+      assert.equal(await form.locator('[name=email]').inputValue(), identity.email);
+      const replacement = 'Synthetic-replaced-password!43';
+      await form.locator('[name=password]').fill(replacement);
+      await form.locator('[name=confirm_password]').fill(replacement);
+      pendingAccount = postResponse('assign_member_password');
+      await form.locator('#staffAssignPassword').click();
+      responseAccount = await pendingAccount;
+      assert.equal(responseAccount.status(), 200, await responseAccount.text());
+      await settleResponse(responseAccount);
+      assert.equal(await form.locator('[name=password]').inputValue(), '');
+      assert.equal(await form.locator('[name=display_name]').inputValue(), 'Unsaved local alias');
+      assert.equal((await control('state')).posts, 3);
+      await form.locator('[data-staff-cancel]').click();
+      await closed();
 
       await page.locator(`[data-staff-number="${actor}"]`).click();
       form = page.locator('#staffEditForm');
@@ -157,7 +186,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-staff-cancel]').click();
       await closed();
       assert.equal(await page.locator('input[type=password]').evaluateAll(nodes => nodes.every(node => node.value === '')), true);
-      assert.equal((await control('state')).posts, 4, 'One create, one WA update, one local update and one rejected duplicate');
+      assert.equal((await control('state')).posts, 6, 'Create, email, password, WA, local update and one rejected duplicate');
     } else if (mode === 'conflict') {
       await openEmployee(62);
       const form = page.locator('#staffEditForm');
@@ -230,7 +259,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
     assert.equal(await page.evaluate(value =>
       JSON.stringify([localStorage, sessionStorage, location.href]).includes(value), password), false, 'No password is persisted in browser storage or URL');
     assert(writes.every(write => write.path === '/api/platform/members' &&
-      ['update_member_card', 'provision_member_account'].includes(write.action)), JSON.stringify(writes));
+      ['update_member_card', 'provision_member_account', 'assign_member_email', 'assign_member_password'].includes(write.action)), JSON.stringify(writes));
     assert.deepEqual(errors, [], 'Actual app has no uncaught errors');
     console.log(`PASS EMP01 actual PostgreSQL→HTTP→built /app: ${mode}, ${width}px, ${language}; scoped CRUD, receipt/version/errors, current authority and no external actions`);
   } finally { await context.close(); await browser.close(); }

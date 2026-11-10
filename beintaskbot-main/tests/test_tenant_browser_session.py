@@ -96,3 +96,20 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(stateful.session_id(request), created.call_args.kwargs['session_id'])
         active['value'] = False
         self.assertIsNone(stateful.identity(request))
+
+    def test_status_lookup_errors_fail_closed_for_both_cookie_formats(self):
+        for modern in (False, True):
+            with self.subTest(modern=modern):
+                unavailable = Mock(side_effect=RuntimeError('private backend details'))
+                session = TenantBrowserSession(lambda: self.secret, self.member, self.demo, StoreError,
+                    clock=lambda: self.now, create_session=Mock() if modern else None,
+                    session_active=unavailable if modern else None,
+                    legacy_session_allowed=None if modern else unavailable)
+                request = self.request(session.issue(TENANT, 42))
+                self.member.reset_mock()
+                self.assertIsNone(session.identity(request))
+                self.assertIsNone(session.profile(request))
+                self.assertIsNone(session.source(request))
+                self.assertIsNone(session.session_id(request))
+                self.member.assert_not_called()
+                self.assertEqual(unavailable.call_count, 4)

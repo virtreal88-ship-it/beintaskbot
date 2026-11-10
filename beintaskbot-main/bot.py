@@ -269,6 +269,7 @@ from tenant_account_store import (
     profile as tenant_account_profile, update_profile as update_tenant_account_profile,
     create_session as create_tenant_browser_session,
     session_is_active as tenant_browser_session_is_active,
+    legacy_session_is_allowed as tenant_legacy_session_is_allowed,
     list_sessions as list_tenant_browser_sessions,
     revoke_session as revoke_tenant_browser_session,
     notification_preferences as tenant_notification_preferences,
@@ -17851,11 +17852,14 @@ _tenant_browser_session = TenantBrowserSession(
     clock=lambda: _time_module.time(),
     create_session=create_tenant_browser_session,
     session_active=tenant_browser_session_is_active,
+    legacy_session_allowed=tenant_legacy_session_is_allowed,
 )
 
 
-def _make_tenant_session(tenant_id: str, chat_id: int) -> str:
-    return _tenant_browser_session.issue(tenant_id, chat_id)
+def _make_tenant_session(tenant_id: str, chat_id: int, *, credential_fingerprint: str | None = None,
+                         source_session: dict | None = None, revoke_source: bool = False) -> str:
+    return _tenant_browser_session.issue(tenant_id, chat_id, credential_fingerprint=credential_fingerprint,
+                                         source_session=source_session, revoke_source=revoke_source)
 
 
 def _tenant_session_id(request: web.Request) -> str | None:
@@ -18573,6 +18577,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         list_sessions=list_tenant_browser_sessions,
         revoke_session=revoke_tenant_browser_session,
         session_id=_tenant_session_id,
+        source_session=_tenant_browser_session.source,
         record_login=record_tenant_login,
         accept_email_invite=accept_tenant_email_invite,
         # The retired legacy WebApp identity resolver is no longer present in
@@ -18675,12 +18680,18 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         _tenant_member_from_request, _tenant_kommo_request, logger)
     app_web.router.add_get('/api/platform/push/devices', push_api)
     app_web.router.add_post('/api/platform/push/devices', push_api)
+    from tenant_member_password_assign import assign_member_password
+    from tenant_member_email_assign import assign_member_email
+    from tenant_member_profile_assign import assign_member_profile
     member_api = tenant_member_handlers(MemberApiContext(
         member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
         telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
         origin=CANONICAL_WEB_ORIGIN,
         list_members=list_tenant_members, upsert_member=upsert_tenant_member,
         provision_employee_account=provision_tenant_employee_account,
+        assign_member_password=assign_member_password,
+        assign_member_email=assign_member_email,
+        assign_member_profile=assign_member_profile,
         deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
         request_invite_acceptance=request_tenant_invite_acceptance,
         list_invite_requests=list_tenant_invite_requests,
@@ -18691,6 +18702,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         add_member_whatsapp_number=add_tenant_member_whatsapp_number,
         accept_email_invite=accept_tenant_email_invite,
         issue_session=_make_tenant_session,
+        source_session=_tenant_browser_session.source,
         cookie_name=_TENANT_SESSION_COOKIE,
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
     ))

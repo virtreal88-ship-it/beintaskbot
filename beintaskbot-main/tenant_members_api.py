@@ -28,6 +28,10 @@ class MemberApiContext:
     issue_session: Callable[[str, int], str] | None = None
     cookie_name: str = 'csa_tenant_session'
     cookie_ttl: int = 28800
+    source_session: Callable[..., dict | None] | None = None
+    assign_member_password: Callable[..., dict] | None = None
+    assign_member_email: Callable[..., dict] | None = None
+    assign_member_profile: Callable[..., dict] | None = None
 
     def may_manage(self, profile: dict | None) -> bool:
         return bool(profile and (self.can_manage(profile) if self.can_manage else profile.get('role') == 'owner'))
@@ -99,6 +103,81 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                 # readback, which may legitimately lose authority meanwhile.
                 return web.json_response({'success': True, 'applied': {
                     'telegram_id': result['telegram_id'], 'card_version': result['card_version']}},
+                    headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
+            elif action == 'assign_member_password':
+                rejected = strict_context(request, data, tenant_id, owner_id)
+                if rejected is not None:
+                    return rejected
+                if profile.get('role') != 'owner' or profile.get('active') is not True:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=403)
+                if set(data) - {'action','telegram_id','expected_version','expected_tenant_id','expected_user_id','password','confirm_password'}:
+                    return invalid({'changes': 'unknown_field'})
+                if (type(data.get('telegram_id')) is bool or not str(data.get('telegram_id') or '').isdigit()
+                        or int(data['telegram_id']) <= 0 or not isinstance(data.get('expected_version'), str)
+                        or not 1 <= len(data['expected_version']) <= 100
+                        or not isinstance(data.get('password'), str) or not 12 <= len(data['password']) <= 256
+                        or not isinstance(data.get('confirm_password'), str) or len(data['confirm_password']) > 256):
+                    return invalid({'password': 'invalid'})
+                source = context.source_session(request) if context.source_session else None
+                if not source:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=401)
+                if not context.assign_member_password:
+                    return web.json_response({'success': False, 'code': 'member_password_unavailable', 'fields': {}}, status=503)
+                result = await asyncio.to_thread(context.assign_member_password,
+                    tenant_id=tenant_id, owner_id=owner_id, telegram_id=int(data['telegram_id']),
+                    password=data['password'], confirm_password=data['confirm_password'],
+                    expected_version=data['expected_version'], source_session=source)
+                return web.json_response({'success': True, 'applied': result},
+                    headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
+            elif action == 'assign_member_email':
+                rejected = strict_context(request, data, tenant_id, owner_id)
+                if rejected is not None:
+                    return rejected
+                if profile.get('role') != 'owner' or profile.get('active') is not True:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=403)
+                if set(data) - {'action','telegram_id','expected_version','expected_tenant_id','expected_user_id','email'}:
+                    return invalid({'changes': 'unknown_field'})
+                if (type(data.get('telegram_id')) is bool or not str(data.get('telegram_id') or '').isdigit()
+                        or int(data['telegram_id']) <= 0 or not isinstance(data.get('expected_version'), str)
+                        or not 1 <= len(data['expected_version']) <= 100
+                        or not isinstance(data.get('email'), str) or not 3 <= len(data['email']) <= 254):
+                    return invalid({'new_email': 'invalid'})
+                source = context.source_session(request) if context.source_session else None
+                if not source:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=401)
+                if not context.assign_member_email:
+                    return web.json_response({'success': False, 'code': 'member_email_unavailable', 'fields': {}}, status=503)
+                result = await asyncio.to_thread(context.assign_member_email,
+                    tenant_id=tenant_id, owner_id=owner_id, telegram_id=int(data['telegram_id']),
+                    email=data['email'],
+                    expected_version=data['expected_version'], source_session=source)
+                return web.json_response({'success': True, 'applied': result},
+                    headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
+            elif action == 'assign_member_profile':
+                rejected = strict_context(request, data, tenant_id, owner_id)
+                if rejected is not None:
+                    return rejected
+                if profile.get('role') != 'owner' or profile.get('active') is not True:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=403)
+                if set(data) - {'action','telegram_id','expected_version','expected_tenant_id','expected_user_id','changes'}:
+                    return invalid({'changes': 'unknown_field'})
+                if (type(data.get('telegram_id')) is bool or not str(data.get('telegram_id') or '').isdigit()
+                        or int(data['telegram_id']) <= 0 or not isinstance(data.get('expected_version'), str)
+                        or not 1 <= len(data['expected_version']) <= 100
+                        or not isinstance(data.get('changes'), dict) or not data['changes']
+                        or set(data['changes']) - {'first_name','last_name','login','phone','avatar_url'}
+                        or any(not isinstance(v, str) for v in data['changes'].values())):
+                    return invalid({'changes': 'invalid'})
+                source = context.source_session(request) if context.source_session else None
+                if not source:
+                    return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=401)
+                if not context.assign_member_profile:
+                    return web.json_response({'success': False, 'code': 'member_profile_unavailable', 'fields': {}}, status=503)
+                result = await asyncio.to_thread(context.assign_member_profile,
+                    tenant_id=tenant_id, owner_id=owner_id, telegram_id=int(data['telegram_id']),
+                    changes=data['changes'],
+                    expected_version=data['expected_version'], source_session=source)
+                return web.json_response({'success': True, 'applied': result},
                     headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
             elif action == "whatsapp_numbers":
                 telegram_id = int(data.get("telegram_id") or 0)
@@ -232,13 +311,18 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
             return web.json_response({'success':False,'error':'Dəvəti qəbul etmək üçün email hesabı ilə daxil olun.'},status=401)
         if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+        source = context.source_session(request) if context.source_session else None
+        if not source:
+            return web.json_response({'success':False,'error':'Platforma girişi tələb olunur.'},status=401)
         try:
             data=await request.json();data=data if isinstance(data,dict) else {}
             result=await asyncio.to_thread(context.accept_email_invite,token=str(data.get('token') or ''),
-                actor_id=int(profile['telegram_id']),email=str(profile['email']),display_name=str(profile.get('display_name') or ''))
+                actor_id=int(profile['telegram_id']),email=str(profile['email']),display_name=str(profile.get('display_name') or ''),
+                source_session=source)
             response=web.json_response({'success':True,'tenant':{'id':result['tenant_id'],'name':result['tenant_name']},'redirect':'/app'})
             if context.issue_session:
-                response.set_cookie(context.cookie_name,context.issue_session(result['tenant_id'],int(profile['telegram_id'])),
+                response.set_cookie(context.cookie_name,context.issue_session(result['tenant_id'],int(profile['telegram_id']),
+                    source_session=source),
                     max_age=context.cookie_ttl,httponly=True,secure=True,samesite='Lax',path='/')
             return response
         except context.platform_error as exc:

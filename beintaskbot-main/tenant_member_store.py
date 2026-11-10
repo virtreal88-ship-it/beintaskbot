@@ -164,7 +164,7 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
         _require_member_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT m.*, au.email, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status,
+                SELECT m.*, au.email, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status, t.owner_telegram_id AS company_owner_id,
                        t.modules, t.notification_rules, t.onboarding, t.industry,
                        COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
                        COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
@@ -250,6 +250,16 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                        COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
                        COALESCE(NULLIF(au.avatar_url,''),up.avatar_url,'') AS avatar_url,
                        COALESCE(NULLIF(au.login,''),up.login,'') AS login, au.status AS account_status,
+                       COALESCE(m.active=TRUE AND au.tenant_id=m.tenant_id
+                         AND au.verified_at IS NOT NULL AND au.disabled_at IS NULL AND au.status='active'
+                         AND m.role<>'owner'
+                         AND EXISTS(SELECT 1 FROM saas_tenant_audit_events a
+                           WHERE a.tenant_id=m.tenant_id AND a.action='employee.provisioned'
+                             AND a.entity_type='employee' AND a.entity_id=m.telegram_id::text)
+                         AND NOT EXISTS(SELECT 1 FROM saas_tenant_members other
+                           WHERE other.telegram_id=m.telegram_id AND other.tenant_id<>m.tenant_id)
+                         AND NOT EXISTS(SELECT 1 FROM saas_tenants owned WHERE owned.owner_telegram_id=m.telegram_id),FALSE)
+                           AS _password_assign_eligible,
                        COALESCE(m.telegram_id=%s AND au.tenant_id=m.tenant_id
                          AND au.disabled_at IS NULL AND au.status='active',FALSE) AS password_change_available
                 FROM saas_tenant_members m
@@ -280,6 +290,12 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
         value=_member_payload(row)
         value['whatsapp_numbers']=numbers.get(int(row['telegram_id']),[])
         value['editable_fields'], value['read_only_reasons'] = _card_access(current, row)
+        value['password_assign_available'] = bool(value.pop('_password_assign_eligible', False)
+            and current.get('role') == 'owner' and current.get('active') is True
+            and current.get('company_owner_id') == int(owner_id)
+            and int(row['telegram_id']) != int(owner_id))
+        value['email_assign_available'] = value['password_assign_available']
+        value['profile_assign_available'] = value['password_assign_available']
         result.append(value)
     return result
 

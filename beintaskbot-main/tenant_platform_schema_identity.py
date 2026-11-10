@@ -53,6 +53,7 @@ def migrate_identity_schema(cur) -> None:
     # keeps the existing unique-email semantics without inventing an address.
     cur.execute("ALTER TABLE saas_auth_users ALTER COLUMN email DROP NOT NULL")
     cur.execute("ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS force_password_change BOOLEAN NOT NULL DEFAULT FALSE")
+    cur.execute("ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS legacy_sessions_revoked BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_user_profiles (
             actor_id BIGINT PRIMARY KEY,
