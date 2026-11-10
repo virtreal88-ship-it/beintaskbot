@@ -92,6 +92,15 @@ class TenantPolicy:
             return False
         if self.profile.get('role') == 'owner':
             return True
+        # Native CRM CRUD overrides are independent of legacy module grants.
+        # In particular, changing native delete must not revoke Kommo access or
+        # convert a broad membership grant. Explicit false wins over :manage.
+        if module in {'tasks', 'deals', 'customers'} and action in {'view', 'create', 'update', 'delete'}:
+            native = self.member_settings.get('native_crm_actions', {})
+            values = native.get(module, {}) if isinstance(native, dict) else {}
+            override = values.get(action) if isinstance(values, dict) else None
+            if type(override) is bool:
+                return override
         permissions = set(self.profile.get('permissions') or [])
         action_grants = {f'{module}:{item}' for item in allowed_actions}
         if module in permissions and not (permissions & action_grants):
@@ -194,7 +203,11 @@ class TenantPolicy:
                     (self.policies.get('deal_completion') or {}).get('requires_admin', False)))
 
     def public_capabilities(self) -> dict:
+        from tenant_member_access import page_capabilities, action_capabilities, page_visibility
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+                'pages': page_capabilities(self.profile),
+                'page_visibility': page_visibility(self.profile),
+                'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
                 'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
@@ -281,6 +294,12 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
         if 'notifications' in item:
             validate_notification_preferences(item['notifications'])
+        if 'page_visibility' in item:
+            from tenant_member_access import validate_page_visibility
+            validate_page_visibility(item['page_visibility'])
+        if 'native_crm_actions' in item:
+            from tenant_member_access import validate_native_crm_actions
+            validate_native_crm_actions(item['native_crm_actions'])
     for key in ('task_approval', 'deal_completion', 'modules', 'notifications'):
         if any(not isinstance(v, bool) for v in ((policies or {}).get(key) or {}).values()):
             raise ValueError('Qayda üçün aktiv/deaktiv seçin.')

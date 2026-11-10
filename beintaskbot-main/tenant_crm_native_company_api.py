@@ -39,7 +39,14 @@ def handler(member_from_request,origin,logger):
                 return web.json_response({'success':True,('company' if ident else 'companies'):_jsonable(result)},headers={'Cache-Control':'no-store'})
             require_json_post(request,origin); body=await request.json()
             if not isinstance(body,dict):return web.json_response({'success':False,'error':'invalid_body'},status=400)
-            permission_action=('delete' if body.get('action') in ('archive','unlink_contact','unlink_deal') else
+            action = body.get('action')
+            # Link/archive operations require an existing company. Otherwise
+            # their assign/delete permission could authorize a new company.
+            allowed_actions = ('update', 'archive', 'link_contact', 'link_deal',
+                               'unlink_contact', 'unlink_deal') if ident else (None, 'create')
+            if action not in allowed_actions:
+                return web.json_response({'success': False, 'error': 'invalid_action'}, status=400)
+            permission_action=('delete' if action in ('archive','unlink_contact','unlink_deal') else
                                'assign' if body.get('action') in ('link_contact','link_deal') else
                                'create' if not ident else 'update')
             if not policy.allows_action('customers',permission_action):

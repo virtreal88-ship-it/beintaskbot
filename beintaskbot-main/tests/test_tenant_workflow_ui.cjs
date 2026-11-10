@@ -15,3 +15,12 @@ assert.equal(context.result[0].owner_telegram_id,20);
 assert.equal(context.result[0].stages[0].settings.visible,false,'Saved hidden stage must stay hidden');
 assert.equal(context.result[1].active,false,'New catalog pipelines must not automatically grant access');
 console.log('PASS: workflow UI preserves explicit visibility and assignments when importing Kommo choices.');
+
+assert.ok(source.includes("member.role === 'manager'"));
+assert.ok(source.includes('Şirkət → Əməkdaşlar'));
+assert.ok(source.includes('expected_pipeline_ids:prior.pipeline_ids ?? null'));
+assert.ok(source.includes('member_pipeline_changes:memberPipelineChanges'));
+assert.ok(source.includes('delete nextRules.members'));
+for (const duplicate of ['data-role', 'data-permissions', 'memberEditor(', 'readMember(', 'notificationEditor(', 'readNotificationPreferences(', 'members:nextMembers']) {
+  assert.ok(!source.includes(duplicate), `Duplicated employee control remains: ${duplicate}`);
+}

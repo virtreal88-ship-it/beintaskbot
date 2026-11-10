@@ -94,7 +94,7 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                         or len(data['expected_version']) > 100):
                     return invalid({'expected_version': 'invalid'})
                 if (not isinstance(changes, dict) or not changes
-                        or set(changes) - {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers'}):
+                        or set(changes) - {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings'}):
                     return invalid({'changes': 'invalid'})
                 result = await asyncio.to_thread(context.upsert_member, tenant_id=tenant_id,
                     owner_id=owner_id, telegram_id=int(data['telegram_id']),
