@@ -87,7 +87,13 @@
       if (changed || (!dirty(item) && ((reauthorized && !employees(item)) || item.freshness !== freshness(item, data)))) reset(item, data);
     }
     conceal(false);
-    for (const item of subscriptions) refresh(item);
+    for (const item of subscriptions) {
+      // The employee controller lifts its auth curtain later in this same
+      // profile event. Do not mistake that temporary hidden host for leaving
+      // the view, then expire a still-open card when it becomes visible again.
+      if (reauthorized && employees(item)) queueMicrotask(() => refresh(item));
+      else refresh(item);
+    }
   }
   function invalidate() {
     generation++; profile = null; integration = '';

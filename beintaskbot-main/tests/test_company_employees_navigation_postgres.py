@@ -310,6 +310,7 @@ def test_switching_real_company_cookies_keeps_same_actor_members_and_contacts_te
     ('ready', 38, 390, 'ru'),
     ('denied', 32, 390, 'ru'), ('denied', 35, 768, 'en'),
     ('initial_pending', 31, 390, 'ru'), ('auth_pending', 31, 390, 'ru'),
+    ('minute_resume', 11, 1440, 'ru'),
     ('revoked', 31, 390, 'ru'), ('tenant_switch', 37, 390, 'en'),
     ('actor_switch', 31, 390, 'ru'),
 ])
@@ -471,7 +472,8 @@ def test_actual_app_company_navigation_uses_real_cookie_and_members_http(staff, 
                'COMPANY_EMPLOYEES_RUNTIME_WIDTH': str(width), 'COMPANY_EMPLOYEES_RUNTIME_LANGUAGE': language,
                'COMPANY_EMPLOYEES_RUNTIME_TENANT_A': A, 'COMPANY_EMPLOYEES_RUNTIME_TENANT_B': B}
         completed = subprocess.run(['node', str(ROOT / 'tests/company_employees_navigation_http_browser.cjs')],
-            cwd=ROOT, env=env, capture_output=True, text=True, timeout=65)
+            cwd=ROOT, env=env, capture_output=True, text=True,
+            timeout=210 if mode == 'minute_resume' else 65)
         assert completed.returncode == 0, completed.stdout + '\n' + completed.stderr
         assert f['blocked'] == [], 'Navigation must never mutate any API'
         after = _snapshot(f)

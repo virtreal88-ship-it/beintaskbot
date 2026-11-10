@@ -5,6 +5,7 @@ on:
       - '.github/workflows/company-employees-entry.yml'
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-members-ui.js'
+      - 'beintaskbot-main/docs/tenant-view-demand.js'
       - 'beintaskbot-main/docs/tenant-workspace.js'
       - 'beintaskbot-main/docs/tenant-chakra-ui.*'
       - 'beintaskbot-main/ui/**'

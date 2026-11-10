@@ -17,13 +17,15 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
   const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), args: ['--no-sandbox'] });
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Baku' });
   const page = await context.newPage();
-  const writes = [], errors = [], bundles = [], memberRequests = [];
+  const writes = [], errors = [], bundles = [], memberRequests = [], notificationRequests = [], documents = [];
   // Only external network transports are blocked. Local me/members/task APIs,
   // cookies, profile events and capabilities are the application's real paths.
   await context.route(url => ['http:', 'https:'].includes(url.protocol) && url.origin !== origin, route => route.abort());
   page.on('pageerror', error => errors.push(error.stack || error.message));
   page.on('request', request => {
     if (new URL(request.url()).pathname === '/api/platform/members') memberRequests.push(request);
+    if (new URL(request.url()).pathname === '/api/platform/notifications') notificationRequests.push(request);
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documents.push(request);
     if (!['GET', 'HEAD'].includes(request.method())) writes.push({ method: request.method(), path: new URL(request.url()).pathname });
   });
   page.on('response', response => {
@@ -116,7 +118,39 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
         assert.equal(await page.locator('[data-app-open=settings]').isVisible(), false, 'Employee access grants no Settings access');
         await page.keyboard.press('Escape');
       }
-      if (mode === 'auth_pending') {
+      if (mode === 'minute_resume') {
+        // Use wall-clock time and the real built app, not synthetic profile
+        // events alone: exercise two actual global notification poll cycles.
+        const opener = page.locator('[data-staff-edit="41"]');
+        await opener.click();
+        await page.locator('#staffMemberModal.show').waitFor();
+        const form = await page.locator('#staffEditForm').elementHandle();
+        const list = await opener.elementHandle();
+        const reads = memberRequests.length, notifications = notificationRequests.length;
+        const navigations = documents.length;
+        await page.waitForTimeout(125000);
+        assert(notificationRequests.length >= notifications + 2, 'Two real minute notification polls ran');
+        assert.equal(documents.length, navigations, 'Minute polling never reloads the document');
+        assert.equal(memberRequests.length, reads, 'Minute polling does not refetch employees');
+        assert.equal(await form.evaluate(node => node.isConnected), true);
+        assert.equal(await list.evaluate(node => node.isConnected), true);
+        await page.locator('#staffMemberModal.show').waitFor();
+
+        // Focus/visibility revalidation applies a privacy curtain. The clean
+        // card must survive it even though its demand cache is now >30s old.
+        await control('hold-me');
+        await page.evaluate(() => { void window.tenantRequestCoordinator.revalidateProfile().catch(() => {}); });
+        await waitState('pending_me');
+        assert.equal(await page.locator('#staffManagement').isVisible(), false);
+        assert.equal(await page.locator('#staffMemberModal').isVisible(), false);
+        await control('release');
+        await visibleStaff(tenantA);
+        await page.locator('#staffMemberModal.show').waitFor();
+        assert.equal(await form.evaluate(node => node === document.getElementById('staffEditForm')), true);
+        assert.equal(await list.evaluate(node => node.isConnected), true);
+        assert.equal(memberRequests.length, reads, 'Unchanged authority restores the same clean card without a list read');
+        assert.equal(documents.length, navigations);
+      } else if (mode === 'auth_pending') {
         await page.locator('#staffAdd').click();
         await page.locator('#staffMemberModal.show').waitFor();
         const retainedForm = await page.locator('#staffInviteForm').elementHandle();

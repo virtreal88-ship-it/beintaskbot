@@ -15,6 +15,7 @@ on:
       - 'beintaskbot-main/tenant_crm_native_company_api.py'
       - 'beintaskbot-main/docs/tenant-view-demand.js'
       - 'beintaskbot-main/tests/test_employee_demand_lifecycle.cjs'
+      - 'beintaskbot-main/tests/test_employee_auth_curtain_ui.cjs'
       - 'beintaskbot-main/tests/test_native_company_relation_ui.cjs'
       - 'beintaskbot-main/tests/test_native_crud_dispatch.py'
       - 'beintaskbot-main/tests/test_tenant_member_access.py'
@@ -114,6 +115,7 @@ jobs:
           node tests/test_employee_access_settings_ui.cjs
           node tests/test_employee_card_layout.cjs
           node tests/test_employee_demand_lifecycle.cjs
+          node tests/test_employee_auth_curtain_ui.cjs
           node tests/test_native_company_relation_ui.cjs
           node tests/test_tenant_workflow_ui.cjs
           node tests/test_tenant_linear_employee_settings.cjs
