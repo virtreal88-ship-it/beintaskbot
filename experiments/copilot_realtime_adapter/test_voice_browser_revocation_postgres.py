@@ -1,5 +1,6 @@
 """Isolated Postgres + local WS regression; never contacts a provider."""
 import asyncio
+import base64
 import os
 import re
 import time
@@ -16,11 +17,13 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import tenant_account_store as accounts
 from tenant_browser_session import TenantBrowserSession, COOKIE_NAME
-from tenant_operator_voice_session import Session
+from tenant_operator_voice_session import Session, ProviderEventGuardRejected
 from tenant_operator_voice_lease import VoiceSessionLease
 import tenant_operator_voice_lease as lease_module
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_api import handler
+from tenant_operator_realtime_wire import SyntheticRealtimeWire
+from tests.test_tenant_operator_realtime_wire import Socket
 import tenant_operator_voice_orchestration as service
 
 
@@ -201,6 +204,90 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                         with self.connect() as conn:
                             row=conn.execute('SELECT state FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=%s',(tenant,actor)).fetchone()
                         self.assertEqual(row['state'],'active' if mode in ('fence_changed','owner_changed') else 'closed')
+                finally:
+                    if lock_owned_by_test:session.io_lock.release()
+                    if pending is not None and not pending.done():
+                        pending.cancel();await asyncio.gather(pending,return_exceptions=True)
+                    with self.connect() as conn:
+                        conn.execute('DELETE FROM saas_operator_voice_lease');conn.execute('DELETE FROM saas_tenant_browser_sessions')
+                        conn.execute('DELETE FROM saas_auth_users');conn.execute('DELETE FROM saas_tenant_members')
+
+    async def test_output_and_final_dispatch_recheck_revocation_and_fence(self):
+        # Real isolated DB and real bound authority/lease, with no provider API.
+        for phase,change in (('output','browser'),('output','fence'),('output','owner'),
+                             ('dispatch','browser'),('dispatch','fence'),('dispatch','context')):
+            with self.subTest(phase=phase,change=change):
+                tenant=str(uuid.uuid4());sid=str(uuid.uuid4());channel=str(uuid.uuid4());actor=7
+                with self.connect() as conn:
+                    conn.execute('INSERT INTO saas_tenant_members VALUES (%s,%s,true)',(tenant,actor))
+                    conn.execute("INSERT INTO saas_auth_users VALUES (%s,%s,NULL,'active')",(str(uuid.uuid4()),actor))
+                    conn.execute("INSERT INTO saas_tenant_browser_sessions VALUES (%s,%s,%s,NULL,now()+interval '1 hour')",(sid,tenant,actor))
+                browser=TenantBrowserSession(secret=lambda:'synthetic-secret',member=lambda t,a:{'tenant_id':t,'telegram_id':a},
+                    identity_allowed=lambda *_:False,membership_error=ValueError,create_session=lambda **_:None,
+                    session_active=accounts.session_is_active)
+                payload=f'{tenant}.{actor}.{int(time.time())+3600}.{sid}'
+                request=SimpleNamespace(cookies={COOKIE_NAME:payload+'.'+browser._signature(payload)})
+                scope=SimpleNamespace(tenant=tenant,actor=actor,channel_id=channel,conversation_id='dialog',
+                                      lead_id=1,agent_binding='synthetic',config_version='v1')
+                route={'provider':'connect','lead_id':'1','channel_id':channel,'conversation_id':'dialog'}
+                authority=service.ScopedAuthority({},route,scope,lambda:browser.profile(request))
+                lease=VoiceSessionLease(authority,str(uuid.uuid4()))
+                policy=PilotAdmission(authority,lease,authority.session_scope,lease.session_id)
+                socket=Socket();provider=SyntheticRealtimeWire(socket,policy)
+                class Context:
+                    def __init__(self):self.valid=True
+                    async def read_authorized(self,_):return {'existing_copilot_instructions':'Never send messages','lines':[],'extra_context':{}}
+                    async def revalidate(self,_):
+                        if not self.valid:raise ValueError('synthetic context changed')
+                class Client:
+                    def __init__(self):self.events=[]
+                    async def send(self,event):self.events.append(event)
+                context=Context();client=Client()
+                session=Session(authority.session_scope,authority=authority,ledger=None,lease=lease,context=context,
+                                provider=provider,client=client,session_id=lease.session_id,pilot_policy=policy,duplex=True)
+                pending=None;lock_owned_by_test=False
+                try:
+                    with patch.object(accounts,'_connect',self.connect),patch.object(accounts,'_ensure_schema',lambda *_:None), \
+                         patch.object(lease_module,'_connect',self.connect),patch.object(service.voice,'check',return_value=scope), \
+                         patch.object(service.voice,'authorize',return_value=scope),patch.object(service,'require_pilot'):
+                        await session.start();session.VAD_SETTLE_SECONDS=.001
+                        if phase=='output':
+                            session.response_inflight=True;session.provider_response_id='synthetic-response'
+                            audio={'type':'response.output_audio.delta','response_id':'synthetic-response',
+                                   'item_id':'synthetic-item','content_index':0,'delta':base64.b64encode(bytes(2)).decode()}
+                            await session._receive_provider(audio)
+                            self.assertEqual(sum(e['type']=='audio' for e in client.events),1)
+                        else:
+                            session._remember_context_item('turn1',usable=True,role='user')
+                            session.pending_input_item_id='turn1';session.response_pending=True
+                            class TrackedLock(asyncio.Lock):
+                                def __init__(self):super().__init__();self.waiting=asyncio.Event()
+                                async def __aenter__(self):
+                                    self.waiting.set()
+                                    return await super().__aenter__()
+                            session.io_lock=TrackedLock();await session.io_lock.acquire();lock_owned_by_test=True
+                            pending=asyncio.create_task(session._dispatch_pending())
+                            await asyncio.wait_for(session.io_lock.waiting.wait(),3)
+                            self.assertEqual(list(policy._permits.values()),[None])
+                        def revoke_or_change_lease():
+                            with self.connect() as conn:
+                                if change=='browser':
+                                    conn.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE id=%s',(sid,))
+                                elif change=='fence':
+                                    conn.execute('UPDATE saas_operator_voice_lease SET fence=fence+1 WHERE tenant_id=%s AND actor_id=%s',(tenant,actor))
+                                elif change=='owner':
+                                    conn.execute('UPDATE saas_operator_voice_lease SET owner_id=%s WHERE tenant_id=%s AND actor_id=%s',(str(uuid.uuid4()),tenant,actor))
+                        if change=='context':context.valid=False
+                        else:await asyncio.to_thread(revoke_or_change_lease)
+                        if phase=='output':
+                            with self.assertRaises(ProviderEventGuardRejected):await session._receive_provider(audio)
+                            self.assertEqual(sum(e['type']=='audio' for e in client.events),1)
+                        else:
+                            session.io_lock.release();lock_owned_by_test=False
+                            with self.assertRaises(Exception):await asyncio.wait_for(pending,3)
+                            self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),0)
+                            self.assertEqual(list(policy._permits.values()),[None])
+                        await session.end('test')
                 finally:
                     if lock_owned_by_test:session.io_lock.release()
                     if pending is not None and not pending.done():

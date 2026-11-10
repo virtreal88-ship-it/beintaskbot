@@ -100,8 +100,67 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
     def test_aggregate_logging_is_bounded_and_payload_free(self):
         with self.assertLogs('tenant_operator_voice_gateway',level='INFO') as logs:
             gateway._log_voice_activity(True,{'input_audio_frames':12,'input_audio_batches':5,
-                                               'input_audio_process_ms':123,'audio':'synthetic private'})
+                                               'input_audio_process_ms':123,'audio':'synthetic private',
+                                               'provider_events':4,'provider_event_process_ms':456,
+                                               'provider_event_queue_max_ms':10**12,'transcript':'secret transcript'})
         self.assertIn('input_audio_frames=12',repr(logs.output))
         self.assertIn('input_audio_batches=5',repr(logs.output))
         self.assertIn('input_audio_process_ms=123',repr(logs.output))
+        self.assertIn('provider_events=4',repr(logs.output))
+        self.assertIn('provider_event_process_ms=456',repr(logs.output))
+        self.assertIn('provider_event_queue_max_ms=1000000000',repr(logs.output))
         self.assertNotIn('synthetic private',repr(logs.output))
+        self.assertNotIn('secret transcript',repr(logs.output))
+
+    async def test_provider_queue_activity_reports_aggregate_delay_without_payload(self):
+        from tenant_operator_voice_session import Session
+        incoming=asyncio.Queue();entered=asyncio.Event();observed=asyncio.Event();release=asyncio.Event()
+        processed=asyncio.Event();logged=asyncio.Event();count=0
+        class Provider:
+            async def receive(self):return await incoming.get()
+        class FakeSession:
+            def __init__(self,client):
+                self.client=client;self.provider=Provider();self.duplex=True;self.closed=False
+                self.response_inflight=False;self.item=None
+            _consume_task=staticmethod(Session._consume_task)
+            async def start(self):pass
+            async def next_provider_event(self):return await self.provider.receive()
+            def observe_provider_event(self,event):
+                nonlocal count
+                count+=1
+                if count==2:observed.set()
+            async def receive_provider(self,event,already_observed=False):
+                if event['number']==1:entered.set();await release.wait()
+                else:processed.set()
+            async def receive_client(self,event):
+                if event['type']=='end':await self.end('user_end')
+            async def end(self,reason):
+                if self.closed:return
+                self.closed=True
+                await self.client.send({'type':'ended','reason':reason})
+        async def authenticate(_):return ('tenant','actor','channel','dialog')
+        app=web.Application();app.router.add_get('/voice',gateway.make_handler(
+            allowed_origins=['https://test.local'],authenticate=authenticate,
+            build_session=lambda _scope,client:FakeSession(client)))
+        original=gateway._log_voice_activity
+        def capture(*args):original(*args);logged.set()
+        client=TestClient(TestServer(app));await client.start_server()
+        try:
+            with patch.object(gateway,'_log_voice_activity',capture),self.assertLogs('tenant_operator_voice_gateway',level='INFO') as logs:
+                ws=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
+                await incoming.put({'type':'rate_limits.updated','number':1,'payload':'private audio'})
+                await incoming.put({'type':'rate_limits.updated','number':2,'payload':'private transcript'})
+                await asyncio.wait_for(entered.wait(),1);await asyncio.wait_for(observed.wait(),1)
+                await asyncio.sleep(.04);release.set()
+                await asyncio.wait_for(processed.wait(),1)
+                await ws.send_json({'type':'end'});await asyncio.wait_for(ws.receive(),1)
+                await asyncio.wait_for(ws.receive(),1)  # acknowledge WebSocket close
+                await asyncio.wait_for(logged.wait(),1)
+            line=next(line for line in logs.output if 'realtime_voice_session_activity' in line)
+            self.assertIn('provider_events=2',line)
+            fields=dict(part.split('=',1) for part in line.split() if '=' in part)
+            self.assertGreaterEqual(int(fields['provider_event_process_ms']),30)
+            self.assertGreaterEqual(int(fields['provider_event_queue_max_ms']),30)
+            self.assertNotIn('private',line)
+        finally:
+            release.set();await client.close()

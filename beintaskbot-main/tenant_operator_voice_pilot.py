@@ -49,6 +49,19 @@ class PilotAdmission:
             await self.lease.assert_current(scope,self._fence)
             return True
 
+    async def _check_dispatch_authority_and_lease(self,scope,stage):
+        from tenant_operator_voice_lease import bound_authority_and_lease
+        combined=bound_authority_and_lease(self.authority,self.lease,scope,self.session_id)
+        fence=self._fence
+        if combined:
+            await self.lease.assert_current(scope,fence)
+            if (self._closed or self._fence!=fence or self.lease.fence!=fence or
+                not bound_authority_and_lease(self.authority,self.lease,scope,self.session_id)):
+                raise PilotAdmissionError('admission_binding_invalid')
+        else:
+            await self.authority.check(scope,stage)
+            await self.lease.assert_current(scope,fence)
+
     async def issue(self,scope,request_id):
         async with self._lock:
             if self._closed or self._fence is None or scope!=self.scope:
@@ -58,8 +71,7 @@ class PilotAdmission:
             except (ValueError,TypeError,AttributeError):
                 raise PilotAdmissionError('request_invalid') from None
             if request_id in self._permits:raise PilotAdmissionError('request_reused')
-            await self.authority.check(scope,'pilot_issue')
-            await self.lease.assert_current(scope,self._fence)
+            await self._check_dispatch_authority_and_lease(scope,'pilot_issue')
             token=str(uuid.uuid4());self._permits[request_id]=token
             return {'request_id':request_id,'session_id':self.session_id,'token':token}
 
@@ -73,8 +85,7 @@ class PilotAdmission:
             # Consume before any awaited check: failures and uncertainty can
             # never turn the same permit into a retry.
             self._permits[request_id]=None
-            await self.authority.check(scope,'pilot_dispatch')
-            await self.lease.assert_current(scope,self._fence)
+            await self._check_dispatch_authority_and_lease(scope,'pilot_dispatch')
             return True
 
     async def close(self):

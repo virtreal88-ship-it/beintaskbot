@@ -25,6 +25,7 @@ _SAFE_FAILURE_CODES=frozenset({
     'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
     'session_closed','output_authorization_rejected','voice_lease_rejected','response_not_inflight',
     'response_id_mismatch','provider_authority_rejected','provider_lease_rejected',
+    'provider_authority_or_lease_rejected','output_authority_or_lease_rejected',
     'interrupted_before_audio','input_turn_commit_pending',
     'provider_audio_delta_invalid','provider_audio_delta_too_large',
     'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
@@ -62,6 +63,7 @@ _VOICE_ACTIVITY_COUNTERS=(
     'playback_completion_acks','audio_frames_ws_sent','browser_playback_scheduled',
     'browser_playback_failed','playback_context_running','playback_context_suspended',
     'input_audio_batches','input_audio_process_ms',
+    'provider_events','provider_event_process_ms','provider_event_queue_max_ms',
 )
 
 
@@ -142,7 +144,8 @@ def _log_voice_activity(ready,activity):
               'vad_interrupt_candidates=%d interrupt_notices_sent=%d vad_cancelled_responses=%d '
               'playback_interrupt_acks=%d playback_completion_acks=%d audio_frames_ws_sent=%d '
               'browser_playback_scheduled=%d browser_playback_failed=%d playback_context_running=%d '
-              'playback_context_suspended=%d input_audio_batches=%d input_audio_process_ms=%d',*fields)
+              'playback_context_suspended=%d input_audio_batches=%d input_audio_process_ms=%d '
+              'provider_events=%d provider_event_process_ms=%d provider_event_queue_max_ms=%d',*fields)
 
 
 def _safe_client_transport_kind(error):
@@ -331,24 +334,32 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                             # Observe VAD promptly even when handling an older
                             # event is waiting for authorization or lease IO.
                             if callable(observer):observer(incoming)
-                            await incoming_provider.put((True,incoming))
+                            await incoming_provider.put((True,incoming,time.monotonic()))
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
-                        await incoming_provider.put((False,exc))
+                        await incoming_provider.put((False,exc,None))
                 provider_receiver=asyncio.create_task(receive_ahead()) if duplex else None
                 try:
                     while not session.closed:
                         if duplex:
-                            ok,event=await incoming_provider.get()
+                            ok,event,queued_at=await incoming_provider.get()
                             if not ok:raise event
                         else:
                             event=await session.next_provider_event()
+                            queued_at=time.monotonic()
                         stage='provider_event'
+                        processing_at=time.monotonic()
+                        queue_ms=int(max(0,min(processing_at-queued_at,600))*1000)
+                        activity['provider_events']+=1
+                        activity['provider_event_queue_max_ms']=max(activity['provider_event_queue_max_ms'],queue_ms)
                         response_inflight_before=session.response_inflight
                         output_playing_before=bool(session.item)
-                        if callable(observer):await session.receive_provider(event,already_observed=True)
-                        else:await session.receive_provider(event)
+                        try:
+                            if callable(observer):await session.receive_provider(event,already_observed=True)
+                            else:await session.receive_provider(event)
+                        finally:
+                            activity['provider_event_process_ms']+=int(max(0,min(time.monotonic()-processing_at,600))*1000)
                         if isinstance(event,dict):
                             kind=event.get('type')
                             if kind=='input_audio_buffer.speech_started':
