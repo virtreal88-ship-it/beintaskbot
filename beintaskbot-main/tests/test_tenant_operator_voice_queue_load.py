@@ -9,6 +9,43 @@ import tenant_operator_voice_gateway as gateway
 
 
 class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_limit_and_invalid_frames_are_not_merged_or_bypassed(self):
+        for invalid in (b'',b'\x01'):
+            with self.subTest(invalid_size=len(invalid)):
+                entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event();count=0;seen=[]
+                class FakeSession:
+                    def __init__(self):self.closed=False;self.provider=object();self.duplex=True;self.MAX_FRAME=9600
+                    async def start(self):pass
+                    async def receive_client(self,event):
+                        if event['type']!='audio':return
+                        data=event['pcm'];seen.append(data)
+                        if len(seen)==1:entered.set();await release.wait()
+                        if not data or len(data)%2 or len(data)>self.MAX_FRAME:raise ValueError('invalid_pcm_frame')
+                    async def end(self,reason):self.closed=True
+                async def authenticate(request):return ('tenant','actor','channel','dialog')
+                app=web.Application();session=FakeSession()
+                app.router.add_get('/voice',gateway.make_handler(allowed_origins=['https://test.local'],
+                    authenticate=authenticate,build_session=lambda scope,client:session))
+                original=gateway._enqueue_client_message
+                async def observe(queue,message):
+                    nonlocal count
+                    await original(queue,message);count+=1
+                    if count>=5:queued.set()
+                client=TestClient(TestServer(app));await client.start_server()
+                try:
+                    with patch.object(gateway,'_enqueue_client_message',observe):
+                        ws=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
+                        await ws.send_bytes(bytes(2));await asyncio.wait_for(entered.wait(),3)
+                        await ws.send_bytes(bytes([1])*4800);await ws.send_bytes(bytes([2])*4800)
+                        await ws.send_bytes(invalid);await ws.send_bytes(bytes([3])*2)
+                        await asyncio.wait_for(queued.wait(),3);release.set()
+                        await asyncio.wait_for(ws.receive(),3)
+                    self.assertEqual([len(frame) for frame in seen],[2,9600,len(invalid)])
+                    self.assertEqual(seen[1],bytes([1])*4800+bytes([2])*4800)
+                    self.assertEqual(seen[-1],invalid)
+                finally:
+                    release.set();await client.close()
+
     async def test_queued_pcm_is_coalesced_without_crossing_ack_barrier(self):
         entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event()
         seen=[];checks=[];count=0
