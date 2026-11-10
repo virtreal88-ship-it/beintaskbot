@@ -1,0 +1,61 @@
+# Beintaskbot AI Business Analyst: source audit
+
+- **Audit date:** 2026-11-10
+- **Code baseline:** `d1afa7a2c598f2e17a3d3229798467e834003c33` (`main`)
+- **Production Worker:** Railway deployment `e56ad1f4-7df4-4a63-8508-554e5e4a718c` (`SUCCESS`)
+
+## Scope and evidence
+
+This audit maps the current application readers, role checks, and production schema. The Railway Postgres table browser showed the source tables listed below in the production `public` schema. No customer rows, messages, credentials, variable values, or provider payloads were opened. Table presence proves only that the relation exists; it does not prove that a source has current rows, that a provider is connected, or that its history is complete. Those checks remain open until a tenant-scoped, read-only source preflight is added.
+
+The production Worker was shown active on the code baseline above. The current GitHub `main` and latest Worker deployment were checked before this audit. No production settings or business data were changed.
+
+## Source inventory
+
+| Source | Production relations observed | Existing read path | Scope and completeness |
+|---|---|---|---|
+| Connect / WhatsApp conversations | `saas_connect_channels`, `saas_connect_conversations`, `saas_crm_messages`, plus direct-identity and merge tables | Learning MCP exposes `channels_read`, `conversations_read`, and `messages_read`. The message projection is bounded to 25 rows and constrains `channel` to a Connect channel. | The MCP reader binds to a configured tenant/channel; message content additionally requires its content scope. These readers are not connected to `/app` Copilot. Production ingest freshness and message coverage were not queried. The projection exposes direction/type/time, not a verified human author for every outbound message, so it cannot yet support staff-quality scoring. |
+| Sales / Kommo conversations | `saas_crm_deals`, `saas_crm_messages`, CRM sync tables | Existing selected-dialog Copilot and CRM routes operate on a chosen conversation. The shared MCP `messages_read` projection maps its channel filter to Connect and is not a company-wide Kommo conversation reader. | No unified sales conversation search/timeline adapter was found. Do not treat Connect message coverage as Kommo coverage. CRM contact/deal data may be present while conversation history is not. |
+| Operators and managers | Same Connect/CRM conversation stores | Selected-dialog access is checked through `tenant_operator_access.assert_route` and the current membership policy. | A broad management report must not reuse an employee's selected-dialog authority. Existing message reads do not establish the sender identity needed to attribute every message to an individual employee. |
+| Developer discussions | `saas_internal_consultations`, `saas_dialog_consultation_replies`, Linear tables | Copilot can load a developer consultation reply only when it is bound to the exact selected Connect conversation. The `/app` Linear task reader fetches a bounded team-scoped issue page through the existing integration. | There is no company-wide discussion search for developer conversations. The consultation reply is case/dialog evidence, not a general employee chat archive. Linear configuration, provider response coverage, and pagination must be checked per authorized member/team. |
+| Tasks | `saas_crm_tasks`, `saas_crm_native_tasks`, `saas_linear_snapshots`, `saas_linear_sync` | Existing CRM task routes and `tenant_linear_tasks.listing` read their respective configured sources. Owner-only risk observation already stores deterministic findings for Linear issues and cached CRM tasks. | No common AI analytics task search/timeline tool exists. Linear is an external provider read; CRM/Linear links to customers must use stored exact relations, never name similarity. Existing task-risk findings do not cover all customer or support risks. Reuse the current risk reader and source freshness guards instead of adding a second observer. |
+| Support inbox and confirmed cases | `saas_support_tickets`, `saas_support_ticket_messages`, `saas_knowledge_candidates`, `saas_knowledge_extractions` | `support_inbox_read` projects ticket metadata. `cases_read` and `case_evidence_read` expose the existing reviewed-candidate/extraction workflow; case-to-dialog linking uses the existing exact route and evidence checks. | The current MCP read surface does not project `saas_support_ticket_messages` as a general timeline. Case text is explicitly gated; source/media evidence is bounded to the verified case. Production ticket volume, response history, and resolution confirmation were not inspected. |
+| Knowledge and instructions | `saas_ai_knowledge_sources`, `saas_instruction_lessons`, knowledge-candidate/extraction tables | Learning MCP exposes `knowledge_read` and `instructions_read`; approved internal-agent instruction lookup is agent-bound. | Knowledge content needs the separate content grant. Analytics should include only currently published/active sources relevant to the authorized tenant and must cite the source ID/version and check time. A table row or candidate is not itself verified knowledge. |
+| Media and transcripts | `saas_dialog_audio_sources`, `saas_dialog_audio_attempts`, `saas_media_evidence_receipts`, case media/extraction tables | Existing media readers return scoped receipts and coverage. Case media verification reuses protected Connect loading and the exact case/source checks. | No company-wide raw media reader is exposed. A saved transcript/result may be used only when its current source and coverage are verified. Do not infer that a message with media was fully analyzed. |
+| Cross-channel customer identity | `saas_crm_entity_links`, `saas_crm_native_contact_identities`, `saas_crm_native_contact_conversations`, `saas_connect_direct_identities`, owner assertions, conflict and merge tables | Existing identity/merge services contain source-bound identity checks and conflict guards. | The proposed analyst has no unified customer search/timeline reader. Reuse exact verified links and canonical merge services. Similar names or unconfirmed phone matches cannot establish identity. |
+| Existing risk signals | `saas_proactive_risk_findings`, checks, scope checks, alert events/deliveries | Merged owner-only risk work already scans scoped Linear issues and cached CRM tasks, stores deterministic findings, rechecks current source scope/freshness, and displays findings in `/app`. | This is a reusable, non-AI risk source. It does not detect dissatisfaction, promises, support resolution, or staff performance. Risk-alert delivery is a separate feature; the analyst must not create notifications or duplicate findings. |
+
+### What is already callable by the assistants
+
+- The **Learning MCP** has a large explicit read registry, including `conversations_read`, `messages_read`, `cases_read`, `case_evidence_read`, `support_inbox_read`, `knowledge_read`, `ai_runs_read`, and `ai_jobs_read`. It requires an authorized OAuth read connection, rechecks tenant/membership/owner scope, limits pages, and writes the existing read audit event. It is currently an MCP integration, not a tool connection inside `/app`.
+- The `/app` text Copilot is a single selected-dialog flow. Its provider uses one Responses API generation and does not send function tools. Its system instruction explicitly forbids tool use and external actions.
+- The `/app` voice flow uses temporary selected-dialog context and likewise forbids tools. It does not share persistent text-Copilot history.
+- The internal expert registry in `tenant_ai_expert_tools.py` is a separate agent-runtime surface. Its seven listed diagnostic tools currently return `integration_unavailable`; its mock fixture path is not called by the runtime. It is not a business-data adapter and must not be made into a shortcut for management authority.
+- Existing expert-agent policies, assigned customer agents, CRM actions, and support dispatch paths must remain separate from management analytics.
+
+## Access boundary for implementation
+
+1. Keep the existing dialog context and access checks unchanged. Add a separate management context in the existing assistant experience.
+2. Require the current active owner, or an administrator with a new explicit analytics-read permission. The existing role/module permissions do not yet define that analytics permission; do not infer it from dialog access, `ai_agents`, or an employee's assigned conversations.
+3. Recheck tenant, membership, role/grant, source configuration, and source scope on every read. Pass no caller-controlled SQL/table/column, arbitrary URL, shell, or secret to the model.
+4. Return bounded projections with source references and `checked_at`, and mark missing/partial/stale source coverage explicitly. Any text from a conversation, ticket, task, document, or knowledge source is untrusted evidence, never an instruction.
+5. Keep all tools read-only. No message send, CRM/task mutation, agent setting change, notification, or background analysis belongs in the first release.
+6. Text and voice should call the same server registry under the same management authority. Customer-facing agents must never inherit it.
+
+## First implementation set
+
+The safest initial server tools are:
+
+1. `list_analytics_sources`: return scoped schema presence and known coverage gaps without returning content or secrets; report data readiness and freshness as unknown until they are checked.
+2. `search_conversations` / `get_conversation_timeline`: first for Connect, using the existing exact tenant/channel/dialog guards and bounded message projections.
+3. `get_support_cases` / `get_risk_evidence`: reuse existing reviewed-case and owner-risk readers with their source freshness checks.
+4. `search_tasks` / `get_task_timeline`: call existing Linear/CRM readers under their current source and membership scope; no fuzzy customer join.
+5. `search_knowledge`: reuse the active published source reader with citations and current version.
+
+The first code slice now provides `list_analytics_sources` and `get_company_risks` through the allowlisted server registry and authenticated `POST /api/platform/ai/analytics/tools` endpoint. Both are owner-only, read-only, audited, and accept no arbitrary query text. Source listing reports relation presence only and explicitly marks freshness/coverage as unknown. Risk results call the existing source-revalidated owner risk reader; they do not create a second risk observer. Administrators do not yet receive this access; a separate explicit read grant must be added before they can use it.
+
+The first response to a company-wide question must start by reporting which sources are readable and current. Until the live source preflight and management tool registry are shipped, `/app` Copilot cannot honestly answer the requested company-wide question from these sources.
+
+## Audit outcome
+
+Several real read paths already exist and should be reused. The main integration gap is that they are split between the Learning MCP, selected-dialog Copilot, CRM/Linear pages, and owner risk UI; `/app` Copilot has no management tool registry. The initial server registry is implemented locally, but it is not yet connected to text or voice generation. Production table presence is confirmed, but live row coverage, source sync freshness, role grants, and cross-source joins have not yet been established. Next, add bounded tenant-scoped conversation, support-case, task, and knowledge adapters with authorization and evidence tests; then connect the same registry to the existing text/voice assistant behind a separate management context.
