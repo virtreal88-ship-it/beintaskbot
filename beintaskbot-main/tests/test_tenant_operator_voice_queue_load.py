@@ -47,7 +47,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                     release.set();await client.close()
 
     async def test_queued_pcm_is_coalesced_without_crossing_ack_barrier(self):
-        entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event()
+        entered=asyncio.Event();release=asyncio.Event();queued=asyncio.Event();logged=asyncio.Event()
         seen=[];checks=[];count=0
         class FakeSession:
             def __init__(self):self.closed=False;self.provider=object();self.duplex=True;self.MAX_FRAME=9600
@@ -68,9 +68,12 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
             nonlocal count
             await original(queue,message);count+=1
             if count>=14:queued.set()
+        original_log=gateway._log_voice_activity
+        def observe_activity(ready,activity):
+            original_log(ready,activity);logged.set()
         client=TestClient(TestServer(app));await client.start_server()
         try:
-            with patch.object(gateway,'_enqueue_client_message',observe), self.assertLogs('tenant_operator_voice_gateway',level='INFO') as logs:
+            with patch.object(gateway,'_enqueue_client_message',observe), patch.object(gateway,'_log_voice_activity',observe_activity), self.assertLogs('tenant_operator_voice_gateway',level='INFO') as logs:
                 ws=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
                 await ws.send_bytes(bytes([1])*2048)
                 await asyncio.wait_for(entered.wait(),3)
@@ -81,6 +84,7 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 await ws.send_bytes(bytes([12])*2048)
                 await asyncio.wait_for(queued.wait(),3);release.set()
                 await ws.send_json({'type':'end'});await asyncio.wait_for(ws.receive(),3)
+                await asyncio.wait_for(logged.wait(),3)
             audio=[payload for kind,payload in seen if kind=='audio']
             self.assertEqual(b''.join(audio),b''.join(bytes([i])*2048 for i in range(1,13)))
             self.assertTrue(all(len(frame)<=9600 for frame in audio))
