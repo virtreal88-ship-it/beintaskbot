@@ -95,6 +95,17 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused):await self.s._receive_client({'type':'audio','pcm':bytes(480)})
         self.assertEqual(self.provider.events,[])
 
+    async def test_combined_pcm_still_requires_current_authority_and_lease(self):
+        self.lease.valid=False
+        with self.assertRaisesRegex(Refused,'lease_expired'):
+            await self.s._receive_client({'type':'audio','pcm':bytes(8192)})
+        self.assertEqual(self.provider.events,[])
+        self.lease.valid=True
+        self.s.authority.check=AsyncMock(side_effect=Refused('permission_revoked'))
+        with self.assertRaisesRegex(Refused,'permission_revoked'):
+            await self.s._receive_client({'type':'audio','pcm':bytes(8192)})
+        self.assertEqual(self.provider.events,[])
+
     async def test_interrupt_completion_order_discards_old_audio_and_late_ack(self):
         for done_first in (False,True):
             with self.subTest(done_first=done_first):
