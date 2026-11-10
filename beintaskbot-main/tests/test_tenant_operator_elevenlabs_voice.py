@@ -302,6 +302,78 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('stage=receive',repr(logs.output))
 
 
+class HybridOpenAILoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
+    async def make_wire(self,*,abort=False):
+        stop=asyncio.Event();server_closed=asyncio.Event();server_state={}
+        async def handler(request):
+            ws=web.WebSocketResponse();await ws.prepare(request)
+            try:
+                if abort:
+                    await stop.wait();request.transport.abort()
+                else:
+                    async for _ in ws:pass
+            finally:
+                server_state['code']=ws.close_code;server_closed.set()
+            return ws
+        app=web.Application();app.router.add_get('/test',handler)
+        runner=web.AppRunner(app);await runner.setup();self.addAsyncCleanup(runner.cleanup)
+        site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+        port=site._server.sockets[0].getsockname()[1]
+        session=_new_owned_session()
+        ws=await _connect_websocket(session,f'http://127.0.0.1:{port}/test',{})
+        socket=AiohttpRealtimeSocket(ws,owned_session=session);socket.synthetic_only=True
+        policy=PilotAdmission(Authority(),Lease(),('tenant',7,'channel','dialog'),str(uuid.uuid4()))
+        wire=SyntheticHybridRealtimeWire(socket,policy,object(),lambda *_:None);wire.ready=True
+        reading=asyncio.create_task(wire.receive())
+        async def wait_reader():
+            while not ws._waiting:await asyncio.sleep(.001)
+        await asyncio.wait_for(wait_reader(),2)
+        return wire,ws,reading,stop,server_state,server_closed
+
+    async def test_close_confirms_peer_before_cancelling_openai_receive(self):
+        wire,ws,reading,_,state,closed=await self.make_wire()
+        try:
+            await asyncio.wait_for(wire.close(),3)
+            await asyncio.wait_for(closed.wait(),2)
+            self.assertEqual((ws.close_code,state['code']),(1000,1000))
+        finally:
+            if not reading.done():reading.cancel()
+            await asyncio.gather(reading,return_exceptions=True)
+
+    async def test_openai_tcp_abort_remains_unconfirmed(self):
+        wire,ws,reading,stop,_,closed=await self.make_wire(abort=True)
+        class TTDProbe:
+            cancelled=False;closed=False
+            def cancel_now(self):self.cancelled=True
+            async def wait_closed(self):self.closed=True
+        ttd=TTDProbe();wire._hybrid_streams.append(ttd)
+        try:
+            stop.set();await asyncio.wait_for(closed.wait(),2)
+            await asyncio.gather(reading,return_exceptions=True)
+            with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+                await asyncio.wait_for(wire.close(),3)
+            self.assertEqual(ws.close_code,1006)
+            self.assertTrue(ttd.cancelled and ttd.closed)
+        finally:
+            if not reading.done():reading.cancel()
+            await asyncio.gather(reading,return_exceptions=True)
+
+    async def test_unconfirmed_ttd_still_closes_openai_peer(self):
+        wire,ws,reading,_,state,closed=await self.make_wire()
+        class BrokenTTD:
+            def cancel_now(self):pass
+            async def wait_closed(self):raise ValueError('tts_close_unconfirmed')
+        wire._hybrid_streams.append(BrokenTTD())
+        try:
+            with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+                await asyncio.wait_for(wire.close(),3)
+            await asyncio.wait_for(closed.wait(),2)
+            self.assertEqual((ws.close_code,state['code']),(1000,1000))
+        finally:
+            if not reading.done():reading.cancel()
+            await asyncio.gather(reading,return_exceptions=True)
+
+
 class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.scope=('tenant',7,'channel','dialog');self.session_id=str(uuid.uuid4())
