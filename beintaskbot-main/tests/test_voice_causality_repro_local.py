@@ -18,6 +18,12 @@ from tests.test_tenant_operator_realtime_wire import Socket
 from tests.test_tenant_operator_voice_duplex import Authority, Lease, Ledger, Client, Context, Provider
 
 
+def synthetic_tone(amplitude, samples=512):
+    # Deterministic zero-centred waveform; not a recorded human utterance.
+    values=[amplitude if (i//50)%2==0 else -amplitude for i in range(samples)]
+    return struct.pack('<'+'h'*samples,*values)
+
+
 class BlockingContext(Context):
     def __init__(self):
         self.entered = asyncio.Event()
@@ -135,8 +141,53 @@ async def make_pilot(authority=None,lease=None,socket=None):
 
 
 class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_observed_provider_vad_drops_queued_old_audio_before_handler_catches_up(self):
+        s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.01
+        try:
+            await turn(s,'turn1')
+            await s.receive_provider({'type':'response.created','response':{'id':'response1'}})
+            old={'type':'response.output_audio.delta','response_id':'response1','item_id':'output1',
+                 'content_index':0,'delta':base64.b64encode(bytes(480)).decode()}
+            onset={'type':'input_audio_buffer.speech_started'}
+            # The provider reader may see VAD while earlier audio is queued for
+            # the ordered handler. No unvalidated audio is sent to the client.
+            s.observe_provider_event(old);s.observe_provider_event(onset)
+            await s.receive_provider(old,already_observed=True)
+            self.assertFalse(any(e['type']=='audio' for e in s.client.events))
+            await s.receive_provider(onset,already_observed=True)
+            await s.receive_provider({'type':'response.done','response':{'id':'response1','status':'cancelled',
+                                    'status_details':{'reason':'turn_detected'},'output':[]}})
+            await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await confirmed_user(s,'turn2')
+            await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'turn2'})
+            self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),2)
+            self.assertEqual(list(policy._permits.values()),[None,None])
+        finally:await s.end('test')
+
+    async def test_provider_auto_cancel_still_waits_for_exact_truncation(self):
+        s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.01
+        try:
+            await turn(s,'turn1')
+            await s.receive_provider({'type':'response.created','response':{'id':'response1'}})
+            await s.receive_provider({'type':'response.output_audio.delta','response_id':'response1',
+                                      'item_id':'output1','content_index':0,
+                                      'delta':base64.b64encode(bytes(480)).decode()})
+            await s.receive_provider({'type':'input_audio_buffer.speech_started'})
+            self.assertEqual(s.client.events[-1],{'type':'interrupt','item_id':'output1'})
+            await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await confirmed_user(s,'turn2')
+            await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'turn2'})
+            await s.receive_provider({'type':'response.done','response':{'id':'response1','status':'cancelled',
+                                    'status_details':{'reason':'turn_detected'},'output':[]}})
+            self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),1)
+            await s.receive_provider({'type':'conversation.item.truncated','item_id':'output1',
+                                      'content_index':0,'audio_end_ms':0})
+            self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),2)
+            self.assertEqual(list(policy._permits.values()),[None,None])
+        finally:await s.end('test')
+
     @unittest.expectedFailure
-    async def test_quiet_pcm_can_precede_delayed_vad_without_stale_response(self):
+    async def test_signal_below_noise_floor_can_precede_delayed_vad_without_stale_response(self):
         """Known open race: the provider gives no acknowledgement per PCM append."""
         s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.15
         original=s._wait_audio_boundary;boundary_done=asyncio.Event()
@@ -145,9 +196,9 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
         s._wait_audio_boundary=notify
         dispatch=asyncio.create_task(turn(s,'turn1'))
         await asyncio.wait_for(boundary_done.wait(),1)
-        # A quiet but nonzero one-frame utterance is forwarded unchanged. The
-        # local 1% RMS heuristic cannot identify this as speech.
-        quiet=struct.pack('<h',200)*512
+        # A waveform below the local noise floor is forwarded unchanged; no
+        # local detector can guarantee that this waveform represents speech.
+        quiet=synthetic_tone(10)
         await s.receive_client({'type':'audio','pcm':quiet})
         async def delayed_provider_vad():
             await asyncio.sleep(.3)
@@ -158,7 +209,7 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
         try:
             await asyncio.wait_for(dispatch,1)
             sent_before_vad=await asyncio.wait_for(vad,1)
-            self.assertFalse(sent_before_vad,'quiet speech can still race provider VAD')
+            self.assertFalse(sent_before_vad,'below-noise signal can still race provider VAD')
         finally:
             await s.end('test')
 
@@ -239,9 +290,9 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
             GatewaySocket.last.incoming.put_nowait(WSMessage(WSMsgType.CLOSE,None,''))
             await asyncio.wait_for(task,2)
 
-    async def test_new_voiced_pcm_after_snapshot_blocks_stale_send_but_silence_does_not(self):
-        for voiced in (False,True):
-            with self.subTest(voiced=voiced):
+    async def test_quiet_and_loud_onsets_after_snapshot_block_stale_send_but_silence_does_not(self):
+        for amplitude in (0,200,2000):
+            with self.subTest(amplitude=amplitude):
                 s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.15
                 original=s._wait_audio_boundary;boundary_done=asyncio.Event()
                 async def notify(boundary,guard):
@@ -249,18 +300,45 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
                 s._wait_audio_boundary=notify
                 dispatch=asyncio.create_task(turn(s,'turn1'))
                 await asyncio.wait_for(boundary_done.wait(),1)
-                pcm=struct.pack('<h',s.LOCAL_SPEECH_RMS)*512 if voiced else bytes(1024)
+                pcm=synthetic_tone(amplitude)
                 await s.receive_client({'type':'audio','pcm':pcm})
                 await asyncio.wait_for(dispatch,2)
-                self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),0 if voiced else 1)
+                self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),0 if amplitude else 1)
                 appends=[e for e in socket.sent if e['type']=='input_audio_buffer.append']
                 self.assertEqual(base64.b64decode(appends[-1]['audio']),pcm)
                 await s.end('test')
 
+    async def test_quiet_onset_waits_for_delayed_vad_and_answers_confirmed_new_turn(self):
+        s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.15
+        original=s._wait_audio_boundary;boundary_done=asyncio.Event()
+        async def notify(boundary,guard):
+            result=await original(boundary,guard);boundary_done.set();return result
+        s._wait_audio_boundary=notify
+        dispatch=asyncio.create_task(turn(s,'turn1'))
+        try:
+            await asyncio.wait_for(boundary_done.wait(),1)
+            onset=synthetic_tone(200)
+            await s.receive_client({'type':'audio','pcm':onset})
+            await asyncio.wait_for(dispatch,1)
+            self.assertFalse(any(e['type']=='response.create' for e in socket.sent))
+            self.assertEqual(base64.b64decode(socket.sent[-1]['audio']),onset)
+            # Emulate provider onset later than the bounded settle window.
+            await asyncio.sleep(.3)
+            await s.receive_provider({'type':'input_audio_buffer.speech_started'})
+            for _ in range(3):await s.receive_client({'type':'audio','pcm':bytes(9600)})
+            await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
+            await confirmed_user(s,'turn2')
+            await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'turn2'})
+            creates=[e for e in socket.sent if e['type']=='response.create']
+            self.assertEqual(len(creates),1)
+            self.assertEqual([e['id'] for e in creates[0]['response']['input']][1:],['turn1','turn2'])
+            self.assertEqual(list(policy._permits.values()),[None,None])
+        finally:await s.end('test')
+
     async def test_false_noise_gate_expires_during_continuous_noise_and_rearms_after_quiet(self):
         s,provider,policy,socket=await make_pilot();s.VAD_SETTLE_SECONDS=.02;s.LOCAL_SPEECH_GATE_TIMEOUT=.05
-        loud=struct.pack('<h',s.LOCAL_SPEECH_RMS)*512
-        quiet=struct.pack('<h',s.LOCAL_SPEECH_RMS-1)*512
+        loud=synthetic_tone(2000)
+        quiet=synthetic_tone(8)
         # Below-threshold audio is still sent verbatim and does not gate.
         await s.receive_client({'type':'audio','pcm':quiet})
         self.assertFalse(s._local_speech_active)
@@ -289,6 +367,43 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(s._local_speech_epoch,old_epoch+1)
         await s.end('test')
 
+    async def test_adaptive_gate_tracks_background_rejects_dc_and_keeps_short_onset(self):
+        provider=Provider();s=make_session(provider,Context())
+        # Preserve the original 200-count fixture as a DC/no-false-onset test;
+        # a static offset is not an actual spoken waveform.
+        for bias in (200,5000):
+            s.observe_client_audio(struct.pack('<h',bias)*512)
+            self.assertFalse(s._local_speech_active)
+        # Stationary low background is learned without triggering the gate.
+        for _ in range(64):s.observe_client_audio(synthetic_tone(20))
+        self.assertFalse(s._local_speech_active)
+        self.assertGreater(s._local_noise_rms,s.LOCAL_NOISE_INITIAL_RMS)
+        # A single 10 ms onset in a longer frame survives per-window analysis.
+        first_word=synthetic_tone(200,240)+bytes(1568)
+        s.observe_client_audio(first_word)
+        self.assertTrue(s._local_speech_active)
+        if s._local_speech_timer is not None:s._local_speech_timer.cancel()
+
+    async def test_steady_and_rising_noise_rearms_adaptive_gate(self):
+        for rising in (False,True):
+            with self.subTest(rising=rising):
+                s=make_session(Provider(),Context());s.LOCAL_SPEECH_GATE_TIMEOUT=.01
+                s.observe_client_audio(synthetic_tone(120))
+                await asyncio.sleep(.02)
+                self.assertTrue(s._local_speech_suppressed)
+                # Advance the audio clock with steady or slowly rising noise.
+                # Suppression may clear once that sound is learned as ambient.
+                for index in range(500):
+                    amplitude=min(120,40+index//6) if rising else 120
+                    s.observe_client_audio(synthetic_tone(amplitude))
+                self.assertFalse(s._local_speech_active)
+                self.assertFalse(s._local_speech_suppressed)
+                prior=s._local_speech_epoch
+                s.observe_client_audio(synthetic_tone(500))
+                self.assertTrue(s._local_speech_active)
+                self.assertEqual(s._local_speech_epoch,prior+1)
+                if s._local_speech_timer is not None:s._local_speech_timer.cancel()
+
     async def test_noise_timeout_during_slow_consume_does_not_lose_retry(self):
         authority=PausedDispatchAuthority();s,provider,policy,socket=await make_pilot(authority=authority)
         s.LOCAL_SPEECH_GATE_TIMEOUT=.05;s.VAD_SETTLE_SECONDS=.01
@@ -297,7 +412,7 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
         await confirmed_user(s,'turn1')
         dispatch=asyncio.create_task(s.receive_provider({'type':'input_audio_buffer.committed','item_id':'turn1'}))
         await asyncio.wait_for(authority.entered.wait(),1)
-        await s.receive_client({'type':'audio','pcm':struct.pack('<h',s.LOCAL_SPEECH_RMS)*512})
+        await s.receive_client({'type':'audio','pcm':synthetic_tone(200)})
         await asyncio.sleep(.08)
         self.assertTrue(s._local_speech_suppressed)
         authority.release.set()
@@ -406,7 +521,7 @@ class CausalityRaceTest(unittest.IsolatedAsyncioTestCase):
         s.VAD_SETTLE_SECONDS=.01
         dispatch=asyncio.create_task(turn(s,'turn1'))
         await asyncio.wait_for(authority.entered.wait(),1)
-        pcm=struct.pack('<h',s.LOCAL_SPEECH_RMS)*512
+        pcm=synthetic_tone(200)
         audio=asyncio.create_task(s.receive_client({'type':'audio','pcm':pcm}))
         async def audio_observed():
             while s._client_audio_observed_bytes<len(pcm):await asyncio.sleep(0)

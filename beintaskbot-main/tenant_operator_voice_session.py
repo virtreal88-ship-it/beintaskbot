@@ -103,7 +103,13 @@ class Session:
     # snapshot to drain with modest headroom instead of ending it at 1 s.
     AUDIO_BOUNDARY_TIMEOUT = 6.0
     VAD_SETTLE_SECONDS = .15
-    LOCAL_SPEECH_RMS = 328  # About 1% full-scale PCM16; an advisory gate only.
+    # This is only an onset guard. The provider VAD remains authoritative.
+    LOCAL_NOISE_INITIAL_RMS = 16
+    LOCAL_SPEECH_MIN_RMS = 24
+    LOCAL_SPEECH_NOISE_MULTIPLIER = 2
+    LOCAL_NOISE_RISE_PER_SECOND = 12
+    LOCAL_NOISE_FALL_PER_SECOND = 200
+    LOCAL_ANALYSIS_SAMPLES = 240  # 10 ms at 24 kHz.
     LOCAL_SILENCE_BYTES = 24000  # 500 ms at 24 kHz mono PCM16.
     LOCAL_SPEECH_GATE_TIMEOUT = 1.5
 
@@ -200,6 +206,7 @@ class Session:
         self._client_audio_progress = asyncio.Event()
         self._vad_observed = asyncio.Event()
         self._local_speech_epoch = 0
+        self._local_noise_rms = self.LOCAL_NOISE_INITIAL_RMS
         self._local_speech_active = False
         self._local_speech_suppressed = False
         self._local_silence_bytes = 0
@@ -296,7 +303,26 @@ class Session:
         self._client_audio_observed_bytes+=len(pcm)
         samples=array.array('h');samples.frombytes(pcm)
         if sys.byteorder!='little':samples.byteswap()
-        voiced=sum(value*value for value in samples)>=len(samples)*self.LOCAL_SPEECH_RMS**2
+        # Center each short window to ignore microphone DC offset. Looking at
+        # the strongest 10 ms window avoids diluting a short onset across an
+        # entire 43–200 ms PCM frame. Samples are discarded after this check.
+        rms=0
+        for offset in range(0,len(samples),self.LOCAL_ANALYSIS_SAMPLES):
+            window=samples[offset:offset+self.LOCAL_ANALYSIS_SAMPLES]
+            n=len(window)
+            if n<self.LOCAL_ANALYSIS_SAMPLES//2:continue
+            total=sum(window);power=sum(value*value for value in window)
+            rms=max(rms,math.isqrt(max(0,n*power-total*total))//n)
+        threshold=max(self.LOCAL_SPEECH_MIN_RMS,
+                      self.LOCAL_SPEECH_NOISE_MULTIPLIER*self._local_noise_rms)
+        voiced=rms>=threshold
+        duration=len(samples)/self.SAMPLE_RATE
+        # Slow upward tracking avoids quickly learning speech as background;
+        # a sudden sustained loud environment can take many seconds to adapt.
+        if rms>self._local_noise_rms:
+            self._local_noise_rms=min(rms,self._local_noise_rms+self.LOCAL_NOISE_RISE_PER_SECOND*duration)
+        else:
+            self._local_noise_rms=max(rms,self._local_noise_rms-self.LOCAL_NOISE_FALL_PER_SECOND*duration)
         if voiced:
             self._local_silence_bytes=0
             if not self._local_speech_active and not self._local_speech_suppressed:
@@ -490,7 +516,9 @@ class Session:
             stage='provider_open'
             options={'tools':[],'create_response':False,'interrupt_response':False,
                      'transcription':None,'reconnect':False}
-            if not self.manual_turns:options['duplex']=True
+            if not self.manual_turns:
+                options['duplex']=True
+                options['interrupt_response']=True
             self._open_task = asyncio.create_task(self.provider.open(snapshot,**options))
             done, pending = await asyncio.wait({self._open_task}, timeout=PROVIDER_OPEN_DEADLINE)
             if pending:
@@ -1089,10 +1117,19 @@ class Session:
             # Never expose late audio, transcripts or items from a response
             # whose exact terminal event has already been accepted.
             return
+        if (getattr(self,'duplex',False) and kind in ('response.output_audio.delta','response.output_audio.done') and
+            self._observed_speech_epoch>self._processed_speech_epoch):
+            # The socket reader has already seen a later VAD onset. Do not
+            # play queued output while the ordered event handler catches up.
+            item_id=event.get('item_id')
+            if (not self.response_inflight or not self.provider_response_id or
+                response_id!=self.provider_response_id or not isinstance(item_id,str) or not item_id or
+                len(item_id)>128 or event.get('content_index')!=0 or self.item not in (None,item_id)):
+                raise Refused('unreserved_response')
+            return
         if kind == 'input_audio_buffer.speech_started':
-            # The production pilot disables provider VAD. Ignore unsolicited
-            # VAD notifications so they can never open or cancel a click-owned
-            # microphone turn if a provider event is delayed or duplicated.
+            # Manual turns ignore unsolicited VAD notifications so they cannot
+            # open or cancel a click-owned microphone turn.
             if getattr(self,'manual_turns',False):
                 return
             async with self.lock:
@@ -1105,8 +1142,8 @@ class Session:
                     raise Refused('input_turn_commit_pending')
                 self.activity = time.monotonic()
                 if self.response_inflight and not self.cancel_requested:
-                    # Duplex disables provider-side automatic cancellation so
-                    # this lock serializes VAD and explicit-stop requests.
+                    # Provider VAD also cancels, but an explicit correlated
+                    # cancel covers the race where VAD preceded creation.
                     self.cancel_requested=True
                     if getattr(self,'duplex',False):await self._send_cancel_when_identified()
                 if self.item and not self.interrupt_pending:

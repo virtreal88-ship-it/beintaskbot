@@ -36,6 +36,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.',
                        'lines':[],'extra_context':{}}
         self.options={'tools':[],'create_response':False,'interrupt_response':False,'transcription':None,'reconnect':False}
+        self.duplex_options={**self.options,'interrupt_response':True}
 
     async def open(self):await self.wire.open(self.snapshot,**self.options)
 
@@ -54,17 +55,17 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(input_audio['turn_detection'])
         await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='});self.assertEqual(self.socket.sent[-1]['type'],'input_audio_buffer.append')
 
-    async def test_duplex_vad_cannot_create_or_cancel_responses_without_server(self):
-        await self.wire.open(self.snapshot,**self.options,duplex=True)
+    async def test_duplex_vad_cannot_create_responses_and_must_interrupt(self):
+        await self.wire.open(self.snapshot,**self.duplex_options,duplex=True)
         vad=self.socket.sent[0]['session']['audio']['input']['turn_detection']
         self.assertEqual(vad,{'type':'server_vad','threshold':0.5,'prefix_padding_ms':300,
-                              'silence_duration_ms':500,'create_response':False,'interrupt_response':False})
+                              'silence_duration_ms':500,'create_response':False,'interrupt_response':True})
         await self.wire.send({'type':'input_audio_buffer.append','audio':'AAA='})
         with self.assertRaisesRegex(ValueError,'claim_missing'):await self.wire.send({'type':'response.create'})
-        for field in ('create_response','interrupt_response'):
-            wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input']['turn_detection'].__setitem__(field,True)),Guard())
+        for field,bad in (('create_response',True),('interrupt_response',False)):
+            wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input']['turn_detection'].__setitem__(field,bad)),Guard())
             with self.assertRaisesRegex(ValueError,'unsafe_session_readback'):
-                await wire.open(self.snapshot,**self.options,duplex=True)
+                await wire.open(self.snapshot,**self.duplex_options,duplex=True)
 
     async def test_cancel_race_is_ignored_only_after_exact_completed_response(self):
         class QueueSocket(Socket):
@@ -97,6 +98,21 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
         socket.events=[{'type':'_cancel_not_active','event_id':'unrelated'}]
         with self.assertRaisesRegex(ValueError,'provider_error'):await wire.receive()
 
+    async def test_provider_auto_cancel_done_can_arrive_before_local_cancel(self):
+        class QueueSocket(Socket):
+            def __init__(self):super().__init__();self.events=[]
+            async def receive_json(self):return self.events.pop(0)
+        socket=QueueSocket();wire=SyntheticRealtimeWire(socket,Guard());wire.ready=True;wire.duplex=True
+        socket.events=[{'type':'response.done','response':{'id':'response-auto','status':'cancelled',
+                                                          'status_details':{'reason':'turn_detected'}}}]
+        self.assertEqual((await wire.receive())['type'],'response.done')
+        # The ordered application handler can request cancellation only after
+        # the reader has already seen the provider's automatic response.done.
+        await wire.send({'type':'response.cancel','response_id':'response-auto'})
+        event_id=socket.sent[-1]['event_id']
+        socket.events=[{'type':'_cancel_not_active','event_id':event_id}]
+        self.assertEqual(await wire.receive(),{'type':'response_cancel_noop'})
+
     async def test_cancel_error_requires_done_for_the_matching_response(self):
         class QueueSocket(Socket):
             def __init__(self):super().__init__();self.events=[]
@@ -112,11 +128,11 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await wire.receive())['response']['id'],'different')
             with self.assertRaisesRegex(ValueError,'provider_error'):await wire.receive()
         wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',None)),Guard())
-        await wire.open(self.snapshot,**self.options,duplex=True)
+        await wire.open(self.snapshot,**self.duplex_options,duplex=True)
         for key,value in [('idle_timeout_ms',1000),('unknown_option',True),('prefix_padding_ms',True)]:
             wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input']['turn_detection'].__setitem__(key,value)),Guard())
             with self.assertRaisesRegex(ValueError,'unsafe_session_readback'):
-                await wire.open(self.snapshot,**self.options,duplex=True)
+                await wire.open(self.snapshot,**self.duplex_options,duplex=True)
 
     async def test_truncate_accepts_bounded_playback_offset_for_click_interruption(self):
         await self.open()

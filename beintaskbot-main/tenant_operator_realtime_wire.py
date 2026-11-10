@@ -222,7 +222,7 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect,duplex=False):
-        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not False or transcription is not None
+        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not duplex or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -241,12 +241,11 @@ class _RealtimeWire:
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
                             'noise_reduction':{'type':'near_field','strength':1},
-                            # Click-to-talk owns turn boundaries. The server
-                            # commits input only after the employee presses
-                            # Send, so VAD cannot auto-submit a pause or noise.
+                            # Provider VAD may interrupt ongoing speech but
+                            # must never create a response without our permit.
                             'turn_detection':({'type':'server_vad','threshold':0.5,'prefix_padding_ms':300,
                                                'silence_duration_ms':500,'create_response':False,
-                                               'interrupt_response':False} if duplex else None)},
+                                               'interrupt_response':True} if duplex else None)},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
@@ -286,7 +285,7 @@ class _RealtimeWire:
         allowed=set(expected)|{'idle_timeout_ms'}
         return (set(actual)<=allowed and actual.get('idle_timeout_ms') is None and
                 actual.get('type')=='server_vad' and actual.get('create_response') is False and
-                actual.get('interrupt_response') is False and
+                actual.get('interrupt_response') is expected.get('interrupt_response') and
                 type(actual.get('threshold')) in (int,float) and actual.get('threshold')==expected['threshold'] and
                 type(actual.get('prefix_padding_ms')) is int and actual.get('prefix_padding_ms')==expected['prefix_padding_ms'] and
                 type(actual.get('silence_duration_ms')) is int and actual.get('silence_duration_ms')==expected['silence_duration_ms'])
@@ -460,7 +459,10 @@ class _RealtimeWire:
             self._pending_cancel_races[event_id]=(response_id,asyncio.get_running_loop().time()+CANCEL_RACE_DEADLINE)
         if event.get('type')=='response.done':
             response=event.get('response');response_id=response.get('id') if isinstance(response,dict) else None
-            if isinstance(response_id,str) and response_id in self._cancel_events.values():
+            if isinstance(response_id,str) and 0<len(response_id)<=128 and (
+                    self.duplex or response_id in self._cancel_events.values()):
+                if response_id not in self._completed_responses and len(self._completed_responses)>=256:
+                    raise SafeRealtimeFailure('provider_error',event_type='response.done')
                 self._completed_responses.add(response_id)
                 for event_id,(pending_response,_) in list(self._pending_cancel_races.items()):
                     if pending_response==response_id:
