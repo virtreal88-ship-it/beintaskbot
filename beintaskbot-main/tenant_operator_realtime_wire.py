@@ -764,12 +764,14 @@ class _HybridRealtimeMixin:
     async def receive(self):
         if not self.ready:raise ValueError('session_not_ready')
         while True:
+            if self._hybrid_closing or not self.ready:raise ValueError('session_not_ready')
             if self._hybrid_openai_task is None:self._hybrid_openai_task=asyncio.create_task(super().receive())
             if self._hybrid_ready:
                 # A hot audio backlog must not keep the OpenAI reader from
                 # observing a queued speech_started. One loop turn is bounded:
                 # an idle network reader never holds up audio indefinitely.
                 await asyncio.sleep(0)
+                if self._hybrid_closing or not self.ready:raise ValueError('session_not_ready')
                 if not self._hybrid_openai_task.done():return self._hybrid_ready.popleft()
                 event=await self._hybrid_openai_task;self._hybrid_openai_task=None
                 mapped=await self._handle_hybrid_openai(event)
@@ -782,6 +784,7 @@ class _HybridRealtimeMixin:
                 continue
             if self._hybrid_tts_task is None:self._hybrid_tts_task=asyncio.create_task(self._hybrid_events.get())
             done,_=await asyncio.wait({self._hybrid_openai_task,self._hybrid_tts_task},return_when=asyncio.FIRST_COMPLETED)
+            if self._hybrid_closing or not self.ready:raise ValueError('session_not_ready')
             # Give newly observed VAD priority over queued TTD chunks.
             if self._hybrid_openai_task in done:
                 event=await self._hybrid_openai_task;self._hybrid_openai_task=None
@@ -801,12 +804,17 @@ class _HybridRealtimeMixin:
         # Drain a bounded queue so a completing reader cannot hold cleanup.
         while not self._hybrid_events.empty():self._hybrid_events.get_nowait()
         readers=[task for task in (self._hybrid_openai_task,self._hybrid_tts_task) if task is not None]
-        for task in readers:
-            if not task.done():task.cancel()
+        # An active aiohttp receive must remain alive through the OpenAI close
+        # handshake: cancelling it first makes aiohttp record a false 1006.
+        if self._hybrid_tts_task is not None and not self._hybrid_tts_task.done():self._hybrid_tts_task.cancel()
         cleanup=[stream.wait_closed() for stream in self._hybrid_streams]
-        cleanup.extend(readers)
         cleanup.append(super().close())
         results=await asyncio.gather(*cleanup,return_exceptions=True)
+        for task in (self._hybrid_openai_task,self._hybrid_tts_task):
+            if task is not None and task not in readers:readers.append(task)
+        for task in readers:
+            if not task.done():task.cancel()
+        if readers:await asyncio.gather(*readers,return_exceptions=True)
         stream_count=len(self._hybrid_streams)
         # Reader errors are drained above, but do not mean a transport is
         # still open: only the corresponding close operations can prove that.
