@@ -57,12 +57,19 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 if event['type']=='audio':
                     if not entered.is_set():entered.set();await release.wait()
                     seen.append(('audio',event['pcm']))
-                else:seen.append((event['type'],None))
+                else:
+                    seen.append((event['type'],None))
+                    if event['type']=='end':
+                        self.closed=True
+                        await self.client.send({'type':'ended','reason':'user_end'})
             async def end(self,reason):self.closed=True
         async def authenticate(request):return ('tenant','actor','channel','dialog')
         app=web.Application();session=FakeSession()
+        def build_session(scope,client):
+            session.client=client
+            return session
         app.router.add_get('/voice',gateway.make_handler(allowed_origins=['https://test.local'],
-            authenticate=authenticate,build_session=lambda scope,client:session))
+            authenticate=authenticate,build_session=build_session))
         original=gateway._enqueue_client_message
         async def observe(queue,message):
             nonlocal count
@@ -83,7 +90,9 @@ class QueueLoadTest(unittest.IsolatedAsyncioTestCase):
                 await ws.send_json({'type':'stop_response','item_id':'synthetic','audio_end_ms':0})
                 await ws.send_bytes(bytes([12])*2048)
                 await asyncio.wait_for(queued.wait(),3);release.set()
-                await ws.send_json({'type':'end'});await asyncio.wait_for(ws.receive(),3)
+                await ws.send_json({'type':'end'})
+                ended=await asyncio.wait_for(ws.receive_json(),3)
+                self.assertEqual(ended,{'type':'ended','reason':'user_end'})
                 await asyncio.wait_for(ws.close(),3)
                 await asyncio.wait_for(logged.wait(),3)
             audio=[payload for kind,payload in seen if kind=='audio']
