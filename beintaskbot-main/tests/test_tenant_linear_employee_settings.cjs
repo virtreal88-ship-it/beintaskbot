@@ -15,6 +15,13 @@ async function harness(){
  w.fetch=async(url,options)=>{
   if(options.method==='POST'){
    const data=JSON.parse(options.body);state.posts.push({url,data});
+   if(url==='/api/platform/members'&&state.applyWrites){
+    const row=state.rows.find(row=>row.telegram_id===data.telegram_id);
+    if(data.changes.permission_changes)row.permissions=data.changes.permission_changes.linear?['tasks','linear']:['tasks'];
+    const notifications=data.changes.work_settings?.changes.notifications||{};
+    for(const [event,channels] of Object.entries(notifications))row.work_settings.values.notifications[event]={...row.work_settings.values.notifications[event],...channels};
+    row.card_version='card2';row.work_settings.version='work2';
+   }
    if(state.pending)return state.pending;
    if(state.fail)throw new Error('Network interrupted');
    return {ok:true,json:async()=>({success:true,applied:{telegram_id:data.telegram_id,card_version:'card2'}})};
@@ -44,6 +51,17 @@ async function harness(){
  assert.equal(h.root(1).querySelector('[data-tl-grant]').disabled,true);
  h=await harness();root=h.root(2);root.querySelector('[data-tl-grant]').click();root.querySelector('[data-tl-save]').click();await flush();
  assert.deepEqual(h.state.posts[0].data.changes,{permission_changes:{linear:true}});
+ h=await harness();root=h.root(2);h.state.applyWrites=true;
+ const draft=root.querySelector('[data-tl-event="linear_done"][data-tl-channel="push"]');draft.click();
+ const binding=h.w.document.querySelector('[data-member="2"] [data-field="account"]');binding.value='Unsaved provider draft';
+ h.w.document.getElementById('tlSave').click();await flush();
+ assert.equal(h.state.posts.length,0,'Main save must not discard employee drafts');assert.equal(draft.checked,true);
+ assert.match(h.w.document.getElementById('tlMessage').textContent,/Əvvəlcə əməkdaşın/);
+ root.querySelector('[data-tl-save]').click();await flush();
+ assert.equal(binding.value,'Unsaved provider draft','Employee save preserves provider draft');
+ h.w.document.getElementById('tlSave').click();await flush();
+ assert.equal(h.state.posts.length,2);assert.equal(h.state.posts[1].url,'/api/platform/linear/settings');
+ assert.equal(h.state.posts[1].data.settings.members['2'].account,'Unsaved provider draft');
  h=await harness();root=h.root(2);h.state.fail=true;root.querySelector('[data-tl-grant]').click();root.querySelector('[data-tl-save]').click();await flush();
  assert.equal(root.dataset.tlBlocked,'true');assert.equal(root.querySelector('[data-tl-save]').disabled,true);
  root.querySelector('[data-tl-save]').click();await flush();assert.equal(h.state.posts.length,1,'Uncertain write must not retry');

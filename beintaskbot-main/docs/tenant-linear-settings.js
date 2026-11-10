@@ -60,6 +60,13 @@
     if(Object.keys(notifications).length)changes.work_settings={expected_version:row.work_settings.version,changes:{notifications}};
     return changes;
   }
+  function requireSavedEmployeeControls(){
+    const pending=[...$('tlMembers').querySelectorAll('[data-tl-employee]')].some(root=>{
+      const row=employeeRows.find(item=>String(item.telegram_id)===root.dataset.tlEmployee);
+      return root.dataset.tlBlocked==='true'||(row&&Object.keys(employeeChanges(root,row)).length>0);
+    });
+    if(pending)throw new Error('Əvvəlcə əməkdaşın giriş və bildiriş dəyişikliklərini ayrıca saxlayın. Saxlama nəticəsi məlum deyilsə, ayarları yenidən yükləyin.');
+  }
   async function saveEmployee(root,row){
     if(busy||profile?.role!=='owner'||root.dataset.tlBlocked==='true'||!root.isConnected)return;
     const changes=employeeChanges(root,row),message=root.querySelector('[data-tl-result]');
@@ -102,7 +109,7 @@
       <p>Yalnız əsas tapşırıqlar, 90 günlük saxlama və dərcdən əvvəl əl ilə təsdiq. Kanalın yazılması mesaj göndərmir. Account/Operator mövcud Linear dəyərləridir; yeni parametr yaradılmır.</p>
       <button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
     $('tlLoad').onclick=()=>perform(load);
-    $('tlConnect').onclick=()=>perform(async current=>{const key=$('tlKey').value;$('tlKey').value='';await write('connect',{api_key:key});if(current===generation)await load(current);});
+    $('tlConnect').onclick=()=>perform(async current=>{requireSavedEmployeeControls();const key=$('tlKey').value;$('tlKey').value='';await write('connect',{api_key:key});if(current===generation)await load(current);});
     $('tlDisconnect').onclick=()=>{if(confirm('Linear bağlantısı ayrılsın?'))perform(async current=>{await write('disconnect');if(current===generation)await load(current);});};
     $('tlTeam').onchange=()=>perform(teamChoices);
     $('tlMore').onclick=()=>perform(current=>teams(current,$('tlMore').dataset.cursor));
@@ -114,7 +121,7 @@
       news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
       await write('settings',{settings:config});if(current===generation)await load(current);});
   }
-  async function write(action,extra={}){if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
+  async function write(action,extra={}){requireSavedEmployeeControls();if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
     return api('',{action,...extra,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id,expected_updated_at:snapshot.updated_at});}
   async function teams(current,after){const result=await api('?catalog=1'+(after?'&after='+encodeURIComponent(after):''));if(current!==generation)return;
     result.teams.nodes.forEach(team=>{if(![...$('tlTeam').options].some(option=>option.value===team.id))$('tlTeam').insertAdjacentHTML('beforeend',`<option value="${esc(team.id)}">${esc(team.name)}</option>`);});
