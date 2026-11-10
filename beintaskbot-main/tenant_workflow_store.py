@@ -57,7 +57,8 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                                 pipelines: list[dict] | None = None,
                                 stages: list[dict] | None = None,
                                 policies: dict | None = None,
-                                members: list[dict] | None = None) -> dict:
+                                members: list[dict] | None = None,
+                                member_pipeline_changes: list[dict] | None = None) -> dict:
     """Replace the owner-managed workflow configuration atomically."""
     current = _member(str(tenant_id), int(owner_id))
     if not current or current.get("role") != "owner":
@@ -71,6 +72,24 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
     policies = policies if isinstance(policies, dict) else {}
     if members is not None and not isinstance(members, list):
         raise TenantPlatformError('Əməkdaşlar siyahı olmalıdır.')
+    changes = member_pipeline_changes if member_pipeline_changes is not None else []
+    if not isinstance(changes, list):
+        raise TenantPlatformError('Vərəq dəyişiklikləri siyahı olmalıdır.')
+    seen = set()
+    for change in changes:
+        if (not isinstance(change, dict) or set(change) != {'telegram_id', 'expected_pipeline_ids', 'pipeline_ids'}
+                or not str(change.get('telegram_id') or '').isdigit()
+                or not isinstance(change.get('pipeline_ids'), list)
+                or not all(isinstance(pid, str) and pid for pid in change['pipeline_ids'])
+                or (change.get('expected_pipeline_ids') is not None and
+                    not isinstance(change['expected_pipeline_ids'], list))):
+            raise TenantPlatformError('Vərəq dəyişikliyi düzgün deyil.')
+        identity = int(change['telegram_id'])
+        if identity in seen:
+            raise TenantPlatformError('Əməkdaş təkrar göstərilib.')
+        seen.add(identity)
+    if changes and any(str(key).strip()[:120] == 'members' for key in policies):
+        raise TenantPlatformError('Əməkdaş ayarlarını ayrıca saxlayın.')
     members = members or []
     for item in members:
         if not isinstance(item, dict) or not str(item.get('telegram_id') or '').isdigit() or item.get('role') not in {'admin','manager','worker','master'}:
@@ -80,6 +99,21 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            # Match employee settings: tenant, policy keys, then memberships.
+            cur.execute("SELECT owner_telegram_id,status FROM saas_tenants WHERE id=%s::uuid FOR SHARE", (str(tenant_id),))
+            company = cur.fetchone()
+            if not company or company['owner_telegram_id'] != int(owner_id) or company['status'] != 'active':
+                raise TenantPlatformError('Yalnız aktiv şirkətin sahibi ayarları dəyişə bilər.')
+            locked_policies = {}
+            policy_keys = {str(key or '').strip()[:120] for key in policies}
+            if changes:
+                policy_keys.add('members')
+            for key in sorted(policy_keys - {'', 'summary_language'}):
+                cur.execute("""INSERT INTO saas_tenant_workflow_policies (tenant_id,policy_key,value,updated_by)
+                    VALUES (%s::uuid,%s,'{}'::jsonb,%s) ON CONFLICT (tenant_id,policy_key) DO NOTHING""",
+                    (str(tenant_id), key, int(owner_id)))
+                cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE", (str(tenant_id), key))
+                locked_policies[key] = cur.fetchone()['value']
             # This setting has its own optimistic version contract. The
             # existing workflow editor may echo it, but cannot bypass that
             # contract or overwrite a newer language policy on an old form.
@@ -92,9 +126,11 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                     raise TenantPlatformError('Настройка языка сводок изменилась. Сохраните её в настройках компании.')
                 policies = {key: value for key, value in policies.items() if key != 'summary_language'}
             # Validate links against this company's current membership before
-            # any insert. IDs from another company must never grant access.
-            cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))
+            # writing grants. IDs from another company must never grant access.
+            cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id FOR UPDATE", (str(tenant_id),))
             active_members=cur.fetchall()
+            if not any(int(row['telegram_id']) == int(owner_id) and row['role'] == 'owner' for row in active_members):
+                raise TenantPlatformError('Yalnız şirkət sahibi ayarları dəyişə bilər.')
             member_roles = {int(row['telegram_id']): row['role'] for row in active_members}
             task_members = {int(row['telegram_id']) for row in active_members if row['role']=='owner' or 'tasks' in (row.get('permissions') or [])}
             member_ids = set(member_roles)
@@ -120,6 +156,22 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
             for key, value in (policies.get('members') or {}).items():
                 if int(key) not in member_ids or any(str(pid) not in pipeline_ids for pid in value.get('pipeline_ids', [])):
                     raise TenantPlatformError('Əməkdaş və vərəq eyni şirkətə aid olmalıdır.')
+            if changes:
+                existing = locked_policies.get('members')
+                if not isinstance(existing, dict):
+                    raise TenantPlatformError('Əməkdaş ayarları düzgün deyil.')
+                updated = dict(existing)
+                for change in changes:
+                    identity = int(change['telegram_id'])
+                    if member_roles.get(identity) != 'manager':
+                        raise TenantPlatformError('Yalnız aktiv vərəq istifadəçisinin girişini dəyişə bilərsiniz.')
+                    prior = existing.get(str(identity), {})
+                    if not isinstance(prior, dict) or prior.get('pipeline_ids') != change['expected_pipeline_ids']:
+                        raise TenantPlatformError('Vərəq girişi dəyişib. Ayarları yeniləyin.')
+                    if any(pid not in pipeline_ids for pid in change['pipeline_ids']):
+                        raise TenantPlatformError('Əməkdaş və vərəq eyni şirkətə aid olmalıdır.')
+                    updated[str(identity)] = {**prior, 'pipeline_ids': change['pipeline_ids']}
+                policies = {**policies, 'members': updated}
             for item in pipelines:
                 pid = str(item.get("pipeline_id") or "").strip()[:120]
                 if not pid: continue

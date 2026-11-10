@@ -17,7 +17,7 @@ from tenant_policy import TenantPolicy
 # when an employee card is updated; an older client must never erase them.
 _EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
 _RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
-_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers'}
+_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings'}
 _GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 
 
@@ -82,6 +82,13 @@ def _card_access(current, target):
             if target.get('active') is False and 'active' in editable:
                 editable.remove('active')
                 reasons['active'] = 'permission_scope'
+    if current.get('role') != 'owner':
+        for field in ('permission_changes', 'work_settings'):
+            editable.discard(field)
+            reasons[field] = 'owner_protected'
+    elif 'permissions' not in editable:
+        editable.discard('permission_changes')
+        reasons['permission_changes'] = 'owner_protected'
     return sorted(editable), reasons
 
 
@@ -296,6 +303,10 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
             and int(row['telegram_id']) != int(owner_id))
         value['email_assign_available'] = value['password_assign_available']
         value['profile_assign_available'] = value['password_assign_available']
+        if current.get('role') == 'owner':
+            from tenant_member_settings import settings_snapshot, PERMISSION_MODULES
+            value['work_settings'] = settings_snapshot(workflow, row)
+            value['permission_modules'] = sorted(PERMISSION_MODULES)
         result.append(value)
     return result
 
@@ -400,11 +411,21 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
     if 'permissions' in changes and (not isinstance(changes['permissions'], list)
             or any(not isinstance(item, str) for item in changes['permissions'])):
         raise MemberCardError('member_card_invalid', fields={'permissions': 'invalid'})
+    if 'permission_changes' in changes:
+        from tenant_member_settings import PERMISSION_MODULES
+        patch = changes['permission_changes']
+        if (not isinstance(patch, dict) or not patch or set(patch) - PERMISSION_MODULES
+                or any(type(value) is not bool for value in patch.values()) or 'permissions' in changes):
+            raise MemberCardError('member_card_invalid', fields={'permissions': 'invalid'})
     selected = _normalize_numbers(changes['whatsapp_numbers']) if 'whatsapp_numbers' in changes else None
     try:
         with _connect() as conn:
             _require_member_schema(conn)
             with conn.cursor() as cur:
+                if 'work_settings' in changes:
+                    cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant_id,))
+                    cur.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'members','{}'::jsonb,%s) ON CONFLICT DO NOTHING", (tenant_id, int(owner_id)))
+                    cur.execute("SELECT policy_key FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='members' FOR UPDATE", (tenant_id,))
                 current, existing = _locked_members(cur, tenant_id, owner_id, telegram_id)
                 _protected_target(current, existing)
                 if _version(existing) != expected_version:
@@ -425,6 +446,20 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                         target=telegram_id, strict=True)
                     if 'permissions' not in changes:
                         permissions = list(existing.get('permissions') or [])
+                if set(changes) & {'permission_changes', 'work_settings'}:
+                    cur.execute('SELECT owner_telegram_id,status FROM saas_tenants WHERE id=%s::uuid', (tenant_id,))
+                    company = cur.fetchone() or {}
+                    if company.get('owner_telegram_id') != int(owner_id) or company.get('status') != 'active':
+                        raise MemberCardError('member_access_revoked', 403)
+                if 'permission_changes' in changes:
+                    for module, enabled in changes['permission_changes'].items():
+                        permissions = [grant for grant in permissions if grant != module and not grant.startswith(module + ':')]
+                        if enabled:
+                            permissions.append(module)
+                if 'work_settings' in changes:
+                    from tenant_member_settings import apply_settings_patch
+                    apply_settings_patch(cur, tenant_id=tenant_id, owner_id=owner_id, target=existing,
+                        workflow=current.get('workflow') or {}, patch=changes['work_settings'])
                 if selected is not None:
                     _replace_numbers(cur, tenant_id, owner_id, telegram_id, selected)
                 cur.execute('''UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,

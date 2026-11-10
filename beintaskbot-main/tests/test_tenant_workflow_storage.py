@@ -24,6 +24,7 @@ class WorkflowStorageTests(unittest.TestCase):
         self.connection=MagicMock()
         self.cursor=self.connection.cursor.return_value.__enter__.return_value
         self.cursor.fetchall.side_effect=[[{'telegram_id':1,'role':'owner'},{'telegram_id':2,'role':'manager'}],[{'pipeline_id':'10'}]]
+        self.cursor.fetchone.return_value={'owner_telegram_id':1,'status':'active','value':{}}
         connect=MagicMock();connect.return_value.__enter__.return_value=self.connection
         self.ns={'_member':Mock(return_value={'role':'owner','telegram_id':1}),'_connect':connect,
                  '_ensure_schema':Mock(),'validate_workflow_patch':validate_workflow_patch,'TenantPlatformError':RuntimeError,
@@ -52,6 +53,47 @@ class WorkflowStorageTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.ns['save_tenant_workflow_config'](tenant_id='company-a',owner_id=1,
                 members=[{'telegram_id':1,'display_name':'Owner','role':'worker','permissions':[]}])
+        self.connection.commit.assert_not_called()
+
+    def sparse_change(self, **overrides):
+        return dict(telegram_id=2, expected_pipeline_ids=['10'], pipeline_ids=[], **overrides)
+
+    def test_sparse_pipeline_changes_preserve_latest_work_settings_and_inactive_members(self):
+        latest={'2':{'pipeline_ids':['10'],'ai_enabled':True,'provider_scopes':{'linear':['secret-team']},
+                     'notifications':{'task_assigned':{'push':True}}},
+                '99':{'pipeline_ids':['old'],'ai_enabled':False}}
+        self.cursor.fetchone.side_effect=[{'owner_telegram_id':1,'status':'active'}, {'value':latest}]
+        self.ns['save_tenant_workflow_config'](tenant_id='company-a',owner_id=1,
+            member_pipeline_changes=[self.sparse_change()])
+        writes=[c for c in self.cursor.execute.call_args_list if 'DO UPDATE SET value=' in c.args[0]]
+        saved=json.loads(writes[0].args[1][2])
+        self.assertEqual(saved, {**latest,'2':{**latest['2'],'pipeline_ids':[]}})
+        self.assertEqual(latest['2']['pipeline_ids'], ['10'])
+        sqls=[c.args[0] for c in self.cursor.execute.call_args_list]
+        self.assertIn('FOR SHARE',sqls[0])
+        self.assertIn('policy_key=%s FOR UPDATE',sqls[2])
+        self.assertIn('ORDER BY telegram_id FOR UPDATE',sqls[3])
+
+    def test_sparse_pipeline_conflict_rolls_back_instead_of_overwriting(self):
+        self.cursor.fetchone.side_effect=[{'owner_telegram_id':1,'status':'active'},
+                                         {'value':{'2':{'pipeline_ids':['new']}}}]
+        with self.assertRaisesRegex(RuntimeError,'dəyişib'):
+            self.ns['save_tenant_workflow_config'](tenant_id='company-a',owner_id=1,
+                member_pipeline_changes=[self.sparse_change()])
+        self.connection.commit.assert_not_called()
+
+    def test_nonmanager_and_foreign_target_cannot_be_changed(self):
+        for target in (1,999):
+            with self.assertRaises(RuntimeError):
+                self.cursor.fetchall.side_effect=[[{'telegram_id':1,'role':'owner'}, {'telegram_id':2,'role':'manager'}],[{'pipeline_id':'10'}]]
+                self.ns['save_tenant_workflow_config'](tenant_id='company-a',owner_id=1,
+                    member_pipeline_changes=[dict(telegram_id=target,expected_pipeline_ids=None,pipeline_ids=[])])
+        self.connection.commit.assert_not_called()
+
+    def test_stale_owner_is_rechecked_in_transaction(self):
+        self.cursor.fetchone.return_value={'owner_telegram_id':99,'status':'active'}
+        with self.assertRaises(RuntimeError):
+            self.ns['save_tenant_workflow_config'](tenant_id='company-a',owner_id=1)
         self.connection.commit.assert_not_called()
 
     def test_pipeline_and_stage_scope_is_applied_before_pagination(self):

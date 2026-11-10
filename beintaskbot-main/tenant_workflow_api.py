@@ -41,6 +41,9 @@ def handlers(context: WorkflowApiContext) -> dict[str, Callable]:
                     context.load_workflow, tenant_id=tenant_id, owner_id=owner_id)
             else:
                 data = await _object_body(request)
+                if 'members' in data or (isinstance(data.get('policies'), dict) and any(
+                        str(key or '').strip()[:120] == 'members' for key in data['policies'])):
+                    raise ValueError("Əməkdaş ayarlarını Şirkət → Əməkdaşlar bölməsində dəyişin.")
                 workflow = await asyncio.to_thread(
                     context.save_workflow,
                     tenant_id=tenant_id,
@@ -48,7 +51,7 @@ def handlers(context: WorkflowApiContext) -> dict[str, Callable]:
                     pipelines=data.get("pipelines"),
                     stages=data.get("stages"),
                     policies=data.get("policies"),
-                    members=data.get("members"),
+                    member_pipeline_changes=data.get("member_pipeline_changes"),
                 )
             return web.json_response({"success": True, **workflow,
                                       "role_permissions": context.role_permissions})

@@ -10,6 +10,11 @@ on:
       - 'beintaskbot-main/tenant_invite_store.py'
       - 'beintaskbot-main/tests/test_*assign*'
       - 'beintaskbot-main/tenant_member_store.py'
+      - 'beintaskbot-main/tenant_member_settings.py'
+      - 'beintaskbot-main/tenant_workflow_api.py'
+      - 'beintaskbot-main/docs/tenant-workflow.js'
+      - 'beintaskbot-main/tests/test_employee_settings*'
+      - 'beintaskbot-main/tests/test_tenant_workflow*'
       - 'beintaskbot-main/tenant_members_api.py'
       - 'beintaskbot-main/tenant_account_store.py'
       - 'beintaskbot-main/tenant_browser_session.py'
@@ -69,6 +74,10 @@ jobs:
         run: >-
           python -m pytest -q -rs
           tests/test_employee_card_consistency_postgres.py
+          tests/test_employee_settings_postgres.py
+          tests/test_tenant_workflow_sparse_postgres.py
+          tests/test_tenant_workflow_api.py
+          tests/test_tenant_workflow_storage.py
           tests/test_tenant_member_store.py
           tests/test_tenant_members_api.py
           tests/test_tenant_auth_api.py
@@ -84,6 +93,8 @@ jobs:
       - name: Current employee forms and retained navigation lifecycle
         run: |
           node tests/test_employee_card_ui.cjs
+          node tests/test_employee_settings_ui.cjs
+          node tests/test_tenant_workflow_ui.cjs
           node tests/test_employee_account_assign_ui.cjs
           node tests/test_employee_profile_assign_ui.cjs
           node tests/test_company_employees_entry_ui.cjs

@@ -21,7 +21,7 @@ from tenant_email_auth import _hash_password, _password_matches
 
 
 INITIAL_PASSWORD = 'Synthetic-initial-password!42'
-LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers'}
+LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings'}
 GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 ALLOWED_ACTIONS = {'update_member_card', 'provision_member_account', 'upsert', 'deactivate',
                    'whatsapp_numbers', 'add_whatsapp_number', 'provision_account',
@@ -812,7 +812,7 @@ def test_actual_app_employee_card_crud_uses_real_scoped_postgres_http(cards, mod
             assert len(after['saas_tenant_audit_events']) == len(before['saas_tenant_audit_events']) + 5
             assert len(after['saas_tenant_member_whatsapp_numbers']) == len(before['saas_tenant_member_whatsapp_numbers']) + 1
             unchanged = set(before) - {'saas_auth_users', 'saas_user_profiles', 'saas_tenant_members',
-                'saas_tenant_audit_events', 'saas_tenant_member_whatsapp_numbers'}
+                'saas_tenant_audit_events', 'saas_tenant_member_whatsapp_numbers', 'saas_tenant_workflow_policies'}
         else:
             assert _globals(f) == {table: before[table] for table in ('saas_auth_users', 'saas_user_profiles')}
             unchanged = set(before) - {'saas_tenant_members', 'saas_tenant_audit_events'}
