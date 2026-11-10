@@ -841,6 +841,47 @@ class Session:
                 if self._pending_client_controls<0:raise Refused('client_control_observation_invalid')
                 self._schedule_dispatch_retry()
 
+    def _transactional_audio_binding(self):
+        # Only this exact server-owned pair guarantees that lease renewal
+        # rechecks live identity, pilot access, route and configuration in its
+        # transaction. All other dependencies retain the separate checks.
+        from tenant_operator_voice_lease import VoiceSessionLease
+        if type(self.lease) is not VoiceSessionLease:return False
+        from tenant_operator_voice_orchestration import ScopedAuthority
+        if type(self.authority) is not ScopedAuthority:return False
+        if (self.lease.authority is not self.authority or self.lease.scope!=self.scope or
+            self.authority.session_scope!=self.scope or self.lease.session_id!=self.session_id):
+            raise Refused('client_scope_binding_rejected')
+        return True
+
+    async def _receive_transactional_audio(self,event):
+        # Check under the same lock as provider send, so a revoke or fence
+        # change while waiting for that lock cannot precede this batch's check.
+        async with self.io_lock:
+            if self.closed:raise Refused('session_closed')
+            try:
+                await self.lease.assert_current(self.scope,self.fence)
+            except Refused:
+                raise
+            except Exception:
+                raise Refused('client_authority_or_lease_rejected') from None
+            if self.closed:raise Refused('session_closed')
+            if not self._transactional_audio_binding() or self.lease.fence!=self.fence:
+                raise Refused('client_scope_binding_rejected')
+            if set(event)!={'type','pcm'} or not isinstance(event.get('pcm'),bytes):
+                raise Refused('client_event_not_allowed')
+            data=event['pcm']
+            if not data or len(data)>self.MAX_FRAME or len(data)%2:
+                raise Refused('invalid_pcm_frame')
+            if self.muted:return
+            if self.input_bytes+len(data)>self.max_input_bytes:
+                raise Refused('session_input_limit')
+            self.input_bytes+=len(data)
+            append={'type':'input_audio_buffer.append','audio':base64.b64encode(data).decode('ascii')}
+            self._check_provider_send(append)
+            await self.provider.send(append)
+            self.activity=time.monotonic()
+
     async def _receive_client(self, event):
         received_at=time.monotonic() if isinstance(event,dict) and event.get('type')=='talk_end' else None
         if not isinstance(event, dict) or self.closed:
@@ -848,6 +889,9 @@ class Session:
         kind = event.get('type')
         if kind == 'end':
             await self.end('user_end')
+            return
+        if kind=='audio' and getattr(self,'duplex',False) and self._transactional_audio_binding():
+            await self._receive_transactional_audio(event)
             return
         try:
             await self.authority.check(self.scope, 'input')

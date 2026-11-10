@@ -48,6 +48,7 @@ _SAFE_CLIENT_READER_EXITS=frozenset({'unavailable','peer_close','peer_error','fr
 _SAFE_CLIENT_TRANSPORT_KINDS=frozenset({'none','timeout','socket_error','transport_error'})
 _SAFE_CLIENT_FAILURE_CODES=frozenset({
     'client_authority_rejected','client_lease_rejected','client_event_not_allowed',
+    'client_authority_or_lease_rejected','client_scope_binding_rejected',
     'session_closed','invalid_pcm_frame','session_input_limit','input_turn_commit_pending',
     'input_turn_queue_full','invalid_playback_ack','invalid_playback_completion',
     'invalid_playback_start_ack','invalid_playback_failure_ack',
