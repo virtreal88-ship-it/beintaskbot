@@ -18,6 +18,15 @@ def _jsonable(v):
     return v
 
 
+def relation_actions(policy):
+    """Use the same effective CRUD permissions as the native editing UI."""
+    update = policy.allows_action('customers', 'update')
+    delete = policy.allows_action('customers', 'delete')
+    return {'link_contact': update,
+            'link_deal': update and policy.allows_action('deals', 'update'),
+            'unlink_contact': delete, 'unlink_deal': delete}
+
+
 def handler(member_from_request,origin,logger):
     async def handle(request):
         profile=member_from_request(request)
@@ -41,15 +50,15 @@ def handler(member_from_request,origin,logger):
             if not isinstance(body,dict):return web.json_response({'success':False,'error':'invalid_body'},status=400)
             action = body.get('action')
             # Link/archive operations require an existing company. Otherwise
-            # their assign/delete permission could authorize a new company.
+            # their update/delete permission could authorize a new company.
             allowed_actions = ('update', 'archive', 'link_contact', 'link_deal',
                                'unlink_contact', 'unlink_deal') if ident else (None, 'create')
             if action not in allowed_actions:
                 return web.json_response({'success': False, 'error': 'invalid_action'}, status=400)
-            permission_action=('delete' if action in ('archive','unlink_contact','unlink_deal') else
-                               'assign' if body.get('action') in ('link_contact','link_deal') else
-                               'create' if not ident else 'update')
-            if not policy.allows_action('customers',permission_action):
+            permission_action = 'delete' if action == 'archive' else 'create' if not ident else 'update'
+            relations = relation_actions(policy)
+            allowed = relations[action] if action in relations else policy.allows_action('customers', permission_action)
+            if not allowed:
                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
             if body.get('action')=='archive' and ident:
                 result=await asyncio.to_thread(archive_company,tenant,ident)

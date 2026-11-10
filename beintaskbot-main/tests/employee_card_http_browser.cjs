@@ -11,35 +11,6 @@ const tenantB = process.env.EMPLOYEE_CARD_RUNTIME_TENANT_B;
 const login = process.env.EMPLOYEE_CARD_RUNTIME_LOGIN;
 const password = 'Synthetic-initial-password!42';
 assert(origin && mode && width && login && tenantA && tenantB);
-const visibilityLabels={ru:{open:'По правам: открыта',unavailable:'По правам: нет',pending:'По правам: пересчёт'},az:{open:'Hüquqla: açıq',unavailable:'Hüquqla: yoxdur',pending:'Hüquqla: yoxlanacaq'},en:{open:'By rights: open',unavailable:'By rights: no',pending:'By rights: pending'}}[language];
-const assertPageState=async(form,page,state,label)=>{
-  assert.equal(await form.locator('[data-access-hint='+page+']').getAttribute('data-access-state'),state,page+' effective visibility');
-  if(label)assert.equal(await form.locator('[data-access-page='+page+'] option:checked').textContent(),label);
-};
-const assertVisibilityFits=async(form,viewportWidth)=>{
-  const measurements=await form.evaluate(async(node,labels)=>{
-    await document.fonts.ready;
-    return [...node.querySelectorAll('[data-access-page]')].filter(input=>input.getClientRects().length).flatMap(input=>{
-      const texts=new Set([...input.options].map(option=>option.textContent).concat(Object.values(labels)));
-      return [...texts].map(text=>{
-        // A native max-content clone measures the browser's actual font, padding,
-        // arrow and internal text inset. Canvas misses select chrome and can
-        // silently fall back when the computed font shorthand is empty.
-        const probe=input.cloneNode(false),option=document.createElement('option');
-        probe.removeAttribute('id');probe.removeAttribute('aria-describedby');
-        option.textContent=text;probe.append(option);
-        for(const [key,value] of Object.entries({position:'fixed',visibility:'hidden',left:'-10000px',width:'max-content','min-width':'0','max-width':'none'}))probe.style.setProperty(key,value,'important');
-        input.parentElement.append(probe);
-        const result={page:input.dataset.accessPage,text,required:probe.getBoundingClientRect().width,available:input.getBoundingClientRect().width};
-        probe.remove();return result;
-      });
-    });
-  },visibilityLabels);
-  assert(measurements.length,'Visible page dropdowns must be measured');
-  assert.deepEqual(measurements.filter(item=>item.required>item.available+0.5),[],
-    'Native select labels fit without clipping at '+viewportWidth+'px in '+language);
-};
-
 (async () => {
   const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || (fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), args: ['--no-sandbox'] });
@@ -187,79 +158,50 @@ const assertVisibilityFits=async(form,viewportWidth)=>{
       const beforeAccess=(await readRows(page.request)).find(row=>row.telegram_id===actor);
       assert.deepEqual(beforeAccess.permissions,[],'Creation starts with explicitly empty grants');
       assert.equal(beforeAccess.access_settings.actions.tasks.view,false,'First native access save is a real change');
-      await form.locator('[data-staff-pane-tab=settings]').click();
-      await assertPageState(form,'tasks','unavailable',visibilityLabels.unavailable);
+      await form.locator('[data-staff-pane-tab=rights]').click();
       const beforeNoop=(await control('state')).posts;
       await form.locator('[type=submit]').click();
-      assert.equal((await control('state')).posts,beforeNoop,'Inherited preferences do not write on no-op save');
+      assert.equal((await control('state')).posts,beforeNoop,'Unchanged permissions do not write on no-op save');
       await form.locator('[data-staff-pane-tab=rights]').click();
       for(const module of ['tasks','customers','deals'])await form.locator('[data-access-action=view][data-access-module='+module+']').check();
-      await assertPageState(form,'tasks','pending',visibilityLabels.pending);
       await save(form,'update_member_card');await closed();
       assert.deepEqual(writes.at(-1).access,{expected_version:beforeAccess.access_settings.version,changes:{actions:{tasks:{view:true},deals:{view:true},customers:{view:true}}}},'Only changed operations are submitted');
       const afterActions=(await readRows(page.request)).find(row=>row.telegram_id===actor);
       assert.deepEqual(afterActions.permissions,beforeAccess.permissions,'Native CRUD does not rewrite legacy/provider grants');
       assert.equal(afterActions.access_settings.actions.tasks.view,true);
       await openEmployee(actor);form=page.locator('#staffEditForm');
-      await form.locator('[data-staff-pane-tab=settings]').click();
-      assert.deepEqual(afterActions.access_settings.page_visibility,{},'Native grants preserve sparse page inheritance');
-      for(const pageId of ['tasks','customers','companies','deals']){
-        assert.equal(afterActions.access_settings.pages[pageId],true);
-        assert.equal(await form.locator('[data-access-page='+pageId+']').inputValue(),'inherit');
-        await assertPageState(form,pageId,'visible',visibilityLabels.open);
-      }
+      await form.locator('[data-staff-pane-tab=rights]').click();
+      assert.equal(await form.locator('[data-access-page],[data-access-hint],[data-staff-pane-tab=settings]').count(),0,'Removed page preferences and settings tab');
+      for(const pageId of ['tasks','customers','companies','deals'])assert.equal(afterActions.access_settings.pages[pageId],true,'Pages follow effective rights');
       const beforeOpenNoop=(await control('state')).posts;
       await form.locator('[type=submit]').click();
-      assert.equal((await control('state')).posts,beforeOpenNoop,'Four inherited open pages remain a no-op');
-      await assertVisibilityFits(form,width);
-      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-inherited-pages-'+width+'-'+language+'.png'});
-      // All RU/AZ/EN complete-mode runs also verify the narrowest mobile width,
-      // including open, unavailable and pending captions without changing data.
-      await page.setViewportSize({width:360,height:900});
-      await assertVisibilityFits(form,360);
-      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-inherited-pages-360-'+language+'.png'});
-      await page.setViewportSize({width,height:900});
-      await form.locator('[data-access-page=tasks]').selectOption('false');
-      await assertPageState(form,'tasks','hidden');
-      await save(form,'update_member_card');await closed();
-      assert.deepEqual(writes.at(-1).access,{expected_version:afterActions.access_settings.version,changes:{pages:{tasks:false}}},'Hiding one page does not materialize inherited preferences');
-      const afterPage=(await readRows(page.request)).find(row=>row.telegram_id===actor);
-      assert.deepEqual(afterPage.permissions,afterActions.permissions,'Page hide does not revoke grants');
-      assert.deepEqual(afterPage.access_settings.actions,afterActions.access_settings.actions,'Page hide does not revoke operations');
-      assert.equal(afterPage.access_settings.page_visibility.tasks,false);
-      await openEmployee(actor);form=page.locator('#staffEditForm');
-      await form.locator('[data-staff-pane-tab=settings]').click();
-      assert.equal(await form.locator('[data-access-page=tasks]').inputValue(),'false','Saved visibility reopens accurately');
-      await assertPageState(form,'tasks','hidden');
-      if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR){
-        for(const tab of ['details','rights','settings']){
+      assert.equal((await control('state')).posts,beforeOpenNoop,'Reopened permissions remain a no-op');
+      for(const viewportWidth of [...new Set([width,360])]){
+        await page.setViewportSize({width:viewportWidth,height:900});
+        for(const tab of ['details','rights']){
           await form.locator('[data-staff-pane-tab='+tab+']').click();
           const layout=await form.evaluate((node,tab)=>{
             const footer=node.querySelector('.staff-modal-actions').getBoundingClientRect();
             const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
-            const boxes=[...panel.querySelectorAll('[data-access-operations]>fieldset:not(.staff-rights)')].map(group=>[...group.querySelectorAll('input')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
-            const pageHeights=[...panel.querySelectorAll('[data-access-page]')].map(input=>input.closest('label').getBoundingClientRect().height);
-            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights};
+            const boxes=[...panel.querySelectorAll('[data-access-operations]>.staff-native-permission')].map(group=>[...group.querySelectorAll('[data-access-action]')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
+            const broad=[...panel.querySelectorAll('.staff-section-permission')].map(card=>({controls:card.querySelectorAll('[data-permission]').length,fakeActions:card.querySelectorAll('[data-access-action]').length,overflow:card.scrollWidth>card.clientWidth+1}));
+            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,broad};
           },tab);
           assert(!layout.overflow,'Employee tab fits viewport');
           assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
           for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
-          assert(layout.pageHeights.every(height=>height<110),'Page preferences stay compact');
-          if(tab==='settings')await assertVisibilityFits(form,width);
-          await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+width+'-'+language+'.png'});
+          for(const card of layout.broad){assert.equal(card.controls,1);assert.equal(card.fakeActions,0);assert(!card.overflow,'Broad permission card fits viewport');}
+          if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR)await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+viewportWidth+'-'+language+'.png'});
         }
       }
-      await form.locator('[data-access-page=tasks]').selectOption('inherit');
-      await assertPageState(form,'tasks','visible',visibilityLabels.open);
+      await page.setViewportSize({width,height:900});
       await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=display_name]').fill('Local employee alias');
       await form.locator('[data-staff-pane-tab=rights]').click();
       await form.locator('[name=role]').selectOption('manager');
-      await assertPageState(form,'tasks','pending',visibilityLabels.pending);
       await form.locator('[data-permission][value=support]').check();
       await form.locator('[data-permission][value=finance]').check();
-      await form.locator('[data-staff-pane-tab=settings]').click();
-      if(!(await form.locator('details.staff-section').evaluate(node=>node.open)))await form.locator('details.staff-section > summary').click();
+      await form.locator('[data-staff-pane-tab=rights]').click();
       await form.locator('[data-work-setting=completion_requires_admin]').selectOption('true');
       await form.locator('[data-work-event=task_assigned][data-work-channel=push]').check();
       assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Expanded settings fit viewport');
@@ -267,7 +209,7 @@ const assertVisibilityFits=async(form,viewportWidth)=>{
       await form.locator('[data-staff-pane-tab=details]').click();
       await form.locator('[name=active]').uncheck();
       const updated = await save(form, 'update_member_card');
-      assert.deepEqual(writes.at(-1).access,{expected_version:afterPage.access_settings.version,changes:{pages:{tasks:null}}},'Mixed card save retains other inherited pages and native operations');
+      assert.equal(writes.at(-1).access,undefined,'Work settings do not rewrite native rights');
       assert.notEqual(updated.applied.card_version, whatsapp.applied.card_version);
       await closed();
       await page.reload();
@@ -279,7 +221,7 @@ const assertVisibilityFits=async(form,viewportWidth)=>{
       assert.equal(await form.locator('[name=active]').isChecked(), false);
       assert.equal(await form.locator('[data-permission][value=support]').isChecked(), true);
       assert.equal(await form.locator('[data-permission][value=finance]').isChecked(), true);
-      await form.locator('[data-staff-pane-tab=settings]').click();
+      await form.locator('[data-staff-pane-tab=rights]').click();
       assert.equal(await form.locator('[data-work-setting=completion_requires_admin]').inputValue(), 'true');
       assert.equal(await form.locator('[data-work-event=task_assigned][data-work-channel=push]').isChecked(), true);
       await form.locator('[data-staff-pane-tab=details]').click();
@@ -318,7 +260,7 @@ const assertVisibilityFits=async(form,viewportWidth)=>{
       await form.locator('[data-staff-cancel]').click();
       await closed();
       assert.equal(await page.locator('input[type=password]').evaluateAll(nodes => nodes.every(node => node.value === '')), true);
-      assert.equal((await control('state')).posts, 9, 'Create, email, password, WA, native actions, page visibility, local update, granular employee grant and one rejected duplicate');
+      assert.equal((await control('state')).posts, 8, 'Create, email, password, WA, native actions, local update, granular employee grant and one rejected duplicate');
     } else if (mode === 'conflict') {
       await openEmployee(62);
       const form = page.locator('#staffEditForm');
