@@ -58,13 +58,18 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.s.closed=False;self.s.started=time.monotonic();self.s.fence=1
         self.s._check_receipt=lambda *_:None
 
+    async def commit(self,session,item_id):
+        await session.receive_provider({'type':'conversation.item.added',
+                                        'item':{'id':item_id,'type':'message','role':'user'}})
+        await session.receive_provider({'type':'input_audio_buffer.committed','item_id':item_id})
+
     async def test_pcm_before_vad_then_interrupt_cancel_truncate_commit_and_dispatch(self):
         s=self.s
         await s.receive_client({'type':'audio','pcm':bytes(480)})
         self.assertEqual(self.provider.events[-1]['type'],'input_audio_buffer.append')
         await s.receive_provider({'type':'input_audio_buffer.speech_started'})
         await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
-        await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+        await self.commit(s,'input-1')
         self.assertEqual(sum(e['type']=='response.create' for e in self.provider.events),1)
         await s.receive_provider({'type':'response.created','response':{'id':'response-1'}})
         await s.receive_provider({'type':'response.output_item.added','response_id':'response-1',
@@ -84,7 +89,7 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
                                   'item_id':'output-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
         self.assertEqual(len(self.client.events),count,'late audio is discarded while truncation is pending')
         await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
-        await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-2'})
+        await self.commit(s,'input-2')
         await s.receive_provider({'type':'response.done','response':{'id':'response-1','output':[]}})
         self.assertEqual(sum(e['type']=='response.create' for e in self.provider.events),1)
         await s.receive_provider({'type':'conversation.item.truncated','item_id':'output-1','content_index':0,'audio_end_ms':0})
@@ -113,14 +118,14 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 await s.receive_client({'type':'audio','pcm':bytes(480)})
                 await s.receive_provider({'type':'input_audio_buffer.speech_started'})
                 await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
-                await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+                await self.commit(s,'input-1')
                 await s.receive_provider({'type':'response.created','response':{'id':'response-1'}})
                 audio={'type':'response.output_audio.delta','response_id':'response-1','item_id':'output-1',
                        'content_index':0,'delta':base64.b64encode(bytes(480)).decode()}
                 await s.receive_provider(audio)
                 await s.receive_provider({'type':'input_audio_buffer.speech_started'})
                 await s.receive_provider({'type':'input_audio_buffer.speech_stopped'})
-                await s.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-2'})
+                await self.commit(s,'input-2')
                 done={'type':'response.done','response':{'id':'response-1','output':[]}}
                 truncated={'type':'conversation.item.truncated','item_id':'output-1','content_index':0,'audio_end_ms':0}
                 for event in ([done,truncated] if done_first else [truncated,done]):
@@ -187,6 +192,8 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await s.receive_provider({'type':'input_audio_buffer.speech_started'})
             stop={'type':'input_audio_buffer.speech_stopped'}
             commit={'type':'input_audio_buffer.committed','item_id':'private-input'}
+            await s.receive_provider({'type':'conversation.item.added',
+                                      'item':{'id':'private-input','type':'message','role':'user'}})
             with self.assertLogs('tenant_operator_voice_session',level='INFO') as logs:
                 for event in ([commit,stop] if commit_first else [stop,commit]):
                     await s.receive_provider(event)
@@ -208,7 +215,7 @@ class DuplexIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_provider({'type':'input_audio_buffer.speech_started'})
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             self.assertFalse(any(e['type']=='response.create' for e in socket.sent))
-            await session.receive_provider({'type':'input_audio_buffer.committed','item_id':'input-1'})
+            await self.commit(session,'input-1')
             self.assertEqual(sum(e['type']=='response.create' for e in socket.sent),1)
             with self.assertRaisesRegex(ValueError,'claim_missing'):
                 await provider.send({'type':'response.create'})

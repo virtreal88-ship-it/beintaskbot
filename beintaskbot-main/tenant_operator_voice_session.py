@@ -1,10 +1,12 @@
 """Server-owned Realtime session lifecycle and admission enforcement."""
 import asyncio
+import array
 import base64
 import binascii
 import logging
 import math
 import re
+import sys
 import time
 import uuid
 
@@ -96,6 +98,14 @@ class Session:
     # is speaking. Keep a bounded backlog large enough for a short interruption
     # burst without ending the whole conversation.
     MAX_QUEUED_INPUT_TURNS = 8
+    MAX_CONTEXT_ITEMS = 1024
+    # The prior production queue delay reached ~4.8 s. Allow one bounded
+    # snapshot to drain with modest headroom instead of ending it at 1 s.
+    AUDIO_BOUNDARY_TIMEOUT = 6.0
+    VAD_SETTLE_SECONDS = .15
+    LOCAL_SPEECH_RMS = 328  # About 1% full-scale PCM16; an advisory gate only.
+    LOCAL_SILENCE_BYTES = 24000  # 500 ms at 24 kHz mono PCM16.
+    LOCAL_SPEECH_GATE_TIMEOUT = 1.5
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
@@ -171,6 +181,32 @@ class Session:
         self.pending_input_item_id = None
         self.queued_input_item_ids = []
         self.seen_input_item_ids = set()
+        # Only acknowledged items from this short-lived provider session are
+        # used to build a response context. Audio and transcripts stay remote.
+        self._context_order = []
+        self._context_usable = set()
+        self._context_roles = {}
+        self._context_required = set()
+        self._confirmed_user_items = set()
+        # The provider socket reader can observe speech while its event
+        # handler waits on authorization. Track those observations separately.
+        self._observed_speech_epoch = 0
+        self._processed_speech_epoch = 0
+        self._observed_speech_active = False
+        self._pending_provider_events = 0
+        self._handling_provider_task = None
+        self._client_audio_observed_bytes = 0
+        self._client_audio_forwarded_bytes = 0
+        self._client_audio_progress = asyncio.Event()
+        self._vad_observed = asyncio.Event()
+        self._local_speech_epoch = 0
+        self._local_speech_active = False
+        self._local_speech_suppressed = False
+        self._local_silence_bytes = 0
+        self._local_speech_timer = None
+        self._pending_client_controls = 0
+        self._retry_dispatch_task = None
+        self._retry_dispatch_requested = False
         self.current_reservation = None
         self.current_input_item_id = None
         self.current_response_usage_microusd = None
@@ -203,6 +239,7 @@ class Session:
         self.provider_event_lock = asyncio.Lock()
         self.client_event_lock = asyncio.Lock()
         self.client_lock = asyncio.Lock()
+        self.retry_lock = asyncio.Lock()
         self.shutdown_timeout = .5
         self._end_task = None
         self._opening = False
@@ -214,17 +251,164 @@ class Session:
         self._latency_output_done_at = None
         self._latency_commit_times = {}
 
-    async def _send_provider(self, event):
+    def observe_provider_event(self, event):
+        if not getattr(self,'duplex',False) or not isinstance(event,dict):return
+        self._pending_provider_events+=1
+        if event.get('type')=='input_audio_buffer.speech_started':
+            self._observed_speech_epoch+=1
+            self._observed_speech_active=True
+            self._vad_observed.set()
+            self._client_audio_progress.set()
+        elif event.get('type')=='input_audio_buffer.speech_stopped':
+            self._observed_speech_active=False
+
+    def _duplex_dispatch_ready(self, epoch, local_epoch):
+        # The current provider event is allowed; any additional observed event
+        # (including a full prefetch queue) must be processed before dispatch.
+        current=1 if self._handling_provider_task is asyncio.current_task() else 0
+        return (not self.closed and not self.muted and not self.cancel_requested and
+                self.input_turn is None and not self.stopped_input_turns and
+                not self._observed_speech_active and self._observed_speech_epoch==epoch and
+                self._processed_speech_epoch==epoch and self._context_required<=self._context_usable and
+                self._pending_provider_events==current and self._pending_client_controls==0 and
+                not self._local_speech_active and self._local_speech_epoch==local_epoch)
+
+    def _remember_context_item(self, item_id, *, usable, role):
+        if not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id):
+            raise Refused('provider_context_item_invalid')
+        if role not in ('user','assistant') or self._context_roles.get(item_id,role)!=role:
+            raise Refused('provider_context_item_conflict')
+        if item_id not in self._context_order:
+            if len(self._context_order)>=self.MAX_CONTEXT_ITEMS:raise Refused('provider_context_item_limit')
+            self._context_order.append(item_id)
+            self._context_roles[item_id]=role
+        if usable:self._context_usable.add(item_id)
+
+    def _context_refs(self):
+        return [{'type':'item_reference','id':item_id} for item_id in self._context_order
+                if item_id in self._context_usable]
+
+    def observe_client_audio(self, pcm):
+        # No PCM is retained. Silence is counted for FIFO ordering but does
+        # not itself cancel, restart, or extend a pending response.
+        if (not getattr(self,'duplex',False) or not isinstance(pcm,bytes) or
+            not pcm or len(pcm)>self.MAX_FRAME or len(pcm)%2):return False
+        self._client_audio_observed_bytes+=len(pcm)
+        samples=array.array('h');samples.frombytes(pcm)
+        if sys.byteorder!='little':samples.byteswap()
+        voiced=sum(value*value for value in samples)>=len(samples)*self.LOCAL_SPEECH_RMS**2
+        if voiced:
+            self._local_silence_bytes=0
+            if not self._local_speech_active and not self._local_speech_suppressed:
+                self._local_speech_epoch+=1
+                self._local_speech_active=True
+                self._local_speech_timer=asyncio.get_running_loop().call_later(
+                    self.LOCAL_SPEECH_GATE_TIMEOUT,self._expire_local_speech_gate)
+                self._client_audio_progress.set()
+                self._vad_observed.set()
+        else:
+            self._local_silence_bytes=min(self.LOCAL_SILENCE_BYTES,self._local_silence_bytes+len(pcm))
+            if self._local_silence_bytes>=self.LOCAL_SILENCE_BYTES:
+                if self._local_speech_active:
+                    if self._local_speech_timer is not None:self._local_speech_timer.cancel()
+                    self._local_speech_timer=None
+                    self._local_speech_active=False
+                    self._schedule_dispatch_retry()
+                self._local_speech_suppressed=False
+        return True
+
+    def _expire_local_speech_gate(self):
+        self._local_speech_timer=None
+        self._local_speech_active=False
+        # Do not re-arm indefinitely for uninterrupted background noise.
+        self._local_speech_suppressed=True
+        self._schedule_dispatch_retry()
+
+    def observe_client_control(self):
+        if not getattr(self,'duplex',False):return
+        self._pending_client_controls+=1
+        self._client_audio_progress.set()
+        self._vad_observed.set()
+
+    def _schedule_dispatch_retry(self):
+        if self.closed or not (self.response_pending or
+                               (self.response_inflight and self.current_reservation is not None)):return
+        self._retry_dispatch_requested=True
+        if self._retry_dispatch_task is not None and not self._retry_dispatch_task.done():return
+        async def retry():
+            try:
+                async with self.retry_lock:
+                    while self._retry_dispatch_requested and not self.closed:
+                        self._retry_dispatch_requested=False
+                        async with self.lock:
+                            if not self.closed:await self._dispatch_pending()
+            except Exception:
+                if not self.closed:await self.end('dispatch_retry_failed')
+            finally:
+                self._retry_dispatch_task=None
+        self._retry_dispatch_task=asyncio.create_task(retry())
+
+    async def _wait_audio_boundary(self, boundary, dispatch_guard):
+        deadline=asyncio.get_running_loop().time()+self.AUDIO_BOUNDARY_TIMEOUT
+        while self._client_audio_forwarded_bytes<boundary:
+            if not dispatch_guard():return False
+            self._client_audio_progress.clear()
+            if self._client_audio_forwarded_bytes>=boundary:break
+            remaining=deadline-asyncio.get_running_loop().time()
+            if remaining<=0:raise Refused('client_audio_boundary_timeout')
+            try:await asyncio.wait_for(self._client_audio_progress.wait(),remaining)
+            except asyncio.TimeoutError:raise Refused('client_audio_boundary_timeout') from None
+        return dispatch_guard()
+
+    def _check_provider_send(self,event):
+        if self.closed:raise Refused('session_closed')
+        if (event.get('type') in ('input_audio_buffer.append','response.create') and
+            self.started and time.monotonic()-self.started >= self.max_seconds):
+            raise Refused('session_duration_limit')
+
+    async def _send_provider(self, event, *, dispatch_guard=None):
+        prepare=getattr(self.provider,'prepare_guarded_response',None)
+        send_prepared=getattr(self.provider,'send_prepared_response',None)
+        discard=getattr(self.provider,'discard_prepared_response',None)
+        if dispatch_guard is not None and all(callable(x) for x in (prepare,send_prepared,discard)):
+            # Authority/permit checks do not hold the provider write lock:
+            # accepted PCM may continue upstream while they await the DB.
+            self._check_provider_send(event)
+            ticket=await prepare(event,dispatch_guard)
+            if ticket is None:return False
+            try:
+                boundary=self._client_audio_observed_bytes
+                if not await self._wait_audio_boundary(boundary,dispatch_guard):return False
+                # Append has no provider ACK. Give already-forwarded audio a
+                # bounded chance to produce VAD events, without waiting for a
+                # stream of silence to stop. This cannot prove VAD detection.
+                self._vad_observed.clear()
+                if not dispatch_guard():return False
+                try:await asyncio.wait_for(self._vad_observed.wait(),self.VAD_SETTLE_SECONDS)
+                except asyncio.TimeoutError:pass
+                if not dispatch_guard():return False
+                async with self.io_lock:
+                    self._check_provider_send(event)
+                    if not dispatch_guard():return False
+                    # Authority and fencing are rechecked *after* waiting for
+                    # the write lock. Otherwise a revoked session or lost
+                    # fence could still dispatch while queued on this lock.
+                    await self.context.revalidate(self.scope)
+                    await self.authority.check(self.scope,'response_dispatch')
+                    await self.lease.assert_current(self.scope,self.fence)
+                    self._check_provider_send(event)
+                    if not dispatch_guard():return False
+                    return await send_prepared(ticket,dispatch_guard)
+            finally:
+                discard(ticket)
         async with self.io_lock:
-            if self.closed:
-                raise Refused('session_closed')
-            # A busy event loop or a slow authorization/lease check can delay
-            # the watchdog. Do not initiate billable input or a new response
-            # after the session deadline while waiting for that watchdog.
-            if (event.get('type') in ('input_audio_buffer.append','response.create') and
-                self.started and time.monotonic()-self.started >= self.max_seconds):
-                raise Refused('session_duration_limit')
+            self._check_provider_send(event)
+            guarded=getattr(self.provider,'send_guarded_response',None)
+            if dispatch_guard is not None and callable(guarded):
+                return await guarded(event,dispatch_guard)
+            if dispatch_guard is not None and not dispatch_guard():return False
             await self.provider.send(event)
+            return True
 
     async def _send_cancel_when_identified(self):
         if getattr(self,'duplex',False):
@@ -314,6 +498,11 @@ class Session:
                 raise Refused('provider_open_timeout')
             await self._open_task
             if self._stop_requested: raise Refused('session_stopped_during_start')
+            if self.duplex:
+                context_id=getattr(self.provider,'context_id',None)
+                if context_id is not None:self._remember_context_item(context_id,usable=True,role='user')
+                elif getattr(self.provider,'mock_only',None) is not True:
+                    raise Refused('provider_context_unconfirmed')
             stage='post_open_authorization'
             await self.authority.check(self.scope, 'post_open')
             stage='post_open_lease'
@@ -395,21 +584,26 @@ class Session:
             not self.interrupt_pending and not self.truncate_pending and not self.closed):
             self.pending_input_item_id=self.queued_input_item_ids.pop(0)
             self.response_pending=True
+        duplex=getattr(self,'duplex',False)
+        dispatch_epoch=self._processed_speech_epoch if duplex else None
+        local_epoch=self._local_speech_epoch if duplex else None
+        if duplex and not self._duplex_dispatch_ready(dispatch_epoch,local_epoch):return
         if (not self.response_pending or not self.pending_input_item_id or self.interrupt_pending or
             self.truncate_pending or self.response_inflight or self.current_reservation is not None or
             self.item is not None or self.closed):
             return
         if self.pilot_policy is not None and self.response_number>=self.MAX_PILOT_RESPONSES:
             raise Refused('session_response_limit')
-        self.response_number += 1
         latency_dispatch_started=time.monotonic()
         commit_times=getattr(self,'_latency_commit_times',{})
         _log_voice_latency('commit_ack_to_dispatch',commit_times.pop(self.pending_input_item_id,None),latency_dispatch_started)
-        if self.pilot_policy is None and self.response_number > 2:
+        if self.pilot_policy is None and self.response_number >= 2:
             raise Refused('session_response_limit')
         # Validate the server-owned context before issuing a one-use pilot
         # permit and again as close as possible to dispatch.
         await self.context.revalidate(self.scope)
+        if duplex and not self._duplex_dispatch_ready(dispatch_epoch,local_epoch):return
+        self.response_number += 1
         tenant, actor, channel, conversation = self.scope
         input_item_id=self.pending_input_item_id
         reservation = {'request_id': str(uuid.uuid4()), 'tenant_id': str(tenant), 'session_id': self.session_id,
@@ -444,7 +638,32 @@ class Session:
                 await self.provider.bind_claim(reservation,claimed)
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
-            await self._send_provider({'type': 'response.create'})
+            event={'type':'response.create'}
+            if duplex:
+                event['response']={'input':self._context_refs()}
+            if duplex:
+                sent=await self._send_provider(event,dispatch_guard=lambda:self._duplex_dispatch_ready(dispatch_epoch,local_epoch))
+            else:
+                sent=await self._send_provider(event)
+            if sent is False:
+                # The provider consumed the one-use permit but did not send.
+                # Preserve the turn until newly observed speech is processed.
+                if self.pilot_policy is None:
+                    marked=await self.ledger.mark_unknown(reservation)
+                    if not isinstance(marked,dict) or marked.get('state')!='unknown':
+                        raise Refused('budget_unknown_unconfirmed')
+                cancelled=self.cancel_requested or self.muted
+                self.cancel_requested=False
+                self.current_reservation=None
+                self.current_input_item_id=None
+                self.current_response_kind=None
+                self.current_response_usage_microusd=None
+                self.response_inflight=False
+                if self.pilot_policy is not None:self.response_number-=1
+                if not self.closed and not cancelled:
+                    self.pending_input_item_id=input_item_id
+                    self.response_pending=True
+                return
             sent_at=time.monotonic()
             _log_voice_latency('dispatch_checks',latency_dispatch_started,sent_at)
             self._latency_response_sent_at=sent_at
@@ -506,7 +725,19 @@ class Session:
                 _log_voice_latency('vad_stop_to_commit_ack',vad_stopped_at,committed_at)
             elif vad_first=='commit':
                 _log_voice_latency('commit_ack_to_vad_stop',committed_at,vad_stopped_at)
-        if self.pending_input_item_id is None and not self.response_pending:
+        if getattr(self,'duplex',False):
+            if turn['item_id'] in self._context_roles:raise Refused('provider_context_item_conflict')
+            self._context_required.add(turn['item_id'])
+            self._remember_context_item(turn['item_id'],usable=turn['item_id'] in self._confirmed_user_items,role='user')
+            # One response to the latest completed utterance covers earlier
+            # committed speech as conversation context, without duplicate
+            # replies for an interruption burst.
+            if self.pending_input_item_id is not None:
+                self._latency_commit_times.pop(self.pending_input_item_id,None)
+            self.pending_input_item_id=turn['item_id']
+            self.response_pending=True
+            self.queued_input_item_ids.clear()
+        elif self.pending_input_item_id is None and not self.response_pending:
             self.pending_input_item_id=turn['item_id']
             self.response_pending=True
         else:
@@ -548,18 +779,39 @@ class Session:
         except asyncio.CancelledError:
             pass
 
-    async def receive_client(self, event):
+    async def receive_client(self, event, *, audio_observed=False, control_observed=False):
         # End is the operation that closes the session and waits for the other
         # in-flight handlers. It must not hold client_event_lock while doing so.
-        if isinstance(event,dict) and event.get('type')=='end':
-            await self._receive_client(event)
+        kind=event.get('type') if isinstance(event,dict) else None
+        is_control=(getattr(self,'duplex',False) and kind in
+                    ('end','mute','talk_start','stop_response','talk_end','played','played_all',
+                     'playback_scheduled','playback_failed'))
+        if is_control and not control_observed:self.observe_client_control()
+        if kind=='end':
+            try:await self._receive_client(event)
+            finally:
+                if is_control:self._pending_client_controls-=1
             return
+        pcm=event.get('pcm') if isinstance(event,dict) and event.get('type')=='audio' else None
+        valid_pcm=(getattr(self,'duplex',False) and isinstance(pcm,bytes) and bool(pcm) and
+                   len(pcm)<=self.MAX_FRAME and len(pcm)%2==0)
+        if valid_pcm and not audio_observed:self.observe_client_audio(pcm)
         try:
             async with self.client_event_lock:
                 await self._receive_client(event)
+                if valid_pcm:
+                    self._client_audio_forwarded_bytes+=len(pcm)
+                    if self._client_audio_forwarded_bytes>self._client_audio_observed_bytes:
+                        raise Refused('client_audio_observation_invalid')
+                    self._client_audio_progress.set()
         except Exception:
             await self.end('client_or_authority_error')
             raise
+        finally:
+            if is_control:
+                self._pending_client_controls-=1
+                if self._pending_client_controls<0:raise Refused('client_control_observation_invalid')
+                self._schedule_dispatch_retry()
 
     async def _receive_client(self, event):
         received_at=time.monotonic() if isinstance(event,dict) and event.get('type')=='talk_end' else None
@@ -590,6 +842,10 @@ class Session:
                     # Do not turn a late VAD stop into a response after mute.
                     self.input_turn=None
                     self.stopped_input_turns.clear()
+                    if getattr(self,'duplex',False):
+                        self.pending_input_item_id=None
+                        self.response_pending=False
+                        self.queued_input_item_ids.clear()
                     await self._send_provider({'type': 'input_audio_buffer.clear'})
             return
         if kind in ('talk_start','stop_response') and set(event) in ({'type'},{'type','item_id','audio_end_ms'}):
@@ -602,6 +858,14 @@ class Session:
             if 'audio_end_ms' in event and (type(audio_end_ms) is not int or audio_end_ms<0):
                 raise Refused('talk_interrupt_offset_invalid')
             async with self.lock:
+                if (getattr(self,'duplex',False) and kind=='stop_response' and
+                    (self.pending_input_item_id is not None or self.response_pending)):
+                    # A Stop that arrived while a response was waiting for
+                    # dispatch cancels that pending response as well.
+                    self.pending_input_item_id=None
+                    self.response_pending=False
+                    self.queued_input_item_ids.clear()
+                    if not self.response_inflight and self.item is None:return
                 # Only the explicit Stop button may interrupt an assistant
                 # response. An automatic listening request racing provider
                 # output must not cancel, truncate, or close the conversation.
@@ -731,6 +995,7 @@ class Session:
                 # heard the answer. The text history marks it unverified.
                 if self.transcript is not None:self.transcript.device_playback_complete(self.item)
                 completed_item=self.item
+                if getattr(self,'duplex',False):self._remember_context_item(completed_item,usable=True,role='assistant')
                 _log_voice_latency('output_done_to_played_all',getattr(self,'_latency_output_done_at',None),time.monotonic())
                 self._latency_output_done_at=None
                 self.item,self.produced=None,0
@@ -761,10 +1026,28 @@ class Session:
             return
         raise Refused('client_event_not_allowed')
 
-    async def receive_provider(self, event):
+    async def receive_provider(self, event, *, already_observed=False):
         try:
+            if not already_observed:self.observe_provider_event(event)
             async with self.provider_event_lock:
-                await self._receive_provider(event)
+                duplex=getattr(self,'duplex',False)
+                if duplex:
+                    if not isinstance(event,dict) or self._pending_provider_events<=0:
+                        raise Refused('provider_event_observation_invalid')
+                    self._handling_provider_task=asyncio.current_task()
+                try:
+                    if duplex and event.get('type')=='input_audio_buffer.speech_started':
+                        self._processed_speech_epoch+=1
+                    await self._receive_provider(event)
+                finally:
+                    if duplex:
+                        self._pending_provider_events-=1
+                        self._handling_provider_task=None
+                # If this was the last event observed by the socket reader,
+                # a pending turn can become eligible even when this event was
+                # otherwise a no-op such as rate_limits.updated.
+                if duplex and not self.closed:
+                    async with self.lock:await self._dispatch_pending()
         except Exception:
             await self.end('provider_or_budget_error')
             raise
@@ -987,6 +1270,7 @@ class Session:
                         isinstance(self.provider_response_id,str) and event.get('response_id')==self.provider_response_id)
                 if self.item is None:
                     if self.greeting_pending:self.greeting_item_id=item
+                if getattr(self,'duplex',False):self._remember_context_item(item,usable=False,role='assistant')
                 self.item = item
                 if self.produced + len(data) > self.MAX_OUTPUT_BYTES:
                     raise Refused('provider_audio_output_limit')
@@ -1018,6 +1302,12 @@ class Session:
                     raise Refused('invalid_truncation_confirmation')
                 if self.truncate_pending in self.assistant_response_ids:
                     self.truncated_playback_items.add(self.truncate_pending)
+                if (getattr(self,'duplex',False) and self.truncate_pending_audio_end_ms>0 and
+                    self._context_roles.get(self.truncate_pending)=='assistant'):
+                    # Explicit interruption can conservatively retain the
+                    # portion reported played, but only after the provider
+                    # confirms the exact truncation. Zero retains nothing.
+                    self._remember_context_item(self.truncate_pending,usable=True,role='assistant')
                 self.truncate_pending=None
                 self.truncate_pending_audio_end_ms=None
                 self.interrupt_pending=False
@@ -1082,6 +1372,20 @@ class Session:
         if kind in ('conversation.item.added','conversation.item.created','conversation.item.done'):
             item=event.get('item')
             if isinstance(item,dict) and item.get('type')=='message' and item.get('role') in ('user','assistant'):
+                if getattr(self,'duplex',False) and item.get('role')=='user':
+                    status=item.get('status')
+                    if status=='in_progress':return
+                    if status not in (None,'completed'):raise Refused('provider_context_item_incomplete')
+                    item_id=item.get('id')
+                    if not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id):
+                        raise Refused('provider_context_item_invalid')
+                    if item_id not in self._confirmed_user_items and len(self._confirmed_user_items)>=self.MAX_CONTEXT_ITEMS:
+                        raise Refused('provider_context_item_limit')
+                    self._confirmed_user_items.add(item_id)
+                    if item_id in self._context_required:
+                        async with self.lock:
+                            self._remember_context_item(item_id,usable=True,role='user')
+                            await self._dispatch_pending()
                 return
             raise Refused('provider_item_forbidden')
         if kind in ('response.output_item.added','response.output_item.done'):
@@ -1177,6 +1481,10 @@ class Session:
         self._latency_output_done_at=None
         getattr(self,'_latency_commit_times',{}).clear()
         self.closed = True
+        timer=getattr(self,'_local_speech_timer',None)
+        if timer is not None:timer.cancel()
+        for event in (getattr(self,'_client_audio_progress',None),getattr(self,'_vad_observed',None)):
+            if event is not None:event.set()
         if self.watchdog and self.watchdog is not asyncio.current_task():
             self.watchdog.cancel()
         self._end_task = asyncio.create_task(self._finish_end(reason))
@@ -1221,9 +1529,12 @@ class Session:
                 await self.ledger.mark_unknown(reservation)
         # close and both drains are independent: close can unblock a running
         # send, but the lease remains held until *all* I/O is really drained.
-        drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
-                                    self._drain(self.provider_event_lock),self._drain(self.client_event_lock),
-                                    self._drain(self.client_lock),hold_unknown())
+        drains=[self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
+                self._drain(self.provider_event_lock),self._drain(self.client_event_lock),
+                self._drain(self.client_lock),hold_unknown()]
+        retry_lock=getattr(self,'retry_lock',None)
+        if retry_lock is not None:drains.append(self._drain(retry_lock))
+        drained=await self._bounded(*drains)
         async def terminal(event):
             async with self.client_lock:
                 await self.client.send(event)

@@ -250,6 +250,12 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         if session.closed:
                             activity['client_reader_exit']='session_closed'
                             break
+                        if message.type==WSMsgType.BINARY:
+                            observer=getattr(session,'observe_client_audio',None)
+                            if callable(observer):observer(bytes(message.data))
+                        elif message.type==WSMsgType.TEXT:
+                            observer=getattr(session,'observe_client_control',None)
+                            if callable(observer):observer()
                         # The audio consumer performs live authorization and
                         # lease checks before forwarding each frame. If it is
                         # briefly slower than the browser, pause this reader
@@ -272,13 +278,34 @@ def make_handler(*, allowed_origins, authenticate, build_session):
             async def read_provider():
                 stage='provider_receive'
                 event=None
+                duplex=getattr(session,'duplex',False)
+                incoming_provider=asyncio.Queue(maxsize=128) if duplex else None
+                observer=getattr(session,'observe_provider_event',None) if duplex else None
+                async def receive_ahead():
+                    try:
+                        while not session.closed:
+                            incoming=await session.next_provider_event()
+                            # Observe VAD promptly even when handling an older
+                            # event is waiting for authorization or lease IO.
+                            if callable(observer):observer(incoming)
+                            await incoming_provider.put((True,incoming))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        await incoming_provider.put((False,exc))
+                provider_receiver=asyncio.create_task(receive_ahead()) if duplex else None
                 try:
                     while not session.closed:
-                        event=await session.next_provider_event()
+                        if duplex:
+                            ok,event=await incoming_provider.get()
+                            if not ok:raise event
+                        else:
+                            event=await session.next_provider_event()
                         stage='provider_event'
                         response_inflight_before=session.response_inflight
                         output_playing_before=bool(session.item)
-                        await session.receive_provider(event)
+                        if callable(observer):await session.receive_provider(event,already_observed=True)
+                        else:await session.receive_provider(event)
                         if isinstance(event,dict):
                             kind=event.get('type')
                             if kind=='input_audio_buffer.speech_started':
@@ -305,6 +332,13 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         _log_provider_failure(stage,event,exc)
                     if not session.closed:await session.end('provider_disconnected')
                     await ws.close()
+                finally:
+                    if provider_receiver is not None:
+                        provider_receiver.cancel()
+                        # Cancellation does not prove that a socket read ended.
+                        # Session shutdown still drains receive_lock before lease
+                        # release and retains its lease on an uncertain drain.
+                        provider_receiver.add_done_callback(session._consume_task)
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
             session_ready=True
@@ -343,7 +377,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                             pcm+=part;frame_count+=1
                     event={'type':'audio','pcm':pcm}
                     audio_started=time.monotonic()
-                    try:await session.receive_client(event)
+                    try:
+                        if callable(getattr(session,'observe_client_audio',None)) and getattr(session,'duplex',False):
+                            await session.receive_client(event,audio_observed=True)
+                        else:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
@@ -359,7 +396,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     if not isinstance(event,dict) or event.get('type') not in ('end','mute','talk_start','stop_response','talk_end','played','played_all','playback_scheduled','playback_failed'):
                         break
                     _log_playback_queue_latency(event,received_at)
-                    try:await session.receive_client(event)
+                    try:
+                        if callable(getattr(session,'observe_client_control',None)) and getattr(session,'duplex',False):
+                            await session.receive_client(event,control_observed=True)
+                        else:await session.receive_client(event)
                     except Exception as exc:
                         _log_client_failure(event,exc)
                         raise
