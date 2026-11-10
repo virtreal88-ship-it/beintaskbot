@@ -121,11 +121,14 @@ class Session:
         if any(x is None for x in (authority, lease, context, provider, client)) or (ledger is None and pilot_policy is None):
             raise Refused('trusted_dependencies_missing')
         if getattr(provider, 'mock_only', None) is not True:
-            from tenant_operator_realtime_wire import OpenAIRealtimeProvider
+            from tenant_operator_realtime_wire import OpenAIRealtimeProvider, HybridOpenAIRealtimeProvider
             from tenant_operator_voice_pilot import PilotAdmission
-            if (type(provider) is not OpenAIRealtimeProvider or type(pilot_policy) is not PilotAdmission or
+            if (type(provider) not in (OpenAIRealtimeProvider,HybridOpenAIRealtimeProvider) or type(pilot_policy) is not PilotAdmission or
                 provider.guard is not pilot_policy or history is not None):
                 raise Refused('provider_not_trusted')
+            if (type(provider) is HybridOpenAIRealtimeProvider and
+                (getattr(lease,'provider_kind',None)!='openai_elevenlabs_tts' or not duplex)):
+                raise Refused('provider_lease_kind_mismatch')
         if pilot_policy is not None:
             from tenant_operator_voice_pilot import PilotAdmission
             if type(pilot_policy) is not PilotAdmission or history is not None:
@@ -975,6 +978,11 @@ class Session:
                     max_audio_ms=self.produced//(self.SAMPLE_RATE*2//1000)
                     if offset>max_audio_ms:
                         raise Refused('talk_interrupt_offset_out_of_range')
+                    # TTS timing cannot identify a prefix of the upstream text
+                    # item. Retain none of an interrupted hybrid reply; the
+                    # bridge confirms its exact deletion before the next turn.
+                    if getattr(self.provider,'text_output',False) is True:
+                        offset=0
                     self.interrupt_pending=True
                     self._latency_first_audio_item=None
                     self._latency_output_done_at=None

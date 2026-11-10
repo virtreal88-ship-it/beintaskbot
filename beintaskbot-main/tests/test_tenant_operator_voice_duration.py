@@ -18,7 +18,8 @@ class PilotDuration(unittest.IsolatedAsyncioTestCase):
         authority=orchestration.ScopedAuthority({}, {}, SimpleNamespace(
             tenant=scope[0],actor=scope[1],channel_id=scope[2],conversation_id=scope[3]),lambda:{'tenant_id':scope[0],'telegram_id':scope[1]})
         authority.check=AsyncMock()
-        lease=SimpleNamespace(claim=AsyncMock(),assert_current=AsyncMock(),release=AsyncMock())
+        lease=SimpleNamespace(claim=AsyncMock(),assert_current=AsyncMock(),release=AsyncMock(),
+                              provider_kind='openai_realtime')
         provider=SimpleNamespace(mock_only=True,bind_pilot_claim=AsyncMock(),bind_claim=AsyncMock(),send=AsyncMock())
         policy=PilotAdmission(authority,lease,scope,sid) if pilot else None
         return scope,dict(authority=authority,ledger=None if pilot else Mock(),lease=lease,

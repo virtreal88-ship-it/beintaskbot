@@ -36,9 +36,12 @@ def bound_authority_and_lease(authority, lease, scope, session_id):
 
 
 class VoiceSessionLease:
-    def __init__(self, authority, session_id, *, owner_id=None):
+    def __init__(self, authority, session_id, *, owner_id=None, provider_kind='openai_realtime'):
         if not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id:
             raise ValueError('invalid_session_id')
+        if provider_kind not in ('openai_realtime', 'openai_elevenlabs_tts', 'unknown'):
+            raise ValueError('invalid_provider_kind')
+        self.provider_kind = provider_kind
         self.authority = authority
         self.session_id = session_id
         self.owner_id = owner_id or str(uuid.uuid4())
@@ -68,7 +71,7 @@ class VoiceSessionLease:
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
                           lease_until>now() AS live,
-                          (state='active' AND provider_opened_at IS NOT NULL AND
+                          (state='active' AND provider_kind='openai_realtime' AND provider_opened_at IS NOT NULL AND
                            provider_opened_at <= now() - (%s * interval '1 second'))
                             AS provider_session_expired
                           FROM saas_operator_voice_lease
@@ -105,6 +108,17 @@ class VoiceSessionLease:
                               (*self.key,self.channel,self.conversation,self.session_id,self.owner_id,next_fence,LEASE_SECONDS))
                         row=cur.fetchone()
                         if not row or int(row['fence'])!=next_fence:
+                            raise TenantLinearError('Голосовой сеанс уже открыт.',409)
+                        # The migration trigger resets provider provenance when a
+                        # row changes owners. Set it before commit, under the
+                        # same advisory lock and exact owner/fence CAS.
+                        cur.execute('''UPDATE saas_operator_voice_lease SET provider_kind=%s
+                          WHERE tenant_id=%s::uuid AND actor_id=%s AND session_id=%s::uuid
+                            AND owner_id=%s::uuid AND fence=%s AND state='starting'
+                            AND provider_kind='unknown' AND provider_opened_at IS NULL RETURNING fence''',
+                          (self.provider_kind,*self.key,self.session_id,self.owner_id,next_fence))
+                        assigned=cur.fetchone()
+                        if not assigned or int(assigned['fence'])!=next_fence:
                             raise TenantLinearError('Голосовой сеанс уже открыт.',409)
                         conn.commit()
                         return next_fence

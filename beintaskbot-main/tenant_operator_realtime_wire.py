@@ -2,10 +2,12 @@
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import re
 import uuid
+from collections import deque
 import aiohttp
 from tenant_linear_policy import TenantLinearError
 
@@ -206,10 +208,12 @@ def create_pilot_provider(policy,credential_loader):
 
 
 class _RealtimeWire:
-    def __init__(self,socket,claim_guard):
+    def __init__(self,socket,claim_guard,*,output_modality='audio'):
         if not callable(getattr(claim_guard,'consume',None)):
             raise ValueError('claim_guard_required')
+        if output_modality not in ('audio','text'):raise ValueError('output_modality_invalid')
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
+        self.output_modality=output_modality
         self.duplex=False;self.context_id=None;self._prepared_response=None;self._cancel_events={};self._completed_responses=set();self._pending_cancel_races={}
 
     def _note_conversation(self,event,session_id=None):
@@ -238,7 +242,7 @@ class _RealtimeWire:
         session_id=session.get('id') if isinstance(session,dict) else None
         if not isinstance(session_id,str) or not session_id or len(session_id)>128:raise ValueError('session_id_missing')
         config={'type':'realtime','model':MODEL,'instructions':instructions,
-          'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
+          'output_modalities':[self.output_modality],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
                             'noise_reduction':{'type':'near_field','strength':1},
                             # Provider VAD may interrupt ongoing speech but
@@ -247,6 +251,7 @@ class _RealtimeWire:
                                                'silence_duration_ms':500,'create_response':False,
                                                'interrupt_response':True} if duplex else None)},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
+        if self.output_modality=='text':config['audio'].pop('output')
         await self.socket.send_json({'type':'session.update','session':config})
         # GA may announce the conversation between session.created and
         # session.updated. Reject all other interleavings; caller bounds open.
@@ -298,7 +303,7 @@ class _RealtimeWire:
             noise=incoming.get('noise_reduction')
             checks={
               'id':s.get('id')==session_id,'type':s.get('type')=='realtime','model':s.get('model')==MODEL,
-              'output_modalities':s.get('output_modalities')==['audio'],'tools':s.get('tools')==[],
+              'output_modalities':s.get('output_modalities')==expected['output_modalities'],'tools':s.get('tools')==[],
               'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
               'instructions':s.get('instructions')==expected['instructions'],
               'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
@@ -310,7 +315,8 @@ class _RealtimeWire:
               # session.updated. Null means no separate transcription model.
               'audio.input.transcription':incoming.get('transcription') is None,
               'audio.input.turn_detection':_RealtimeWire._turn_detection_matches(incoming.get('turn_detection'),expected['audio']['input']['turn_detection']),
-              'audio.output.format':audio['output'].get('format')=={'type':'audio/pcm','rate':24000},
+              'audio.output.format':(expected['output_modalities']==['text'] or
+                                     audio['output'].get('format')=={'type':'audio/pcm','rate':24000}),
             }
             mismatch=[name for name,valid in checks.items() if not valid]
             if mismatch:
@@ -494,9 +500,11 @@ class OpenAIRealtimeProvider(_RealtimeWire):
     """Server-only provider composition for the scoped no-tools pilot."""
     mock_only=False
 
-    def __init__(self,credential_loader,claim_guard):
+    def __init__(self,credential_loader,claim_guard,*,output_modality='audio'):
         if not callable(credential_loader):raise ValueError('credential_loader_required')
-        super().__init__(None,claim_guard)
+        if output_modality!='audio' and type(self) is OpenAIRealtimeProvider:
+            raise ValueError('hybrid_provider_required')
+        super().__init__(None,claim_guard,output_modality=output_modality)
         self._credential_loader=credential_loader;self._closing=False
         self._opening_session=None;self._opening_close_task=None
 
@@ -543,3 +551,277 @@ class OpenAIRealtimeProvider(_RealtimeWire):
         self._closing=True;self.ready=False;self.bound=None
         if self.socket is not None:await self.socket.close()
         elif self._opening_session is not None:await self._close_opening_session()
+
+
+class _HybridRealtimeMixin:
+    """Bridge one admitted OpenAI text response to a bounded TTD stream."""
+    text_output=True
+    def _init_hybrid(self,loader,stream_factory):
+        self._tts_loader=loader;self._stream_factory=stream_factory
+        self._hybrid_events=asyncio.Queue(maxsize=128);self._hybrid_ready=deque()
+        self._hybrid_openai_task=None;self._hybrid_tts_task=None
+        self._hybrid_streams=[];self._hybrid_active=None;self._hybrid_epoch=0
+        self._hybrid_pending_dispatch=None;self._hybrid_cancel_pending=False
+        self._hybrid_items={};self._hybrid_pending_delete={};self._hybrid_closing=False
+        self._hybrid_close_task=None
+
+    async def send_prepared_response(self,token,dispatch_guard=None):
+        if self._hybrid_pending_dispatch is not None or self._hybrid_active is not None:
+            raise ValueError('hybrid_response_overlap')
+        pending=asyncio.get_running_loop().create_future()
+        self._hybrid_pending_dispatch=pending
+        try:
+            sent=await super().send_prepared_response(token,dispatch_guard)
+            if not pending.done():pending.set_result(sent is True)
+            if sent is not True:
+                self._hybrid_pending_dispatch=None;self._hybrid_cancel_pending=False
+            return sent
+        except BaseException:
+            if not pending.done():pending.set_result(False)
+            self._hybrid_pending_dispatch=None;self._hybrid_cancel_pending=False
+            raise
+
+    def _cancel_hybrid_response(self):
+        active=self._hybrid_active
+        if active is None:
+            if self._hybrid_pending_dispatch is not None:self._hybrid_cancel_pending=True
+            return
+        if active['cancelled']:return
+        active['cancelled']=True
+        if active['stream'] is None:active['tts_done']=True
+        else:active['stream'].cancel_now()
+
+    def _hybrid_current(self,epoch):
+        active=self._hybrid_active
+        return (not self._hybrid_closing and self.ready and active is not None and
+                active['epoch']==epoch and not active['cancelled'])
+
+    async def _hybrid_emit(self,event):
+        await self._hybrid_events.put(event)
+
+    async def _send(self,event,dispatch_guard=None):
+        if isinstance(event,dict) and event.get('type')=='response.cancel':
+            active=self._hybrid_active
+            if active is not None and event.get('response_id')!=active['response_id']:
+                raise ValueError('hybrid_response_mismatch')
+            self._cancel_hybrid_response()
+        if isinstance(event,dict) and event.get('type')=='conversation.item.truncate':
+            if (set(event)!={'type','item_id','content_index','audio_end_ms'} or
+                event.get('content_index')!=0 or event.get('audio_end_ms')!=0 or
+                event.get('item_id') not in self._hybrid_items or
+                event['item_id'] in self._hybrid_pending_delete):
+                raise ValueError('hybrid_truncate_invalid')
+            self._cancel_hybrid_response()
+            self._hybrid_pending_delete[event['item_id']]=True
+            await self.socket.send_json({'type':'conversation.item.delete','item_id':event['item_id']})
+            return True
+        return await super()._send(event,dispatch_guard)
+
+    def _hybrid_finish_if_ready(self):
+        active=self._hybrid_active
+        if active is None or active['response_done'] is None or not active['tts_done']:return
+        if not active['cancelled']:
+            if not active['audio_seen'] or active['item_id'] is None:raise ValueError('tts_empty_response')
+            self._hybrid_ready.append({'type':'response.output_audio.done','response_id':active['response_id'],
+                                       'item_id':active['item_id'],'content_index':0})
+        self._hybrid_ready.append(active['response_done'])
+        self._hybrid_active=None
+
+    async def _handle_hybrid_openai(self,event):
+        kind=event.get('type')
+        if kind=='input_audio_buffer.speech_started':
+            self._cancel_hybrid_response()
+            return event
+        if kind=='response.created':
+            pending=self._hybrid_pending_dispatch
+            if pending is None or self._hybrid_active is not None:raise ValueError('hybrid_unsolicited_response')
+            allowed=await asyncio.shield(pending)
+            self._hybrid_pending_dispatch=None
+            response=event.get('response');rid=response.get('id') if isinstance(response,dict) else None
+            if not allowed or not isinstance(rid,str) or not rid or len(rid)>128:
+                raise ValueError('hybrid_unsolicited_response')
+            self._hybrid_epoch+=1
+            self._hybrid_active={'epoch':self._hybrid_epoch,'response_id':rid,'item_id':None,'stream':None,
+                                 'cancelled':self._hybrid_cancel_pending,'tts_done':self._hybrid_cancel_pending,
+                                 'audio_seen':False,'text_done':False,'response_done':None,
+                                 'text_digest':hashlib.sha256(),'item_verified':False}
+            self._hybrid_cancel_pending=False
+            return {'type':'response.created','response':{'id':rid}}
+        if kind=='conversation.item.deleted':
+            item=event.get('item_id')
+            if item not in self._hybrid_pending_delete:raise ValueError('hybrid_delete_unexpected')
+            self._hybrid_pending_delete.pop(item,None);self._hybrid_items.pop(item,None)
+            return {'type':'conversation.item.truncated','item_id':item,'content_index':0,'audio_end_ms':0}
+        if kind in ('response.output_item.added','response.output_item.done'):
+            active=self._hybrid_active;item=event.get('item')
+            if (active is None or event.get('response_id')!=active['response_id'] or
+                type(event.get('output_index')) is not int or event['output_index']!=0 or not isinstance(item,dict) or
+                item.get('type')!='message' or item.get('role')!='assistant'):
+                raise ValueError('hybrid_item_invalid')
+            item_id=item.get('id')
+            if not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id):
+                raise ValueError('hybrid_item_invalid')
+            if active['item_id'] not in (None,item_id):raise ValueError('hybrid_item_invalid')
+            if kind.endswith('.done'):
+                if active['item_id']!=item_id:raise ValueError('hybrid_item_invalid')
+                if not active['cancelled']:
+                    content=item.get('content')
+                    if (item.get('status')!='completed' or not isinstance(content,list) or len(content)!=1 or
+                        not isinstance(content[0],dict) or content[0].get('type')!='output_text' or
+                        not isinstance(content[0].get('text'),str) or
+                        hashlib.sha256(content[0]['text'].encode('utf-8')).digest()!=active['text_digest'].digest()):
+                        raise ValueError('hybrid_text_mismatch')
+                    active['item_verified']=True
+                return None
+            if active['item_id'] is not None:raise ValueError('hybrid_item_invalid')
+            active['item_id']=item_id;self._hybrid_items[item_id]=active['response_id']
+            if len(self._hybrid_items)>1024:raise ValueError('hybrid_item_limit')
+            return {'type':kind,'response_id':active['response_id'],
+                    'item':{'type':'message','role':'assistant','id':item_id}}
+        if kind in ('response.content_part.added','response.content_part.done',
+                    'response.output_text.delta','response.output_text.done'):
+            active=self._hybrid_active
+            if (active is None or event.get('response_id')!=active['response_id'] or
+                event.get('item_id')!=active['item_id'] or active['item_id'] is None or
+                type(event.get('output_index')) is not int or event['output_index']!=0 or
+                type(event.get('content_index')) is not int or event['content_index']!=0):
+                raise ValueError('hybrid_text_event_invalid')
+            if kind=='response.output_text.delta':
+                text=event.get('delta')
+                from tenant_operator_elevenlabs_voice import MAX_DELTA_CHARS
+                if not isinstance(text,str) or not text or len(text)>MAX_DELTA_CHARS or active['text_done']:
+                    raise ValueError('hybrid_text_event_invalid')
+                if not active['cancelled']:
+                    active['text_digest'].update(text.encode('utf-8'))
+                    if active['stream'] is None:
+                        stream=self._stream_factory(self.guard,self._tts_loader,active['epoch'],
+                                                    self._hybrid_current,self._hybrid_emit)
+                        active['stream']=stream.start();self._hybrid_streams.append(stream)
+                    active['stream'].feed(text)
+            elif kind=='response.output_text.done':
+                if active['text_done']:raise ValueError('hybrid_text_event_invalid')
+                final=event.get('text')
+                if (not active['cancelled'] and
+                    (not isinstance(final,str) or hashlib.sha256(final.encode('utf-8')).digest()!=active['text_digest'].digest())):
+                    raise ValueError('hybrid_text_mismatch')
+                active['text_done']=True
+                if active['stream'] is not None and not active['cancelled']:active['stream'].finish_input()
+            return None
+        if kind=='response.done':
+            active=self._hybrid_active;response=event.get('response')
+            if active is None or not isinstance(response,dict) or response.get('id')!=active['response_id']:
+                raise ValueError('hybrid_response_mismatch')
+            if active['response_done'] is not None:raise ValueError('hybrid_response_mismatch')
+            output=response.get('output',[])
+            if (not isinstance(output,list) or len(output)>1 or
+                any(not isinstance(item,dict) or item.get('type')!='message' or
+                    item.get('role')!='assistant' or item.get('id')!=active['item_id'] for item in output)):
+                raise ValueError('provider_item_forbidden')
+            safe={'id':active['response_id'],'status':response.get('status'),
+                  'output':[{'type':'message','role':'assistant'} for _ in output],
+                  'usage':response.get('usage')}
+            details=response.get('status_details')
+            if isinstance(details,dict):safe['status_details']={'type':details.get('type'),'reason':details.get('reason')}
+            active['response_done']={'type':'response.done','response':safe}
+            if response.get('status')!='completed':self._cancel_hybrid_response()
+            elif not active['cancelled'] and (active['stream'] is None or not active['text_done'] or not active['item_verified']):
+                raise ValueError('tts_text_unconfirmed')
+            elif not active['cancelled'] and len(output)!=1:
+                raise ValueError('tts_text_unconfirmed')
+            self._hybrid_finish_if_ready()
+            return None
+        if kind in ('conversation.item.added','conversation.item.done'):
+            item=event.get('item')
+            if isinstance(item,dict) and item.get('role')=='assistant':
+                if item.get('id') not in self._hybrid_items:raise ValueError('hybrid_item_invalid')
+                return None
+        if kind in ('response.output_audio.delta','response.output_audio.done',
+                    'response.output_audio_transcript.delta','response.output_audio_transcript.done'):
+            raise ValueError('hybrid_event_forbidden')
+        if kind in ('conversation.created','rate_limits.updated'):return None
+        return event
+
+    def _handle_hybrid_tts(self,event):
+        kind,epoch,payload=event
+        active=self._hybrid_active
+        if active is None or active['epoch']!=epoch:return
+        if kind=='audio':
+            if active['cancelled']:return
+            if active['item_id'] is None:raise ValueError('hybrid_item_invalid')
+            active['audio_seen']=True
+            self._hybrid_ready.append({'type':'response.output_audio.delta','response_id':active['response_id'],
+                                       'item_id':active['item_id'],'content_index':0,'delta':payload})
+        elif kind in ('done','cancelled'):
+            if kind=='cancelled' and not active['cancelled']:raise ValueError('tts_provider_error')
+            active['tts_done']=True;self._hybrid_finish_if_ready()
+        else:
+            raise ValueError(payload if payload in ('tts_provider_error','tts_close_unconfirmed','tts_timeout') else 'tts_provider_error')
+
+    async def receive(self):
+        if not self.ready:raise ValueError('session_not_ready')
+        while True:
+            if self._hybrid_ready and (self._hybrid_openai_task is None or not self._hybrid_openai_task.done()):
+                return self._hybrid_ready.popleft()
+            if self._hybrid_openai_task is None:self._hybrid_openai_task=asyncio.create_task(super().receive())
+            if self._hybrid_tts_task is None:self._hybrid_tts_task=asyncio.create_task(self._hybrid_events.get())
+            done,_=await asyncio.wait({self._hybrid_openai_task,self._hybrid_tts_task},return_when=asyncio.FIRST_COMPLETED)
+            # Give newly observed VAD priority over queued TTD chunks.
+            if self._hybrid_openai_task in done:
+                event=await self._hybrid_openai_task;self._hybrid_openai_task=None
+                mapped=await self._handle_hybrid_openai(event)
+                if mapped is not None:return mapped
+            if self._hybrid_tts_task in done:
+                event=await self._hybrid_tts_task;self._hybrid_tts_task=None
+                self._handle_hybrid_tts(event)
+
+    async def close(self):
+        if self._hybrid_close_task is None:self._hybrid_close_task=asyncio.create_task(self._close_hybrid())
+        await asyncio.shield(self._hybrid_close_task)
+
+    async def _close_hybrid(self):
+        self._hybrid_closing=True;self._cancel_hybrid_response()
+        for stream in self._hybrid_streams:stream.cancel_now()
+        # Drain a bounded queue so a completing reader cannot hold cleanup.
+        while not self._hybrid_events.empty():self._hybrid_events.get_nowait()
+        readers=[task for task in (self._hybrid_openai_task,self._hybrid_tts_task) if task is not None]
+        for task in readers:
+            if not task.done():task.cancel()
+        cleanup=[stream.wait_closed() for stream in self._hybrid_streams]
+        cleanup.extend(readers)
+        cleanup.append(super().close())
+        results=await asyncio.gather(*cleanup,return_exceptions=True)
+        stream_count=len(self._hybrid_streams)
+        # Reader errors are drained above, but do not mean a transport is
+        # still open: only the corresponding close operations can prove that.
+        if (any(isinstance(result,BaseException) for result in results[:stream_count]) or
+            isinstance(results[-1],BaseException)):
+            raise ValueError('tts_close_unconfirmed')
+
+
+class SyntheticHybridRealtimeWire(_HybridRealtimeMixin,_RealtimeWire):
+    mock_only=True
+    def __init__(self,socket,guard,loader,stream_factory):
+        if getattr(socket,'synthetic_only',None) is not True:raise ValueError('synthetic_socket_required')
+        super().__init__(socket,guard,output_modality='text')
+        self._init_hybrid(loader,stream_factory)
+
+
+class HybridOpenAIRealtimeProvider(_HybridRealtimeMixin,OpenAIRealtimeProvider):
+    """Server-only OpenAI input/text with ElevenLabs voice synthesis."""
+    mock_only=False
+    def __init__(self,credential_loader,claim_guard,ttd_loader):
+        from tenant_operator_elevenlabs_voice import ElevenTTDStream
+        super().__init__(credential_loader,claim_guard,output_modality='text')
+        self._init_hybrid(ttd_loader,ElevenTTDStream)
+
+
+def create_hybrid_pilot_provider(policy,credential_loader,ttd_loader):
+    from tenant_operator_voice_pilot import PilotAdmission
+    from tenant_operator_voice_orchestration import ServerCredentialLoader
+    from tenant_operator_elevenlabs_voice import ElevenServerCredentialLoader
+    if (type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader or
+        type(ttd_loader) is not ElevenServerCredentialLoader or policy.authority is not credential_loader.authority or
+        policy.authority is not ttd_loader.authority or
+        getattr(policy.lease,'provider_kind',None)!='openai_elevenlabs_tts'):
+        raise ValueError('trusted_provider_dependencies_required')
+    return HybridOpenAIRealtimeProvider(credential_loader.load,policy,ttd_loader)

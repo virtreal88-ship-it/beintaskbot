@@ -31,6 +31,13 @@ _SAFE_FAILURE_CODES=frozenset({
     'provider_audio_base64_invalid','provider_audio_chunk_invalid','provider_audio_output_limit',
     'input_turn_queue_full','multiple_commits_for_input_turn','assistant_item_response_conflict',
     'audio_after_completion','overlapping_output_items','session_output_limit',
+    'tts_provider_error','tts_close_unconfirmed','tts_timeout','tts_empty_response',
+    'hybrid_unsolicited_response','hybrid_response_mismatch','hybrid_item_invalid',
+    'hybrid_text_event_invalid','hybrid_response_overlap','hybrid_truncate_invalid',
+    'hybrid_delete_unexpected','hybrid_item_limit',
+    'hybrid_text_mismatch','tts_text_unconfirmed',
+    'tts_audio_invalid','tts_input_backlog','tts_text_invalid',
+    'hybrid_event_forbidden',
 })
 _SAFE_FAILURE_STAGES=frozenset({'provider_receive','provider_event'})
 _SAFE_PROVIDER_EVENT_TYPES=frozenset({
