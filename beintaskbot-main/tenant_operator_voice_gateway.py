@@ -178,21 +178,43 @@ def _startup_failure_code(exc, session, session_ready):
 
 
 class SocketClient:
-    def __init__(self, ws, activity=None): self.ws=ws; self.activity=activity
+    def __init__(self, ws, activity=None):
+        self.ws=ws;self.activity=activity;self.close_task=None;self.terminal_sent=False
+
+    @staticmethod
+    def _consume_close(task):
+        try:task.exception()
+        except BaseException:pass
+
+    def start_close(self):
+        if self.close_task is None:
+            self.close_task=asyncio.create_task(self.ws.close())
+            self.close_task.add_done_callback(self._consume_close)
+        return self.close_task
+
+    async def close(self):
+        await asyncio.shield(self.start_close())
+
     async def send(self, event):
+        terminal=event.get('type') in ('ended','end_unconfirmed')
+        if self.terminal_sent:
+            if terminal:return
+            raise ConnectionError('voice_socket_closed')
         if event.get('type') == 'audio':
             event={'type':'audio','item_id':event['item_id'],
                    'pcm_base64':base64.b64encode(event['pcm']).decode('ascii')}
         if self.ws.closed:
-            if event.get('type') in ('ended','end_unconfirmed'):
-                return  # already disconnected; no client notification possible
             raise ConnectionError('voice_socket_closed')
-        await self.ws.send_json(event)
+        try:await self.ws.send_json(event)
+        except Exception:
+            if terminal:self.start_close()
+            raise
         if isinstance(self.activity,dict):
             if event.get('type')=='audio':self.activity['audio_frames_ws_sent']+=1
             elif event.get('type')=='interrupt':self.activity['interrupt_notices_sent']+=1
-        if event.get('type') in ('ended','end_unconfirmed'):
-            await self.ws.close()
+        if terminal:
+            self.terminal_sent=True
+            self.start_close()
 
 
 def make_handler(*, allowed_origins, authenticate, build_session):
@@ -224,8 +246,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         activity.update(client_reader_exit='unavailable',client_close_code=None,
                         client_transport_kind='none',client_end_received=False)
         session_ready=False
+        socket_client=SocketClient(ws,activity)
         try:
-            session=build_session(scope, SocketClient(ws,activity))
+            session=build_session(scope, socket_client)
             async def read_frames():
                 count=0;window=time.monotonic()
                 try:
@@ -261,7 +284,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     activity['client_transport_kind']=_safe_client_transport_kind(ws.exception())
                     if activity['client_reader_exit']=='unavailable':activity['client_reader_exit']='stream_ended'
                     await session.end('disconnected')
-                    await ws.close()
+                    socket_client.start_close()
                     while incoming.full(): incoming.get_nowait()
                     incoming.put_nowait(None)
             # A dedicated single reader detects disconnect even while open is
@@ -303,7 +326,7 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     if not _expected_close_after_session_end(session,exc):
                         _log_provider_failure(stage,event,exc)
                     if not session.closed:await session.end('provider_disconnected')
-                    await ws.close()
+                    socket_client.start_close()
             if callable(getattr(session.provider,'receive',None)):
                 provider_reader=asyncio.create_task(read_provider())
             session_ready=True
@@ -361,7 +384,6 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                 if session is not None:
                     await session.end('disconnected')
             finally:
-                await ws.close()
                 if reader is not None:
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
@@ -372,6 +394,9 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                     # unless its receive lock and socket were drained.
                     done,pending=await asyncio.wait({provider_reader},timeout=.5)
                     for task in pending:task.add_done_callback(session._consume_task)
-            _log_voice_activity(session_ready,activity)
+                try:
+                    await socket_client.close()
+                finally:
+                    _log_voice_activity(session_ready,activity)
         return ws
     return handler
