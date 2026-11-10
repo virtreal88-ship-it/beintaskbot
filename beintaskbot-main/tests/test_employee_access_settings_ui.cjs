@@ -46,7 +46,7 @@ assert.equal(form.querySelector('[data-permission][value=tasks]'),null);
    assert.equal(b.d.querySelector('[data-native-operation=view]').hidden,false);assert.equal(b.d.getElementById('nativeDealCreate').hidden,true);
    assert.equal(b.d.querySelector('[data-app-instructions]').dataset.pageHidden,'true');
    assert.equal(b.d.querySelector('[data-app-open=settings]').dataset.pageHidden,'true');
-   b.f.profile.capabilities.pages.tasks=false;b.w.tenantRequestCoordinator.reset();await b.w.tenantReloadProfile();await settle();
+   b.f.profile.capabilities.pages.tasks=false;b.f.profile.capabilities.page_visibility={tasks:false};b.w.tenantRequestCoordinator.reset();await b.w.tenantReloadProfile();await settle();
    assert.equal(b.d.querySelector('.nav [data-view=tasks]').hidden,true);assert.equal(b.w.tenantAppNavigate('tasks'),false);
    b.w.history.pushState({},'','/app?view=tasks');b.w.dispatchEvent(new b.w.PopStateEvent('popstate'));await settle();
    assert(!b.d.getElementById('view-tasks').classList.contains('active'),'Hidden deep-link cannot bypass preference');
@@ -54,6 +54,14 @@ assert.equal(form.querySelector('[data-permission][value=tasks]'),null);
    const task=b.d.querySelector('.nav [data-view=tasks]');task.hidden=false;task.style.display='';await settle();assert(task.hidden,'Late module controller cannot resurrect hidden page');
    b.d.getElementById('view-tasks').classList.add('active');await settle();assert(!b.d.getElementById('view-tasks').classList.contains('active'),'Direct late activation is blocked');
    const dynamic=b.d.createElement('button');dynamic.dataset.view='ai_testing';b.d.querySelector('.nav').append(dynamic);await settle();assert.equal(dynamic.dataset.pageHidden,'true');
+   b.f.profile.capabilities.pages.employees=false;b.f.profile.capabilities.can_manage_employees=false;
+   b.w.tenantRequestCoordinator.reset();await b.w.tenantReloadProfile();await settle();
+   const beforeReads=b.f.calls.filter(call=>call.path==='/api/platform/members').length;
+   assert.equal(b.w.tenantAppNavigate('employees'),true,'Unavailable employee route retains its explanatory shell');await settle();
+   assert.equal(b.d.getElementById('employeesAccessNotice').hidden,false);
+   assert.equal(b.d.getElementById('staffManagement').hidden,true);
+   assert.equal(b.d.querySelector('.nav [data-view=employees]').hidden,true);
+   assert.equal(b.f.calls.filter(call=>call.path==='/api/platform/members').length,beforeReads,'Denied shell must not load employee data');
    assert.equal(b.errors.length,0,b.errors.join('\n'));
   }finally{b.close()}
  }

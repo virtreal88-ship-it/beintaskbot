@@ -203,9 +203,10 @@ class TenantPolicy:
                     (self.policies.get('deal_completion') or {}).get('requires_admin', False)))
 
     def public_capabilities(self) -> dict:
-        from tenant_member_access import page_capabilities, action_capabilities
+        from tenant_member_access import page_capabilities, action_capabilities, page_visibility
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
                 'pages': page_capabilities(self.profile),
+                'page_visibility': page_visibility(self.profile),
                 'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
                 'chat_ai': self.can_use_chat_ai(),

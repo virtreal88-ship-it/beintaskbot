@@ -50,6 +50,24 @@ def test_hidden_page_does_not_change_permissions_or_action_authority():
     assert page_capabilities(with_result(changed, inherited))['tasks'] is True
 
 
+def test_public_visibility_only_exposes_own_sanitized_preferences():
+    person = profile(permissions=[])
+    person['workflow']['policies']['members']['20'].update({
+        'page_visibility': {'tasks': False, 'customers': True, 'profile': False,
+                            'invented': True, 'employees': 1},
+        'private_other_setting': 'not-public'})
+    person['workflow']['policies']['members']['21'] = {'page_visibility': {'deals': False}}
+    caps = TenantPolicy(person).public_capabilities()
+    assert caps['page_visibility'] == {'tasks': False, 'customers': True}
+    assert not caps['pages']['tasks']
+    assert not caps['pages']['customers']
+    assert 'workflow' not in caps
+    assert TenantPolicy({**person, 'role': 'owner'}).public_capabilities()['page_visibility'] == {}
+    denied = TenantPolicy(profile(permissions=[])).public_capabilities()
+    assert denied['page_visibility'] == {}
+    assert not denied['pages']['tasks']
+
+
 def test_instructions_catalog_visibility_requires_member_not_ai_management():
     person = profile(permissions=[], modules={})
     assert page_capabilities(person)['instructions']
@@ -155,6 +173,7 @@ def test_explicit_native_view_without_any_grants_is_navigable_but_not_external()
 @pytest.mark.parametrize('module', ['tasks', 'deals', 'customers'])
 def test_native_view_disabled_preserves_external_page_until_explicitly_hidden(module):
     person = profile(role='manager', permissions=[module], modules={module: True})
+    person['workflow']['pipelines'] = [{'pipeline_id': 10, 'owner_telegram_id': 20, 'active': True}]
     changed = with_result(person, apply_access_patch(person, {'actions': {module: {'view': False}}}))
     assert TenantPolicy(changed).allows(module)
     assert not TenantPolicy(changed).allows_action(module, 'view')
@@ -164,6 +183,39 @@ def test_native_view_disabled_preserves_external_page_until_explicitly_hidden(mo
     hidden = with_result(changed, apply_access_patch(changed, {'pages': {module: False}}))
     assert not page_capabilities(hidden)[module]
     assert TenantPolicy(hidden).allows(module)
+
+
+def test_deals_only_admin_with_scope_sees_kommo_contacts_without_native_rights():
+    person = profile(role='admin', permissions=['deals'], modules={'deals': True, 'customers': True})
+    person['workflow']['pipelines'] = [{'pipeline_id': 10, 'active': True}]
+    policy = TenantPolicy(person)
+    assert policy.pipeline_scope()
+    assert page_capabilities(person)['customers']
+    assert not page_capabilities(person)['companies']
+    assert not any(action_capabilities(person)['customers'].values())
+    assert not policy.allows('customers')
+    hidden = with_result(person, apply_access_patch(person, {'pages': {'customers': False}}))
+    assert not page_capabilities(hidden)['customers']
+    assert TenantPolicy(hidden).allows('deals')
+    assert hidden['permissions'] == ['deals']
+
+
+def test_deals_only_contacts_prerequisite_requires_pipeline_scope():
+    person = profile(role='admin', permissions=['deals'], modules={'deals': True})
+    assert not page_capabilities(person)['customers']
+    version = access_snapshot(person)['version']
+    person['workflow']['pipelines'] = [{'pipeline_id': 10, 'active': True}]
+    assert page_capabilities(person)['customers']
+    assert access_snapshot(person)['version'] != version
+    person['workflow']['pipelines'][0]['active'] = False
+    assert not page_capabilities(person)['customers']
+
+
+def test_customers_only_legacy_grant_can_open_shared_kommo_deals_feed():
+    person = profile(role='manager', permissions=['customers'], modules={'customers': True})
+    assert page_capabilities(person)['deals']
+    assert not any(action_capabilities(person)['deals'].values())
+    assert not TenantPolicy(person).allows('deals')
 
 
 def test_native_overrides_are_member_specific_and_sparse():

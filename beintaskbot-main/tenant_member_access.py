@@ -52,6 +52,11 @@ def _visibility(policy):
             } if isinstance(value, dict) else {}
 
 
+def page_visibility(profile):
+    """Expose only this member's navigation preferences, never workflow data."""
+    return {} if profile.get('role') == 'owner' else _visibility(_policy(profile))
+
+
 def page_capabilities(profile, *, ignore_visibility=False):
     policy = _policy(profile)
     active = profile.get('active') is not False
@@ -62,6 +67,13 @@ def page_capabilities(profile, *, ignore_visibility=False):
     # modules: those also enable Kommo actions and assignee admission.
     for module in ACTION_MODULES:
         pages[module] = bool(modules[module] or policy.allows_action(module, 'view'))
+    # Kommo's contact directory accepts either CRM grant, but only with an
+    # actual pipeline scope. Its shared deal feed likewise accepts either
+    # grant; native CRUD authority remains entirely source-specific.
+    external_crm = bool(modules['deals'] or modules['customers'])
+    pages['customers'] = bool(policy.allows_action('customers', 'view')
+                              or (external_crm and policy.pipeline_scope()))
+    pages['deals'] = bool(policy.allows_action('deals', 'view') or external_crm)
     pages['companies'] = policy.allows_action('customers', 'view')
     pages['employees'] = policy.allows_action('employees', 'manage')
     pages['approvals'] = role in {'owner', 'admin'} and any(
@@ -122,6 +134,7 @@ def access_snapshot(profile):
         'permissions': sorted(str(item) for item in permissions),
         'modules': profile.get('modules') or {},
         'policy_modules': policy.policies.get('modules'),
+        'pipeline_scope': policy.pipeline_scope(),
         'ai_agents_manage': policy.member_settings.get('ai_agents_manage'),
         'page_visibility': visibility,
         'native_crm_actions': _native_actions(policy),

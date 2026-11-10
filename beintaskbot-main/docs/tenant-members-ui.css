@@ -1,1 +1,51 @@
 #staffManagement{margin:0 0 18px}.staff-head{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:14px}.staff-head h2{margin:0}.staff-head p{margin:4px 0 0;color:var(--muted)}.staff-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:12px}.staff-tabs button{padding:9px 12px;background:transparent;color:var(--muted);font-weight:650;border-bottom:2px solid transparent}.staff-tabs button[aria-selected=true]{color:var(--brand-deep);border-bottom-color:var(--brand)}.staff-table{display:grid;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)}.staff-row{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(160px,1.2fr) minmax(95px,.6fr) minmax(130px,.8fr) minmax(105px,.6fr) minmax(95px,.5fr) auto;gap:10px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}.staff-row:last-child{border:0}.staff-row.head{font-size:12px;color:var(--muted);font-weight:700;background:var(--paper)}.staff-person{min-width:0}.staff-person b,.staff-person small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.staff-person small{color:var(--muted)}.staff-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}.staff-actions button{padding:7px 9px}.staff-modal .modal-card{width:min(760px,100%);max-height:calc(100dvh - 32px);overflow:auto}.staff-modal .grid{grid-template-columns:1fr 1fr}.staff-modal label{display:grid;gap:6px;margin:10px 0;font-weight:650}.staff-modal input,.staff-modal select{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink)}.staff-modal .full{grid-column:1/-1}.staff-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.staff-number-row{display:grid;grid-template-columns:minmax(140px,1fr) auto auto;gap:8px;align-items:center;margin:8px 0}.staff-status{display:inline-flex;width:max-content;padding:3px 8px;border-radius:99px;background:var(--paper);font-size:12px}.staff-status.active{color:var(--brand-deep)}.staff-status.inactive{color:var(--danger)}.staff-empty{padding:28px;text-align:center;color:var(--muted)}body.staff-modal-open{overflow:hidden}@media(max-width:900px){.staff-row{grid-template-columns:1.2fr 1fr auto}.staff-row>*:nth-child(4),.staff-row>*:nth-child(5){display:none}.staff-row.head>*:nth-child(4),.staff-row.head>*:nth-child(5){display:none}}@media(max-width:600px){.staff-head{align-items:stretch;flex-direction:column}.staff-head .primary{width:100%}.staff-row{grid-template-columns:1fr auto;padding:12px}.staff-row.head{display:none}.staff-row>.staff-email,.staff-row>.staff-role,.staff-row>.staff-numbers,.staff-row>.staff-login{display:none}.staff-actions{grid-column:1/-1;justify-content:stretch}.staff-actions button{flex:1}.staff-modal{padding:10px}.staff-modal .grid{grid-template-columns:1fr}.staff-modal .full{grid-column:auto}.staff-number-row{grid-template-columns:1fr auto}.staff-number-row label{grid-column:1/-1;margin:0!important}.staff-tabs{overflow:auto}.staff-tabs button{white-space:nowrap}}
+
+/* Employee tabs own their layout; generic modal/grid labels must not stretch it. */
+#staffMemberModal .modal-card:has(.staff-tabbed-form){display:flex;flex-direction:column;width:min(880px,100%);height:min(850px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);overflow:hidden;padding:0}
+#staffMemberModal .modal-card:has(.staff-tabbed-form)>.modal-head{flex:none;margin:0;padding:14px 20px;border-bottom:1px solid var(--line)}
+#staffMemberModal #staffModalBody:has(.staff-tabbed-form){display:flex;flex:1;min-height:0;overflow:hidden}
+#staffMemberModal .staff-tabbed-form{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden;margin:0}
+#staffMemberModal .staff-tabbed-form>.staff-tabs{flex:none;gap:2px;margin:0;padding:0 12px;overflow-x:auto;scrollbar-width:thin}
+#staffMemberModal .staff-tabs button{flex:none;white-space:nowrap;padding:12px 10px}
+#staffMemberModal .staff-tab-panel{flex:1;min-height:0;overflow:auto;padding:16px 20px;overscroll-behavior:contain}
+#staffMemberModal .staff-tab-panel[hidden]{display:none!important}
+#staffMemberModal .staff-section{margin:0 0 16px;padding:0;min-width:0}
+#staffMemberModal .staff-section:last-child{margin-bottom:0}
+#staffMemberModal h3,#staffMemberModal h4,#staffMemberModal summary{margin:0 0 10px;font-size:14px;line-height:1.4;font-weight:650}
+#staffMemberModal .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;align-items:start}
+#staffMemberModal label{display:flex;flex-direction:column;align-items:stretch;gap:4px;margin:0;min-width:0;font-size:13px;font-weight:550;line-height:1.4}
+#staffMemberModal input:not([type=checkbox]),#staffMemberModal select{min-width:0;width:100%;min-height:36px;padding:7px 10px;font-size:13px;box-sizing:border-box}
+#staffMemberModal small,#staffMemberModal .sub{min-width:0;white-space:normal;overflow:visible;text-overflow:clip;font-size:11px;line-height:1.4;font-weight:400}
+#staffMemberModal small:empty,#staffMemberModal p:empty{display:none}
+#staffMemberModal .sub{margin:4px 0 10px}
+#staffMemberModal label>.sub{margin:0}
+#staffMemberModal label.staff-right{display:flex;flex-direction:row;align-items:center;gap:8px;padding:5px 0}
+#staffMemberModal input[type=checkbox]{flex:none;width:16px!important;height:16px;min-height:0!important;padding:0!important;margin:0;align-self:center}
+#staffMemberModal label:has(>input[name=active]){display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;column-gap:6px}
+#staffMemberModal label:has(>input[name=active])>input{grid-column:1;grid-row:1}
+#staffMemberModal label:has(>input[name=active])>small{grid-column:2}
+#staffMemberModal fieldset{min-width:0;margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px}
+#staffMemberModal legend{padding:0 4px;font-size:13px;font-weight:650}
+#staffMemberModal [data-access-operations]>fieldset:not(.staff-rights){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+#staffMemberModal [data-access-operations]>fieldset:not(.staff-rights)>label{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px;text-align:center;font-size:12px;padding:4px 0}
+#staffMemberModal fieldset.staff-rights{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}
+#staffMemberModal .staff-right span{min-width:0}
+#staffMemberModal .staff-right small{display:block;margin-top:2px}
+#staffMemberModal [data-access-pages]>.grid{grid-template-columns:1fr;gap:0}
+#staffMemberModal [data-access-pages]>.grid>label{display:grid;grid-template-columns:minmax(0,1fr) minmax(170px,220px);gap:2px 14px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+#staffMemberModal [data-access-pages] select{grid-column:2;grid-row:1/3}
+#staffMemberModal [data-access-pages] [data-access-hint]{grid-column:1;grid-row:2;margin:0}
+#staffMemberModal .staff-tabbed-form>.staff-modal-actions{position:sticky;bottom:0;flex:none;display:flex;justify-content:flex-end;gap:8px;margin:0;padding:12px 20px;border-top:1px solid var(--line);background:var(--app-surface,var(--card,#fff));z-index:2}
+#staffMemberModal .staff-tabbed-form>#staffSaveError:not(:empty),#staffMemberModal .staff-tabbed-form>#staffConflict:not(:empty),#staffMemberModal .staff-tabbed-form>#staffErrorDetails{flex:none;margin:4px 20px;max-height:90px;overflow:auto}
+@media(max-width:600px){
+ #staffMemberModal .modal-card:has(.staff-tabbed-form){height:calc(100dvh - 24px);max-height:calc(100dvh - 24px)}
+ #staffMemberModal .modal-card:has(.staff-tabbed-form)>.modal-head{padding:10px 14px}
+ #staffMemberModal .staff-tab-panel{padding:12px 14px}
+ #staffMemberModal .grid{grid-template-columns:minmax(0,1fr);gap:10px}
+ #staffMemberModal fieldset.staff-rights{grid-template-columns:1fr}
+ #staffMemberModal [data-access-pages]>.grid>label{grid-template-columns:minmax(0,1fr) minmax(120px,47%);gap:2px 8px;padding:8px 0}
+ #staffMemberModal [data-access-pages] select{font-size:11px;padding:6px;min-height:34px}
+ #staffMemberModal [data-access-pages] [data-access-hint]{font-size:10px;line-height:1.3}
+ #staffMemberModal .staff-tabbed-form>.staff-modal-actions{padding:10px 14px;gap:6px}
+ #staffMemberModal .staff-modal-actions button{padding:8px 10px;font-size:12px}
+}

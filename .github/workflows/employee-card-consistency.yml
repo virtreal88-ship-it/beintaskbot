@@ -105,6 +105,7 @@ jobs:
           node tests/test_employee_card_ui.cjs
           node tests/test_employee_settings_ui.cjs
           node tests/test_employee_access_settings_ui.cjs
+          node tests/test_employee_card_layout.cjs
           node tests/test_tenant_workflow_ui.cjs
           node tests/test_tenant_linear_employee_settings.cjs
           node tests/test_tenant_linear_settings.cjs

@@ -179,6 +179,17 @@ assert(origin && mode && width && login && tenantA && tenantB);
       if(process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR){
         for(const tab of ['details','rights','settings']){
           await form.locator('[data-staff-pane-tab='+tab+']').click();
+          const layout=await form.evaluate((node,tab)=>{
+            const footer=node.querySelector('.staff-modal-actions').getBoundingClientRect();
+            const panel=node.querySelector('[data-staff-pane="'+tab+'"]');
+            const boxes=[...panel.querySelectorAll('[data-access-operations]>fieldset:not(.staff-rights)')].map(group=>[...group.querySelectorAll('input')].map(input=>{const r=input.getBoundingClientRect();return {x:r.x,y:r.y}}));
+            const pageHeights=[...panel.querySelectorAll('[data-access-page]')].map(input=>input.closest('label').getBoundingClientRect().height);
+            return {footer:{top:footer.top,bottom:footer.bottom},height:innerHeight,overflow:node.scrollWidth>node.clientWidth+1,boxes,pageHeights};
+          },tab);
+          assert(!layout.overflow,'Employee tab fits viewport');
+          assert(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'Save footer remains visible on every tab');
+          for(const boxes of layout.boxes){assert.equal(boxes.length,4);assert(Math.max(...boxes.map(box=>box.y))-Math.min(...boxes.map(box=>box.y))<3,'Native CRUD is one compact checkbox row');assert(new Set(boxes.map(box=>Math.round(box.x))).size===4);}
+          assert(layout.pageHeights.every(height=>height<110),'Page preferences stay compact');
           await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-'+tab+'-'+width+'-'+language+'.png'});
         }
       }
@@ -190,6 +201,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-permission][value=support]').check();
       await form.locator('[data-permission][value=finance]').check();
       await form.locator('[data-staff-pane-tab=settings]').click();
+      if(!(await form.locator('details.staff-section').evaluate(node=>node.open)))await form.locator('details.staff-section > summary').click();
       await form.locator('[data-work-setting=completion_requires_admin]').selectOption('true');
       await form.locator('[data-work-event=task_assigned][data-work-channel=push]').check();
       assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Expanded settings fit viewport');
@@ -211,6 +223,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-staff-pane-tab=settings]').click();
       assert.equal(await form.locator('[data-work-setting=completion_requires_admin]').inputValue(), 'true');
       assert.equal(await form.locator('[data-work-event=task_assigned][data-work-channel=push]').isChecked(), true);
+      await form.locator('[data-staff-pane-tab=details]').click();
       assert((await form.innerText()).includes('+994501231234'), 'Explicit WA binding is separate from contact phone');
       await page.evaluate(() => window.tenantReloadProfile());
       await page.keyboard.press('Escape');
