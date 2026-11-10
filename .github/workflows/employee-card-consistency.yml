@@ -13,6 +13,8 @@ on:
       - 'beintaskbot-main/tenant_member_settings.py'
       - 'beintaskbot-main/tenant_workflow_api.py'
       - 'beintaskbot-main/docs/tenant-workflow.js'
+      - 'beintaskbot-main/docs/tenant-linear-settings.js'
+      - 'beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs'
       - 'beintaskbot-main/tests/test_employee_settings*'
       - 'beintaskbot-main/tests/test_tenant_workflow*'
       - 'beintaskbot-main/tenant_members_api.py'
@@ -95,6 +97,8 @@ jobs:
           node tests/test_employee_card_ui.cjs
           node tests/test_employee_settings_ui.cjs
           node tests/test_tenant_workflow_ui.cjs
+          node tests/test_tenant_linear_employee_settings.cjs
+          node tests/test_tenant_linear_settings.cjs
           node tests/test_employee_account_assign_ui.cjs
           node tests/test_employee_profile_assign_ui.cjs
           node tests/test_company_employees_entry_ui.cjs

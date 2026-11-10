@@ -2,7 +2,7 @@
 (() => {
   const $=id=>document.getElementById(id);
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let profile, snapshot, generation=0, busy=false, catalogComplete=true;
+  let profile, snapshot, generation=0, busy=false, catalogComplete=true, employeeRows=[];
   async function api(params='',data) {
     const response=await fetch('/api/platform/linear/settings'+params,{credentials:'same-origin',cache:'no-store',
       ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});
@@ -10,11 +10,80 @@
     if(!response.ok||!result.success)throw new Error(result.error||'Ayarlar yüklənmədi.');
     return result;
   }
-  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on);if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;}
+  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on||input.dataset.tlReadonly==='true'||!!input.closest('[data-tl-blocked="true"]'));if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;}
   async function perform(work){if(busy)return;const current=generation;disable(true);$('tlMessage').textContent='Yüklənir…';
     try{await work(current);if(current===generation)$('tlMessage').textContent='Hazırdır.';}
     catch(error){if(current===generation)$('tlMessage').textContent=error.message;}
     finally{if(current===generation)disable(false);}}
+  const employeeEvents=new Set(['linear_done','linear_status_changed','proactive_risk']);
+  async function memberApi(data){
+    const response=await fetch('/api/platform/members',{credentials:'same-origin',cache:'no-store',
+      ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});
+    const result=await response.json();
+    if(!response.ok||!result.success)throw new Error(result.error||'Əməkdaş ayarları yüklənmədi.');
+    return result;
+  }
+  function employeeControls(row){
+    if(!row?.card_version)return '<p>Əməkdaş ayarlarını yükləmək üçün siyahını yeniləyin.</p>';
+    const grantEditable=row.role!=='owner'&&row.editable_fields?.includes('permission_changes');
+    const settingsEditable=row.editable_fields?.includes('work_settings')&&!!row.work_settings?.version;
+    const readonly=allowed=>allowed?'':'disabled data-tl-readonly="true"';
+    return `<div data-tl-employee="${esc(row.telegram_id)}"><h4>Linear girişi və şəxsi bildirişlər</h4>
+      <label style="display:flex"><input type="checkbox" style="width:auto" data-tl-grant ${readonly(grantEditable)} ${(row.permissions||[]).includes('linear')||row.role==='owner'?'checked':''}>Linear səhifəsinə giriş</label>
+      <p data-tl-partial hidden>Məhdud Linear icazələri saxlanılır. Dəyişmək bütün Linear səhifəsinə girişi dəyişir.</p>
+      ${(row.work_settings?.notifications||[]).filter(event=>employeeEvents.has(event.key)).map(event=>`<div><span>${esc(event.label)}</span> ${event.channels.map(channel=>`<label style="display:inline-flex"><input type="checkbox" style="width:auto" data-tl-event="${esc(event.key)}" data-tl-channel="${esc(channel)}" ${readonly(settingsEditable)} ${row.work_settings?.values?.notifications?.[event.key]?.[channel]===true?'checked':''}>${esc(channel)}</label>`).join('')}</div>`).join('')}
+      <button type="button" class="outline" data-tl-save ${readonly(grantEditable||settingsEditable)}>Bu əməkdaşın giriş və bildirişlərini saxla</button>
+      <p data-tl-result role="status" aria-live="polite"></p></div>`;
+  }
+  function bindEmployeeControls(root,row){
+    const grant=root.querySelector('[data-tl-grant]');
+    if(!grant)return;
+    grant.indeterminate=row.role!=='owner'&&!row.permissions?.includes('linear')&&(row.permissions||[]).some(key=>key.startsWith('linear:'));
+    root.querySelector('[data-tl-partial]').hidden=!grant.indeterminate;
+    grant.onchange=()=>{grant.dataset.touched='true';};
+    root.querySelector('[data-tl-save]').onclick=()=>saveEmployee(root,row);
+  }
+  function employeeChanges(root,row){
+    const changes={}, grant=root.querySelector('[data-tl-grant]');
+    if(grant.dataset.touched==='true'&&grant.dataset.tlReadonly!=='true'&&
+       (grant.checked!==(row.permissions||[]).includes('linear')||(row.permissions||[]).some(key=>key.startsWith('linear:')))) {
+      changes.permission_changes={linear:grant.checked};
+    }
+    const notifications={};
+    root.querySelectorAll('[data-tl-event]').forEach(input=>{
+      const event=input.dataset.tlEvent, channel=input.dataset.tlChannel;
+      if(input.dataset.tlReadonly==='true'||!employeeEvents.has(event))return;
+      if(input.checked!==(row.work_settings?.values?.notifications?.[event]?.[channel]===true)) {
+        (notifications[event]??={})[channel]=input.checked;
+      }
+    });
+    if(Object.keys(notifications).length)changes.work_settings={expected_version:row.work_settings.version,changes:{notifications}};
+    return changes;
+  }
+  async function saveEmployee(root,row){
+    if(busy||profile?.role!=='owner'||root.dataset.tlBlocked==='true'||!root.isConnected)return;
+    const changes=employeeChanges(root,row),message=root.querySelector('[data-tl-result]');
+    if(!Object.keys(changes).length){message.textContent='Dəyişiklik yoxdur.';return;}
+    const current=generation, identity=profile.identity;
+    const command={action:'update_member_card',telegram_id:row.telegram_id,expected_tenant_id:profile.tenant_id,
+      expected_user_id:profile.telegram_id,expected_version:row.card_version,changes};
+    const valid=()=>current===generation&&profile?.identity===identity&&root.isConnected;
+    disable(true);message.textContent='Saxlanılır…';let committed=false;
+    try{
+      const result=await memberApi(command);if(!valid())return;
+      const receipt=result.applied;
+      if(!receipt||String(receipt.telegram_id)!==String(row.telegram_id)||typeof receipt.card_version!=='string'||!receipt.card_version)throw new Error('Saxlama nəticəsi təsdiqlənmədi.');
+      committed=true;message.textContent='Saxlanıldı. Siyahı yenilənir…';
+      const fresh=await memberApi();if(!valid())return;
+      const updated=(fresh.members||[]).find(item=>String(item.telegram_id)===String(row.telegram_id));
+      if(!updated?.card_version)throw new Error('Əməkdaşın yeni ayarları yüklənmədi.');
+      employeeRows=employeeRows.map(item=>String(item.telegram_id)===String(row.telegram_id)?updated:item);
+      const wrapper=document.createElement('div');wrapper.innerHTML=employeeControls(updated);
+      const replacement=wrapper.firstElementChild;root.replaceWith(replacement);bindEmployeeControls(replacement,updated);
+      replacement.querySelector('[data-tl-result]').textContent='Giriş və bildirişlər saxlanıldı.';
+    }catch(error){if(valid()){root.dataset.tlBlocked='true';message.textContent=(committed?'Saxlanıldı, amma yeni ayarlar yüklənmədi. ':error.message+' ')+'Davam etmək üçün ayarları yenidən yükləyin.';}}
+    finally{if(current===generation&&profile?.identity===identity)disable(false);}
+  }
   function install(data){const next=data.member;
     const identity=next.tenant_id+':'+next.telegram_id+':'+next.role;
     if(profile?.identity===identity)return;
@@ -61,7 +130,7 @@
     catalogComplete=!(result.team.states.pageInfo.hasNextPage||result.team.projects.pageInfo.hasNextPage||result.team.members.pageInfo.hasNextPage);
     if(!catalogComplete)$('tlProjects').insertAdjacentHTML('beforeend','<p>İlk 50 seçim göstərilir. Ayarları itirməmək üçün saxlama dayandırılıb: böyük kataloq üçün genişləndirilmiş səhifələmə tələb olunur.</p>');
   }
-  async function load(current){const result=await api();if(current!==generation)return;snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
+  async function load(current){const [result, employees]=await Promise.all([api(),memberApi()]);if(current!==generation)return;employeeRows=employees.members||[];snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
     $('tlStatus').textContent=result.status==='connected'?(result.runtime_enabled?'Linear tapşırıqları aktivdir':'Linear qoşulub · iş qaydalarını aktiv edin'):'Linear qoşulmayıb';
     const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';$('tlNewsEnabled').checked=config.news?.enabled===true;
     $('tlMembers').innerHTML='<h3>Əməkdaşların Linear qaydaları</h3>'+result.members.map(member=>{
@@ -70,8 +139,9 @@
         ['account','operator'].map(field=>`<label>${field==='account'?'Account':'Operator'}<input data-field="${field}" value="${esc(binding[field]||'')}"></label>`).join('')+
         '<label>Linear icraçısı<select data-field="assignee_id"><option value="">Təyin edilməyib</option></select></label>'+
         [['can_view_all','Komandanın bütün tapşırıqlarını görmək'],['can_create','Tapşırıq yaratmaq'],['can_edit','Tapşırıq redaktəsi'],['can_change_status','Sərbəst status dəyişmək'],['can_review_news','Xəbərləri təsdiqləmək və dərc etmək']].map(([field,label])=>`<label style="display:flex"><input style="width:auto" type="checkbox" data-field="${field}" ${binding[field]?'checked':''}>${label}</label>`).join('')+
-        '<label>İcazəli keçid düymələri<select data-field="button_ids" multiple style="min-height:80px"></select></label><p>Linear səhifəsi şirkət modullarında və əməkdaşın səhifə icazələrində də açıq olmalıdır.</p></details>';
+        '<label>İcazəli keçid düymələri<select data-field="button_ids" multiple style="min-height:80px"></select></label><p>Linear səhifəsi şirkət modullarında və əməkdaşın səhifə icazələrində də açıq olmalıdır.</p>'+employeeControls(employeeRows.find(row=>String(row.telegram_id)===String(member.telegram_id)))+'</details>';
     }).join('');
+    $('tlMembers').querySelectorAll('[data-tl-employee]').forEach(root=>bindEmployeeControls(root,employeeRows.find(row=>String(row.telegram_id)===root.dataset.tlEmployee)));
     $('tlTeam').innerHTML='<option value="">Seçin</option>';$('tlStates').innerHTML='';$('tlProjects').innerHTML='';$('tlMore').hidden=true;
     window.TenantLinearRules.render(config,null);
     if(result.status==='connected'){await teams(current);if(current!==generation)return;

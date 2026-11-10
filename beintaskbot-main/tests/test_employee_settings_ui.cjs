@@ -1,11 +1,11 @@
 const assert=require('node:assert/strict');
 const {mount,settle,writes,edit,input,submit}=require('./employee_card_fixture.cjs');
-const settings={version:'settings-v1',values:{ai_enabled:false,hot_order_services:['gone'],notifications:{task_assigned:{push:false}}},defaults:{ai_enabled:false},services:[{id:'install',name:'Install',active:true}],notifications:[{key:'task_assigned',label:'Assigned',channels:['push','telegram']}]};
+const settings={version:'settings-v1',values:{ai_enabled:false,hot_order_services:['gone'],notifications:{task_assigned:{push:false}}},defaults:{ai_enabled:false},services:[{id:'install',name:'Install',active:true}],notifications:[{key:'task_assigned',label:'Assigned',channels:['push','telegram']},{key:'linear_done',label:'Linear',channels:['push','telegram']},{key:'proactive_risk',label:'Risk',channels:['push','internal']}]};
 const row={permission_modules:['finance','employees'],editable_fields:['display_name','role','permissions','active','whatsapp_numbers','permission_changes','work_settings'],work_settings:settings,explicit_permissions:['tasks','finance:manage','legacy:retained'],permissions:['tasks','finance:manage','legacy:retained']};
 (async()=>{
 for(const language of ['ru','az','en']){
  const b=await mount({role:'owner',language,row});try{
-  const form=edit(b);assert(form.querySelector('[data-permission][value=finance]'));assert(form.querySelector('[data-permission][value=employees]'));assert(!form.querySelector('[data-permission][value=linear]'));assert(form.querySelector('[data-work-setting=ai_enabled]'));
+  const form=edit(b);assert(form.querySelector('[data-permission][value=finance]'));assert(form.querySelector('[data-permission][value=employees]'));assert(!form.querySelector('[data-permission][value=linear]'));assert(form.querySelector('[data-work-setting=ai_enabled]'));assert(!form.querySelector('[data-work-event=linear_done]'));assert(!form.querySelector('[data-work-event=proactive_risk]'));
   submit(b,form);await settle();assert.equal(writes(b).length,0,'unchanged settings must not broaden partial grants');
   const ai=form.querySelector('[data-work-setting=ai_enabled]');ai.value='true';ai.dispatchEvent(new b.w.Event('change',{bubbles:true}));
   const notify=form.querySelector('[data-work-event=task_assigned][data-work-channel=push]');notify.checked=true;notify.dispatchEvent(new b.w.Event('change',{bubbles:true}));

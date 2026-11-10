@@ -41,7 +41,7 @@ def test_owner_edits_one_member_settings_without_replacing_others(cards):
     assert result['card_version']!=row['card_version']
     fresh=get(f);assert fresh['work_settings']['values']['completion_requires_admin'] is True
     assert 'pipeline_ids' not in fresh['work_settings']['values']
-    assert 'linear_done' not in fresh['work_settings']['values']['notifications']
+    assert fresh['work_settings']['values']['notifications']['linear_done']=={'push':True}
 
 
 def test_full_module_toggle_can_remove_existing_hidden_and_action_grants(cards):
@@ -73,7 +73,7 @@ def test_inherit_removes_only_selected_override(cards):
 
 
 @pytest.mark.parametrize('changes',[{'permission_changes':{'owner':True}}, {'permission_changes':{'tasks':1}},
-    {'permission_changes':{'linear':True}}, {'permission_changes':{'tasks':False},'permissions':[]},
+    {'permission_changes':{'unknown_provider':True}}, {'permission_changes':{'tasks':False},'permissions':[]},
     {'work_settings':{'expected_version':'x','changes':{'pipeline_ids':['10']}}}])
 def test_rejected_extra_scope(cards,changes):
     row=get(cards)
@@ -115,3 +115,16 @@ def test_settings_only_affect_selected_tenant(cards):
     with cards['factory']() as conn:
         assert conn.execute('SELECT * FROM saas_tenant_members WHERE tenant_id=%s',(B,)).fetchall()==before
         assert not conn.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s AND policy_key='members'",(B,)).fetchone()
+
+
+def test_linear_panel_can_update_only_selected_access_and_channels(cards):
+    seed(cards);row=get(cards)
+    apply(cards,row,{'permission_changes':{'linear':True}, 'work_settings':{
+        'expected_version':row['work_settings']['version'],
+        'changes':{'notifications':{'linear_done':{'push':False,'telegram':True}}}}})
+    fresh=get(cards)
+    assert 'linear' in fresh['explicit_permissions']
+    assert 'finance' in fresh['explicit_permissions']
+    assert policy(cards)['61']['notifications']['linear_done']=={'push':False,'telegram':True}
+    assert policy(cards)['61']['pipeline_ids']==['10']
+    assert policy(cards)['62']=={'ai_enabled':True}

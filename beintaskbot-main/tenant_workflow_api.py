@@ -43,7 +43,7 @@ def handlers(context: WorkflowApiContext) -> dict[str, Callable]:
                 data = await _object_body(request)
                 if 'members' in data or (isinstance(data.get('policies'), dict) and any(
                         str(key or '').strip()[:120] == 'members' for key in data['policies'])):
-                    raise ValueError("Əməkdaş ayarlarını Şirkət → Əməkdaşlar bölməsində dəyişin.")
+                    raise context.platform_error("Əməkdaş ayarlarını Şirkət → Əməkdaşlar bölməsində dəyişin.")
                 workflow = await asyncio.to_thread(
                     context.save_workflow,
                     tenant_id=tenant_id,

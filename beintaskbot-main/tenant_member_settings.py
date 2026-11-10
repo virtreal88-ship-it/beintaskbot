@@ -10,11 +10,11 @@ SETTING_FLAGS = frozenset({'ai_enabled', 'ai_agents_manage', 'creation_requires_
     'completion_requires_admin', 'deal_completion_requires_admin', 'hot_order_create',
     'hot_order_claim', 'hot_order_completion_requires_admin'})
 SETTING_FIELDS = SETTING_FLAGS | {'hot_order_services', 'notifications'}
-# Provider-specific grants/scopes remain in integration settings.
+# Provider-specific grants are edited from their integration panel. Resource
+# bindings such as pipeline/team IDs are not part of this employee patch.
 PERMISSION_MODULES = frozenset({'tasks', 'deals', 'customers', 'dialogs', 'support',
-    'hot_orders', 'finance', 'employees', 'integrations', 'settings', 'night_report'})
-NOTIFICATION_KEYS = frozenset(item['key'] for item in notification_catalog()
-    if item['key'] not in {'linear_done', 'linear_status_changed', 'proactive_risk'})
+    'hot_orders', 'finance', 'employees', 'integrations', 'settings', 'night_report', 'linear'})
+NOTIFICATION_KEYS = frozenset(item['key'] for item in notification_catalog())
 
 
 def settings_snapshot(workflow, target):

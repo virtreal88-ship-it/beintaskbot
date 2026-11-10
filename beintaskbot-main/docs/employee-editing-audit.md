@@ -74,7 +74,8 @@ legacy workflow calls retain their compatibility contract.
 
 Remaining structural boundary: pipeline scope is still in the existing workflow
 screen, not yet moved into a unified multi-provider integration editor. Linear
-scope and risk notification behavior are deliberately unchanged. Company owners
+page access and notification preferences remain editable in the existing Linear
+integration panel, independently for each employee. Observer behavior is unchanged. Company owners
 cannot take over a shared global identity, transfer ownership, or turn a
 company-only switch into global account deletion through this employee form.
 
@@ -83,5 +84,6 @@ cover sparse settings, stale versions, concurrent scope/settings writes,
 foreign-tenant isolation, partial grants, retained services, and RU/AZ/EN UI.
 The real cookie/Chromium CRUD scenario additionally saves and reopens module
 permissions and work preferences at 360/390/768/1440 px. Its local browser launch
-is blocked by the execution environment's Unix socket restriction; it must pass
-in CI before this patch is released.
+is blocked by the execution environment's Unix socket restriction. The first
+remote CI run passed all 254 tests including these scenarios; the final copy is
+checked again in CI before release.
