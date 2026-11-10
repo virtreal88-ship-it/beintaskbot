@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import time
+from pathlib import Path
 import unittest
 import uuid
 from types import SimpleNamespace
@@ -51,6 +52,8 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 tenant_id uuid,actor_id bigint,channel_id uuid,conversation_id text,session_id uuid,owner_id uuid,
                 fence bigint,state text,lease_until timestamptz,updated_at timestamptz DEFAULT now(),
                 provider_opened_at timestamptz,closed_at timestamptz,PRIMARY KEY(tenant_id,actor_id))''')
+            for name in ('voice_lease_provider_open.sql','voice_lease_provider_kind.sql'):
+                conn.execute((Path(__file__).parents[2]/'beintaskbot-main'/'migrations'/name).read_text(encoding='utf-8'))
 
     @classmethod
     def tearDownClass(cls):
@@ -59,6 +62,17 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
 
     def connect(self):
         return psycopg.connect(self.dsn,options='-csearch_path='+self.schema,row_factory=dict_row)
+
+    @staticmethod
+    def force_ownership_change(conn,tenant,*,owner=None):
+        # Synthetic stale-owner scenario in disposable test schema only. The
+        # production trigger correctly forbids this direct active takeover.
+        conn.execute('ALTER TABLE saas_operator_voice_lease DISABLE TRIGGER protect_voice_lease_provider_kind')
+        if owner is None:
+            conn.execute('UPDATE saas_operator_voice_lease SET fence=fence+1 WHERE tenant_id=%s AND actor_id=7',(tenant,))
+        else:
+            conn.execute('UPDATE saas_operator_voice_lease SET owner_id=%s WHERE tenant_id=%s AND actor_id=7',(owner,tenant))
+        conn.execute('ALTER TABLE saas_operator_voice_lease ENABLE TRIGGER protect_voice_lease_provider_kind')
 
     async def test_live_websocket_stops_input_after_browser_revoke_or_account_disable(self):
         for mode in ('session_revoked','account_disabled','session_expired'):
@@ -190,9 +204,9 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                                 if mode=='browser_revoked':
                                     conn.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE id=%s',(sid,))
                                 elif mode=='fence_changed':
-                                    conn.execute('UPDATE saas_operator_voice_lease SET fence=fence+1 WHERE tenant_id=%s AND actor_id=%s',(tenant,actor))
+                                    self.force_ownership_change(conn,tenant)
                                 elif mode=='owner_changed':
-                                    conn.execute('UPDATE saas_operator_voice_lease SET owner_id=%s WHERE tenant_id=%s AND actor_id=%s',(str(uuid.uuid4()),tenant,actor))
+                                    self.force_ownership_change(conn,tenant,owner=str(uuid.uuid4()))
                                 else:
                                     conn.execute("UPDATE saas_operator_voice_lease SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND actor_id=%s",(tenant,actor))
                         await asyncio.to_thread(revoke_or_change_lease)
@@ -274,9 +288,9 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                                 if change=='browser':
                                     conn.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE id=%s',(sid,))
                                 elif change=='fence':
-                                    conn.execute('UPDATE saas_operator_voice_lease SET fence=fence+1 WHERE tenant_id=%s AND actor_id=%s',(tenant,actor))
+                                    self.force_ownership_change(conn,tenant)
                                 elif change=='owner':
-                                    conn.execute('UPDATE saas_operator_voice_lease SET owner_id=%s WHERE tenant_id=%s AND actor_id=%s',(str(uuid.uuid4()),tenant,actor))
+                                    self.force_ownership_change(conn,tenant,owner=str(uuid.uuid4()))
                         if change=='context':context.valid=False
                         else:await asyncio.to_thread(revoke_or_change_lease)
                         if phase=='output':
@@ -319,8 +333,8 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     with self.connect() as conn:
                         if mode=='account_disabled':conn.execute('UPDATE saas_auth_users SET disabled_at=now() WHERE actor_id=%s',(actor,))
                         else:conn.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE id=%s',(sid,))
-                        if mode=='owner_changed':conn.execute('UPDATE saas_operator_voice_lease SET owner_id=%s WHERE tenant_id=%s AND actor_id=%s',(str(uuid.uuid4()),tenant,actor))
-                        if mode=='fence_changed':conn.execute('UPDATE saas_operator_voice_lease SET fence=fence+1 WHERE tenant_id=%s AND actor_id=%s',(tenant,actor))
+                        if mode=='owner_changed':self.force_ownership_change(conn,tenant,owner=str(uuid.uuid4()))
+                        if mode=='fence_changed':self.force_ownership_change(conn,tenant)
                 class Provider:
                     mock_only=True
                     def __init__(self):self.close_completed=False

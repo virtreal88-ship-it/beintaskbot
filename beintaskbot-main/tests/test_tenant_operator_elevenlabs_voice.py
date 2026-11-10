@@ -267,6 +267,49 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.done')
         self.assertFalse(any(event.get('close_socket') for event in self.ttd_sockets[0].sent))
 
+    async def test_speech_started_preempts_ready_audio_with_pending_reader(self):
+        await self.start_response()
+        epoch=self.wire._hybrid_active['epoch'];encoded=base64.b64encode(bytes(480)).decode()
+        first=asyncio.create_task(self.wire.receive())
+        await self.wire._hybrid_events.put(('audio',epoch,encoded))
+        self.assertEqual((await asyncio.wait_for(first,2))['type'],'response.output_audio.delta')
+        self.assertIsNotNone(self.wire._hybrid_openai_task)
+        self.assertFalse(self.wire._hybrid_openai_task.done())
+        stale={'type':'response.output_audio.delta','response_id':'response1','item_id':'item1',
+               'content_index':0,'delta':encoded}
+        terminal={'type':'response.done','response':{'id':'response1','status':'cancelled','output':[]}}
+        self.wire._hybrid_ready.extend([stale.copy(),stale.copy(),terminal])
+        await self.openai.incoming.put({'type':'input_audio_buffer.speech_started'})
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'input_audio_buffer.speech_started')
+        self.assertEqual(list(self.wire._hybrid_ready),[terminal])
+
+    async def test_speech_started_preempts_ready_audio_before_reader_exists(self):
+        await self.start_response()
+        self.assertIsNone(self.wire._hybrid_openai_task)
+        self.wire._hybrid_ready.append({'type':'response.output_audio.delta','response_id':'response1',
+                                        'item_id':'item1','content_index':0,'delta':'AAA='})
+        await self.openai.incoming.put({'type':'input_audio_buffer.speech_started'})
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'input_audio_buffer.speech_started')
+        self.assertFalse(self.wire._hybrid_ready)
+
+    async def test_ready_audio_is_not_held_by_idle_openai_reader(self):
+        await self.start_response()
+        audio={'type':'response.output_audio.delta','response_id':'response1',
+               'item_id':'item1','content_index':0,'delta':'AAA='}
+        self.wire._hybrid_ready.append(audio)
+        self.assertEqual(await asyncio.wait_for(self.wire.receive(),.25),audio)
+
+    async def test_ready_audio_is_not_starved_by_queued_openai_text(self):
+        await self.start_response()
+        audio={'type':'response.output_audio.delta','response_id':'response1',
+               'item_id':'item1','content_index':0,'delta':'AAA='}
+        self.wire._hybrid_ready.append(audio)
+        for _ in range(50):
+            await self.openai.incoming.put(self.text_event('response.output_text.delta',delta='a'))
+        self.assertEqual(await asyncio.wait_for(self.wire.receive(),.25),audio)
+        self.assertFalse(self.wire._hybrid_active['text_done'])
+        self.assertGreater(self.openai.incoming.qsize(),0)
+
     async def test_unconfirmed_ttd_close_still_closes_openai_and_fails(self):
         async def connector(*_):
             socket=TTDSocket(close_fails=True);self.ttd_sockets.append(socket);return socket

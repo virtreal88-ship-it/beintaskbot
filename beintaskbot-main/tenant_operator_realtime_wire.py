@@ -582,6 +582,10 @@ class _HybridRealtimeMixin:
             raise
 
     def _cancel_hybrid_response(self):
+        # Audio already moved out of the TTS queue is stale too. Keep terminal
+        # lifecycle events so the Session can still reconcile the response.
+        self._hybrid_ready=deque(event for event in self._hybrid_ready
+                                 if event.get('type')!='response.output_audio.delta')
         active=self._hybrid_active
         if active is None:
             if self._hybrid_pending_dispatch is not None:self._hybrid_cancel_pending=True
@@ -760,9 +764,22 @@ class _HybridRealtimeMixin:
     async def receive(self):
         if not self.ready:raise ValueError('session_not_ready')
         while True:
-            if self._hybrid_ready and (self._hybrid_openai_task is None or not self._hybrid_openai_task.done()):
-                return self._hybrid_ready.popleft()
             if self._hybrid_openai_task is None:self._hybrid_openai_task=asyncio.create_task(super().receive())
+            if self._hybrid_ready:
+                # A hot audio backlog must not keep the OpenAI reader from
+                # observing a queued speech_started. One loop turn is bounded:
+                # an idle network reader never holds up audio indefinitely.
+                await asyncio.sleep(0)
+                if not self._hybrid_openai_task.done():return self._hybrid_ready.popleft()
+                event=await self._hybrid_openai_task;self._hybrid_openai_task=None
+                mapped=await self._handle_hybrid_openai(event)
+                if mapped is not None:return mapped
+                # Likewise, a hot stream of text deltas must not starve TTS.
+                # Prefetch the next OpenAI event while the caller handles PCM.
+                if self._hybrid_ready:
+                    self._hybrid_openai_task=asyncio.create_task(super().receive())
+                    return self._hybrid_ready.popleft()
+                continue
             if self._hybrid_tts_task is None:self._hybrid_tts_task=asyncio.create_task(self._hybrid_events.get())
             done,_=await asyncio.wait({self._hybrid_openai_task,self._hybrid_tts_task},return_when=asyncio.FIRST_COMPLETED)
             # Give newly observed VAD priority over queued TTD chunks.
