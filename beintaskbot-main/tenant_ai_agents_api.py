@@ -8,7 +8,8 @@ from aiohttp import web
 from tenant_ai_agents_store import (delete_knowledge, restore_knowledge, list_agents,
     list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
     list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, list_handoffs, list_connect_diagnostics,
-    knowledge_deduplication, preview_agent_deletion, permanently_delete_agent)
+    knowledge_deduplication, preview_agent_deletion, preview_agent_archive_transfer,
+    delete_agent, permanently_delete_agent)
 from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
@@ -124,6 +125,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(preflight, profile)
                 elif resource == 'agent_delete_preview':
                     result = await asyncio.to_thread(preview_agent_deletion, profile, request.match_info['agent_id'])
+                elif resource == 'agent_archive_transfer_preview':
+                    result = await asyncio.to_thread(preview_agent_archive_transfer, profile,
+                        request.match_info['agent_id'], request.query.get('replacement_agent_id', ''))
                 elif resource == 'agents':
                     if request.query.get('view') == 'teams':
                         rows = await asyncio.to_thread(list_agents, profile)
@@ -267,6 +271,17 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         permanently_delete_agent, profile, request.match_info['agent_id'],
                         confirm_agent_id=payload.get('confirm_agent_id'),
                         expected_version=payload.get('expected_version'))
+                elif resource == 'agent_archive_transfer' and method == 'POST':
+                    if (type(payload.get('expected_version')) is not int
+                            or type(payload.get('expected_replacement_version')) is not int
+                            or not isinstance(payload.get('expected_preview_hash'), str)
+                            or len(payload['expected_preview_hash']) != 64):
+                        raise TenantLinearError('Yenidən transfer preview açın və təsdiqi yeniləyin.', 409)
+                    result = await asyncio.to_thread(delete_agent, profile, request.match_info['agent_id'],
+                        replacement_agent_id=payload.get('replacement_agent_id'),
+                        expected_version=payload.get('expected_version'),
+                        expected_replacement_version=payload.get('expected_replacement_version'),
+                        expected_preview_hash=payload.get('expected_preview_hash'))
                 elif resource == 'triggers' and method == 'POST':
                     result = await asyncio.to_thread(save_trigger,profile,request.match_info['agent_id'],payload)
                 elif resource == 'trigger' and method == 'PATCH':
