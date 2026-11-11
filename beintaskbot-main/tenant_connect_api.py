@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
 import json
 from aiohttp import web
 
@@ -10,6 +12,21 @@ from tenant_connect_transport import (ConnectWebhookError, channel_status, chann
 from tenant_platform import TenantPlatformError
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
+
+
+# A provider backlog must not occupy asyncio's shared executor: login reads,
+# CRM lists and aiohttp FileResponse all need that same pool. Keep ingestion
+# on a small dedicated pool without acknowledging before its transaction ends.
+_webhook_io = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix='connect-webhook',
+)
+
+
+async def _run_webhook_ingest(raw, signature, data):
+    context = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        _webhook_io, context.run, ingest, raw, signature, data,
+    )
 
 
 def _policy_error_response(web_module, exc: TenantLinearError) -> web.Response:
@@ -133,7 +150,7 @@ def webhook_handler(logger):
                 raise ConnectWebhookError('invalid_json', 'Connect webhook formatı düzgün deyil.', 400) from None
             if not isinstance(data, dict):
                 raise ConnectWebhookError('invalid_event', 'Connect webhook formatı düzgün deyil.', 400)
-            accepted = await asyncio.to_thread(ingest, raw, signature, data)
+            accepted = await _run_webhook_ingest(raw, signature, data)
             return web.json_response({'accepted': accepted})
         except ConnectWebhookError as exc:
             # Never log the body, signature, API key, or tenant identifiers.

@@ -60,6 +60,7 @@ jobs:
           tests/test_connect_health.py
           tests/test_connect_health_pglite.py
           tests/test_connect_health_postgres.py
+          tests/test_connect_webhook_executor.py
           tests/test_tenant_ai_agent_startup.py
           tests/test_startup_transaction_budget_postgres.py
           tests/test_tenant_notification_worker.py
