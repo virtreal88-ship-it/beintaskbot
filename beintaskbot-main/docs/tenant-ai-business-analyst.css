@@ -1,0 +1,23 @@
+#aiBusinessAnalystHost{max-width:980px}
+.ai-business-analyst textarea{display:block;width:100%;min-height:88px;resize:vertical;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink);font:inherit}
+.analyst-actions{display:flex;justify-content:flex-end;margin-top:10px}
+.analyst-answer{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);white-space:pre-wrap;overflow-wrap:anywhere}
+.analyst-sources{display:grid;gap:6px;margin-top:8px;font-size:13px;overflow-wrap:anywhere}
+.analyst-task-search{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+.analyst-task-search h3{margin:0 0 5px;font-size:16px}
+.analyst-task-search>p{margin:0 0 12px;color:var(--muted);font-size:13px}
+.analyst-task-search-form{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(150px,.7fr) auto;gap:10px;align-items:end}
+.analyst-task-search-form label{display:grid;gap:5px;min-width:0;margin:0;color:var(--ink);font-size:13px;font-weight:650}
+.analyst-task-search-form input,.analyst-task-search-form select{width:100%;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink)}
+.analyst-task-search-form button{min-height:42px}
+.analyst-task-status{margin:10px 0!important}
+.analyst-task-coverage{display:grid;gap:5px;margin:8px 0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.analyst-task-source{display:grid;gap:3px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--paper)}
+.analyst-task-results{display:grid;gap:8px;margin-top:8px}
+.analyst-task-result{min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);overflow-wrap:anywhere}
+.analyst-task-result>strong{display:block;margin-bottom:4px}
+.analyst-task-meta{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.analyst-task-description{margin:8px 0 0!important;color:var(--ink)!important;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.analyst-task-link{display:inline-block;margin-top:8px;color:var(--brand-deep);font-size:13px;font-weight:650}
+.analyst-task-readonly{margin-top:10px!important;font-size:12px}
+@media(max-width:640px){.analyst-task-search-form{grid-template-columns:minmax(0,1fr)}.analyst-task-search-form button{width:100%}}
