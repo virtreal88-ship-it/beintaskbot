@@ -55,7 +55,7 @@ function installCaseTabsFixture(){
     const summary=page.locator('#supportCaseMaterials>summary'),close=page.locator('#supportClose');
     assert.equal(await page.locator('#supportHistory [data-ticket-media-open]').count(),2);
     assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
-    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportSuggestions','#supportNextSteps','#supportEditStatus','#supportEditAssignee','#supportTake','#supportTakeover','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
+    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportRiskAssessment','#supportSuggestions','#supportNextSteps','#supportEditStatus','#supportEditAssignee','#supportTake','#supportTakeover','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
     const photo='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000602"]',documentMessage='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000603"]';
     const opened=[...closed,'#caseMediaLoad',photo+' [data-ticket-media-open]',documentMessage+' [data-ticket-media-open]'];
     await assertTabOrder(page,closed,'closed Materials '+width);

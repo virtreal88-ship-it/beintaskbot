@@ -40,6 +40,10 @@ def _ticket_public(row, policy):
     result = public(row)
     if _scoped_ai_documents(policy):
         result['has_assigned_agent'] = bool(result.get('agent_id'))
+        # Keep the support API shape stable while hiding shared agent data.
+        # Detail may set these explicitly for authorized support updaters.
+        result.setdefault('summary_available', False)
+        result.setdefault('summary_current', False)
         for key in list(result):
             if key.startswith(('agent_', 'company_', 'latest_job_')) or key in {
                     'ai_reason', 'summary_agent_binding', 'summary_run_id'}:
