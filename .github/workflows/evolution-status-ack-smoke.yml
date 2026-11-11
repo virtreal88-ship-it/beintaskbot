@@ -1,0 +1,32 @@
+name: Evolution status ACK isolated smoke
+on:
+  push:
+    branches: [fix/evolution-status-ack-ci]
+    paths:
+      - '.github/workflows/evolution-status-ack-smoke.yml'
+      - 'infra/evolution-status-ack/**'
+permissions:
+  contents: read
+concurrency:
+  group: evolution-status-ack-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infra/evolution-status-ack
+        shell: bash
+    steps:
+      - name: Checkout only reviewed build files
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: infra/evolution-status-ack
+          fetch-depth: 1
+      - name: Build and test empty isolated application
+        env:
+          POSTGRES_IMAGE: postgres@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0
+          REDIS_IMAGE: redis@sha256:7b1753b4c5ad8458906c272a8132b8c15f5557b000379eb115fb239706a384b7
+        run: bash smoke.sh
