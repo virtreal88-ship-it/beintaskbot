@@ -5,6 +5,7 @@ import base64
 import binascii
 import logging
 import math
+import json
 import re
 import sys
 import time
@@ -29,6 +30,7 @@ _SAFE_PROVIDER_EVENT_GUARD_CODES=frozenset({'provider_authority_rejected','provi
 _TERMINAL_RESPONSE_EVENT_TYPES=frozenset({
     'response.done','response.output_item.added','response.output_item.done',
     'response.content_part.added','response.content_part.done',
+    'response.function_call_arguments.delta','response.function_call_arguments.done',
     'response.output_audio.delta','response.output_audio.done',
     'response.output_audio_transcript.delta','response.output_audio_transcript.done',
 })
@@ -116,7 +118,7 @@ class Session:
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
-                 pilot_policy=None, duplex=False):
+                 pilot_policy=None, duplex=False, analytics_tools=None):
         if type(duplex) is not bool:raise Refused('invalid_duplex_mode')
         if any(x is None for x in (authority, lease, context, provider, client)) or (ledger is None and pilot_policy is None):
             raise Refused('trusted_dependencies_missing')
@@ -133,6 +135,15 @@ class Session:
             from tenant_operator_voice_pilot import PilotAdmission
             if type(pilot_policy) is not PilotAdmission or history is not None:
                 raise Refused('pilot_policy_invalid')
+        if analytics_tools is not None:
+            if (pilot_policy is None or not duplex or not callable(analytics_tools) or
+                not isinstance(getattr(analytics_tools,'names',None),frozenset) or
+                not getattr(analytics_tools,'names',None) or
+                not isinstance(getattr(analytics_tools,'tools',None),list)):
+                raise Refused('analytics_tools_invalid')
+        self.analytics_tools=analytics_tools
+        self.analytics_tool_names=(getattr(analytics_tools,'names',frozenset()) if analytics_tools is not None else frozenset())
+        self.analytics_tool_definitions=(getattr(analytics_tools,'tools',[]) if analytics_tools is not None else [])
         if not callable(getattr(provider,'bind_pilot_claim' if pilot_policy is not None else 'bind_claim',None)):
             raise Refused('provider_claim_binding_required')
         if not isinstance(scope, tuple) or len(scope) != 4 or any(not str(x) for x in scope):
@@ -198,6 +209,12 @@ class Session:
         self._context_roles = {}
         self._context_required = set()
         self._confirmed_user_items = set()
+        self._observed_function_items = {}
+        self._pending_analytics_call = None
+        self._pending_analytics_output = None
+        self._analytics_tool_output_items = set()
+        self._analytics_tool_calls = 0
+        self._pending_response_kind = 'user'
         # The provider socket reader can observe speech while its event
         # handler waits on authorization. Track those observations separately.
         self._observed_speech_epoch = 0
@@ -287,13 +304,31 @@ class Session:
     def _remember_context_item(self, item_id, *, usable, role):
         if not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id):
             raise Refused('provider_context_item_invalid')
-        if role not in ('user','assistant') or self._context_roles.get(item_id,role)!=role:
+        if role not in ('user','assistant','tool') or self._context_roles.get(item_id,role)!=role:
             raise Refused('provider_context_item_conflict')
         if item_id not in self._context_order:
             if len(self._context_order)>=self.MAX_CONTEXT_ITEMS:raise Refused('provider_context_item_limit')
             self._context_order.append(item_id)
             self._context_roles[item_id]=role
         if usable:self._context_usable.add(item_id)
+
+    @staticmethod
+    def _parse_analytics_arguments(value):
+        if not isinstance(value,str) or len(value.encode('utf-8'))>8192:
+            raise Refused('analytics_arguments_invalid')
+        def pairs(items):
+            result={}
+            for key,item in items:
+                if key in result:raise ValueError('duplicate_key')
+                result[key]=item
+            return result
+        try:
+            parsed=json.loads(value,object_pairs_hook=pairs,
+                              parse_constant=lambda _value: (_ for _ in ()).throw(ValueError('constant')))
+        except (TypeError,ValueError,json.JSONDecodeError):
+            raise Refused('analytics_arguments_invalid') from None
+        if not isinstance(parsed,dict):raise Refused('analytics_arguments_invalid')
+        return parsed
 
     def _context_refs(self):
         return [{'type':'item_reference','id':item_id} for item_id in self._context_order
@@ -514,10 +549,10 @@ class Session:
             stage='dispatch_lease'
             await self.lease.assert_current(self.scope,self.fence)
             if self._stop_requested: raise Refused('session_stopped_during_start')
-            # The injected provider must use the existing Copilot prompt and
-            # context, no function tools, and never expose a permanent key.
+            # Function tools are injected only by the server-owned owner
+            # analytics adapter; client input cannot add or alter a tool.
             stage='provider_open'
-            options={'tools':[],'create_response':False,'interrupt_response':False,
+            options={'tools':self.analytics_tool_definitions,'create_response':False,'interrupt_response':False,
                      'transcription':None,'reconnect':False}
             if not self.manual_turns:
                 options['duplex']=True
@@ -609,6 +644,10 @@ class Session:
         # turn while the previous interrupted assistant item is still being
         # truncated. Keep those committed turns in order instead of treating
         # a legitimate second speech_started event as a fatal protocol error.
+        if self._pending_analytics_call is not None:
+            if self._pending_analytics_call.get('cancelled') is not True:return
+            if self._pending_analytics_output is not None:return
+            self._pending_analytics_call=None
         if (self.pending_input_item_id is None and self.queued_input_item_ids and
             not self.response_pending and not self.response_inflight and
             self.current_reservation is None and self.item is None and
@@ -649,7 +688,9 @@ class Session:
             self._check_receipt(claimed,reservation,'claimed')
         self.current_reservation = reservation
         self.current_input_item_id=input_item_id
-        self.current_response_kind='user'
+        response_kind=self._pending_response_kind
+        self._pending_response_kind='user'
+        self.current_response_kind=response_kind
         self.current_response_usage_microusd=None
         self.response_pending = False
         self.pending_input_item_id = None
@@ -671,6 +712,7 @@ class Session:
             event={'type':'response.create'}
             if duplex:
                 event['response']={'input':self._context_refs()}
+                if response_kind=='tool_followup':event['response']['tool_choice']='none'
             if duplex:
                 sent=await self._send_provider(event,dispatch_guard=lambda:self._duplex_dispatch_ready(dispatch_epoch,local_epoch))
             else:
@@ -693,6 +735,7 @@ class Session:
                 if not self.closed and not cancelled:
                     self.pending_input_item_id=input_item_id
                     self.response_pending=True
+                    self._pending_response_kind=response_kind
                 return
             sent_at=time.monotonic()
             _log_voice_latency('dispatch_checks',latency_dispatch_started,sent_at)
@@ -766,6 +809,7 @@ class Session:
                 self._latency_commit_times.pop(self.pending_input_item_id,None)
             self.pending_input_item_id=turn['item_id']
             self.response_pending=True
+            self._pending_response_kind='user'
             self.queued_input_item_ids.clear()
         elif self.pending_input_item_id is None and not self.response_pending:
             self.pending_input_item_id=turn['item_id']
@@ -1111,6 +1155,52 @@ class Session:
             return
         raise Refused('client_event_not_allowed')
 
+    async def _complete_analytics_tool_call(self):
+        call=self._pending_analytics_call
+        if (call is None or self.current_reservation is not None or self.response_inflight or
+            call.get('output_sent') is True):
+            return False
+        if (call.get('cancelled') is True or self._observed_speech_epoch!=self._processed_speech_epoch or
+            self._observed_speech_active or self.closed):
+            call['cancelled']=True
+            self._pending_analytics_call=None
+            return False
+        if call.get('response_kind')!='user' or self._analytics_tool_calls>=8:
+            raise Refused('analytics_tool_limit')
+        executor=self.analytics_tools
+        if executor is None or call.get('name') not in self.analytics_tool_names:
+            raise Refused('analytics_tool_not_allowed')
+        self._analytics_tool_calls+=1
+        await self.context.revalidate(self.scope)
+        await self._check_dispatch_authority_and_lease()
+        try:
+            output=await asyncio.wait_for(executor(call['name'],call['arguments']),timeout=8)
+        except asyncio.TimeoutError:
+            output=json.dumps({'read_only':True,'available':False,'reason':'source_timeout'},separators=(',',':'))
+        if (not isinstance(output,str) or len(output.encode('utf-8'))>24576):
+            raise Refused('analytics_tool_output_invalid')
+        await self.context.revalidate(self.scope)
+        await self._check_dispatch_authority_and_lease()
+        if (self._pending_analytics_call is not call or call.get('cancelled') is True or
+            self._observed_speech_epoch!=self._processed_speech_epoch or self._observed_speech_active or self.closed):
+            call['cancelled']=True
+            if self._pending_analytics_call is call:self._pending_analytics_call=None
+            return False
+        sender=getattr(self.provider,'send_function_call_output',None)
+        if not callable(sender):raise Refused('analytics_tool_output_unavailable')
+        output_state={'call_id':call['call_id'],'function_item_id':call['item_id'],
+                      'source_item_id':call['source_item_id'],'output':output}
+        self._pending_analytics_output=output_state
+        call['output_sent']=True
+        self._remember_context_item(call['item_id'],usable=False,role='tool')
+        async with self.io_lock:
+            self._check_provider_send({'type':'response.create'})
+            await self.context.revalidate(self.scope)
+            await self._check_dispatch_authority_and_lease()
+            sent=await sender(call['call_id'],output)
+        if sent is not True:raise Refused('analytics_tool_output_unconfirmed')
+        return True
+
     async def receive_provider(self, event, *, already_observed=False):
         try:
             if not already_observed:self.observe_provider_event(event)
@@ -1206,6 +1296,8 @@ class Session:
             async with self.lock:
                 if self.muted:
                     return
+                if self._pending_analytics_call is not None:
+                    self._pending_analytics_call['cancelled']=True
                 # Duplicate VAD starts for the same live buffer are harmless.
                 if self.input_turn is not None:
                     if not self.input_turn['stopped']:
@@ -1324,7 +1416,8 @@ class Session:
             self.input_transcription_costs[item_id]=amount
             if self.transcript is not None:self.transcript.input_completed(item_id,content_index,text)
             async with self.lock:
-                await self._settle_response_if_ready()
+                settled=await self._settle_response_if_ready()
+                if settled:await self._complete_analytics_tool_call()
                 await self._dispatch_pending()
             return
         if kind == 'conversation.item.input_audio_transcription.failed':
@@ -1338,7 +1431,8 @@ class Session:
             self.input_transcription_costs[item_id]=None
             if self.transcript is not None:self.transcript.input_failed(item_id,content_index)
             async with self.lock:
-                await self._settle_response_if_ready()
+                settled=await self._settle_response_if_ready()
+                if settled:await self._complete_analytics_tool_call()
                 await self._dispatch_pending()
             return
         if kind == 'response.output_audio.delta':
@@ -1431,8 +1525,31 @@ class Session:
                     not isinstance(response,dict) or response.get('id') != self.provider_response_id):
                     raise Refused('unreserved_response')
                 output=response.get('output',[])
-                if (not isinstance(output,list) or any(not isinstance(item,dict) or item.get('type')!='message' or
-                    item.get('role')!='assistant' for item in output)):
+                if not isinstance(output,list):raise Refused('provider_item_forbidden')
+                function_items=[item for item in output if isinstance(item,dict) and item.get('type')=='function_call']
+                if function_items:
+                    if (len(output)!=1 or len(function_items)!=1 or self.analytics_tools is None or
+                        self.current_response_kind!='user' or self._analytics_tool_calls>=8):
+                        raise Refused('provider_function_call_forbidden')
+                    function_item=function_items[0]
+                    item_id=function_item.get('id');call_id=function_item.get('call_id')
+                    name=function_item.get('name');arguments=function_item.get('arguments')
+                    observed=self._observed_function_items.get((response['id'],item_id))
+                    if (response.get('status')!='completed' or self.cancel_requested or
+                        not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id) or
+                        not isinstance(call_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',call_id) or
+                        name not in self.analytics_tool_names or
+                        not isinstance(arguments,str)):
+                        raise Refused('provider_function_call_invalid')
+                    parsed_arguments=self._parse_analytics_arguments(arguments)
+                    if observed is not None and (observed.get('call_id')!=call_id or observed.get('name')!=name or
+                        observed.get('arguments') not in (None,arguments)):
+                        raise Refused('provider_function_call_conflict')
+                    pending_call={'item_id':item_id,'call_id':call_id,'name':name,
+                                  'arguments':parsed_arguments,'source_item_id':self.current_input_item_id,
+                                  'response_kind':self.current_response_kind,'cancelled':False,'output_sent':False}
+                elif any(not isinstance(item,dict) or item.get('type')!='message' or item.get('role')!='assistant'
+                         for item in output):
                     raise Refused('provider_item_forbidden')
                 # A provider can queue audio deltas around response.done. Once
                 # this exact ID is terminal, discard any later event for it;
@@ -1445,7 +1562,10 @@ class Session:
                 self.response_inflight = False
                 self.provider_response_id = None
                 self.cancel_requested = False
-                await self._settle_response_if_ready()
+                if function_items:
+                    self._pending_analytics_call=pending_call
+                settled=await self._settle_response_if_ready()
+                if settled and function_items:await self._complete_analytics_tool_call()
                 await self._dispatch_pending()
                 await self._notify_listening_if_idle()
             return
@@ -1479,6 +1599,51 @@ class Session:
             return
         if kind in ('conversation.item.added','conversation.item.created','conversation.item.done'):
             item=event.get('item')
+            if isinstance(item,dict) and item.get('type')=='function_call_output':
+                item_id=item.get('id');output_pending=self._pending_analytics_output
+                if (not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id)):
+                    raise Refused('provider_function_output_invalid')
+                if item_id in self._analytics_tool_output_items:return
+                if output_pending is None:
+                    raise Refused('provider_function_output_unexpected')
+                call=self._pending_analytics_call
+                if (call is None or item.get('call_id')!=output_pending['call_id'] or
+                    item.get('output')!=output_pending['output']):
+                    raise Refused('provider_function_output_mismatch')
+                if self._observed_speech_epoch>self._processed_speech_epoch or self._observed_speech_active:
+                    call['cancelled']=True
+                self._analytics_tool_output_items.add(item_id)
+                self._remember_context_item(output_pending['function_item_id'],
+                    usable=call.get('cancelled') is not True,role='tool')
+                self._remember_context_item(item_id,usable=call.get('cancelled') is not True,role='tool')
+                self._pending_analytics_output=None
+                self._pending_analytics_call=None
+                if call.get('cancelled') is not True:
+                    self.pending_input_item_id=item_id
+                    self.response_pending=True
+                    self._pending_response_kind='tool_followup'
+                    async with self.lock:await self._dispatch_pending()
+                return
+            if isinstance(item,dict) and item.get('type')=='function_call':
+                if (not self.response_inflight or event.get('response_id')!=self.provider_response_id or
+                    self.analytics_tools is None or item.get('name') not in self.analytics_tool_names or
+                    not isinstance(item.get('id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item['id']) or
+                    not isinstance(item.get('call_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',item['call_id'])):
+                    raise Refused('provider_function_call_invalid')
+                arguments=item.get('arguments','')
+                if not isinstance(arguments,str) or len(arguments.encode('utf-8'))>8192:
+                    raise Refused('provider_function_call_invalid')
+                key=(event['response_id'],item['id'])
+                observed=self._observed_function_items.get(key)
+                exact={'call_id':item['call_id'],'name':item['name']}
+                if observed is not None and any(observed.get(field)!=value for field,value in exact.items()):
+                    raise Refused('provider_function_call_conflict')
+                if kind.endswith('.done'):
+                    self._parse_analytics_arguments(arguments)
+                    self._observed_function_items[key]={**exact,'arguments':arguments}
+                else:
+                    self._observed_function_items[key]={**exact,'arguments':None}
+                return
             if isinstance(item,dict) and item.get('type')=='message' and item.get('role') in ('user','assistant'):
                 if getattr(self,'duplex',False) and item.get('role')=='user':
                     status=item.get('status')
@@ -1496,8 +1661,42 @@ class Session:
                             await self._dispatch_pending()
                 return
             raise Refused('provider_item_forbidden')
+        if kind in ('response.function_call_arguments.delta','response.function_call_arguments.done'):
+            item_id=event.get('item_id');rid=event.get('response_id');call_id=event.get('call_id')
+            observed=self._observed_function_items.get((rid,item_id))
+            if (not self.response_inflight or rid!=self.provider_response_id or self.analytics_tools is None or
+                observed is None or observed.get('call_id')!=call_id):
+                raise Refused('provider_function_call_invalid')
+            value=event.get('delta') if kind.endswith('.delta') else event.get('arguments')
+            if not isinstance(value,str) or len(value.encode('utf-8'))>8192:
+                raise Refused('provider_function_call_invalid')
+            if kind.endswith('.done'):
+                self._parse_analytics_arguments(value)
+                observed['arguments']=value
+            return
         if kind in ('response.output_item.added','response.output_item.done'):
             item=event.get('item')
+            if (self.response_inflight and event.get('response_id')==self.provider_response_id and
+                isinstance(item,dict) and item.get('type')=='function_call'):
+                if type(event.get('output_index')) is not int or event['output_index']!=0:
+                    raise Refused('provider_function_call_invalid')
+                item_id=item.get('id');call_id=item.get('call_id');name=item.get('name')
+                arguments=item.get('arguments','')
+                if (self.analytics_tools is None or name not in self.analytics_tool_names or
+                    not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id) or
+                    not isinstance(call_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',call_id) or
+                    not isinstance(arguments,str) or len(arguments.encode('utf-8'))>8192):
+                    raise Refused('provider_function_call_invalid')
+                key=(event['response_id'],item_id);observed=self._observed_function_items.get(key)
+                if observed is not None and (observed.get('call_id')!=call_id or observed.get('name')!=name or
+                    observed.get('arguments') not in (None,arguments)):
+                    raise Refused('provider_function_call_conflict')
+                if kind.endswith('.done'):
+                    self._parse_analytics_arguments(arguments)
+                    self._observed_function_items[key]={'call_id':call_id,'name':name,'arguments':arguments}
+                else:
+                    self._observed_function_items[key]={'call_id':call_id,'name':name,'arguments':None}
+                return
             if (self.response_inflight and event.get('response_id')==self.provider_response_id and
                 isinstance(item,dict) and item.get('type')=='message' and item.get('role')=='assistant' and
                 isinstance(item.get('id'),str) and item['id']):
@@ -1545,6 +1744,19 @@ class Session:
             self.current_response_kind=None
             return True
         if item_id is None:return False
+        if self.current_response_kind=='tool_followup':
+            model_cost=self.current_response_usage_microusd
+            if model_cost is None:
+                receipt=await self.ledger.mark_unknown(reservation)
+                if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
+                    raise Refused('budget_unknown_unconfirmed')
+            else:
+                receipt=await self.ledger.note_actual(reservation,model_cost)
+                if not isinstance(receipt,dict) or receipt.get('state') not in {'settled','quarantined'}:
+                    raise Refused('usage_reconciliation_unconfirmed')
+            self.current_reservation=None;self.current_input_item_id=None
+            self.current_response_usage_microusd=None;self.current_response_kind=None
+            return True
         if self.current_response_usage_microusd is None:
             receipt=await self.ledger.mark_unknown(reservation)
             if not isinstance(receipt,dict) or receipt.get('state')!='unknown':
