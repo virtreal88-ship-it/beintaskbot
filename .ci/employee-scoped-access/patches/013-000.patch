@@ -647,27 +647,33 @@ index 0000000000000000000000000000000000000000..90ffa748501238e905b8801e3a3ea4c9
 +})();
 diff --git a/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs b/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..2dd998aa6f0b0e1f29bd4d0e3dbca896a3b87377
+index 0000000000000000000000000000000000000000..acfa06de7813a10202722a7e135bb1199713b68d
 --- /dev/null
 +++ b/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs
-@@ -0,0 +1,17 @@
-+/* Real Chromium, no browser automation dependency or HTTP interception.
-+   Assertions execute as DOM events in the browser; not physical pointer tests. */
-+const fs=require('node:fs'),{spawnSync}=require('node:child_process'),assert=require('node:assert/strict');
+@@ -0,0 +1,23 @@
++/* Real Chromium lifecycle, production controller and localhost synthetic HTTP.
++   Assertions execute as DOM events in the page, not physical pointer tests. */
++const assert=require('node:assert/strict');
++const {chromium}=require('../.support-test-deps/node_modules/playwright');
 +const origin=process.env.AI_RUNTIME_ORIGIN,width=Number(process.env.AI_RUNTIME_WIDTH||1100);
 +assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(origin||''),'isolated localhost origin required');
-+const executable=process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium';
-+assert(fs.existsSync(executable),'Chromium executable required');
-+const userData=fs.mkdtempSync('/tmp/ai-chromium-');
-+const run=spawnSync(executable,[`--user-data-dir=${userData}`,'--headless','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--no-proxy-server',
-+ '--disable-background-networking','--disable-component-update','--disable-extensions','--no-first-run',
-+ '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',`--window-size=${width},950`,
-+ '--virtual-time-budget=20000','--dump-dom',origin+'/app'],{encoding:'utf8',timeout:65000,maxBuffer:4*1024*1024});
-+fs.rmSync(userData,{recursive:true,force:true});
-+const output=run.stdout||'',result=output.match(/<pre id="aiAcceptanceResult" data-result="([^"]+)">([\s\S]*?)<\/pre>/);
-+assert(!run.error,run.error?.message);assert.equal(run.status,0,(run.stderr||'').slice(-2000));
-+assert(result,'Browser acceptance did not run: '+(run.stderr||'').slice(-1000));
-+assert.equal(result[1],'passed',result[2]);console.log(result[2]);
++(async()=>{
++ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:[
++  '--no-sandbox','--disable-dev-shm-usage','--no-proxy-server','--disable-background-networking',
++  '--disable-component-update','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
++ try{
++  const context=await browser.newContext({viewport:{width,height:950}});
++  const page=await context.newPage(),errors=[],failed=[];
++  page.on('pageerror',error=>errors.push(error.message));
++  page.on('requestfailed',request=>failed.push({url:request.url(),failure:request.failure()?.errorText}));
++  await page.goto(origin+'/app',{waitUntil:'domcontentloaded',timeout:15000});
++  try{await page.locator('#aiAcceptanceResult').waitFor({state:'attached',timeout:45000});}
++  catch(error){throw new Error('Browser acceptance did not finish: '+JSON.stringify({errors,failed,body:(await page.locator('body').innerText()).slice(-4000)}));}
++  const result=page.locator('#aiAcceptanceResult'),message=await result.textContent();
++  assert.equal(await result.getAttribute('data-result'),'passed',message);
++  assert.deepEqual(errors,[]);console.log(message);
++ }finally{await browser.close();}
++})().catch(error=>{console.error(error.stack);process.exitCode=1;});
 diff --git a/beintaskbot-main/tests/contacts_directory_fixture.cjs b/beintaskbot-main/tests/contacts_directory_fixture.cjs
 index 3d47a8e4030e7e6dd116a17cb679d109ac31f005..a8c15c168d009133ca5e4e5110a7294cf39bc74c 100644
 --- a/beintaskbot-main/tests/contacts_directory_fixture.cjs

@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == 'f19d18998deac97711903b3800e1f9d46ca1ee2a3b451f2fe83f15803aa1e2e5'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == 'b786dadfb442d72e804d5aa3fda95340471c9c58ae46a59e7154ab22a59a9d34'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == '20f5f5309d92ab404b26cd0f66d1265e4c412b2d', actual
+          assert actual == manifest['target_tree'] == '44cd220fa0ab7ac7b53ca28f111294682ecb9a7e', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
