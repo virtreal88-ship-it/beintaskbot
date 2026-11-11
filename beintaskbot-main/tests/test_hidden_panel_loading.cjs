@@ -106,7 +106,7 @@ async function marketplaceModal(){
 }
 async function dirtyReauthorization(){
  let holdAuth=false;
- const b=fixture({view:'integrations',core:true,workspace:true,hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
+ const b=fixture({view:'integrations',core:true,workspace:true,profile:{...owner,integrations:[{provider:'connect',updated_at:'old-status'}]},hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
   await tick();await tick();
   let card=[...b.w.document.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
   while(card&&!card.querySelector('button'))card=card.parentElement;

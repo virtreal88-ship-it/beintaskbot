@@ -62,11 +62,15 @@
   }
   const dirty = item => item.dirty || (item.preserveProviderDrafts && [...subscriptions].some(other => other.provider === integration && other.dirty));
   function reset(item, data) {
-    item.started = 0; item.dirty = false; item.reset();
-    if (data) { item.freshness = freshness(item, data); item.prepare?.(data); }
+    if (item.resetting) return;
+    item.resetting = true;
+    try {
+      item.started = 0; item.dirty = false; item.reset();
+      if (data) { item.freshness = freshness(item, data); item.prepare?.(data); }
+    } finally { item.resetting = false; }
   }
   function refresh(item) {
-    if (!profile || paused) return;
+    if (!profile || paused || item.resetting) return;
     const visible = item.provider ? integration === item.provider :
       document.getElementById('view-' + item.view)?.classList.contains('active') &&
       (!item.host || !document.getElementById(item.host)?.hidden);
