@@ -141,6 +141,7 @@ jobs:
           tests/test_tenant_kommo.py
           tests/test_tenant_connect_api.py
           tests/test_integrated_connect_release.py
+          tests/test_connect_channel_isolation.py
           tests/test_connect_webhook_deactivation.py
           tests/test_tenant_connect_channel_management.py
           tests/test_tenant_connect_configure.py

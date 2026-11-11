@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import json
 import uuid
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import pytest
 from test_tenant_support_inbox import database, db, A, B, CA, CB, AGENT, PROFILE
 from test_integrated_connect_release import flow
@@ -480,10 +480,29 @@ def test_assignment_reconciler_retries_no_candidate_and_preserves_manual_no_agen
     assert missing=={'agent_id':None,'state':'paused','reason':'automatic_assignment_no_eligible_agent'}
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT))
     assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later')[0]['id']==AGENT
-    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,agent_assignment_id=%s::uuid,state='paused',reason='operator_agent_unassigned' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(str(uuid.uuid4()),A,CA));db.commit()
-    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later')[1]=='explicit_or_existing_state_preserved'
-    saved=db.execute("SELECT agent_id,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(A,CA))[0]
-    assert saved=={'agent_id':None,'reason':'operator_agent_unassigned'}
+    assignment_id=str(uuid.uuid4())
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,agent_assignment_id=%s::uuid,state='paused',reason='operator_agent_unassigned' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(assignment_id,A,CA));db.commit()
+    snapshot_sql="SELECT * FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'"
+    before=db.execute(snapshot_sql,(A,CA))[0];db.commit()
+    assert before['agent_id'] is None
+    assert before['agent_assignment_id']==assignment_id
+    assert before['state']=='paused' and before['reason']=='operator_agent_unassigned'
+    # An explicit no-agent choice still owns an assignment marker. The early
+    # existing-assignment guard must preserve it without taking dialog locks;
+    # the later unassigned-state guard has a different diagnostic label.
+    for blocking in (True,False):
+        with patch.object(db,'execute',wraps=db.execute) as statements:
+            result=connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later',blocking=blocking)
+        assert result==(None,'existing_agent_preserved')
+        assert statements.call_count==1
+        statement=' '.join(statements.call_args.args[0].upper().split())
+        assert statement.startswith('SELECT AGENT_ID,AGENT_ASSIGNMENT_ID FROM SAAS_AI_CONVERSATION_STATE')
+        assert 'FOR UPDATE' not in statement and 'PG_ADVISORY' not in statement
+        # Compare every stored field, including assignment id, revision and
+        # timestamps, rather than merely accepting the new return label.
+        assert db.execute(snapshot_sql,(A,CA))[0]==before
+        db.commit()
+    f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
 def test_company_settings_save_reconciles_old_direct_routes_without_queueing(channels):
