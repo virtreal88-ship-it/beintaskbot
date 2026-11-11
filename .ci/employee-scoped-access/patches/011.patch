@@ -1,0 +1,538 @@
+diff --git a/beintaskbot-main/tests/test_tenant_crm_notice.py b/beintaskbot-main/tests/test_tenant_crm_notice.py
+index aa10080ceef7d45b548cd747556fc10fa18a9f96..29ca9507e51e164e4149ec0a8140e8914d89d98e 100644
+--- a/beintaskbot-main/tests/test_tenant_crm_notice.py
++++ b/beintaskbot-main/tests/test_tenant_crm_notice.py
+@@ -159,7 +159,7 @@ class OutboxTests(unittest.TestCase):
+         self.p=member();self.row=task()
+         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
+             'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
+-            'connect_dialog_route':connect_dialog_route},
++            'connect_dialog_route':connect_dialog_route,'source_eligible':lambda cur,*args:eligible(*args)},
+             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
+         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
+                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
+@@ -229,7 +229,7 @@ class OutboxTests(unittest.TestCase):
+ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
+     async def test_complete_text_and_one_delivery_attempt(self):
+         worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
+-            'send_push':Mock()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
++            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
+         row=task();row['deal'].update(contact_name='Client',phone='+994123')
+         item={'resource':row,'event':'task_assigned','send':True,'recipient_id':20,'tenant_name':'Company'}
+         self.assertIn('Call client',worker.message(item));self.assertIn('+994123',worker.message(item))
+@@ -237,3 +237,21 @@ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
+         await worker.deliver(bot,'',{},Mock())
+         bot.send_message.assert_awaited_once()
+         self.assertEqual(worker.finish.call_args.args[1],'unknown')
++
++
++class ScopedNoticeDeadline(unittest.IsolatedAsyncioTestCase):
++    async def test_scoped_provider_timeout_is_unknown_without_retry(self):
++        import asyncio
++        from unittest.mock import patch
++        worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
++            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()},
++            {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
++        worker.deliver.__globals__['DELIVERY_TIMEOUT']=.01
++        item={'resource':{'body':'synthetic'},'event':'incoming_message','send':True,'recipient_id':20}
++        worker.claim.side_effect=[item,None]
++        async def slow(**kwargs):await asyncio.sleep(5)
++        bot=AsyncMock();bot.send_message.side_effect=slow
++        with patch.dict('os.environ',{'TENANT_SCOPED_ACCESS_ENABLED':'true'}):
++            await asyncio.wait_for(worker.deliver(bot,'',{},Mock()),timeout=2)
++        bot.send_message.assert_awaited_once()
++        assert worker.finish.call_args.args[1]=='unknown'
+diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_contract.py b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b2c974d6a4fbb11022bff23f465906e30edf36af
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+@@ -0,0 +1,238 @@
++"""Synthetic, I/O-free checks for the deliberately inactive relation contract."""
++from dataclasses import FrozenInstanceError, replace
++from datetime import datetime, timedelta, timezone
++import hashlib
++import json
++
++import pytest
++
++from tenant_crm_relation_contract import (
++    BoundIdentity, ProviderBinding, ProviderExpectation, RecordRef,
++    RelationContractError, RelationIntent, classify_observation,
++)
++
++
++TENANT = '10000000-0000-4000-8000-000000000001'
++EVENT = '20000000-0000-4000-8000-000000000001'
++DEAL = RecordRef('deal', '30000000-0000-4000-8000-000000000001')
++CONTACT_A = RecordRef('contact', '40000000-0000-4000-8000-000000000001')
++CONTACT_B = RecordRef('contact', '40000000-0000-4000-8000-000000000002')
++COMPANY = RecordRef('company', '50000000-0000-4000-8000-000000000001')
++BINDING = ProviderBinding(TENANT, 'kommo', 'synthetic-account', 'synthetic-generation-1')
++REVISION = datetime(2026, 11, 11, 12, 0, 0, 123456, timezone.utc)
++EXPECTED, DESIRED, OTHER = 'a' * 64, 'b' * 64, 'c' * 64
++
++
++def identity(record, external_id, binding=BINDING):
++    return BoundIdentity(record, external_id, binding)
++
++
++def intent(**overrides):
++    values = dict(event_id=EVENT, actor_id=42, source=CONTACT_B, relation='deal_contact',
++                  changed=identity(DEAL, '101'), before=identity(CONTACT_A, '201'),
++                  after=identity(CONTACT_B, '202'), local_revision=REVISION)
++    values.update(overrides)
++    return RelationIntent(**values)
++
++
++def planned():
++    # Synthetic digests test the classifier. No production Kommo/BEIN adapter
++    # or approved relation semantics are implied by this fixture.
++    return intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, DESIRED))
++
++
++def classify(event=None, **overrides):
++    event = event or planned()
++    values = dict(event_fingerprint=event.fingerprint(), binding=event.changed.binding,
++                  contract_version='synthetic-v1', observed_digest=EXPECTED,
++                  attempt_outcome='not_started')
++    values.update(overrides)
++    return classify_observation(event, **values)
++
++
++def test_event_round_trip_is_strict_narrow_and_detached_from_mutable_payload():
++    event = intent()
++    payload = json.loads(json.dumps(event.to_payload()))
++    assert RelationIntent.from_payload(payload) == event
++    assert payload['source_action'] == 'update'
++    assert payload['provider_expectation'] is None
++    assert set(payload['changed']) == {'entity_type', 'internal_id', 'external_id'}
++    assert not {'name', 'title', 'phone', 'email', 'description', 'pipeline_id',
++                'stage_id', 'responsible_id', 'access_token', 'secrets'} & set(payload)
++    payload['after']['external_id'] = '999'
++    assert event.after.external_id == '202'
++    with pytest.raises(FrozenInstanceError):
++        event.actor_id = 99
++    with pytest.raises(FrozenInstanceError):
++        event.after.external_id = '999'
++
++
++@pytest.mark.parametrize('source', [DEAL, CONTACT_B])
++def test_deal_card_and_contact_card_share_narrow_change_with_distinct_source(source):
++    event = intent(source=source)
++    assert event.source == source
++    assert event.changed.record == DEAL
++    assert event.after.record == CONTACT_B
++
++
++@pytest.mark.parametrize('source', [CONTACT_A, COMPANY])
++@pytest.mark.parametrize('unlink', [False, True])
++def test_company_contact_directions_preserve_changed_entity_and_exact_unlink(source, unlink):
++    company = identity(COMPANY, '301')
++    event = intent(source=source, relation='contact_company', changed=identity(CONTACT_A, '201'),
++                   before=company if unlink else None, after=None if unlink else company)
++    assert event.changed.record == CONTACT_A
++    assert event.source == source
++    assert RelationIntent.from_payload(event.to_payload()) == event
++
++
++def test_contact_card_unlink_retains_exact_old_contact():
++    event = intent(source=CONTACT_A, after=None)
++    assert event.before.record == CONTACT_A and event.after is None
++    with pytest.raises(RelationContractError, match='source_not_in_relation'):
++        intent(source=CONTACT_B, after=None)
++    with pytest.raises(RelationContractError, match='source_action_mismatch'):
++        intent(source=CONTACT_A)
++
++
++@pytest.mark.parametrize('changes', [
++    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
++    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
++    {'connection_generation': 'synthetic-generation-2'},
++])
++@pytest.mark.parametrize('target', ['before', 'after'])
++def test_mixed_tenant_provider_account_or_connection_identity_is_rejected(changes, target):
++    event = intent()
++    changed_identity = replace(getattr(event, target), binding=replace(BINDING, **changes))
++    with pytest.raises(RelationContractError, match='relation_binding_mismatch'):
++        replace(event, **{target: changed_identity})
++
++
++@pytest.mark.parametrize('actor', [None, 0, -1, True, 42.0, '42'])
++def test_exact_human_actor_is_required_without_integration_fallback(actor):
++    with pytest.raises(RelationContractError, match='human_actor_required'):
++        intent(actor_id=actor)
++
++
++@pytest.mark.parametrize('changes,error', [
++    ({'relation': 'company_deal'}, 'invalid_local_relation'),
++    ({'changed': identity(CONTACT_A, '201')}, 'invalid_changed_entity'),
++    ({'after': identity(COMPANY, '301')}, 'invalid_relation_target'),
++    ({'source': COMPANY}, 'source_not_in_relation'),
++    ({'before': None, 'after': None}, 'no_local_relation_change'),
++    ({'before': identity(CONTACT_B, '999')}, 'no_local_relation_change'),
++    ({'after': identity(CONTACT_B, '201')}, 'external_identity_collision'),
++    ({'local_revision': datetime(2026, 11, 11)}, 'timezone_aware_revision_required'),
++    ({'event_id': 'not-a-uuid'}, 'invalid_record_identity'),
++])
++def test_invalid_or_ambiguous_local_intent_is_rejected(changes, error):
++    with pytest.raises(RelationContractError, match=error):
++        intent(**changes)
++
++
++@pytest.mark.parametrize('location,key', [
++    (None, 'title'), ('source', 'phone'), ('changed', 'name'),
++    ('before', 'email'), ('after', 'description'), ('binding', 'access_token'),
++    ('provider_expectation', 'json_body'),
++])
++def test_payload_cannot_smuggle_record_fields_credentials_or_wire_requests(location, key):
++    payload = planned().to_payload()
++    target = payload if location is None else payload[location]
++    target[key] = 'SYNTHETIC-NOT-A-SECRET'
++    with pytest.raises(RelationContractError, match='invalid_relation_payload'):
++        RelationIntent.from_payload(payload)
++
++
++@pytest.mark.parametrize('key,value', [('version', 2), ('version', True),
++                                      ('source_action', 'delete'), ('source_action', 'view')])
++def test_unknown_contract_and_non_update_source_actions_are_rejected(key, value):
++    payload = intent().to_payload()
++    payload[key] = value
++    with pytest.raises(RelationContractError, match='unsupported_relation_contract'):
++        RelationIntent.from_payload(payload)
++
++
++@pytest.mark.parametrize('value', ['', ' ', ' account', 'account ', 'account\nsecret', 101])
++def test_binding_identifier_must_be_explicit_and_canonical(value):
++    with pytest.raises(RelationContractError, match='invalid_binding_identifier'):
++        replace(BINDING, connection_generation=value)
++
++
++def test_fingerprint_is_canonical_and_not_just_event_id():
++    event = planned()
++    reverse_order = dict(reversed(list(event.to_payload().items())))
++    assert RelationIntent.from_payload(reverse_order).fingerprint() == event.fingerprint()
++    offset_revision = REVISION.astimezone(timezone(timedelta(hours=4)))
++    assert replace(event, local_revision=offset_revision).fingerprint() == event.fingerprint()
++    changes = [replace(event, actor_id=43), replace(event, source=DEAL),
++               replace(event, local_revision=REVISION + timedelta(microseconds=1)),
++               replace(event, before=None), replace(event, provider_expectation=None),
++               replace(event, provider_expectation=ProviderExpectation('other-contract', EXPECTED, DESIRED))]
++    assert all(other.event_id == event.event_id and other.fingerprint() != event.fingerprint()
++               for other in changes)
++
++
++def test_no_provider_semantics_or_digests_are_inferred_from_local_foreign_key():
++    event = intent()
++    assert event.provider_expectation is None
++    assert classify(event) == 'provider_contract_missing'
++    # Different possible full remote states remain distinct evidence. The
++    # contract does not choose which one implements the local change.
++    def digest(value):
++        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
++    add = digest([{'id': 201, 'is_main': True}, {'id': 202, 'is_main': False}])
++    replace_primary = digest([{'id': 201, 'is_main': False}, {'id': 202, 'is_main': True}])
++    replace_all = digest([{'id': 202, 'is_main': True}])
++    assert len({add, replace_primary, replace_all}) == 3
++    assert len({replace(event, provider_expectation=ProviderExpectation('synthetic', EXPECTED, desired))
++                .fingerprint() for desired in (add, replace_primary, replace_all)}) == 3
++
++
++@pytest.mark.parametrize('attempt', ['not_started', 'definitely_not_sent', 'unknown', 'acknowledged'])
++@pytest.mark.parametrize('observed,expected_result', [
++    (None, 'observation_unknown'), (OTHER, 'relation_conflict'), (DESIRED, 'desired_observed'),
++])
++def test_reconciliation_does_not_replay_missing_conflicting_or_desired_state(attempt, observed, expected_result):
++    assert classify(attempt_outcome=attempt, observed_digest=observed) == expected_result
++
++
++@pytest.mark.parametrize('attempt,result', [
++    ('not_started', 'expected_observed'), ('definitely_not_sent', 'expected_observed'),
++    ('unknown', 'outcome_unknown'), ('acknowledged', 'outcome_unknown'),
++])
++def test_unchanged_read_after_timeout_or_acknowledgement_does_not_prove_safe_retry(attempt, result):
++    assert classify(attempt_outcome=attempt) == result
++
++
++@pytest.mark.parametrize('changes', [
++    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
++    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
++    {'connection_generation': 'synthetic-generation-2'},
++])
++def test_read_back_from_another_connection_never_settles_this_event(changes):
++    assert classify(binding=replace(BINDING, **changes), observed_digest=DESIRED) == 'connection_changed'
++
++
++def test_old_event_or_contract_observation_never_settles_new_intent():
++    event = planned()
++    assert classify(event, event_fingerprint=replace(event, actor_id=43).fingerprint(),
++                    observed_digest=DESIRED) == 'event_changed'
++    assert classify(contract_version='old-contract', observed_digest=DESIRED) == 'provider_contract_changed'
++
++
++@pytest.mark.parametrize('digest', ['', 'a' * 63, 'G' * 64, {}, None])
++def test_invalid_state_evidence_cannot_be_interpreted_as_empty_relation(digest):
++    with pytest.raises(RelationContractError, match='invalid_relation_digest'):
++        ProviderExpectation('synthetic', digest, DESIRED)
++
++
++def test_expired_lease_is_not_definitely_not_sent_evidence():
++    with pytest.raises(RelationContractError, match='invalid_attempt_outcome'):
++        classify(attempt_outcome='lease_expired')
++
++
++def test_empty_remote_operation_is_observed_without_forcing_a_write():
++    # Some approved adapter might determine that the full remote relation set
++    # already satisfies a local change. Do not impose a remote cardinality rule.
++    event = intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, EXPECTED))
++    assert classify(event) == 'desired_observed'
+diff --git a/beintaskbot-main/tests/test_tenant_customer_voice_service.py b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
+index 084032d34f2ebe7411bc4dc74e8d0d849587e61b..9a5514b91be11606d95dd6854597f80a948d0b65 100644
+--- a/beintaskbot-main/tests/test_tenant_customer_voice_service.py
++++ b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
+@@ -52,6 +52,7 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
+     def setUp(self):
+         self.item = {'key': (TENANT, 20, REQUEST), 'command': COMMAND, 'connection': ['connect', CHANNEL, JID]}
+         self.receipt = _checked_receipt(RECEIPT, ROUTE, REQUEST)
++        patch('tenant_customer_voice_service.dispatch_guarded',side_effect=lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs)).start()
+         self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
+         self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
+         self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()
+diff --git a/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1edc19f4d7d223fff47c235f35ff1b2f6f6b381a
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
+@@ -0,0 +1,101 @@
++"""Published company news is readable without a Linear grant; all writes stay protected."""
++import json
++import uuid
++
++import pytest
++from aiohttp.test_utils import TestClient, TestServer
++from aiohttp import web
++from unittest.mock import Mock
++
++import tenant_news as news
++from tenant_news_api import news_handler
++from tenant_linear_policy import TenantLinearError
++from tenant_member_access import page_capabilities
++from test_company_employees_navigation_postgres import A,B,database,db,staff
++
++
++@pytest.fixture
++def feed(staff,monkeypatch):
++    monkeypatch.setattr(news,'_connect',staff['factory'])
++    import tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema
++    for module in (tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema):
++        monkeypatch.setattr(module,'_ready',False)
++    with staff['factory']() as conn:
++        news.ensure_observer_schema(conn)
++        for tenant,status,age,title in [(A,'published',1,'A shared'),(B,'published',1,'B private'),
++                (A,'pending',1,'A pending private'),(A,'rejected',1,'A rejected private'),(A,'published',100,'A expired')]:
++            key=str(uuid.uuid4())
++            conn.execute('''INSERT INTO saas_linear_news
++              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
++              VALUES(%s,%s,%s,'SRC-1','Project',%s,'Public summary','https://example.test',%s::jsonb,%s,
++                now()-(%s * interval '1 day'))''',(tenant,key,key,title,json.dumps({'_news_ai':{'private':'SECRET CLASSIFICATION'},'private':'SECRET SOURCE'}),status,age))
++    return staff
++
++
++def reader():return {'tenant_id':A,'telegram_id':32,'role':'operator','active':True,'permissions':[]}
++
++
++def test_active_employee_reads_only_published_same_company_without_linear(feed,monkeypatch):
++    monkeypatch.setattr(news,'_read_tenant_workflow',Mock(side_effect=AssertionError('Published reading must not require integration rights')))
++    response=news.member_published(reader())
++    assert response['tenant_id']==A and response['user_id']==32
++    assert [row['title'] for row in response['news']]==['A shared']
++    serialized=json.dumps(response)
++    for private in ('SECRET','reviewed_by','telegram_status','classification','source','status','updated_at'):
++        assert private not in serialized
++    assert page_capabilities({**reader(),'modules':{}})['news'] is True
++    assert page_capabilities({**reader(),'active':False})['news'] is False
++
++
++@pytest.mark.parametrize('change',['inactive_member','inactive_company','not_member'])
++def test_reader_rechecks_current_membership_and_company(feed,change):
++    with feed['factory']() as conn:
++        if change=='inactive_member':conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=32',(A,))
++        if change=='inactive_company':conn.execute("UPDATE saas_tenants SET status='suspended' WHERE id=%s",(A,))
++    session={**reader(),'telegram_id':999999} if change=='not_member' else reader()
++    with pytest.raises(TenantLinearError) as error:news.member_published(session)
++    assert error.value.status==403
++
++
++def test_reader_cannot_read_review_queues_or_publish_reject_or_send(feed):
++    for status in ('pending','published','rejected'):
++        with pytest.raises(TenantLinearError) as error:news.listing(reader(),status=status)
++        assert error.value.status==403
++    for action in ('publish','reject','create_publish'):
++        data={'action':action,'confirm_publication':True,'request_id':str(uuid.uuid4()),'id':str(uuid.uuid4()),
++            'title':'Disallowed','summary':'Disallowed','project_name':'Test','url':''}
++        with pytest.raises(TenantLinearError) as error:news.command(reader(),data)
++        assert error.value.status==403
++    from tenant_news_telegram_settings import read
++    import tenant_news_telegram_settings
++    with pytest.MonkeyPatch.context() as monkeypatch:
++        monkeypatch.setattr(tenant_news_telegram_settings,'_connect',feed['factory'])
++        with pytest.raises(TenantLinearError):read(reader())
++
++
++def test_member_feed_keyset_is_tenant_scoped(feed):
++    with feed['factory']() as conn:
++        for n in range(33):
++            key=str(uuid.uuid4())
++            conn.execute('''INSERT INTO saas_linear_news
++              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
++              VALUES(%s,%s,%s,'','Test',%s,'Text','','{}','published',now())''',(A,key,key,'Page '+str(n)))
++    first=news.member_published(reader());second=news.member_published(reader(),after=first['after'])
++    assert len(first['news'])==30 and len(second['news'])==4 and second['after'] is None
++    assert len({r['id'] for r in first['news']+second['news']})==34
++    assert 'B private' not in json.dumps([first,second])
++
++
++@pytest.mark.asyncio
++async def test_actual_member_api_feed_cannot_select_other_tenant_or_review_status(feed):
++    app=web.Application();handle=news_handler(lambda request:reader(),'http://fixture.test',Mock())
++    app.router.add_get('/api/platform/news',handle);app.router.add_post('/api/platform/news',handle)
++    async with TestClient(TestServer(app)) as client:
++        response=await client.get('/api/platform/news?feed=published&status=pending&tenant_id='+B)
++        assert response.status==200
++        result=await response.json();assert [r['title'] for r in result['news']]==['A shared']
++        assert response.headers['Vary']=='Cookie'
++        assert (await client.get('/api/platform/news?status=pending')).status==403
++        response=await client.post('/api/platform/news?feed=published',headers={'Origin':'http://fixture.test'},json={
++            'expected_tenant_id':A,'expected_user_id':32,'action':'reject','id':str(uuid.uuid4())})
++        assert response.status==403
+diff --git a/beintaskbot-main/tests/test_tenant_news_member_ui.cjs b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e1263042fd32abf76411bafc69aa5e09ba0cb624
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
+@@ -0,0 +1,22 @@
++const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
++const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
++const read=name=>fs.readFileSync(path.join(__dirname,'../docs',name),'utf8');
++const settle=async()=>{for(let n=0;n<12;n++)await new Promise(resolve=>setImmediate(resolve))};
++(async()=>{
++ const dom=new JSDOM('<head></head><body><nav class="nav"></nav><main></main></body>',{url:'https://fixture.test/app?view=news',runScripts:'outside-only',pretendToBeVisual:true});
++ const w=dom.window,calls=[],profile={member:{tenant_id:'company-a',telegram_id:32,active:true,role:'operator',permissions:[]},capabilities:{pages:{news:true},modules:{linear:false}},integrations:[]};
++ w.tenantProfileSnapshot=profile;w.tenantI18n={language:'ru'};w.Response=Response;w.confirm=()=>true;w.tenantAppNavigate=view=>{w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+view));w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view}}))};
++ let held=null;w.fetch=async(url,options={})=>{calls.push({url,options});if(String(url).includes('news?')){const response=()=>new Response(JSON.stringify({success:true,tenant_id:profile.member.tenant_id,user_id:profile.member.telegram_id,news:[{id:'n1',title:'Shared published news',summary:'Safe text',published_at:'2026-11-10',href:'',url:'',project_name:'Test'}]}));if(held)return new Promise(resolve=>held.resolve=()=>resolve(response()));return response()}throw Error('Unexpected endpoint '+url)};
++ try{
++  w.eval(read('tenant-view-demand.js'));w.eval(read('tenant-news.js'));await settle();
++  assert.equal(w.tenantViewDemand.newsAvailable(profile),true);assert.equal(w.tenantViewDemand.newsReviewAvailable(profile),false);
++  assert(calls.some(call=>call.url==='/api/platform/news?feed=published'));assert.equal(calls.some(call=>call.url.includes('/telegram')),false);
++  assert.match(w.document.getElementById('tnRows').textContent,/Shared published news/);
++  for(const id of ['tnCreate','tnStatus','tnRecover'])assert(w.document.getElementById(id).hidden,id);
++  assert.equal(w.document.querySelector('[data-edit],[data-reject],[data-telegram],[data-cancel-telegram]'),null);
++  assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Telegram|AI:/);
++  const count=calls.length;w.document.getElementById('tnCreate').click();w.document.getElementById('tnRecover').click();assert.equal(w.document.getElementById('tnModal').classList.contains('show'),false);assert.equal(calls.length,count);
++  held={};w.document.getElementById('tnRefresh').click();await settle();w.document.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));held.resolve();await settle();assert.equal(w.document.getElementById('tnNav').hidden,true);assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Shared published news/,'Late read cannot resurrect revoked content');
++  console.log('PASS common news reader without Linear: safe feed only, no review/Telegram calls or controls, forged clicks inert and auth revoke fences');
++ }finally{dom.window.close()}
++})().catch(error=>{console.error(error.stack);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_tenant_operator_copilot.py b/beintaskbot-main/tests/test_tenant_operator_copilot.py
+index 078ef9d2923e596a2e5c4d4c1e0fd708f409865c..d6e64c606c6e039d530f4fbe56582831186f9f5c 100644
+--- a/beintaskbot-main/tests/test_tenant_operator_copilot.py
++++ b/beintaskbot-main/tests/test_tenant_operator_copilot.py
+@@ -351,3 +351,23 @@ def test_reply_selection_version_invalidates_old_cached_request_hash():
+     legacy=hashlib.sha256(json.dumps({'mode':'reply','prompt':''},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+     assert _hash(command)!=legacy
+     assert _hash(command)==_hash({**command,'request_id':'different'})
++
++
++@pytest.mark.parametrize('enabled',[False,True])
++def test_finish_imports_and_rechecks_independent_ai_grant(monkeypatch,enabled):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true' if enabled else 'false')
++    tenant=str(uuid.uuid4());actor=22
++    conn=MagicMock();conn.__enter__.return_value=conn
++    cur=conn.cursor.return_value.__enter__.return_value
++    cur.fetchone.side_effect=[{'config_version':'version'},{'updated_at':'version'}]
++    policy=SimpleNamespace(has_scoped_access=lambda *_:enabled,allows=lambda *_:False,can_use_chat_ai=lambda:True)
++    monkeypatch.setattr(copilot,'_connect',lambda:conn)
++    monkeypatch.setattr(copilot,'ensure_schema',Mock())
++    monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,policy)))
++    monkeypatch.setattr(copilot,'assert_route',Mock())
++    monkeypatch.setattr(copilot,'_assigned_context',Mock(return_value={}))
++    monkeypatch.setattr(copilot,'_agent_binding',lambda _:'binding')
++    monkeypatch.setattr('tenant_episode_media.revalidate_sources',Mock())
++    command={**request(),'_agent_binding':'binding'}
++    copilot._finish(tenant,command,actor,{'answer':'synthetic'},[],'question','answer')
++    assert any(call.args[1][0]=='completed' for call in cur.execute.call_args_list if 'UPDATE saas_chat_ai_runs' in call.args[0])
+diff --git a/beintaskbot-main/tests/test_tenant_scoped_access.py b/beintaskbot-main/tests/test_tenant_scoped_access.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..92be45a70d7bb629b7bbfd074226f421742da6c2
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_scoped_access.py
+@@ -0,0 +1,47 @@
++import unittest
++
++from tenant_scoped_access import allows_assigned_task_exception, allows_owned_resource
++
++
++class ScopedAccessTests(unittest.TestCase):
++    def setUp(self):
++        self.actor = {'tenant_id': 'one', 'member_id': 'a', 'department_id': 'sales', 'active': True}
++        self.own = {'tenant_id': 'one', 'responsible_member_id': 'a', 'responsible_department_id': 'sales'}
++        self.colleague = {'tenant_id': 'one', 'responsible_member_id': 'b', 'responsible_department_id': 'sales'}
++        self.other_department = {'tenant_id': 'one', 'responsible_member_id': 'c', 'responsible_department_id': 'support'}
++        self.other_tenant = {'tenant_id': 'two', 'responsible_member_id': 'a', 'responsible_department_id': 'sales'}
++
++    def test_four_scopes_across_members_departments_and_tenants(self):
++        expected = {
++            'none': (False, False, False, False),
++            'self': (True, False, False, False),
++            'department': (True, True, False, False),
++            'all': (True, True, True, False),
++        }
++        for scope, results in expected.items():
++            with self.subTest(scope=scope):
++                self.assertEqual(tuple(allows_owned_resource(self.actor, r, scope) for r in
++                                       (self.own, self.colleague, self.other_department, self.other_tenant)), results)
++
++    def test_missing_inactive_and_invalid_values_fail_closed(self):
++        self.assertFalse(allows_owned_resource({**self.actor, 'active': False}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'tenant_id': None}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'member_id': None}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource(self.actor, self.own, 'everything'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'department_id': None},
++                                                {**self.colleague, 'responsible_department_id': None}, 'department'))
++        self.assertFalse(allows_owned_resource(self.actor, {**self.own, 'responsible_member_id': None}, 'department'))
++
++    def test_assignee_exception_is_only_read_and_complete_and_never_cross_tenant(self):
++        task = {**self.colleague, 'assignee_member_id': 'a'}
++        for operation in ('read', 'complete'):
++            self.assertTrue(allows_assigned_task_exception(self.actor, task, operation))
++        for operation in ('create', 'update', 'delete', 'approve', 'reward'):
++            self.assertFalse(allows_assigned_task_exception(self.actor, task, operation))
++        self.assertFalse(allows_assigned_task_exception(self.actor, {**task, 'tenant_id': 'two'}, 'read'))
++        self.assertFalse(allows_assigned_task_exception(self.actor, {**task, 'assignee_member_id': 'b'}, 'read'))
++        self.assertFalse(allows_assigned_task_exception({**self.actor, 'active': False}, task, 'complete'))
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/beintaskbot-main/tests/test_tenant_web_routes.py b/beintaskbot-main/tests/test_tenant_web_routes.py
+index b1142d095816a4a216eae156532f02a4c962a2f2..f14689ca72987aef2d5366e909d9cd69dad019ae 100644
+--- a/beintaskbot-main/tests/test_tenant_web_routes.py
++++ b/beintaskbot-main/tests/test_tenant_web_routes.py
+@@ -38,7 +38,7 @@ EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-ins
+ EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
+ EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-alert-detail.css']
+ EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
+-EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
++EXPECTED_ASSETS += ['/assets/tenant-dialog-source-members.js','/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
+ EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
+ EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
+ EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
+@@ -83,7 +83,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
+     ('knowledge/deduplication', ('GET','POST')),
+     ('administrator/approvals', ('GET','POST')),
+     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
+-    ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
++    ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
+     ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
+     ('dialogs/agent-assignment', ('GET','POST')),
+     ('dialogs/agent-assignment-bulk', ('GET','POST')),

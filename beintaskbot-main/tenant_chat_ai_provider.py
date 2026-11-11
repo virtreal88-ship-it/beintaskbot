@@ -1,5 +1,6 @@
-"""Direct OpenAI calls; no tools, redirects, global keys or automatic retries."""
+"""Direct OpenAI calls; allowlisted business tools only, no redirects or retries."""
 import base64
+import hashlib
 import json
 import re
 import requests
@@ -29,6 +30,14 @@ class ChatAIProviderError(RuntimeError):
             'model_access', 'rate_limit', 'request_rejected', 'unknown',
         } else 'unknown'
         super().__init__('Chat AI provider returned HTTP ' + str(self.status_code) + ' (' + self.category + ')')
+
+
+def _unique_object(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result:raise ValueError('duplicate_json_key')
+        result[key]=value
+    return result
 
 
 def safe_failure_code(error):
@@ -193,6 +202,118 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     except (TypeError, ValueError):
         input_tokens = output_tokens = total_tokens = 0
     return result, {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens}
+
+
+def generate_with_tools(key, model, prompt, *, instructions, tools, execute_tool,
+                        before_dispatch, after_dispatch=None, max_output_tokens=1200,
+                        request_timeout=45, max_provider_calls=3, max_tool_calls=4):
+    """Run a bounded Responses tool loop for owner-only read-only analytics.
+
+    Tool definitions and execution are supplied by the server registry. This
+    helper accepts no URL, key source, tool result from the browser, or retry
+    policy. Provider responses, source text and exceptions are never logged.
+    """
+    if not isinstance(key, str) or not key or not isinstance(prompt, str) or len(prompt) > 5000:
+        raise ValueError('Invalid business analyst input')
+    if not isinstance(instructions, str) or len(instructions) > 120000:
+        raise ValueError('Invalid business analyst instructions')
+    if not isinstance(tools, list) or not tools or not callable(execute_tool) or not callable(before_dispatch):
+        raise ValueError('Business analyst tool registry is unavailable')
+    definitions=[]
+    allowed=set()
+    for tool in tools:
+        if not isinstance(tool, dict) or not isinstance(tool.get('name'), str):
+            raise ValueError('Invalid business analyst tool definition')
+        name=tool['name']
+        schema=tool.get('inputSchema')
+        if (not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',name) or name in allowed or
+                not isinstance(schema,dict) or schema.get('type')!='object' or
+                schema.get('additionalProperties') is not False):
+            raise ValueError('Invalid business analyst tool definition')
+        allowed.add(name)
+        definitions.append({'type':'function','name':name,
+            'description':str(tool.get('description') or '')[:1000],
+            'parameters':schema,'strict':False})
+    input_items=[{'role':'user','content':[{'type':'input_text','text':prompt}]}]
+    seen_calls=set();tool_results=[];used_tools=set();input_tokens=0;output_tokens=0;tool_output_bytes=0;tool_call_count=0
+    for call_index in range(max(1,min(3,int(max_provider_calls)))):
+        wire={'model':model,'store':False,'max_output_tokens':max(16,min(1800,int(max_output_tokens))),
+              'instructions':instructions,'input':input_items,'tools':definitions,
+              # The first turn must read at least one actual source before the
+              # analyst can answer. Follow-up turns may finish without another
+              # tool call once evidence has been collected.
+              'tool_choice':'required' if call_index==0 else 'auto','parallel_tool_calls':False}
+        reservation=before_dispatch(call_index,wire)
+        accepted=False
+        try:
+            response=requests.post('https://api.openai.com/v1/responses',
+                headers={'Authorization':'Bearer '+key},json=wire,
+                timeout=(min(5,request_timeout),request_timeout),allow_redirects=False)
+            if response.status_code!=200:
+                raise ChatAIProviderError(response.status_code,_provider_error_category(response))
+            payload=response.json()
+            if not isinstance(payload,dict) or payload.get('status')!='completed':
+                raise ValueError('Incomplete business analyst response')
+            accepted=True
+            usage=payload.get('usage') if isinstance(payload.get('usage'),dict) else {}
+            try:
+                input_tokens+=max(0,int(usage.get('input_tokens') or 0))
+                output_tokens+=max(0,int(usage.get('output_tokens') or 0))
+            except (TypeError,ValueError,OverflowError):
+                pass
+            output=payload.get('output')
+            if not isinstance(output,list):
+                raise ValueError('Invalid business analyst response')
+            calls=[item for item in output if isinstance(item,dict) and item.get('type')=='function_call']
+            if not calls:
+                text=''.join(part.get('text','') for item in output if isinstance(item,dict) and item.get('type')=='message'
+                    for part in (item.get('content') if isinstance(item.get('content'),list) else [])
+                    if isinstance(part,dict) and part.get('type')=='output_text').strip()
+                if not text or len(text)>12000:
+                    raise ValueError('Invalid business analyst answer')
+                return text,{'input_tokens':input_tokens,'output_tokens':output_tokens,
+                    'total_tokens':input_tokens+output_tokens},tool_results,sorted(used_tools)
+            if call_index+1>=max(1,min(3,int(max_provider_calls))):
+                raise ValueError('Business analyst tool loop limit reached')
+            if tool_call_count+len(calls)>max(1,min(4,int(max_tool_calls))):
+                raise ValueError('Business analyst tool call limit reached')
+            # Preserve the provider's complete output sequence when continuing
+            # a Responses tool turn. Reasoning models can require their
+            # associated reasoning items to accompany the function calls.
+            input_items.extend(output)
+            for call in calls:
+                tool_call_count+=1
+                name=call.get('name');call_id=call.get('call_id');raw_args=call.get('arguments')
+                if (name not in allowed or not isinstance(call_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',call_id)
+                        or not isinstance(raw_args,str) or len(raw_args)>4000):
+                    raise ValueError('Invalid business analyst tool call')
+                try:
+                    args=json.loads(raw_args,object_pairs_hook=_unique_object,
+                        parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                except (ValueError,TypeError,RecursionError):
+                    raise ValueError('Invalid business analyst tool arguments') from None
+                if not isinstance(args,dict):
+                    raise ValueError('Invalid business analyst tool arguments')
+                fingerprint=hashlib.sha256((name+'\0'+json.dumps(args,sort_keys=True,ensure_ascii=False,
+                    separators=(',',':'),allow_nan=False)).encode('utf-8')).hexdigest()
+                duplicate=fingerprint in seen_calls
+                seen_calls.add(fingerprint)
+                if duplicate:
+                    result={'read_only':True,'available':False,'reason':'duplicate_tool_call'}
+                else:
+                    result=execute_tool(name,args)
+                    used_tools.add(name)
+                serialized=json.dumps(result,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+                serialized_bytes=len(serialized.encode('utf-8'))
+                if serialized_bytes>16000 or tool_output_bytes+serialized_bytes>24000:
+                    serialized='{"read_only":true,"available":false,"reason":"tool_result_too_large"}'
+                else:
+                    tool_output_bytes+=serialized_bytes
+                    if not duplicate:tool_results.append({'tool':name,'result':result})
+                input_items.append({'type':'function_call_output','call_id':call_id,'output':serialized})
+        finally:
+            if callable(after_dispatch):after_dispatch(call_index,reservation,accepted)
+    raise ValueError('Business analyst response unavailable')
 
 
 def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90,

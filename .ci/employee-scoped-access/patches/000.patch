@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..a3e6b3d300f5d20694177a4e8823d4e74cf3c9b6
+index 0000000000000000000000000000000000000000..8191dc442e586ffb0a4a759a7e0a7607ea2a55ab
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,95 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -72,6 +72,9 @@ index 0000000000000000000000000000000000000000..a3e6b3d300f5d20694177a4e8823d4e7
 +          tests/test_ai_access_ownership_postgres.py
 +          tests/test_ai_integration_access_preparation.py
 +          tests/test_analytics_scoped_dialog_guard.py
++          tests/test_business_analyst_scoped_boundary.py
++          tests/test_tenant_ai_business_analyst.py
++          tests/test_tenant_ai_business_analytics.py
 +          tests/test_tenant_news_member_read_postgres.py
 +      - name: Interface regressions
 +        run: |
@@ -82,6 +85,7 @@ index 0000000000000000000000000000000000000000..a3e6b3d300f5d20694177a4e8823d4e7
 +          node tests/test_tenant_crm_native_modal_ui.cjs
 +          node tests/test_employee_finance_scopes_ui.cjs
 +          node tests/test_dialog_source_members_ui.cjs
++          node tests/test_tenant_ai_business_analyst_ui.cjs
 +          node tests/test_tenant_news_member_ui.cjs
 +      - name: Chromium employee matrix, tasks and CRM
 +        run: |
@@ -95,6 +99,31 @@ index 0000000000000000000000000000000000000000..a3e6b3d300f5d20694177a4e8823d4e7
 +          name: employee-scope-synthetic-screenshots
 +          path: beintaskbot-main/employee-scope-screenshots/
 +          if-no-files-found: warn
+diff --git a/.github/workflows/tenant-crm-sync.yml b/.github/workflows/tenant-crm-sync.yml
+index 171b9ab785a973d51afb3c55fba37052f8ef3bed..aff8f32bf6c75456330e7bd70c204063a349724b 100644
+--- a/.github/workflows/tenant-crm-sync.yml
++++ b/.github/workflows/tenant-crm-sync.yml
+@@ -7,11 +7,13 @@ on:
+       - "beintaskbot-main/tenant_crm_sync_store.py"
+       - "beintaskbot-main/tenant_crm_sync_policy.py"
+       - "beintaskbot-main/tenant_crm_sync_worker.py"
++      - "beintaskbot-main/tenant_crm_relation_contract.py"
+       - "beintaskbot-main/tenant_crm_sync_import.py"
+       - "beintaskbot-main/tenant_kommo.py"
+       - "beintaskbot-main/tenant_integration_store.py"
+       - "beintaskbot-main/tests/test_tenant_crm_sync.py"
+       - "beintaskbot-main/tests/test_tenant_crm_external_sync.py"
++      - "beintaskbot-main/tests/test_tenant_crm_relation_contract.py"
+       - "beintaskbot-main/tests/test_tenant_kommo.py"
+       - "beintaskbot-main/tests/test_tenant_integration_store.py"
+ 
+@@ -37,5 +39,6 @@ jobs:
+           python -m pytest -q
+           tests/test_tenant_crm_sync.py
+           tests/test_tenant_crm_external_sync.py
++          tests/test_tenant_crm_relation_contract.py
+           tests/test_tenant_kommo.py
+           tests/test_tenant_integration_store.py
 diff --git a/beintaskbot-main/bot.py b/beintaskbot-main/bot.py
 index 09a1230ec3565e412c36b08252c7e9cf5af6d039..0d676d65c88bca115a592306800d3e392c83e8a0 100644
 --- a/beintaskbot-main/bot.py
@@ -115,6 +144,88 @@ index 09a1230ec3565e412c36b08252c7e9cf5af6d039..0d676d65c88bca115a592306800d3e39
          deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
          request_invite_acceptance=request_tenant_invite_acceptance,
          list_invite_requests=list_tenant_invite_requests,
+diff --git a/beintaskbot-main/docs/crm-relation-sync-contract.md b/beintaskbot-main/docs/crm-relation-sync-contract.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea5944052aa69e4764de0fa80dced3beff934ec7
+--- /dev/null
++++ b/beintaskbot-main/docs/crm-relation-sync-contract.md
+@@ -0,0 +1,76 @@
++# Inactive relation synchronization contract
++
++`tenant_crm_relation_contract.py` is preparation only. No application route,
++worker, scheduler or migration imports it. It performs no I/O, changes no
++permissions, enables no provider capability and does not remove the existing
++`scoped_relation_sync_not_configured` guard. No real provider calls were used to
++develop or test it.
++
++## Implemented, independent of provider semantics
++
++- An immutable, versioned `RelationIntent` records the exact human actor, source
++  card, source `update` action, changed row, previous and new targets, and the
++  timezone-aware post-change local revision. It represents the existing local
++  deal/contact and contact/company operations, including both source-card
++  directions. It does not authorize them.
++- External identities carry the tenant, provider, provider account and
++  connection generation. Mixed bindings, unrelated source cards, incorrect
++  reverse-card unlink, identity collisions and no-op local changes are rejected.
++  Account and generation values are server-resolved identifiers, never tokens.
++  This is a required data shape, not a new database mapping implementation.
++- Strict serialization accepts only that shape. Full record fields, credentials,
++  provider request bodies, unknown versions and non-update actions are rejected.
++  A canonical content fingerprint distinguishes changed intent under the same
++  event ID. It is not a provider idempotency key or an exactly-once guarantee.
++- An optional `ProviderExpectation` records an adapter contract version and
++  digests of the complete expected and desired remote relation states. It has no
++  default inferred from the local FK. An adapter must include cardinality and
++  relevant metadata such as every Kommo contact and its main-contact flag.
++- A pure observation classifier rejects evidence for a different event,
++  account/generation or adapter contract. Missing observations stay unknown;
++  divergent states are conflicts. An unchanged read after a timeout or an
++  acknowledged request does not prove safe replay. Expired leases are not
++  accepted as proof that a request was never sent.
++
++`expected_observed` and `desired_observed` describe evidence, not permission to
++send or proof this event succeeded. In particular, a desired read-back does not
++prove this event caused the state or resolve an in-flight request. No classifier
++result sends, retries, marks an event synced, or deletes an event.
++
++## Required before connecting this to live operations
++
++1. Approve how the local single-contact FK maps to Kommo's multi-contact lead,
++   including primary selection, replacement and unlink. Confirm BEIN's exact
++   relation-only link/clear and read-back contracts. Validate any idempotency,
++   version or compare-and-set guarantees; headers alone are not proof.
++2. Implement durable account/generation-bound identity storage, including company
++   identities, with explicit handling of old mappings and reconnection. Do not
++   infer a binding from the current connection for a historical mapping.
++3. Atomically persist the local mutation and a separate relation outbox intent.
++   Enforce event-ID/content consistency, serialize changes to the same relation,
++   and check the current local relation and revision before delivery. Do not
++   route a relation event through the existing full-record exporter.
++4. Revalidate the current tenant, active membership and **source card's U
++   permission**, sync policy, mapping bindings and provider connection before
++   delivery, using database fences. A stored actor or successful deserialization
++   is not authorization. Handle revocation, local supersession and changes
++   between checks and provider delivery explicitly.
++5. Define lease ownership, request-outcome evidence, concurrent remote edits,
++   unknown/conflict recovery and read-back consistency for each approved adapter.
++   No automatically retried write can be inferred from the classifier alone.
++6. Verify this complete chain with isolated PostgreSQL and mocked transport,
++   including revocation/concurrency, reconnect, multi-contact preservation,
++   timeout-after-apply and crash recovery, before considering activation.
++
++These are remaining implementation and product prerequisites, not permanent
++product restrictions. The current module supplies a reusable contract without
++choosing the unresolved provider behavior.
++
++## Verification
++
++`python -m pytest -q tests/test_tenant_crm_relation_contract.py` tests synthetic
++round trips, narrow payloads, source-card direction and exact unlink, each binding
++boundary, immutable data, event fingerprints, explicit provider semantics and
++unknown/conflict observations. The existing mocked CRM synchronization workflow
++includes this suite. There is no database schema or enabled dispatcher for it to
++exercise yet; these tests do not establish end-to-end sync readiness.
 diff --git a/beintaskbot-main/docs/dialog-source-scope-rollout.md b/beintaskbot-main/docs/dialog-source-scope-rollout.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..735c9ffd69d0fd8e1bd87731f77fcaed46b9e91d
@@ -314,10 +425,10 @@ index 0000000000000000000000000000000000000000..7b20778ff2ae8e23a4cf887422904abe
 +Disposable localhost PostgreSQL tests verify historical backfill and unresolved owners, unchanged task executors, tenant-composite foreign keys, transactional rollback, idempotent startup without filling new NULL documents, department changes, membership revocation, shared/exclusive tenant fencing, workflow write rejection and preservation of unrelated settings. These tests use synthetic databases only and send no provider traffic.
 diff --git a/beintaskbot-main/docs/native-crm-scoped-access.md b/beintaskbot-main/docs/native-crm-scoped-access.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..d7de59771fb96e9e2a9dccfd1d488f3534492bc4
+index 0000000000000000000000000000000000000000..665d19a1b4be43dfdab0678c3ad9cc2bcba87970
 --- /dev/null
 +++ b/beintaskbot-main/docs/native-crm-scoped-access.md
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,38 @@
 +# Native CRM scoped access
 +
 +Implementation is behind `TENANT_SCOPED_ACCESS_ENABLED`; it is not an approval to enable the rollout. With the gate off, the contact directory uses its original company/deal routes and guards; the new narrow contact relation routes reject with `scoped_relation_unavailable` (403). Company-card contact unlink keeps its legacy delete check when off. The server explicitly supplies the UI relation mode and row-specific company relation capabilities; the browser never infers rollout from role or a guessed scope. The native sections are `deals`, `customers` (contacts), and `companies`. An absent cell retains its previous native CRUD permission, without converting a provider permission into an all-record scope.
@@ -347,6 +458,7 @@ index 0000000000000000000000000000000000000000..d7de59771fb96e9e2a9dccfd1d488f35
 +   - The current company entity is absent from `ENTITY_TYPES` and the external identity table's entity-type constraint. Existing mappings lack provider-account/integration-generation binding. Company relations cannot be sent safely by guessing an external ID or reusing an identity after reconnection.
 +   - BEIN ERP's current implementation PATCHes `crm/leads/{id}` with `partner_id`; a confirmed relation-only clear/unlink payload and provider idempotency guarantee have not been established from [its documentation](https://docs.beinsystems.az/docs/api/). Existing client headers alone are not proof of server behavior.
 +   - A durable safe relation event would additionally need exact actor, source-card U action, old/new targets, account-bound identity and expected relation state, with permission revalidation before delivery and explicit unknown/conflict recovery. The current full-record outbox contains no such contract. These are implementation prerequisites plus unresolved provider semantics, not permission to send other fields.
++   - An [inactive relation contract](crm-relation-sync-contract.md) now provides strict, immutable event serialization, account/generation-bound identity checks and pure read-back classification. It is not imported by runtime code, creates no outbox or mapping schema and does not remove this blocker. Provider interpretation, transactional persistence, current authorization checks and the delivery/recovery chain still need implementation and verification.
 +
 +4. CRM-specific frontend behavior for independent record actions and scoped-relationship 409 responses still needs the wider rollout review. The existing contact-directory browser regressions are distinct from full scoped-matrix UI acceptance.
 +
@@ -356,7 +468,7 @@ index 0000000000000000000000000000000000000000..d7de59771fb96e9e2a9dccfd1d488f35
 +
 +The existing native CRUD, source-qualified directory, AI native action, WhatsApp identity and browser directory suites remain regression targets. Never use a production DSN or send test messages to real contacts.
 diff --git a/beintaskbot-main/docs/tenant-app.html b/beintaskbot-main/docs/tenant-app.html
-index 67ed2050992fab8bc39f3ab28e56bbb2ee550f22..c31b7d889a62da0620cbe601a4bda7ee710cc920 100644
+index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..745e976e3be2e61e58ecd56cdbfb722fb73dbc1e 100644
 --- a/beintaskbot-main/docs/tenant-app.html
 +++ b/beintaskbot-main/docs/tenant-app.html
 @@ -338,8 +338,8 @@
@@ -379,7 +491,7 @@ index 67ed2050992fab8bc39f3ab28e56bbb2ee550f22..c31b7d889a62da0620cbe601a4bda7ee
    document.addEventListener('click',e=>{const edit=e.target.closest('[data-native-edit]');if(edit){const [type,id]=edit.dataset.nativeEdit.split(':');if(type==='contact')editNativeContact(id);if(type==='company')editNativeCompany(id);if(type==='deal')editNativeDeal(id);if(type==='task')editNativeTask(id);return}const b=e.target.closest('[data-native-open]');if(b){const [type,id]=b.dataset.nativeOpen.split(':');openNativeEntityCard(type,id)}});
    function loadNativeContacts(query=$('customerSearch').value){return window.tenantContactsDirectory?.refresh(query)}
    let nativeDealOptions={workflows:[],members:[],contacts:[],companies:[]};
-@@ -713,6 +713,7 @@
+@@ -714,6 +714,7 @@
  <script src="/assets/tenant-push.js"></script>
  <script src="/assets/tenant-workspace.js"></script>
  <script src="/assets/tenant-members-ui.js"></script>

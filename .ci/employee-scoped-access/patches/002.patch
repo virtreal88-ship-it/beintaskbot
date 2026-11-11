@@ -298,7 +298,7 @@ index 538cacfdf5db4dd092ec40fdc5460fe7003ad2c1..fd7926bbb3e5cfaa442c66cd93978904
                      result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
                  elif resource == 'triggers':
 diff --git a/beintaskbot-main/tenant_ai_agents_schema.py b/beintaskbot-main/tenant_ai_agents_schema.py
-index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..9c9f9e012941c5ada6454fd5a8233a98a3ceb6b1 100644
+index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..1d1c423a1144dcb872d0089ae1d0385b984e3364 100644
 --- a/beintaskbot-main/tenant_ai_agents_schema.py
 +++ b/beintaskbot-main/tenant_ai_agents_schema.py
 @@ -11,6 +11,7 @@ _lock = Lock()
@@ -318,15 +318,25 @@ index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..9c9f9e012941c5ada6454fd5a8233a98
          'enabled expert_policy id instructions language mode model name response_policy role '
          'safety schedule scopes setup_key style tenant_id updated_at version '
      ).split(),
-@@ -219,6 +220,7 @@ _SCHEMA_COLUMNS = {
+@@ -204,7 +205,7 @@ _SCHEMA_COLUMNS = {
+         'created_at event_key message_id tenant_id ticket_id '
+     ).split(),
+     'saas_support_tickets': (
+-        'assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
++        'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
+         'channel_id completion_note completion_outcome conversation_id created_at created_by '
+         'description history_scope id knowledge_candidate_requested next_steps reason '
+         'resolved_at source status suggestions summary summary_agent_binding '
+@@ -219,6 +220,8 @@ _SCHEMA_COLUMNS = {
      ).split(),
  }
  _SCHEMA_INDEXES = [
 +    'saas_ai_agents_access_owner_idx',
++    'saas_support_tickets_access_owner_idx',
      'saas_ai_accepted_run_idx',
      'saas_ai_agent_drafts_pending_idx',
      'saas_ai_agent_jobs_ready_idx',
-@@ -273,6 +275,11 @@ def _schema_current(conn):
+@@ -273,6 +276,16 @@ def _schema_current(conn):
          cur.execute("""SELECT
            EXISTS(SELECT 1 FROM saas_ai_scope_migrations WHERE version=1)
            AND EXISTS(SELECT 1 FROM saas_ai_compat_migrations WHERE version=1)
@@ -335,10 +345,15 @@ index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..9c9f9e012941c5ada6454fd5a8233a98
 +          AND EXISTS(SELECT 1 FROM pg_constraint
 +            WHERE conrelid='saas_ai_agents'::regclass AND conname='saas_ai_agents_access_owner_fk'
 +              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
++          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
++            WHERE migration_key='historical-access-owner-v1:saas_support_tickets')
++          AND EXISTS(SELECT 1 FROM pg_constraint
++            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_tickets_access_owner_fk'
++              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
            AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_settings
              WHERE operating_mode='test' OR
                (support_case_extraction_enabled AND support_case_extraction_mode='off'))
-@@ -425,6 +432,8 @@ def ensure_schema(conn):
+@@ -425,6 +438,8 @@ def ensure_schema(conn):
                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                UNIQUE(tenant_id,id),
                FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')

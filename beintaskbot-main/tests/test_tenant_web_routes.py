@@ -17,6 +17,7 @@ MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/risks/dry-run"),("GET","/api/platform/risks/alerts/{alert_id}"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += (("GET","/api/platform/crm/chat/quote-receipt"),)
+EXPECTED_API += (("POST","/api/platform/ai/analytics/tools"),("POST","/api/platform/ai/analytics/ask"))
 EXPECTED_API += (("POST","/api/platform/crm/chat/send-voice"),("GET","/api/platform/crm/chat/voice-receipt"),("POST","/api/platform/crm/chat/voice-manual-confirmation"),("GET","/api/platform/crm/chat/voice-capability"),("GET","/api/platform/crm/chat/voice-status"))
 EXPECTED_API += (("GET","/api/platform/notifications"),("POST","/api/platform/notifications/{notification_id}/read"))
 EXPECTED_API += tuple((method,path) for path,methods in [
@@ -31,6 +32,7 @@ EXPECTED_API += tuple((method,path) for path,methods in [
 EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowledge-pilot-admin.js","/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-ai-teams.js","/assets/tenant-ai-teams.css","/assets/tenant-knowledge-center.js","/assets/tenant-knowledge-center.css","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
 
 EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js']
+EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.js']
 
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instruction-catalog.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
@@ -60,6 +62,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/replies/{id}/draft', ('POST',)),
     ('dialogs/asr-comparison', ('GET', 'POST')),
     ('analytics/tools', ('POST',)),
+    ('analytics/ask', ('POST',)),
     ('dialogs/audio-transcription', ('GET', 'POST')),
     ('dialogs/read', ('POST',)),
     ('dialogs/read-all', ('POST',)),
@@ -139,6 +142,7 @@ FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_hand
     'customer_voice_manual_confirmation_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'business_analytics_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
+FACTORIES += ('business_analyst_handler',)
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):

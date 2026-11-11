@@ -513,6 +513,263 @@ index 25f881cd306697ae941594242cdefbe344ced7ed..84ba571d3f8d1f0f332e5131e898ec30
              if result.status != 'delivered':
                  logger.warning('Tenant CRM notice result=%s channel=%s', result.status, channel)
              await asyncio.to_thread(finish, item, result.status, result.message_id)
+diff --git a/beintaskbot-main/tenant_crm_relation_contract.py b/beintaskbot-main/tenant_crm_relation_contract.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5ff4c1418a4ae705245513ebf489fbb64e68bf05
+--- /dev/null
++++ b/beintaskbot-main/tenant_crm_relation_contract.py
+@@ -0,0 +1,251 @@
++"""Inactive, provider-neutral contract for future relation-only synchronization.
++
++Nothing imports this module from a route, queue, migration or provider worker.
++It performs no I/O and grants no permission to send. In particular, a local FK
++change does not determine the provider's desired relation set. An independently
++approved adapter must supply that interpretation and complete state digests.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime, timezone
++import hashlib
++import json
++import re
++import uuid
++
++
++class RelationContractError(ValueError):
++    """Static errors only: never echo provider payloads or customer data."""
++
++
++def _uuid(value):
++    if not isinstance(value, str):
++        raise RelationContractError('invalid_record_identity')
++    try:
++        return str(uuid.UUID(value))
++    except ValueError:
++        raise RelationContractError('invalid_record_identity') from None
++
++
++def _text(value):
++    if (not isinstance(value, str) or not 1 <= len(value) <= 240
++            or value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
++        raise RelationContractError('invalid_binding_identifier')
++    return value
++
++
++def _digest(value):
++    if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
++        raise RelationContractError('invalid_relation_digest')
++    return value
++
++
++def _object(value, keys):
++    if not isinstance(value, dict) or set(value) != set(keys):
++        raise RelationContractError('invalid_relation_payload')
++    return value
++
++
++@dataclass(frozen=True)
++class RecordRef:
++    entity_type: str
++    internal_id: str
++
++    def __post_init__(self):
++        if self.entity_type not in ('contact', 'deal', 'company'):
++            raise RelationContractError('invalid_relation_entity')
++        object.__setattr__(self, 'internal_id', _uuid(self.internal_id))
++
++
++@dataclass(frozen=True)
++class ProviderBinding:
++    tenant_id: str
++    provider: str
++    account_id: str
++    connection_generation: str
++
++    def __post_init__(self):
++        object.__setattr__(self, 'tenant_id', _uuid(self.tenant_id))
++        if self.provider not in ('kommo', 'beinsystems'):
++            raise RelationContractError('invalid_relation_provider')
++        _text(self.account_id)
++        _text(self.connection_generation)
++
++
++@dataclass(frozen=True)
++class BoundIdentity:
++    record: RecordRef
++    external_id: str
++    binding: ProviderBinding
++
++    def __post_init__(self):
++        if not isinstance(self.record, RecordRef) or not isinstance(self.binding, ProviderBinding):
++            raise RelationContractError('invalid_bound_identity')
++        _text(self.external_id)
++
++
++@dataclass(frozen=True)
++class ProviderExpectation:
++    """Adapter-owned full relation state, not hashes of the single local FK.
++
++    The version identifies approved normalization and operation semantics.
++    Digests must cover the complete relevant relation set and provider metadata
++    (e.g. all Kommo contacts and main-contact flags), including empty states.
++    This module cannot establish that an adapter has such an approved contract.
++    """
++    contract_version: str
++    expected_digest: str
++    desired_digest: str
++
++    def __post_init__(self):
++        _text(self.contract_version)
++        _digest(self.expected_digest)
++        _digest(self.desired_digest)
++
++
++# These describe already implemented local FK changes, not provider support or
++# new authorization. Company -> deal and create-time selection are not implied.
++_RELATIONS = {'deal_contact': ('deal', 'contact'), 'contact_company': ('contact', 'company')}
++
++
++@dataclass(frozen=True)
++class RelationIntent:
++    event_id: str
++    actor_id: int
++    source: RecordRef
++    relation: str
++    changed: BoundIdentity
++    before: BoundIdentity | None
++    after: BoundIdentity | None
++    local_revision: datetime
++    provider_expectation: ProviderExpectation | None = None
++
++    def __post_init__(self):
++        object.__setattr__(self, 'event_id', _uuid(self.event_id))
++        if type(self.actor_id) is not int or self.actor_id <= 0:
++            raise RelationContractError('human_actor_required')
++        if not isinstance(self.source, RecordRef) or not isinstance(self.changed, BoundIdentity):
++            raise RelationContractError('invalid_relation_source')
++        if not isinstance(self.relation, str) or self.relation not in _RELATIONS:
++            raise RelationContractError('invalid_local_relation')
++        changed_type, target_type = _RELATIONS[self.relation]
++        if self.changed.record.entity_type != changed_type:
++            raise RelationContractError('invalid_changed_entity')
++        targets = []
++        for target in (self.before, self.after):
++            if target is None:
++                continue
++            if not isinstance(target, BoundIdentity) or target.record.entity_type != target_type:
++                raise RelationContractError('invalid_relation_target')
++            if target.binding != self.changed.binding:
++                raise RelationContractError('relation_binding_mismatch')
++            targets.append(target)
++        if (self.before.record if self.before else None) == (self.after.record if self.after else None):
++            raise RelationContractError('no_local_relation_change')
++        if len(targets) == 2 and targets[0].external_id == targets[1].external_id:
++            raise RelationContractError('external_identity_collision')
++        if self.source not in [self.changed.record, *(target.record for target in targets)]:
++            raise RelationContractError('source_not_in_relation')
++        # Reverse-card linking can assign only that source; reverse-card
++        # unlinking can clear only that exact source, never another relation.
++        if self.source != self.changed.record:
++            target = self.after if self.after is not None else self.before
++            if target.record != self.source:
++                raise RelationContractError('source_action_mismatch')
++        if (not isinstance(self.local_revision, datetime)
++                or self.local_revision.tzinfo is None or self.local_revision.utcoffset() is None):
++            raise RelationContractError('timezone_aware_revision_required')
++        object.__setattr__(self, 'local_revision', self.local_revision.astimezone(timezone.utc))
++        if self.provider_expectation is not None and not isinstance(self.provider_expectation, ProviderExpectation):
++            raise RelationContractError('invalid_provider_expectation')
++
++    def to_payload(self):
++        def record(ref):
++            return {'entity_type': ref.entity_type, 'internal_id': ref.internal_id}
++        def identity(ref):
++            return None if ref is None else {**record(ref.record), 'external_id': ref.external_id}
++        binding, expectation = self.changed.binding, self.provider_expectation
++        return {'version': 1, 'event_id': self.event_id, 'actor_id': self.actor_id,
++                'source': record(self.source), 'source_action': 'update',
++                'binding': {'tenant_id': binding.tenant_id, 'provider': binding.provider,
++                            'account_id': binding.account_id,
++                            'connection_generation': binding.connection_generation},
++                'relation': self.relation, 'changed': identity(self.changed),
++                'before': identity(self.before), 'after': identity(self.after),
++                'local_revision': self.local_revision.isoformat(),
++                'provider_expectation': None if expectation is None else {
++                    'contract_version': expectation.contract_version,
++                    'expected_digest': expectation.expected_digest,
++                    'desired_digest': expectation.desired_digest}}
++
++    @classmethod
++    def from_payload(cls, value):
++        data = _object(value, ('version', 'event_id', 'actor_id', 'source', 'source_action',
++                              'binding', 'relation', 'changed', 'before', 'after',
++                              'local_revision', 'provider_expectation'))
++        if type(data['version']) is not int or data['version'] != 1 or data['source_action'] != 'update':
++            raise RelationContractError('unsupported_relation_contract')
++        binding = ProviderBinding(**_object(data['binding'],
++            ('tenant_id', 'provider', 'account_id', 'connection_generation')))
++        source = RecordRef(**_object(data['source'], ('entity_type', 'internal_id')))
++        def identity(value):
++            if value is None:
++                return None
++            row = _object(value, ('entity_type', 'internal_id', 'external_id'))
++            return BoundIdentity(RecordRef(row['entity_type'], row['internal_id']), row['external_id'], binding)
++        if not isinstance(data['local_revision'], str):
++            raise RelationContractError('invalid_local_revision')
++        try:
++            revision = datetime.fromisoformat(data['local_revision'])
++        except ValueError:
++            raise RelationContractError('invalid_local_revision') from None
++        expectation = data['provider_expectation']
++        if expectation is not None:
++            expectation = ProviderExpectation(**_object(expectation,
++                ('contract_version', 'expected_digest', 'desired_digest')))
++        return cls(data['event_id'], data['actor_id'], source, data['relation'], identity(data['changed']),
++                   identity(data['before']), identity(data['after']), revision, expectation)
++
++    def fingerprint(self):
++        """Content identity for collision checks, NOT provider idempotency."""
++        encoded = json.dumps(self.to_payload(), sort_keys=True, separators=(',', ':'), ensure_ascii=True)
++        return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
++
++
++def classify_observation(intent, *, event_fingerprint, binding, contract_version,
++                         observed_digest, attempt_outcome):
++    """Classify read-back evidence, never authorize a write or automatic retry.
++
++    'expected_observed' is not send-ready: current source-card U, tenant and
++    membership, policy, mappings, local revision and a provider concurrency
++    strategy still need transactional revalidation. Even a desired observation
++    does not prove that this event caused it or settle an in-flight request.
++    """
++    if not isinstance(intent, RelationIntent) or not isinstance(binding, ProviderBinding):
++        raise RelationContractError('invalid_observation_binding')
++    if attempt_outcome not in ('not_started', 'definitely_not_sent', 'unknown', 'acknowledged'):
++        raise RelationContractError('invalid_attempt_outcome')
++    _digest(event_fingerprint)
++    if observed_digest is not None:
++        _digest(observed_digest)
++    if event_fingerprint != intent.fingerprint():
++        return 'event_changed'
++    if binding != intent.changed.binding:
++        return 'connection_changed'
++    expectation = intent.provider_expectation
++    if expectation is None:
++        return 'provider_contract_missing'
++    if contract_version != expectation.contract_version:
++        return 'provider_contract_changed'
++    if observed_digest is None:
++        return 'observation_unknown'
++    if observed_digest == expectation.desired_digest:
++        return 'desired_observed'
++    if observed_digest != expectation.expected_digest:
++        return 'relation_conflict'
++    # An expired lease or a timeout is not proof the request was never sent.
++    # An unchanged read may race the first request; never infer safe replay.
++    if attempt_outcome in ('unknown', 'acknowledged'):
++        return 'outcome_unknown'
++    return 'expected_observed'
 diff --git a/beintaskbot-main/tenant_customer_voice_service.py b/beintaskbot-main/tenant_customer_voice_service.py
 index a06533c4601b866aa80a82c66ee470b63eaf68e4..820cfd508437c2c0f2fcdd79ba6ddc7623ea1a4c 100644
 --- a/beintaskbot-main/tenant_customer_voice_service.py
@@ -922,288 +1179,3 @@ index 2045f31af162eb55dadecbbb9efce7a4725bad62..97210e6390a3961df808e0e747d4b0cf
      from tenant_support_case_context import load_scope
      case=load_scope(cur,tenant,identifier(case_id),channel,conversation)
      if sending and case['status']=='resolved':raise TenantLinearError('Обращение уже закрыто.',409)
-diff --git a/beintaskbot-main/tenant_finance.py b/beintaskbot-main/tenant_finance.py
-index a9879f7d24e6c55068c5f8aaa62d7545be37cf3d..6efc124375019739d98ed8fd67f37afb9eb0ca67 100644
---- a/beintaskbot-main/tenant_finance.py
-+++ b/beintaskbot-main/tenant_finance.py
-@@ -6,6 +6,9 @@ from tenant_platform import _connect
- from tenant_finance_schema import ensure_finance_schema
- from tenant_finance_policy import finance_policy,entry_id,minor_amount,money_text,TenantFinanceError
- from tenant_policy import positive_id
-+from tenant_scoped_access import scoped_access_enabled
-+from tenant_scoped_access_store import read_access_profile
-+from tenant_finance_policy import finance_member_sql,finance_member_allowed,finance_capabilities
- 
- 
- def public_entry(row: dict) -> dict:
-@@ -17,7 +20,49 @@ def public_entry(row: dict) -> dict:
-     return result
- 
- 
-+def _current_policy(cur, profile, *, write=False, recipient=None, everyone=False):
-+    tenant,user=str(profile['tenant_id']),int(profile['telegram_id'])
-+    # Match membership/workflow writers: tenant, sorted policy keys, then
-+    # numerically sorted members. Reads lock every authority dependency before
-+    # taking a fresh READ COMMITTED profile, never an older snapshot captured
-+    # before a pending revocation finished. Ledger/reward writers take the same
-+    # target membership FOR UPDATE, keeping history balance/count/page stable.
-+    cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,));cur.fetchall()
-+    cur.execute("""SELECT policy_key FROM saas_tenant_workflow_policies
-+        WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
-+        ORDER BY policy_key FOR SHARE""",(tenant,['finance','members','modules']));cur.fetchall()
-+    args=[tenant]
-+    clause=''
-+    if not everyone:
-+        clause=' AND telegram_id=ANY(%s::bigint[])'
-+        args.append(sorted({user,int(recipient or user)}))
-+    cur.execute('SELECT telegram_id FROM saas_tenant_members WHERE tenant_id=%s::uuid'+clause+
-+        ' ORDER BY telegram_id'+(' FOR UPDATE' if write else ' FOR SHARE'),args)
-+    cur.fetchall()
-+    current=read_access_profile(cur,tenant,user)
-+    if not current:
-+        raise TenantFinanceError('Maliyyə üçün icazəniz yoxdur.',403)
-+    return finance_policy(current,write=write)
-+
-+
-+def _scoped_members(profile, *, limit=100, offset=0):
-+    limit=max(1,min(int(limit),100));offset=max(0,min(int(offset),100000))
-+    with _connect() as conn:
-+        ensure_finance_schema(conn)
-+        with conn.cursor() as cur:
-+            cur.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ WRITE')
-+            policy=_current_policy(cur,profile,everyone=True)
-+            where,args=finance_member_sql(policy.profile)
-+            cur.execute('SELECT count(*) AS total FROM saas_tenant_members m WHERE '+where,args)
-+            total=int(cur.fetchone()['total'])
-+            cur.execute('SELECT m.telegram_id,m.display_name,m.active FROM saas_tenant_members m WHERE '+where+
-+                ' ORDER BY m.display_name,m.telegram_id LIMIT %s OFFSET %s',[*args,limit,offset])
-+            rows=cur.fetchall()
-+    return {'members':rows,'total':total,'has_more':offset+len(rows)<total,**finance_capabilities(policy)}
-+
-+
- def list_members(profile: dict, *, limit: int=100, offset: int=0) -> dict:
-+    if scoped_access_enabled():return _scoped_members(profile,limit=limit,offset=offset)
-     policy=finance_policy(profile,write=True)
-     with _connect() as conn:
-         ensure_finance_schema(conn)
-@@ -34,18 +79,21 @@ def history(profile: dict, *, member_id: object=None, limit: int=50, offset: int
-     member=positive_id(member_id if member_id is not None else profile['telegram_id'])
-     if not member:
-         raise TenantFinanceError('Əməkdaşı seçin.')
--    if not policy.privileged and member!=positive_id(profile['telegram_id']):
-+    if not scoped_access_enabled() and not policy.privileged and member!=positive_id(profile['telegram_id']):
-         raise TenantFinanceError('Yalnız öz balansınızı görə bilərsiniz.',403)
-     tenant=str(profile['tenant_id']);limit=max(1,min(int(limit),100));offset=max(0,min(int(offset),100000))
-     with _connect() as conn:
-         ensure_finance_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
--            cur.execute('SELECT display_name,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,member))
-+            cur.execute('SET TRANSACTION ISOLATION LEVEL '+
-+                ('READ COMMITTED READ WRITE' if scoped_access_enabled() else 'REPEATABLE READ READ ONLY'))
-+            if scoped_access_enabled():policy=_current_policy(cur,profile,recipient=member)
-+            cur.execute('SELECT tenant_id,telegram_id,department_id,display_name,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,member))
-             person=cur.fetchone()
--            if not person:
-+            if not person or (scoped_access_enabled() and not finance_member_allowed(policy,person)):
-                 raise TenantFinanceError('Əməkdaş tapılmadı.',404)
--            # One snapshot keeps balance, count and the page consistent while writes occur.
-+            # Scoped reads hold the recipient lock; legacy reads retain their snapshot.
-+            # Both keep balance, count and the page consistent with ledger writers.
-             cur.execute('''SELECT COALESCE(sum(amount_minor),0) AS balance,count(*) AS total
-                 FROM saas_finance_entries WHERE tenant_id=%s::uuid AND member_id=%s''',(tenant,member))
-             summary=cur.fetchone()
-@@ -56,7 +104,7 @@ def history(profile: dict, *, member_id: object=None, limit: int=50, offset: int
-             rows=cur.fetchall()
-     return {'entries':[public_entry(row) for row in rows],'balance':money_text(int(summary['balance'])),
-             'total':int(summary['total']),'currency':'AZN','member_id':member,'display_name':person['display_name'],
--            'active':person['active'],'can_write':policy.privileged,'can_view_all':policy.privileged}
-+            'active':person['active'],**finance_capabilities(policy)}
- 
- 
- def record(profile: dict, data: dict) -> dict:
-@@ -75,6 +123,7 @@ def record(profile: dict, data: dict) -> dict:
-     with _connect() as conn:
-         ensure_finance_schema(conn)
-         with conn.cursor() as cur:
-+            if scoped_access_enabled():policy=_current_policy(cur,profile,write=True,recipient=member)
-             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('finance:'+tenant+':'+str(user)+':'+request,))
-             cur.execute('SELECT * FROM saas_finance_entries WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',(tenant,user,request))
-             previous=cur.fetchone()
-diff --git a/beintaskbot-main/tenant_finance_policy.py b/beintaskbot-main/tenant_finance_policy.py
-index 0ee30898682423f9fc88f384af5d8d0cb5ef0a0a..d2d63ddea5d21fc266bf04d2e0e7d7f8354d362d 100644
---- a/beintaskbot-main/tenant_finance_policy.py
-+++ b/beintaskbot-main/tenant_finance_policy.py
-@@ -11,16 +11,63 @@ class TenantFinanceError(ValueError):
- 
- 
- def finance_policy(profile: dict, *, write: bool=False) -> TenantPolicy:
-+    from tenant_scoped_access import scoped_access_enabled
-+    if scoped_access_enabled() and not isinstance(profile.get('permissions'),list):
-+        profile={**profile,'permissions':[]}
-     policy=TenantPolicy(profile)
-     if profile.get('tenant_status','active') not in {'active','onboarding','ready_for_integration'}:
-         raise TenantFinanceError('Şirkət kabineti aktiv deyil.',403)
--    if not profile.get('tenant_id') or not positive_id(profile.get('telegram_id')) or profile.get('active') is not True or not policy.allows('finance'):
-+    scope=policy.action_scope('finance','view')
-+    allowed=policy.legacy_allows('finance') if write or scope is None else scope!='none'
-+    if not profile.get('tenant_id') or not positive_id(profile.get('telegram_id')) or profile.get('active') is not True or not allowed:
-         raise TenantFinanceError('Maliyyə üçün icazəniz yoxdur.',403)
-     if write and not policy.privileged:
-         raise TenantFinanceError('Əməliyyat üçün administrator icazəsi lazımdır.',403)
-     return policy
- 
- 
-+def finance_scope(policy):
-+    scope=policy.action_scope('finance','view')
-+    return scope if scope is not None else 'all' if policy.privileged else 'self'
-+
-+
-+def finance_member_allowed(policy,person):
-+    if not person or str(person.get('tenant_id'))!=str(policy.profile.get('tenant_id')):
-+        return False
-+    if policy.has_scoped_access('finance','view'):
-+        return policy.allows_resource('finance','view',{**person,
-+            'responsible_member_id':person.get('telegram_id'),
-+            'responsible_department_id':person.get('department_id')})
-+    return policy.privileged or positive_id(person.get('telegram_id'))==positive_id(policy.profile.get('telegram_id'))
-+
-+
-+def finance_member_sql(profile,alias='m'):
-+    from tenant_scoped_access_store import resource_scope_sql
-+    policy=finance_policy(profile)
-+    if policy.has_scoped_access('finance','view'):
-+        return resource_scope_sql(profile,'finance','view',alias=alias,responsible_column='telegram_id')
-+    # Legacy read behavior is self for non-admins and tenant-wide for admins.
-+    sql=f'{alias}.tenant_id=%s::uuid';args=[str(profile['tenant_id'])]
-+    if not policy.privileged:
-+        sql+=f' AND {alias}.telegram_id=%s';args.append(int(profile['telegram_id']))
-+    return sql,args
-+
-+
-+def finance_capabilities(policy):
-+    try:
-+        finance_policy(policy.profile,write=True)
-+        can_write=True
-+    except TenantFinanceError:
-+        can_write=False
-+    try:
-+        finance_policy(policy.profile)
-+        scope=finance_scope(policy)
-+    except TenantFinanceError:
-+        scope='none'
-+    return {'can_write':can_write,'can_view_all':scope=='all',
-+            'can_select_members':scope in {'department','all'},'read_scope':scope}
-+
-+
- def entry_id(value: object) -> str:
-     try:
-         return str(uuid.UUID(str(value)))
-diff --git a/beintaskbot-main/tenant_member_access.py b/beintaskbot-main/tenant_member_access.py
-index b25642dec1e1ea97723b98a521ec8941bc17de41..a47542c3408e660903d4414eaabacfd9758ffc8d 100644
---- a/beintaskbot-main/tenant_member_access.py
-+++ b/beintaskbot-main/tenant_member_access.py
-@@ -19,7 +19,7 @@ PAGE_MODULES = {
-     'knowledge_center': 'ai_agents', 'support_cases': 'ai_agents',
-     'ai_testing': 'ai_agents', 'hot_orders': 'hot_orders',
-     'approvals': 'tasks', 'finance': 'finance', 'integrations': 'integrations',
--    'settings': 'settings', 'linear': 'linear', 'news': 'linear',
-+    'settings': 'settings', 'linear': 'linear', 'news': None,
-     'instructions': None, 'profile': None,
- }
- 
-@@ -60,10 +60,23 @@ def page_capabilities(profile):
-     from tenant_policy import positive_id
-     pages['instructions'] = bool(profile.get('tenant_id') and positive_id(profile.get('telegram_id'))
-                                  and profile.get('tenant_status', 'active') == 'active')
--    # News additionally requires the integration's can_review_news binding.
--    # That existing source-specific check remains in newsAvailable/API policy.
-+    # Only published news is shared. Review and publication still enforce
-+    # their existing Linear reviewer binding through tenant_news.access().
-+    pages['news'] = pages['instructions']
-+    for page, module in {'tasks': 'tasks', 'customers': 'customers', 'companies': 'companies',
-+                         'deals': 'deals', 'dialogs': 'dialogs'}.items():
-+        if policy.has_scoped_access(module):
-+            pages[page] = any(policy.allows_action(module, action) for action in CRUD_ACTIONS)
-+            if page == 'tasks':
-+                # The assigned-task exception needs an entry point even when
-+                # every generic task scope is none. The API limits that feed
-+                # to assignments and allows completion only, not generic edits.
-+                pages[page] = True
-+    finance_scope = policy.action_scope('finance', 'view')
-+    if finance_scope is not None:
-+        pages['finance'] = finance_scope != 'none'
-     return {page: True if page == 'profile' else bool(active and (
--        (role == 'owner' and (page != 'instructions' or allowed))
-+        (role == 'owner' and (page not in {'instructions', 'news'} or allowed))
-         or allowed))
-         for page, allowed in pages.items()}
- 
-@@ -108,10 +121,23 @@ def access_snapshot(profile):
-         'pipeline_scope': policy.pipeline_scope(),
-         'ai_agents_manage': policy.member_settings.get('ai_agents_manage'),
-         'native_crm_actions': _native_actions(policy),
-+        'access_scopes': policy.member_settings.get('access_scopes', {}),
-+        'department_id': str(profile.get('department_id') or ''),
-     }
-     version = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(',', ':'),
-                                        ensure_ascii=True).encode()).hexdigest()
-+    from tenant_scoped_access import SCOPE_ACTION_CATALOG, scoped_access_enabled
-+    enabled = scoped_access_enabled()
-     return {'version': version,
-+            'scoped_access_enabled': enabled,
-+            'scope_catalog': {k: list(v) for k, v in SCOPE_ACTION_CATALOG.items()} if enabled else {},
-+            'scope_levels': ['none', 'self', 'department', 'all'],
-+            'department_id': str(profile.get('department_id') or '') or None,
-+            'access_scopes': policy.member_settings.get('access_scopes', {}),
-+            'scoped_actions': {k: {a: policy.action_scope(k, a) for a in v}
-+                               for k, v in SCOPE_ACTION_CATALOG.items()} if enabled else {},
-+            'legacy_actions': {k: {a: policy.legacy_allows_action('customers' if k == 'companies' else k, a)
-+                                  for a in v} for k, v in SCOPE_ACTION_CATALOG.items()} if enabled else {},
-             'action_catalog': {module: list(CRUD_ACTIONS) for module in ACTION_MODULES},
-             'action_scope': 'native_crm',
-             'native_crm_actions': _native_actions(policy),
-@@ -119,11 +145,19 @@ def access_snapshot(profile):
- 
- 
- def validate_access_patch(patch):
--    if (not isinstance(patch, dict) or set(patch) != {'actions'}):
--        raise ValueError('member_access_invalid')
--    validate_native_crm_actions(patch['actions'])
--    if not patch['actions']:
-+    if not isinstance(patch, dict) or set(patch) not in ({'actions'}, {'scopes'}):
-         raise ValueError('member_access_invalid')
-+    if 'scopes' in patch:
-+        from tenant_scoped_access import validate_access_scopes, scoped_access_enabled
-+        if not scoped_access_enabled():
-+            raise ValueError('member_access_scopes_not_enabled')
-+        validate_access_scopes(patch['scopes'])
-+        if not patch['scopes']:
-+            raise ValueError('member_access_invalid')
-+    else:
-+        validate_native_crm_actions(patch['actions'])
-+        if not patch['actions']:
-+            raise ValueError('member_access_invalid')
- 
- 
- def apply_access_patch(profile, patch):
-@@ -140,5 +174,18 @@ def apply_access_patch(profile, patch):
-     native_actions = _native_actions(policy)
-     permissions = list(profile.get('permissions') or [])
-     for module, changes in patch.get('actions', {}).items():
-+        if any(policy.has_scoped_access(module, action) for action in changes):
-+            raise ValueError('member_access_scope_conflict')
-         native_actions.setdefault(module, {}).update(changes)
--    return {'permissions': permissions, 'native_crm_actions': native_actions}
-+    raw = policy.member_settings.get('access_scopes', {})
-+    if not isinstance(raw, dict):
-+        raise ValueError('member_access_scopes_invalid')
-+    # Retain unedited cells and all unrelated settings. Never synthesize scoped
-+    # grants from legacy booleans, role defaults or module visibility.
-+    access_scopes = {key: dict(value) if isinstance(value, dict) else value for key, value in raw.items()}
-+    for module, changes in patch.get('scopes', {}).items():
-+        if module in access_scopes and not isinstance(access_scopes[module], dict):
-+            raise ValueError('member_access_scopes_invalid')
-+        access_scopes.setdefault(module, {}).update(changes)
-+    return {'permissions': permissions, 'native_crm_actions': native_actions,
-+            'access_scopes': access_scopes}
