@@ -16,7 +16,8 @@
 .analyst-settings-form{display:grid;gap:12px;padding:20px;overflow:auto}
 .analyst-settings-form h3{margin:0 0 2px;font-size:20px}
 .analyst-settings-field{display:grid;gap:6px;margin:0;color:var(--ink);font-size:13px;font-weight:650}
-.analyst-settings-field input,.analyst-settings-field textarea{width:100%;min-height:42px;margin:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--paper);color:var(--ink);font:inherit;font-weight:400;resize:vertical}
+.analyst-settings-field input,.analyst-settings-field textarea,.analyst-settings-field select{width:100%;min-height:42px;margin:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--paper);color:var(--ink);font:inherit;font-weight:400}
+.analyst-settings-field textarea{resize:vertical}
 .analyst-settings-field textarea{min-height:74px}
 .analyst-settings-protected,.analyst-settings-status{margin:0!important}
 .analyst-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}

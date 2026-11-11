@@ -97,8 +97,8 @@ def preferences_handler(member_from_request, canonical_origin, logger=None):
                 else:
                     current=save(cur,tenant,actor,validate_settings(settings))
             if settings is not None:conn.commit()
-        return {key:current[key] for key in ('assistant_name','greeting_ru','greeting_az',
-                                               'communication_style','language_style')}
+        from tenant_ai_business_analyst_preferences import DEFAULT_SETTINGS
+        return {key:current[key] for key in DEFAULT_SETTINGS}
 
     async def handle(request):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}
