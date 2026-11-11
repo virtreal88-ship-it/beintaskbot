@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/employee-scoped-access.yml'
+      - 'railway.toml'
+      - 'start.sh'
       - 'beintaskbot-main/**'
   workflow_dispatch:
 permissions:
@@ -157,6 +159,7 @@ jobs:
           tests/test_tenant_bein_crm.py
           tests/test_crm_create_only_page_contract.py
           tests/test_tenant_ai_agent_startup.py
+          tests/test_startup_transaction_budget_postgres.py
           tests/test_ai_schema_cold_readiness.py
           tests/test_request_schema_deadlocks.py
           tests/test_consultation_startup_upgrade_postgres.py

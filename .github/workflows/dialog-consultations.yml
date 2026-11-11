@@ -4,6 +4,8 @@ on:
     paths:
       - 'docs/public-case.html'
       - '.github/workflows/dialog-consultations.yml'
+      - 'railway.toml'
+      - 'start.sh'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
       - 'beintaskbot-main/tenant_developer_question_draft.py'
       - 'beintaskbot-main/tests/test_developer_question_draft*'
@@ -54,6 +56,7 @@ on:
       - 'beintaskbot-main/tenant_consultation_notification_worker.py'
       - 'beintaskbot-main/tenant_ai_pilot.py'
       - 'beintaskbot-main/tests/test_tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/tests/test_startup_transaction_budget_postgres.py'
       - 'beintaskbot-main/tests/test_legacy_app_bootstrap.py'
       - 'beintaskbot-main/tests/test_consultation_startup_upgrade_postgres.py'
       - 'beintaskbot-main/tests/test_tenant_consultation_notification_worker.py'
@@ -184,7 +187,7 @@ jobs:
         working-directory: beintaskbot-main
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
@@ -274,6 +277,7 @@ jobs:
             tests/test_summary_consultation_language.py \
             tests/test_consultation_startup_upgrade_postgres.py \
             tests/test_tenant_ai_agent_startup.py \
+            tests/test_startup_transaction_budget_postgres.py \
             tests/test_legacy_app_bootstrap.py \
             tests/test_tenant_consultation_notification_worker.py \
             tests/test_tenant_ai_pilot.py \

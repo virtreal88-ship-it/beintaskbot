@@ -235,4 +235,34 @@ class OutputDispatchAuthorityTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(old,6.0);self.assertAlmostEqual(new,3.0)
 
 
+class AnalyticsOutputDispatchAuthorityTest(OutputDispatchAuthorityTest):
+    """Run the #593 revocation and queue contract against the analyst authority."""
+    def setUp(self):
+        super().setUp()
+        import tenant_ai_business_analytics_voice as analytics_voice
+        import tenant_ai_business_analytics as analytics
+        self.authority=analytics_voice.AnalyticsVoiceAuthority({},self.scope,lambda:self.identity['value'])
+        self.lease=VoiceSessionLease(self.authority,str(uuid.uuid4()));self.lease.fence=9
+        self.database.lease=self.lease;self.database.owner=self.lease.owner_id
+        def owner(cur,profile):
+            self.database.authorizations+=1
+            self.assertEqual(profile,self.authority.profile)
+            if not self.database.route_valid:raise TenantLinearError('synthetic owner revoked',403)
+            return self.scope.tenant,self.scope.actor
+        for p in (patch.object(analytics_voice,'_connect',side_effect=self.database.connect),
+                  patch.object(analytics,'_owner',side_effect=owner),
+                  patch.object(analytics_voice,'_voice_connection',side_effect=lambda *_:'v2' if self.config_changed else 'v1')):
+            p.start();self.addCleanup(p.stop)
+
+    async def test_analyst_input_uses_one_live_transaction_and_rejects_revocation(self):
+        s,_,socket,_,_=await self.make_session()
+        await s._receive_client({'type':'audio','pcm':bytes(480)})
+        self.assertEqual(self.database.connects,1)
+        self.assertEqual(self.database.authorizations,1)
+        self.assertEqual(sum(e['type']=='input_audio_buffer.append' for e in socket.sent),1)
+        self.database.route_valid=False
+        with self.assertRaises(Exception):await s._receive_client({'type':'audio','pcm':bytes(480)})
+        self.assertEqual(sum(e['type']=='input_audio_buffer.append' for e in socket.sent),1)
+
+
 if __name__=='__main__':unittest.main()
