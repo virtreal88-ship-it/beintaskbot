@@ -44,7 +44,7 @@ jobs:
       - name: Check out the exact reviewed upstream baseline
         uses: actions/checkout@v4
         with:
-          ref: 6bf3c482b7bfaa0edd68a719c5323bf522540ec2
+          ref: 5e02c6c12c48b37a9d67346b84f65b05bc0fd2d7
           persist-credentials: false
           clean: true
       - name: Apply patches and verify the exact final source tree
@@ -56,12 +56,12 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == '7fc8fc4201ad407b3e20be6f6edb093e8269b0baaa202e5cbd4e5e218c72a3a1'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == 'f19d18998deac97711903b3800e1f9d46ca1ee2a3b451f2fe83f15803aa1e2e5'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
-          assert git('rev-parse', 'HEAD') == manifest['base_commit'] == '6bf3c482b7bfaa0edd68a719c5323bf522540ec2'
-          assert git('write-tree') == manifest['base_tree'] == '02b200cd3bb0abe3bfbb71f121aceab1e7a07987'
+          assert git('rev-parse', 'HEAD') == manifest['base_commit'] == '5e02c6c12c48b37a9d67346b84f65b05bc0fd2d7'
+          assert git('write-tree') == manifest['base_tree'] == '2b139e7f096b9695c8990dc7cfc5049f9466015f'
           assert not pathlib.Path('.ci/employee-scoped-access').exists()
           assert not pathlib.Path('.github/workflows/employee-scoped-access-harness.yml').exists()
           for patch in manifest['patches']:
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == '68f4d8e05edf9ae8bae0db4bdb96b5ffd2b852e8', actual
+          assert actual == manifest['target_tree'] == '20f5f5309d92ab404b26cd0f66d1265e4c412b2d', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -118,16 +118,33 @@ jobs:
           tests/test_tenant_news_member_read_postgres.py
           tests/test_support_access_ownership_postgres.py
           tests/test_support_inbox_scopes.py
+          tests/test_support_ai_projection_scopes.py
+          tests/test_tenant_support_inbox.py
+          tests/test_tenant_internal_consultations_api.py
+          tests/test_case_consultations_unified.py
           tests/test_support_inbox_scopes_postgres.py
           tests/test_instruction_member_access_postgres.py
           tests/test_ai_scoped_documents.py
           tests/test_ai_scoped_documents_postgres.py
+          tests/test_tenant_policy.py
+          tests/test_tenant_scoped_access.py
+          tests/test_tenant_ai_agents_api_diagnostics.py
+          tests/test_tenant_web_routes.py
           tests/test_shared_integration_scopes.py
           tests/test_shared_integration_scopes_postgres.py
           tests/test_tenant_crm_relation_contract.py
           tests/test_tenant_crm_relation_kommo.py
           tests/test_tenant_crm_relation_delivery_postgres.py
           tests/test_crm_relation_fences_postgres.py
+          tests/test_crm_scoped_scalar_postgres.py
+          tests/test_crm_scoped_scalar_api_transport.py
+          tests/test_crm_scalar_fences_postgres.py
+          tests/test_tenant_crm_external_sync.py
+          tests/test_crm_native_deals.py
+          tests/test_crm_native_deal_api.py
+          tests/test_crm_native_contacts.py
+          tests/test_crm_native_api.py
+          tests/test_tenant_ai_native_crm_actions.py
           tests/test_tenant_integration_store.py
           tests/test_tenant_bein_integration.py
           tests/test_tenant_linear.py
@@ -146,6 +163,9 @@ jobs:
           node tests/test_employee_scope_settings_ui.cjs
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_contacts_directory_ui.cjs
+          node tests/test_crm_save_receipt_ui.cjs
+          node tests/test_tenant_crm_native_workflow_ui.cjs
+          node tests/test_tenant_app_syntax.cjs
           node tests/test_native_company_relation_ui.cjs
           node tests/test_tenant_crm_native_modal_ui.cjs
           node tests/test_employee_finance_scopes_ui.cjs
@@ -153,14 +173,18 @@ jobs:
           node tests/test_tenant_ai_business_analyst_ui.cjs
           node tests/test_tenant_news_member_ui.cjs
           node tests/test_support_inbox_scopes_ui.cjs
+          node tests/test_support_consultation_flow_ui.cjs
           node tests/test_shared_integration_settings.cjs
           node tests/test_tenant_kommo_settings.cjs
           node tests/test_tenant_linear_settings.cjs
           node tests/test_tenant_linear_employee_settings.cjs
           node tests/test_tenant_chat_ai_ui.cjs
+          node tests/test_ai_scoped_documents_ui.cjs
+          node tests/test_tenant_ai_agent_connect_scope_ui.cjs
       - name: Chromium employee matrix, tasks and CRM
         run: |
           node tests/employee_scope_matrix_browser.cjs
+          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
           python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
           python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
       - name: Save synthetic matrix screenshots

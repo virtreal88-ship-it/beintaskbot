@@ -1,1034 +1,236 @@
-diff --git a/beintaskbot-main/docs/tenant-shared-integration-settings.js b/beintaskbot-main/docs/tenant-shared-integration-settings.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..9b0e8f7154f14cdcade69cad711be92a325fef70
---- /dev/null
-+++ b/beintaskbot-main/docs/tenant-shared-integration-settings.js
-@@ -0,0 +1,76 @@
-+/* Server-issued capabilities for company-wide connections. No role inference. */
-+(() => {
-+  const row = (data, provider) => (data?.integrations || []).find(item => item.provider === (provider === 'openai' ? 'chat_ai' : provider));
-+  const scoped = (data, provider) => !!row(data, provider)?.management_actions;
-+  const can = (data, provider, action) => row(data, provider)?.management_actions?.[action] === true;
-+  const connected = (data, provider) => ['connected', 'configured', 'awaiting_oauth'].includes(row(data, provider)?.status);
-+  function command(data, provider, payload, action) {
-+    if (!scoped(data, provider)) return payload;
-+    if (!can(data, provider, action)) throw new Error('Bu əməliyyat üçün icazə yoxdur.');
-+    const impact = action === 'delete' || (action === 'update' && (payload.action === 'reconnect_channel' || ['api_key','access_token','token','remove_key'].some(key => payload[key])));
-+    if (impact && !window.confirm('Bu dəyişiklik bütün şirkətin bağlantısına təsir edəcək. Davam edilsin?')) throw new Error('Əməliyyat ləğv edildi.');
-+    return {...payload, expected_tenant_id:data.member.tenant_id, expected_user_id:data.member.telegram_id, ...(impact ? {confirm_company_impact:true} : {})};
-+  }
-+  function record(data, provider, result) {
-+    const item=row(data,provider), value=result?.integration||result;
-+    if(!item||!value)return;
-+    if(value.updated_at!==undefined)item.updated_at=value.updated_at;
-+    if(value.status)item.status=value.status;
-+    else if(value.configured!==undefined)item.status=value.configured?'configured':'not_connected';
-+    else if(value.connected!==undefined)item.status=value.connected?'connected':'not_connected';
-+  }
-+  window.tenantSharedIntegrations = {row, scoped, can, connected, command, record};
-+  const $ = id => document.getElementById(id);
-+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-+  for (const provider of ['beinsystems','connect']) {
-+    let profile, epoch=0;
-+    const id='sharedIntegration-'+provider;
-+    async function request(path, payload) {
-+      const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...(payload?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{})});
-+      const result=await response.json();if(!response.ok||result.success===false)throw new Error(result.error||'Əməliyyat baş tutmadı.');return result;
-+    }
-+    function install(data) {
-+      if (!scoped(data,provider)) return;
-+      profile=data; const current=++epoch;
-+      const host=$('integrationSettingsHost');if(!host)return;
-+      const panel=document.createElement('article');panel.id=id;panel.className='panel integration-modal-panel';host.append(panel);
-+      const actions=row(data,provider).management_actions;
-+      const write=actions[connected(data,provider)?'update':'create'];
-+      panel.innerHTML=`<h2>${provider==='connect'?'Connect WhatsApp':'BeinSystems'}</h2><p>Şirkətin ortaq bağlantısı · ${esc(row(data,provider).status)}</p><p data-message role="status"></p>`;
-+      if(write)panel.insertAdjacentHTML('beforeend',provider==='connect'?'<label>Connect API açarı<input data-key type="password" autocomplete="new-password"></label>':'<label>API ünvanı<input data-url type="url"></label><label>Filial<input data-branch></label><label>API token<input data-key type="password" autocomplete="new-password"></label>');
-+      const message=panel.querySelector('[data-message]');
-+      const button=(label,action)=>{const b=document.createElement('button');b.type='button';b.className='outline';b.textContent=label;b.onclick=async()=>{if(current!==epoch)return;b.disabled=true;try{await action();}catch(error){if(current===epoch)message.textContent=error.message;}finally{if(current===epoch)b.disabled=false;}};panel.append(b);return b;};
-+      const post=async(payload,action,path='/api/platform/integrations/'+provider)=>{const body=command(profile,provider,payload,action);const result=await request(path,body);if(current!==epoch)return null;record(profile,provider,result);if(path.endsWith('/disconnect'))row(profile,provider).status='not_connected';message.textContent='Saxlanıldı.';if(result.qr&&result.qr.startsWith('data:image/')){const image=document.createElement('img');image.src=result.qr;image.alt='WhatsApp QR';image.style.maxWidth='240px';message.append(image);}return result;};
-+      if(provider==='beinsystems'){
-+        if(write)button('Tokeni saxla',async()=>{const key=panel.querySelector('[data-key]');await post({action:'connect',token:key.value,base_url:panel.querySelector('[data-url]').value,branch_id:panel.querySelector('[data-branch]').value},connected(profile,provider)?'update':'create');key.value='';});
-+        if(actions.view)button('Bağlantını yoxla',()=>post({action:'test'},'view'));
-+        if(actions.update)button('Əsas CRM kimi seç',()=>post({action:'primary',provider},'update'));
-+        if(actions.delete)button('Bağlantını ayır',()=>post({provider},'delete','/api/platform/integrations/disconnect'));
-+      } else {
-+        const list=document.createElement('div');panel.append(list);
-+        if(actions.delete&&!actions.view){
-+          panel.insertAdjacentHTML('beforeend','<p>Channel UUID ilə bir WhatsApp nömrəsini ayırın. Bu nömrənin bağlantısı bütün şirkət üçün dayandırılacaq; digər nömrələr dəyişməyəcək. Kanal siyahısını görmək icazəniz yoxdur.</p><label>Channel UUID<input data-disconnect-channel autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>');
-+          const disconnect=button('Bu nömrəni şirkətdən ayır',async()=>{
-+            const channel_id=panel.querySelector('[data-disconnect-channel]').value.trim();
-+            if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(channel_id))throw new Error('Düzgün Channel UUID daxil edin.');
-+            await post({action:'disconnect_channel',channel_id},'delete');
-+          });
-+          disconnect.dataset.disconnectById='true';
-+        }
-+        if(actions.view || write)button('Kanalları göstər',async()=>{
-+          const key=panel.querySelector('[data-key]')?.value||'';
-+          const result=await post({action:'channels',api_key:key},key?(connected(profile,provider)?'update':'create'):'view');if(!result)return;
-+          list.replaceChildren();
-+          for(const channel of result.channels||[]){
-+            const entry=document.createElement('div');entry.textContent=`${channel.name||channel.id} · ${channel.status||''}`;list.append(entry);
-+            const actionButton=(label,action,scope)=>{if(!actions[scope])return;const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=async()=>{b.disabled=true;try{if(current!==epoch)return;await post({action,channel_id:channel.id},scope);}catch(e){if(current===epoch)message.textContent=e.message;}finally{if(current===epoch)b.disabled=false;}};entry.append(b);};
-+            if(channel.active || channel.linked){actionButton('Status','channel_status','view');if(!channel.phoneConflict)actionButton('Yenidən qoş','reconnect_channel','update');if(channel.active)actionButton('Ayır','disconnect_channel','delete');}
-+            else if(write&&!channel.phoneConflict){const choice=document.createElement('input');choice.type='checkbox';choice.value=channel.id;entry.prepend(choice);}
-+          }
-+        });
-+        if(write)button('Seçilmiş nömrələri qoş',async()=>{const key=panel.querySelector('[data-key]');const channel_ids=[...list.querySelectorAll('input:checked')].map(input=>input.value);if(!channel_ids.length)throw new Error('Kanal seçin.');await post({api_key:key.value,channel_ids},connected(profile,provider)?'update':'create');key.value='';});
-+      }
-+    }
-+    window.tenantViewDemand.watch({provider,editable:'#'+id,resetOnHide:true,activate:install,reset:()=>{epoch++;profile=null;$(id)?.remove();}});
-+  }
-+})();
-diff --git a/beintaskbot-main/docs/tenant-support-inbox.js b/beintaskbot-main/docs/tenant-support-inbox.js
-index 5e6cfdbf46c74d46cb83ddedce267930942a8056..edd6df6eda228a72d31dd98828daba02bd5bf7d3 100644
---- a/beintaskbot-main/docs/tenant-support-inbox.js
-+++ b/beintaskbot-main/docs/tenant-support-inbox.js
-@@ -164,6 +164,7 @@
-       try{const fresh=await api('/'+encodeURIComponent(ticket.id));if(selected!==ticket.id||!detailData||detailData.ticket.id!==ticket.id)return;rememberMessages(fresh.messages);appendMaterialMessages();detailData.scope=fresh.scope;if(fresh.scope&&$('supportScope'))$('supportScope').textContent=t('caseScopePinned')+' · '+fresh.scope.message_count+' '+t('caseScopeMessages')+' · '+fresh.scope.media_count+' '+t('caseScopeFiles');}catch(error){if(selected===ticket.id)notice(error.message);}
-     });
-     renderConsultations(ticket);
-+    if(result.capabilities?.update===false){for(const id of ['supportSave','supportTake','supportResolve','supportSummary','supportSummaryNewRequest','supportDescription','supportSuggestions','supportNextSteps','supportEditStatus','supportEditAssignee']){const control=$(id);if(control)control.disabled=true;}}
-     const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'history';selectCaseTab(['history','details','developer'].includes(tab)?tab:'history');
-   }
- 
-@@ -349,7 +350,7 @@
-     install();if(!$('supportDetail'))return;
-     directTicketKey=key;const replyId=query.get('consultation_reply_id');if(replyId&&!notificationId){void openNotification({ticketId:id,replyId});return;}void open(id,focus,true,false,notificationId?{keepError:true,notificationId}:{});
-   }
--  async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){await open(id);notice(error.message);}}}
-+  async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;if(result.readable===false){closeTicketModal();await load();return;}renderDetail(result);await load();}catch(error){if(version===epoch){await open(id);notice(error.message);}}}
-   const mutate=(id,data)=>action(id,'','PATCH',data);
-   document.addEventListener('tenant-chat-open',event=>{
-     const lead=event.detail.lead_id,version=epoch;if(!member||!allowed())return;
-diff --git a/beintaskbot-main/docs/tenant-task-flow.js b/beintaskbot-main/docs/tenant-task-flow.js
-index 311bc3d171858c6433a10fdf4fc0a162c9cb1694..bf4da36204a86820043f35abb20b533c03d51f16 100644
---- a/beintaskbot-main/docs/tenant-task-flow.js
-+++ b/beintaskbot-main/docs/tenant-task-flow.js
-@@ -21,6 +21,12 @@
-   const capture = () => ({epoch,key,...identity()});
-   const current = scope => scope.epoch===epoch && scope.key===key && allowed();
-   const sourceActions = source => Object.values(rows).map(value=>value.page?.sources?.find(item=>item.source===source)).find(Boolean) || {};
-+  // Source permissions establish which feed can be opened; each native task
-+  // carries the authoritative actions for this particular row.
-+  const taskActions = (source, task, sourcePermissions={}) => source==='native' && task?.capabilities
-+    ? {update:task.capabilities.update===true, complete:task.capabilities.complete===true,
-+       reopen:task.capabilities.reopen===true, archive:task.capabilities.delete===true}
-+    : sourcePermissions;
-   const canEnter = source => sourceActions(source).view===true&&(sourceActions(source).create===true||(source==='native'?!!pending('native'):window.tenantExternalTasks?.hasPending()));
-   const staleError = () => Object.assign(new Error('task_context_changed'),{stale:true});
-   async function api(path, {method='GET',body,scope=capture(),flow=false}={}) {
-@@ -101,22 +107,22 @@
-   function closeCard(){const value=card;cardRevision++;card=null;const modal=$('taskFlowCard');if(modal)hide(modal,false);clearTarget();if(allowed()){const currentButton=value?[...$(value.source==='native'?'nativeTasksList':'tasksList').querySelectorAll('[data-task-flow-open]')].find(node=>node.dataset.taskFlowOpen===value.id):null;(currentButton||opener?.isConnected&&opener||$('nativeTaskCreate')).focus();}}
-   function renderCard(){if(!card?.task)return;const c=text(),row=card.task,source=card.source,actions=card.actions||{},body=$('taskFlowCardBody');$('taskFlowCardTitle').textContent=cleanText(row.text);$('taskFlowCard').querySelector('[data-task-card-close]').setAttribute('aria-label',c.close);body.innerHTML=`<p class="sub">${esc(c[source])}</p><div class="meta"><div><b>${esc(c.status)}</b><span data-task-card-status>${esc(c[row.status])}</span></div><div><b>${esc(c.assignee)}</b>${esc(row.responsible_name||c.none)}</div><div><b>${esc(c.due)}</b>${esc(date(row.due_at))}</div><div><b>${esc(c.deal)}</b>${esc(row.deal_title||c.none)}</div></div>`;const footer=$('taskFlowCardActions');footer.replaceChildren();
-     const add=(label,callback,attribute)=>{const button=document.createElement('button');button.className='outline';button.type='button';button.textContent=label;if(attribute)button.setAttribute(attribute,'');button.onclick=callback;footer.append(button);};
--    if(source==='native'){if(actions.update===true)add(c.edit,()=>edit(row.id),'data-task-card-edit');if(actions.complete===true)add(c[row.status==='completed'?'reopen':'complete'],()=>changeState(row.id,row.status==='completed'?'reopen':'complete'),'data-task-card-state');if(actions.archive===true)add(c.archive,()=>changeState(row.id,'archive'),'data-task-card-archive');}
-+    if(source==='native'){if(actions.update===true)add(c.edit,()=>edit(row.id),'data-task-card-edit');if(row.status==='open'&&actions.complete===true)add(c.complete,()=>changeState(row.id,'complete'),'data-task-card-state');if(row.status==='completed'&&(row.capabilities?actions.reopen===true:actions.complete===true))add(c.reopen,()=>changeState(row.id,'reopen'),'data-task-card-state');if(actions.archive===true)add(c.archive,()=>changeState(row.id,'archive'),'data-task-card-archive');}
-     else if(actions.complete===true&&row.status==='open'){if(Number.isSafeInteger(Number(row.id))){add(c.complete,()=>{},'data-task-complete');footer.lastChild.setAttribute('data-task-complete',row.id);}else{const reason=document.createElement('p');reason.textContent=c.unsafeComplete;footer.append(reason);}}
-     add(c.close,closeCard);}
-   async function open(source,id,{push=true,revision=routeRevision}={}){
-     id=taskId(source,id);if(!id||!allowed()||!visible())return false;
-     const target=routeTarget();if(target?.error){bindingNotice(true);return false;}
-     const scope=capture(),serial=++cardRevision,modal=ensureCard();opener=document.activeElement;card={source,id,task:null};$('taskFlowCardTitle').textContent=text().loading;$('taskFlowCardBody').replaceChildren();$('taskFlowCardActions').replaceChildren();$('taskFlowCardNotice').classList.remove('show');modal.classList.add('show');
--    try{const data=await read(source,{task_id:id},scope);if(!current(scope)||serial!==cardRevision||revision!==routeRevision||!visible()||!modal.classList.contains('show'))return false;if(data.sources?.find(value=>value.source===source)?.view!==true||data.source!==source||!rowValid(source,data.task)||data.task.id!==id)throw new Error('invalid_task');card={source,id,task:data.task,actions:data.sources?.find(value=>value.source===source)||{}};renderCard();if(push)updateRoute(source,id);modal.querySelector('[data-task-card-close]').focus();return true;}
-+    try{const data=await read(source,{task_id:id},scope);if(!current(scope)||serial!==cardRevision||revision!==routeRevision||!visible()||!modal.classList.contains('show'))return false;if(data.sources?.find(value=>value.source===source)?.view!==true||data.source!==source||!rowValid(source,data.task)||data.task.id!==id)throw new Error('invalid_task');card={source,id,task:data.task,actions:taskActions(source,data.task,data.sources?.find(value=>value.source===source)||{})};renderCard();if(push)updateRoute(source,id);modal.querySelector('[data-task-card-close]').focus();return true;}
-     catch(error){if(!current(scope)||serial!==cardRevision||error.stale)return false;$('taskFlowCardTitle').textContent=text().unavailable;$('taskFlowCardBody').replaceChildren();const box=$('taskFlowCardNotice');box.textContent=text().unavailable;box.classList.add('show');if(error.status===403||error.status===409)void proveAccess();return false;}
-   }
-   function edit(id){if(card?.source==='native'&&card.actions?.update===true){hide($('taskFlowCard'),false);return window.tenantTaskBridge?.edit(id);}}
-   async function changeState(id,action){
--    if(!card||card.source!=='native'||card.id!==id||!allowed())return;const snapshot=card,scope=capture(),serial=cardRevision;
-+    if(!card||card.source!=='native'||card.id!==id||!allowed()||!(card.actions?.[action]===true||(action==='reopen'&&!card.task?.capabilities&&card.actions?.complete===true)))return;const snapshot=card,scope=capture(),serial=cardRevision;
-     if(action==='archive'&&!confirm(text().confirmArchive))return;
-     $('taskFlowCardActions').querySelectorAll('button').forEach(button=>button.disabled=true);
--    try{const data=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id),{method:'POST',scope,body:{action,...identity(),expected_updated_at:snapshot.task.updated_at}});if(!current(scope)||serial!==cardRevision||card!==snapshot)return;if(action==='archive'){if(data.archived!==true)throw Object.assign(new Error('invalid_receipt'),{unknown:true});closeCard();await refreshSource('native',{force:true});return;}if(!rowValid('native',{...data.task,source:'native',status:data.task?.status})||data.task.id!==id||data.task.status!==(action==='complete'?'completed':'open'))throw Object.assign(new Error('invalid_receipt'),{unknown:true});card={...snapshot,task:{...data.task,source:'native'}};renderCard();confirmed('native',data.task);}
-+    try{const data=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id),{method:'POST',scope,body:{action,...identity(),expected_updated_at:snapshot.task.updated_at}});if(!current(scope)||serial!==cardRevision||card!==snapshot)return;if(action==='archive'){if(data.archived!==true)throw Object.assign(new Error('invalid_receipt'),{unknown:true});closeCard();await refreshSource('native',{force:true});return;}if(!rowValid('native',{...data.task,source:'native',status:data.task?.status})||data.task.id!==id||data.task.status!==(action==='complete'?'completed':'open'))throw Object.assign(new Error('invalid_receipt'),{unknown:true});card={...snapshot,task:{...data.task,source:'native'},actions:taskActions('native',data.task,snapshot.actions)};renderCard();confirmed('native',data.task);}
-     catch(error){if(!current(scope)||serial!==cardRevision||card!==snapshot||error.stale)return;const box=$('taskFlowCardNotice');box.textContent=error.unknown?text().unknown:error.code==='task_conflict'?text().conflict:text().writeDenied;box.classList.add('show');const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=text().readAgain;button.onclick=()=>open('native',id,{push:false});$('taskFlowCardActions').replaceChildren(button);if(error.status===403||error.status===409&&error.code!=='task_conflict')void proveAccess();}
-   }
-   function storageKey(source,scope=capture()){return `task-flow:${scope.expected_tenant_id}:${scope.expected_user_id}:${source}`;}
-@@ -134,7 +140,7 @@
-   function beginEditor(){editorProofSerial++;editorPaused=false;const box=$('tasksFlowNotice');if(box.dataset.taskEditorProof==='true'){box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;}}
-   async function proveEditor({fromOptions=false}={}){const id=$('nativeTaskId').value,modal=$('nativeTaskModal');if(!id||!modal.classList.contains('show')||!allowed())return;const serial=++editorProofSerial,scope=capture(),token=window.tenantTaskBridge.snapshot();editorPaused=true;modal.style.visibility='hidden';window.tenantTaskBridge.render();const box=$('tasksFlowNotice');box.dataset.taskEditorProof='true';box.textContent=text().auth;box.classList.add('show');
-     const relevant=()=>serial===editorProofSerial&&current(scope)&&window.tenantTaskBridge.same(token)&&$('nativeTaskId').value===id&&modal.classList.contains('show');
--    try{const data=await read('native',{task_id:id},scope);if(!relevant())return;if(!rowValid('native',data.task)||data.task.id!==id||data.sources?.find(row=>row.source==='native')?.view!==true)throw new Error('invalid_view_proof');rows.native.page={...rows.native.page,sources:data.sources,limit:data.limit};editorPaused=false;modal.style.visibility='';box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;window.tenantTaskBridge.render();if(sourceActions('native').update!==true)window.tenantTaskBridge.readOnly();else if(fromOptions)window.tenantTaskBridge.blockOptions();else void window.tenantTaskBridge.refreshOptions();}
-+    try{const data=await read('native',{task_id:id},scope);if(!relevant())return;if(!rowValid('native',data.task)||data.task.id!==id||data.sources?.find(row=>row.source==='native')?.view!==true)throw new Error('invalid_view_proof');rows.native.page={...rows.native.page,sources:data.sources,limit:data.limit};editorPaused=false;modal.style.visibility='';box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;window.tenantTaskBridge.render();if(taskActions('native',data.task,sourceActions('native')).update!==true)window.tenantTaskBridge.readOnly();else if(fromOptions)window.tenantTaskBridge.blockOptions();else void window.tenantTaskBridge.refreshOptions();}
-     catch(error){if(!relevant())return;if(error.status===403||error.status===404){delete box.dataset.taskEditorProof;modal.classList.remove('show');window.tenantTaskBridge.reset();box.textContent=text().unavailable;box.classList.add('show');if(card?.source==='native'&&card.id===id){card=null;cardRevision++;clearCardPrivate();}rows.native.rows=rows.native.rows.filter(row=>row.id!==id);void refreshSource('native',{force:true});}else{box.textContent=text().error;const retry=document.createElement('button');retry.className='outline';retry.type='button';retry.dataset.taskEditorRetry='true';retry.textContent=text().readAgain;retry.onclick=()=>{if(relevant())void proveEditor({fromOptions});};box.append(retry);}}
-   }
-   function conceal(){for(const id of ['nativeTaskModal','tenantTaskModal','tenantCompleteModal','taskFlowCard'])if($(id))$(id).style.visibility='hidden';}
-diff --git a/beintaskbot-main/docs/tenant-view-demand.js b/beintaskbot-main/docs/tenant-view-demand.js
-index 2972664819227fe62bf026f272264ef2623180c6..1e7dbfb3ec4c0530d8fd17a74236f95d51e04d81 100644
---- a/beintaskbot-main/docs/tenant-view-demand.js
-+++ b/beintaskbot-main/docs/tenant-view-demand.js
-@@ -12,14 +12,14 @@
-     data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
-     Object.fromEntries(Object.entries(data?.capabilities || {}).filter(([key]) => !['deal_board', 'notification_events'].includes(key))),
-     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])),
--    binding(data)?.can_review_news === true]));
-+    binding(data)?.can_review_news === true, (data?.integrations || []).map(row => [row.provider, row.management_actions, row.status_only])]));
-   const snapshot = data => JSON.stringify([data?.member, data?.integrations]);
-   const employees = item => item.host === 'staffManagement';
-   // Employee drafts do not depend on integration health or news-review bindings.
-   // Keep their security scope explicit, and their data freshness separate.
-   const employeeIdentity = data => JSON.stringify(stable([data?.member?.tenant_id, data?.member?.telegram_id,
-     data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
--    data?.capabilities?.can_manage_employees, data?.capabilities?.pages?.employees,
-+    data?.capabilities?.can_manage_employees, data?.capabilities?.can_view_employees, data?.capabilities?.can_update_employees, data?.capabilities?.pages?.employees,
-     data?.capabilities?.actions?.employees,
-     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]))]));
-   const memberData = member => member && Object.fromEntries(Object.entries(member).filter(([key]) =>
-@@ -29,7 +29,9 @@
-   const freshness = (item, data) => employees(item) ? JSON.stringify(stable([
-     memberData(data?.member), Array.isArray(data?.members) ? data.members.map(memberData) : undefined
-   ])) : snapshot(data);
--  const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
-+  const newsAvailable = data => !!(data?.member?.active === true && data.member.tenant_id && data.member.telegram_id
-+    && (data.member.tenant_status || 'active') === 'active' && data?.capabilities?.pages?.news !== false);
-+  const newsReviewAvailable = data => !!(newsAvailable(data) && data?.capabilities?.modules?.linear && (
-     data.member.role === 'owner' || binding(data)?.can_review_news === true));
-   const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
-     '#integrationMarketplaceDialog,#tenantLinearPanel,#tenantKommoPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
-@@ -125,7 +127,7 @@
-         .finally(() => { bootstrap = null; });
-     }
-   }
--  window.tenantViewDemand = {watch, newsAvailable, clean: selector => {
-+  window.tenantViewDemand = {watch, newsAvailable, newsReviewAvailable, clean: selector => {
-     for (const item of subscriptions) if (item.editable === selector) item.dirty = false;
-   }};
- })();
-diff --git a/beintaskbot-main/docs/tenant-workspace.js b/beintaskbot-main/docs/tenant-workspace.js
-index 4a2591252a0c8c1117b5c33a201844244242933c..ff4a573ba51f19a5221a8ed9c317328f1a78dec7 100644
---- a/beintaskbot-main/docs/tenant-workspace.js
-+++ b/beintaskbot-main/docs/tenant-workspace.js
-@@ -177,7 +177,9 @@
-   function placeIntegrationPanels(provider, hostId) {
-     const host = document.getElementById(hostId);
-     if (!host) return false;
--    const ids = integrationPanels[provider] || [];
-+    const scoped = window.tenantSharedIntegrations?.scoped(window.tenantProfileSnapshot, provider);
-+    if (scoped && ['connect','beinsystems'].includes(provider)) return true;
-+    const ids = (scoped && provider === 'openai') ? ['tcAiPanel'] : integrationPanels[provider] || [];
-     const panels = ids.map(id => document.getElementById(id)).filter(Boolean);
-     if (!panels.length) return false;
-     host.replaceChildren(...panels);
-diff --git a/beintaskbot-main/tenant_ai_agents_api.py b/beintaskbot-main/tenant_ai_agents_api.py
-index 538cacfdf5db4dd092ec40fdc5460fe7003ad2c1..fd7926bbb3e5cfaa442c66cd9397890447aab8f0 100644
---- a/beintaskbot-main/tenant_ai_agents_api.py
-+++ b/beintaskbot-main/tenant_ai_agents_api.py
-@@ -146,6 +146,10 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
-                     # Use the tenant's existing Kommo adapter, not a browser
-                     # supplied account.  This keeps the pick-list current and
-                     # prevents saved agent scopes from narrowing it.
-+                    # Revalidate current management authority before making
-+                    # even a read-only provider request. A verified browser
-+                    # session alone is not an AI management grant.
-+                    result = await asyncio.to_thread(configuration_options, profile)
-                     if request_provider is not None and request.query.get('cached') != '1':
-                         try:
-                             remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
-@@ -154,14 +158,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
-                             # the last tenant-owned catalog usable while Kommo
-                             # is disconnected or temporarily unavailable.
-                             logger.warning('AI Agents pipeline catalog unavailable; using cached tenant configuration')
--                            result = await asyncio.to_thread(configuration_options, profile)
-                         else:
-                             result = await asyncio.to_thread(
-                                 refresh_configuration_catalog, profile,
-                                 ((remote.get('_embedded') or {}).get('pipelines') or []),
-                             )
--                    else:
--                        result = await asyncio.to_thread(configuration_options, profile)
-                 elif resource == 'handoffs':
-                     result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
-                 elif resource == 'triggers':
-diff --git a/beintaskbot-main/tenant_ai_agents_schema.py b/beintaskbot-main/tenant_ai_agents_schema.py
-index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..1d1c423a1144dcb872d0089ae1d0385b984e3364 100644
---- a/beintaskbot-main/tenant_ai_agents_schema.py
-+++ b/beintaskbot-main/tenant_ai_agents_schema.py
-@@ -11,6 +11,7 @@ _lock = Lock()
- # Read PostgreSQL catalogs on every call: readiness belongs to this database,
- # search_path and transaction, never to a process-local Boolean.
- _SCHEMA_COLUMNS = {
-+    'saas_access_schema_migrations': ['migration_key', 'applied_at'],
-     'saas_ai_agent_action_runs': (
-         'action_key action_type agent_id created_at event_fingerprint id payload result state '
-         'tenant_id updated_at '
-@@ -48,7 +49,7 @@ _SCHEMA_COLUMNS = {
-         'trigger_type updated_at version '
-     ).split(),
-     'saas_ai_agents': (
--        'archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
-+        'access_responsible_id archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
-         'enabled expert_policy id instructions language mode model name response_policy role '
-         'safety schedule scopes setup_key style tenant_id updated_at version '
-     ).split(),
-@@ -204,7 +205,7 @@ _SCHEMA_COLUMNS = {
-         'created_at event_key message_id tenant_id ticket_id '
-     ).split(),
-     'saas_support_tickets': (
--        'assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
-+        'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
-         'channel_id completion_note completion_outcome conversation_id created_at created_by '
-         'description history_scope id knowledge_candidate_requested next_steps reason '
-         'resolved_at source status suggestions summary summary_agent_binding '
-@@ -219,6 +220,8 @@ _SCHEMA_COLUMNS = {
-     ).split(),
+diff --git a/beintaskbot-main/docs/tenant-members-ui.js b/beintaskbot-main/docs/tenant-members-ui.js
+index 61fcfbfff7dbef1bc9b928edec73ae1e2e5d817c..e931452abc736a60f542f92816ed1030d98896ee 100644
+--- a/beintaskbot-main/docs/tenant-members-ui.js
++++ b/beintaskbot-main/docs/tenant-members-ui.js
+@@ -8,9 +8,9 @@ function rightsCatalog(){const basic=baseRightsCatalog();if(profile?.role!=='own
+ const entryWords=()=>({ru:{title:'Сотрудники и доступ',hint:'Управляйте сотрудниками и доступом в текущей компании.',checking:'Проверяем текущий доступ…',denied:'Для управления сотрудниками требуется соответствующее разрешение компании. Обратитесь к сотруднику с правом управления доступом.',inactive:'Доступ пользователя неактивен. Обратитесь к администратору компании.',loading:'Загружаем сотрудников…',loadingRequests:'Загружаем запросы доступа…',error:'Не удалось загрузить данные. Проверьте текущий доступ и повторите попытку.',retry:'Повторить',technical:'Технические подробности',requestsEmpty:'Запросов доступа нет.'},az:{title:'Əməkdaşlar və giriş',hint:'Cari şirkətin əməkdaşlarını və giriş hüquqlarını idarə edin.',checking:'Cari giriş yoxlanılır…',denied:'Əməkdaşları idarə etmək üçün şirkətin müvafiq icazəsi tələb olunur. Girişi idarə etmək hüququ olan əməkdaşa müraciət edin.',inactive:'İstifadəçinin girişi qeyri-aktivdir. Şirkət administratoruna müraciət edin.',loading:'Əməkdaşlar yüklənir…',loadingRequests:'Giriş sorğuları yüklənir…',error:'Məlumatları yükləmək olmadı. Cari girişi yoxlayıb yenidən cəhd edin.',retry:'Yenidən yoxla',technical:'Texniki təfərrüatlar',requestsEmpty:'Giriş sorğusu yoxdur.'},en:{title:'Employees and access',hint:'Manage employees and access in the current company.',checking:'Checking current access…',denied:'Managing employees requires the company’s employee management permission. Contact someone authorized to manage access.',inactive:'This user’s access is inactive. Contact your company administrator.',loading:'Loading employees…',loadingRequests:'Loading access requests…',error:'Could not load the data. Check current access and try again.',retry:'Retry',technical:'Technical details',requestsEmpty:'No access requests.'}}[window.tenantI18n?.language]||{title:'Employees and access',checking:'Checking current access…',denied:'Employee management permission is required.',loading:'Loading employees…',error:'Could not load the data.',retry:'Retry'});
+ const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
+ const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
+-const fingerprint=data=>JSON.stringify(stable([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.active,data?.member?.role,[...(data?.member?.permissions||[])].sort(),data?.capabilities?.can_manage_employees,data?.capabilities?.pages?.employees,data?.capabilities?.actions?.employees,Object.fromEntries(Object.entries(data?.role_permissions||{}).map(([key,value])=>[key,Array.isArray(value)?[...value].sort():value]))]));
++const fingerprint=data=>JSON.stringify(stable([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.active,data?.member?.role,[...(data?.member?.permissions||[])].sort(),data?.capabilities?.can_manage_employees,data?.capabilities?.can_view_employees,data?.capabilities?.can_update_employees,data?.capabilities?.pages?.employees,data?.capabilities?.actions?.employees,Object.fromEntries(Object.entries(data?.role_permissions||{}).map(([key,value])=>[key,Array.isArray(value)?[...value].sort():value]))]));
+ let pendingFocus=null;const pendingWrites=new WeakMap();
+-function managed(){return !paused&&!accessProof&&profile?.active===true&&capabilities.can_manage_employees===true}
++function managed(){return !paused&&!accessProof&&profile?.active===true&&(capabilities.can_view_employees??capabilities.can_manage_employees)===true}
+ const canonical=()=>!!$('employeesManagementHost');
+ function visible(){const page=$(canonical()?'view-employees':'view-settings');return !!page&&(page.classList.contains('active')||!canonical()&&new URLSearchParams(location.search).get('view')==='settings')}
+ async function api(path,opt={}){const version=epoch,owner=identity(profile),response=await fetch(path,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});const data=await response.json().catch(()=>({}));if(path!=='/api/platform/me'&&(version!==epoch||owner!==identity(profile)||!managed())){const error=Error('Employee request scope changed');error.stale=true;throw error}if(!response.ok||!data.success){const error=Error(data.error||'Request failed');error.status=response.status;error.code=data.code||'';error.fields=data.fields||{};throw error}return data}
+@@ -32,7 +32,7 @@ async function verifyAccess(){
+   if(!data?.success||!data.member){const error=Error('Current authentication could not be verified');error.status=401;throw error}
+   setProfile(data);
+   if(accessProof!==token||epoch!==token.epoch||identity(profile)!==token.owner)return false;
+-  if(data.member.active!==true||data.capabilities?.can_manage_employees!==true){clearStaff();show();return false}
++  if(data.member.active!==true||(data.capabilities?.can_view_employees??data.capabilities?.can_manage_employees)!==true){clearStaff();show();return false}
+   accessProof=null;show();
+   if(modalRevision===token.revision&&visible()&&modal.classList.contains('show')&&token.focus?.isConnected&&modal.contains(token.focus))token.focus.focus({preventScroll:true});
+   return true;
+@@ -46,7 +46,7 @@ async function verifyAccess(){
  }
- _SCHEMA_INDEXES = [
-+    'saas_ai_agents_access_owner_idx',
-+    'saas_support_tickets_access_owner_idx',
-     'saas_ai_accepted_run_idx',
-     'saas_ai_agent_drafts_pending_idx',
-     'saas_ai_agent_jobs_ready_idx',
-@@ -273,6 +276,16 @@ def _schema_current(conn):
-         cur.execute("""SELECT
-           EXISTS(SELECT 1 FROM saas_ai_scope_migrations WHERE version=1)
-           AND EXISTS(SELECT 1 FROM saas_ai_compat_migrations WHERE version=1)
-+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
-+            WHERE migration_key='historical-access-owner-v1:saas_ai_agents')
-+          AND EXISTS(SELECT 1 FROM pg_constraint
-+            WHERE conrelid='saas_ai_agents'::regclass AND conname='saas_ai_agents_access_owner_fk'
-+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
-+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
-+            WHERE migration_key='historical-access-owner-v1:saas_support_tickets')
-+          AND EXISTS(SELECT 1 FROM pg_constraint
-+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_tickets_access_owner_fk'
-+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
-           AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_settings
-             WHERE operating_mode='test' OR
-               (support_case_extraction_enabled AND support_case_extraction_mode='off'))
-@@ -425,6 +438,8 @@ def ensure_schema(conn):
-               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-               UNIQUE(tenant_id,id),
-               FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
-+            from tenant_scoped_access_schema import migrate_resource_ownership
-+            migrate_resource_ownership(cur, ('saas_ai_agents',))
-             cur.execute('ALTER TABLE saas_ai_agents DROP CONSTRAINT IF EXISTS saas_ai_agents_mode_check')
-             cur.execute("ALTER TABLE saas_ai_agents ADD CONSTRAINT saas_ai_agents_mode_check CHECK(mode IN ('manual','automatic'))")
-             # This is deliberately additive: existing agents receive the
-diff --git a/beintaskbot-main/tenant_ai_agents_store.py b/beintaskbot-main/tenant_ai_agents_store.py
-index a269ac5945a99d8b59876f2cf7f3dfc558e19aa8..2681a7ce21337328c05b1f8ab2527a7c4298bfaa 100644
---- a/beintaskbot-main/tenant_ai_agents_store.py
-+++ b/beintaskbot-main/tenant_ai_agents_store.py
-@@ -22,7 +22,7 @@ def _support_case_extraction_runtime_enabled(tenant_id=None):
-     return runtime_flag('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED')
+ function stateMarkup(){const c=entryWords();if(readState==='idle'||readState==='loading')return '<p role="status">'+esc(tab==='requests'?c.loadingRequests:c.loading)+'</p>';if(readState==='error')return '<p id="staffLoadError" role="alert">'+esc(c.error)+'</p><button type="button" class="outline" id="staffRetry">'+esc(c.retry)+'</button><details><summary>'+esc(c.technical)+'</summary><p>'+esc(readError)+'</p></details>';return ''}
+ function wireRetry(){const retry=$('staffRetry');if(retry)retry.onclick=()=>load()}
+-function render(){const c=copy();root.innerHTML=`<div class="staff-head"><div><h2>${c.title}</h2><p>${c.sub}</p></div><button class="primary" type="button" id="staffAdd">${c.add}</button></div><p id="staffSaveStatus" role="status">${esc(saveNotice)}</p><div class="staff-tabs" role="tablist"><button role="tab" data-staff-tab="members" aria-selected="${tab==='members'}">${c.members}</button><button role="tab" data-staff-tab="invites" aria-selected="${tab==='invites'}">${c.invites}</button><button role="tab" data-staff-tab="requests" aria-selected="${tab==='requests'}">${c.requests}</button></div><div id="staffContent" aria-live="polite"></div>`;root.querySelector('#staffAdd').onclick=()=>openInvite();root.querySelectorAll('[data-staff-tab]').forEach(button=>button.onclick=()=>{tab=button.dataset.staffTab;loadRevision++;loadFlight=null;readState='idle';readError='';render();void load()});renderContent()}
++function render(){if(capabilities.can_manage_employees!==true)tab='members';const c=copy();root.innerHTML=`<div class="staff-head"><div><h2>${c.title}</h2><p>${c.sub}</p></div><button class="primary" type="button" id="staffAdd" ${capabilities.can_manage_employees===true?'':'hidden'}>${c.add}</button></div><p id="staffSaveStatus" role="status">${esc(saveNotice)}</p><div class="staff-tabs" role="tablist"><button role="tab" data-staff-tab="members" aria-selected="${tab==='members'}">${c.members}</button><button role="tab" data-staff-tab="invites" ${capabilities.can_manage_employees===true?'':'hidden'} aria-selected="${tab==='invites'}">${c.invites}</button><button role="tab" data-staff-tab="requests" ${capabilities.can_manage_employees===true?'':'hidden'} aria-selected="${tab==='requests'}">${c.requests}</button></div><div id="staffContent" aria-live="polite"></div>`;root.querySelector('#staffAdd').onclick=()=>openInvite();root.querySelectorAll('[data-staff-tab]').forEach(button=>button.onclick=()=>{tab=button.dataset.staffTab;loadRevision++;loadFlight=null;readState='idle';readError='';render();void load()});renderContent()}
+ function renderContent(){if(!root?.querySelector('#staffContent'))return;if(tab==='members'){renderMembers();return}const content=$('staffContent');if(tab==='invites'){content.innerHTML=`<div class="staff-empty">${copy().invitesEmpty}</div>`;return}const state=stateMarkup();if(state){content.innerHTML=state;wireRetry();return}content.innerHTML=requestRows.filter(x=>x.status==='pending').map(x=>`<div class="member"><div><b>${esc(x.display_name||x.card_name)}</b><small>${esc(x.role)}</small></div><div class="request-actions"><button class="outline" data-request="approve:${esc(x.id)}">✓</button><button class="outline danger" data-request="reject:${esc(x.id)}">×</button></div></div>`).join('')||`<div class="staff-empty">${esc(entryWords().requestsEmpty)}</div>`;root.querySelectorAll('[data-request]').forEach(button=>button.onclick=async()=>{const [action,request_id]=button.dataset.request.split(':');await api('/api/platform/access-requests',{method:'POST',body:JSON.stringify({action,request_id})});load()})}
+ function date(value){return value?new Date(value).toLocaleString():'—'}
+ function renderMembers(){const c=copy(),content=root.querySelector('#staffContent'),state=stateMarkup();if(state){content.innerHTML=state;wireRetry();return}content.innerHTML=rows.length?`<div class="staff-table"><div class="staff-row head"><span>${c.name}</span><span>${c.email}</span><span>${c.role}</span><span>${c.whatsapp}</span><span>${c.last}</span><span>${c.status}</span><span></span></div>${rows.map(row=>`<div class="staff-row"><div class="staff-person"><b>${esc(row.display_name||'—')}</b><small>${esc(row.phone||'')}</small></div><div class="staff-email staff-person"><span>${esc(row.email||'—')}</span></div><div class="staff-role">${esc(row.role||'—')}</div><div class="staff-numbers">${esc((row.whatsapp_numbers||[]).map(x=>x.phone).join(', ')||'—')}</div><div class="staff-login">${esc(date(row.last_login_at||row.account_last_login_at))}</div><div><span class="staff-status ${row.active?'active':'inactive'}">${row.active?c.active:c.inactive}</span></div><div class="staff-actions"><button class="outline" data-staff-edit="${row.telegram_id}">${c.edit}</button><button class="outline" data-staff-number="${row.telegram_id}">${c.numbers}</button></div></div>`).join('')}</div>`:`<div class="staff-empty">${c.empty}</div>`;content.querySelectorAll('[data-staff-edit]').forEach(button=>button.onclick=()=>openEdit(rows.find(row=>String(row.telegram_id)===button.dataset.staffEdit),'profile'));content.querySelectorAll('[data-staff-number]').forEach(button=>button.onclick=()=>openEdit(rows.find(row=>String(row.telegram_id)===button.dataset.staffNumber),'numbers'));}
+@@ -85,11 +85,16 @@ function readWorkSettings(form,row){if(!permitted(row,'work_settings')||!row.wor
+ function accessWords(){return ({ru:{operations:'Операции',coarseHelp:'Общее право раздела. Ограничения роли и специальные правила сохраняются.',nativeHelp:'Операции с данными Beintaskbot. Доступ к Kommo и Linear настраивается отдельно.',contactsCompanies:'Контакты и компании',partial:'Частичный доступ сохранён. Изменение галочки включит или отключит общее право раздела.',view:'Просмотр',create:'Создание',update:'Изменение',delete:'Удаление'},az:{operations:'Əməliyyatlar',coarseHelp:'Bölmənin ümumi icazəsi. Rol məhdudiyyətləri və xüsusi qaydalar qüvvədə qalır.',nativeHelp:'Beintaskbot məlumatları ilə əməliyyatlar. Kommo və Linear girişi ayrıca tənzimlənir.',contactsCompanies:'Kontaktlar və şirkətlər',partial:'Qismən giriş saxlanılıb. Xananı dəyişmək bölmənin ümumi icazəsini aktiv və ya deaktiv edəcək.',view:'Baxış',create:'Yaratma',update:'Dəyişmə',delete:'Silmə'},en:{operations:'Operations',coarseHelp:'Broad section permission. Role restrictions and special rules still apply.',nativeHelp:'Operations on Beintaskbot data. Kommo and Linear access is configured separately.',contactsCompanies:'Contacts and companies',partial:'Partial access is retained. Changing this checkbox enables or disables the broad section permission.',view:'View',create:'Create',update:'Update',delete:'Delete'}})[window.tenantI18n?.language]||{}}
+ function accessPageLabel(id){const labels={ru:{instructions:'Инструкции',tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',employees:'Сотрудники',dialogs:'Диалоги',support:'Обращения',night_report:'Ночной отчёт',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',ai_administrator:'AI-администратор',ai_teams:'Команды AI',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI',hot_orders:'Заказы',approvals:'Подтверждения',finance:'Финансы',integrations:'Интеграции',settings:'Настройки',linear:'Linear',news:'Новости',profile:'Профиль'},az:{instructions:'Təlimatlar',tasks:'Tapşırıqlar',customers:'Kontaktlar',companies:'Şirkətlər',deals:'Sövdələşmələr',employees:'Əməkdaşlar',dialogs:'Dialoqlar',support:'Müraciətlər',night_report:'Gecə hesabatı',ai_agents:'AI agentləri',ai_dashboard:'AI paneli',ai_administrator:'AI administrator',ai_teams:'AI komandaları',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək işləri',ai_testing:'AI sınaqları',hot_orders:'Sifarişlər',approvals:'Təsdiqlər',finance:'Maliyyə',integrations:'İnteqrasiyalar',settings:'Tənzimləmələr',linear:'Linear',news:'Xəbərlər',profile:'Profil'},en:{instructions:'Instructions',tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',employees:'Employees',dialogs:'Conversations',support:'Support',night_report:'Night report',ai_agents:'AI agents',ai_dashboard:'AI dashboard',ai_administrator:'AI administrator',ai_teams:'AI teams',knowledge_center:'Knowledge center',support_cases:'Support cases',ai_testing:'AI testing',hot_orders:'Orders',approvals:'Approvals',finance:'Finance',integrations:'Integrations',settings:'Settings',linear:'Linear',news:'News',profile:'Profile'}};return labels[window.tenantI18n?.language]?.[id]||id}
+ function hasAccessSettings(row){return profile?.role==='owner'&&!!row?.access_settings?.version}
++function scopedAccess(row){return hasAccessSettings(row)&&row.access_settings.scoped_access_enabled===true}
++function scopeWords(){return ({ru:{title:'Права по разделам',section:'Раздел',none:'Никакой',self:'Сам',department:'Отдел',all:'Все',legacy:'Прежние правила',allowed:'Действие разрешено по прежним правилам',denied:'Действие запрещено по прежним правилам',help:'Для каждого действия область выбирается отдельно. «Все» означает только свою компанию. Изменения вступают в силу после сохранения.',retained:'«Прежние правила» сохраняет существующий доступ без изменения. Выберите область, чтобы заменить его для этого действия.',unsupported:'Действие не поддерживается',common:'Инструкции и новости не входят в матрицу. Правила публикации и административных действий сохраняются.',departmentLabel:'Отдел',noDepartment:'Без отдела',departmentHelp:'Область «Отдел» определяется текущим отделом ответственного. Без отдела доступ к данным коллег не предоставляется.',newDepartment:'Создать отдел',departmentName:'Название нового отдела',create:'Создать',departmentFailed:'Не удалось создать отдел.',departmentCreated:'Отдел создан. Сохраните карточку, чтобы назначить его сотруднику.',retainedDepartment:'Сохранённый отдел'},az:{title:'Bölmələr üzrə hüquqlar',section:'Bölmə',none:'Heç biri',self:'Özü',department:'Şöbə',all:'Hamısı',legacy:'Əvvəlki qaydalar',allowed:'Əməliyyata əvvəlki qaydalara görə icazə verilir',denied:'Əməliyyata əvvəlki qaydalara görə icazə verilmir',help:'Hər əməliyyat üçün əhatə ayrıca seçilir. «Hamısı» yalnız öz şirkətini nəzərdə tutur. Dəyişikliklər yadda saxlandıqdan sonra qüvvəyə minir.',retained:'«Əvvəlki qaydalar» cari girişi dəyişmədən saxlayır. Bu əməliyyat üçün yeni əhatəni seçə bilərsiniz.',unsupported:'Əməliyyat dəstəklənmir',common:'Təlimatlar və xəbərlər matrisə daxil deyil. Nəşr və inzibati əməliyyatların qaydaları saxlanılır.',departmentLabel:'Şöbə',noDepartment:'Şöbə yoxdur',departmentHelp:'«Şöbə» məsul şəxsin cari şöbəsinə əsaslanır. Şöbə olmadıqda həmkarların məlumatlarına giriş verilmir.',newDepartment:'Şöbə yarat',departmentName:'Yeni şöbənin adı',create:'Yarat',departmentFailed:'Şöbəni yaratmaq olmadı.',departmentCreated:'Şöbə yaradıldı. Əməkdaşa təyin etmək üçün kartı yadda saxlayın.',retainedDepartment:'Saxlanılan şöbə'},en:{title:'Section permissions',section:'Section',none:'None',self:'Self',department:'Department',all:'All',legacy:'Previous rules',allowed:'Allowed under previous rules',denied:'Denied under previous rules',help:'Choose the scope separately for each action. All means this company only. Changes apply after saving.',retained:'Previous rules preserves existing access unchanged. Select a scope to replace it for that action.',unsupported:'Action not supported',common:'Instructions and news are outside the matrix. Publishing and administrative rules remain unchanged.',departmentLabel:'Department',noDepartment:'No department',departmentHelp:'Department scope uses the responsible person’s current department. Without a department, colleagues’ data is not included.',newDepartment:'Create department',departmentName:'New department name',create:'Create',departmentFailed:'Could not create the department.',departmentCreated:'Department created. Save the card to assign it to the employee.',retainedDepartment:'Retained department'}})[window.tenantI18n?.language]||{}}
++function departmentField(row){if(!row||!Array.isArray(row.department_catalog))return '';const w=scopeWords(),selected=String(row.department_id||''),options=row.department_catalog.filter(item=>item.active!==false||String(item.id)===selected),editable=permitted(row,'department_id')&&profile?.role==='owner';if(selected&&!options.some(item=>String(item.id)===selected))options.push({id:selected,name:w.retainedDepartment});return `<label class="full staff-department">${esc(w.departmentLabel)}<select name="department_id" ${editable?'':'disabled'}><option value="">${esc(w.noDepartment)}</option>${options.map(item=>`<option value="${esc(item.id)}" ${String(item.id)===selected?'selected':''}>${esc(item.name)}</option>`).join('')}</select><small class="sub">${esc(editable?w.departmentHelp:reason(row,'department_id'))}</small>${fieldError('department_id')}${editable?`<button type="button" class="outline" data-department-add>${esc(w.newDepartment)}</button><span data-department-create hidden><input type="text" data-department-name maxlength="120" aria-label="${esc(w.departmentName)}" placeholder="${esc(w.departmentName)}"><button type="button" class="outline" data-department-save>${esc(w.create)}</button><span role="status" data-department-status></span></span>`:''}</label>`}
++function installDepartmentForm(form,row){const add=form.querySelector('[data-department-add]'),area=form.querySelector('[data-department-create]');if(!add||!area)return;add.onclick=()=>{area.hidden=!area.hidden;if(!area.hidden)area.querySelector('input').focus()};form.querySelector('[data-department-save]').onclick=async()=>{const input=area.querySelector('input'),button=area.querySelector('button'),status=area.querySelector('[role=status]'),w=scopeWords(),name=input.value.trim(),current=formOperation(form);if(!name||button.disabled||!current())return;button.disabled=true;status.textContent='';try{const result=await api('/api/platform/members',{method:'POST',body:JSON.stringify({action:'create_department',...writeIdentity(),name})});if(!current())return;const item=result.department;if(!item?.id||!item?.name)throw Error(w.departmentFailed);const select=form.elements.namedItem('department_id');select.add(new Option(item.name,item.id));select.value=item.id;row.department_catalog.push(item);dirty=true;input.value='';status.textContent=w.departmentCreated}catch(error){if(current()){status.textContent=error.message||w.departmentFailed;if(error.status===undefined){form.dataset.departmentUncertain='true';status.textContent=employeeWords().unknown}}}finally{if(current()&&form.dataset.departmentUncertain!=='true')button.disabled=false}}}
+ function sectionPermissionCards(row,disabled){const selected=row.explicit_permissions||row.permissions||[];return permissionControls(selected,[],disabled,true,rightsCatalog().filter(([module])=>!['tasks','deals','customers','linear'].includes(module)))}
+-function separateAccessFields(row){const w=accessWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner';return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(w.operations)}</h3><p class="sub">${esc(w.nativeHelp)}</p>`+Object.entries(s.action_catalog||{}).map(([module,actions])=>`<fieldset class="staff-permission-card staff-native-permission" data-permission-card="${esc(module)}"><legend>${esc(module==='customers'?w.contactsCompanies:accessPageLabel(module))}</legend><div class="staff-permission-options">`+actions.map(action=>`<label class="staff-right"><input type="checkbox" data-access-action="${esc(action)}" ${editable?'':'disabled'} data-access-module="${esc(module)}" ${s.actions?.[module]?.[action]===true?'checked':''}>${esc(w[action]||action)}</label>`).join('')+'</div></fieldset>').join('')+sectionPermissionCards(row,!editable||!permitted(row,'permission_changes'))+fieldError('access_settings')+'</div></section>'}
+-function readAccessSettings(form,row){if(!hasAccessSettings(row)||!permitted(row,'access_settings')||row.role==='owner')return null;const s=row.access_settings,actions={};form.querySelectorAll('[data-access-action]').forEach(input=>{if(input.disabled||input.closest('fieldset[disabled]'))return;const module=input.dataset.accessModule,action=input.dataset.accessAction;if(input.checked!==(s.actions?.[module]?.[action]===true))(actions[module]??={})[action]=input.checked});return Object.keys(actions).length?{expected_version:s.version,changes:{actions}}:null}
++function scopedAccessFields(row){const w=accessWords(),t=scopeWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner',actions=['create','view','update','delete'],levels=['none','self','department','all'];return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(t.title)}</h3><p class="sub">${esc(t.help)}</p><p class="sub">${esc(t.retained)}</p><div class="staff-scope-matrix" role="table" aria-label="${esc(t.title)}"><div class="staff-scope-heading" role="row"><span role="columnheader">${esc(t.section)}</span>${actions.map(action=>`<span role="columnheader">${esc(w[action])}</span>`).join('')}</div>`+Object.entries(s.scope_catalog||{}).filter(([module])=>!['instructions','news'].includes(module)).map(([module,supported])=>`<div class="staff-scope-row" role="row" data-scope-row="${esc(module)}"><strong role="rowheader">${esc(accessPageLabel(module))}${module==='integrations'?`<small>${esc(({ru:'Общее подключение компании. Ответственный — владелец компании.',az:'Şirkətin ortaq bağlantısı. Məsul şəxs şirkət sahibidir.',en:'Company-wide connection. The company owner is responsible.'})[window.tenantI18n?.language]||'Company-wide connection. The company owner is responsible.')}</small>`:''}</strong>${actions.map(action=>{if(!Array.isArray(supported)||!supported.includes(action))return `<div role="cell" class="staff-scope-unavailable"><span class="staff-scope-caption">${esc(w[action])}</span><span title="${esc(t.unsupported)}" aria-label="${esc(w[action]+': '+t.unsupported)}">—</span></div>`;const value=s.scoped_actions?.[module]?.[action]??null,legacy=value===null,allowed=s.legacy_actions?.[module]?.[action]??s.actions?.[module]?.[action];return `<div role="cell"><label><span class="staff-scope-caption">${esc(w[action])}</span><select data-access-scope="${esc(action)}" data-access-module="${esc(module)}" aria-label="${esc(accessPageLabel(module)+' · '+w[action])}" ${editable?'':'disabled'}>${legacy?`<option value="legacy" selected disabled>${esc(t.legacy)}</option>`:''}${levels.map(scope=>`<option value="${scope}" ${value===scope?'selected':''}>${esc(t[scope])}</option>`).join('')}</select></label>${legacy?`<small class="staff-scope-legacy">${esc(allowed?t.allowed:t.denied)}</small>`:''}</div>`}).join('')}</div>`).join('')+`</div><p class="sub">${esc(t.common)}</p>${fieldError('access_settings')}</div></section>`}
++function separateAccessFields(row){if(scopedAccess(row))return scopedAccessFields(row);const w=accessWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner';return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(w.operations)}</h3><p class="sub">${esc(w.nativeHelp)}</p>`+Object.entries(s.action_catalog||{}).map(([module,actions])=>`<fieldset class="staff-permission-card staff-native-permission" data-permission-card="${esc(module)}"><legend>${esc(module==='customers'?w.contactsCompanies:accessPageLabel(module))}</legend><div class="staff-permission-options">`+actions.map(action=>`<label class="staff-right"><input type="checkbox" data-access-action="${esc(action)}" ${editable?'':'disabled'} data-access-module="${esc(module)}" ${s.actions?.[module]?.[action]===true?'checked':''}>${esc(w[action]||action)}</label>`).join('')+'</div></fieldset>').join('')+sectionPermissionCards(row,!editable||!permitted(row,'permission_changes'))+fieldError('access_settings')+'</div></section>'}
++function readAccessSettings(form,row){if(!hasAccessSettings(row)||!permitted(row,'access_settings')||row.role==='owner')return null;const s=row.access_settings,actions={};if(scopedAccess(row)){form.querySelectorAll('[data-access-scope]').forEach(input=>{if(input.disabled||input.value==='legacy')return;const module=input.dataset.accessModule,action=input.dataset.accessScope;if(input.value!==s.scoped_actions?.[module]?.[action])(actions[module]??={})[action]=input.value});return Object.keys(actions).length?{expected_version:s.version,changes:{scopes:actions}}:null}form.querySelectorAll('[data-access-action]').forEach(input=>{if(input.disabled||input.closest('fieldset[disabled]'))return;const module=input.dataset.accessModule,action=input.dataset.accessAction;if(input.checked!==(s.actions?.[module]?.[action]===true))(actions[module]??={})[action]=input.checked});return Object.keys(actions).length?{expected_version:s.version,changes:{actions}}:null}
+ function accessFields(row){const c=copy(),w=employeeWords(),creating=!row,explicit=Array.isArray(row?.explicit_permissions)?row.explicit_permissions:row?.permissions||[],known=new Set(rightsCatalog().map(item=>item[0])),legacy=explicit.filter(key=>!known.has(key));return `<section class="staff-section"><h3>${w.access}</h3><div class="grid">`+
+-field('display_name',w.localName,row?.display_name||'',creating?'readonly':'required maxlength="120" '+(permitted(row,'display_name')?'':'readonly'),creating?w.generated:permitted(row,'display_name')?'':reason(row,'display_name'))+
++departmentField(row)+field('display_name',w.localName,row?.display_name||'',creating?'readonly':'required maxlength="120" '+(permitted(row,'display_name')?'':'readonly'),creating?w.generated:permitted(row,'display_name')?'':reason(row,'display_name'))+
+ `<label>${c.role}<select name="role" ${creating||permitted(row,'role')?'':'disabled'}>${roleOptions(row?.role||'worker',c)}</select><small class="sub">${esc(creating||permitted(row,'role')?w.roleHelp:reason(row,'role'))}</small>${fieldError('role')}</label>`+
+ `<label>${w.membership}<input type="checkbox" name="active" ${creating||row.active?'checked':''} ${creating||!permitted(row,'active')?'disabled':''}><small class="sub">${esc(creating?w.createdStatus:permitted(row,'active')?w.accountReason:reason(row,'active'))}</small>${fieldError('active')}</label></div>`+
+ (hasAccessSettings(row)?separateAccessFields(row):permissionControls(explicit,legacy,!creating&&!permitted(row,'permissions'),!creating&&permitted(row,'permission_changes')))+
+@@ -106,7 +111,7 @@ form.dataset.assignPending='true';pendingWrites.set(form,{row,pane:'profile'});c
  
- 
--def _authorize(cur, profile):
-+def _authorize(cur, profile, *, action=None, agent_id=None):
-     if not isinstance(profile, dict):
-         raise TenantLinearError('İcazə yoxdur.', 403)
-     tenant_id = identifier(profile.get('tenant_id'))
-@@ -30,6 +30,13 @@ def _authorize(cur, profile):
-         actor = int(profile.get('telegram_id'))
-     except (TypeError, ValueError):
-         raise TenantLinearError('İcazə yoxdur.', 403) from None
-+    from tenant_ai_scoped_access import context, authorize
-+    if action is None:
-+        context(cur, profile)  # Unconverted shared operations stay closed.
-+    else:
-+        scoped = authorize(cur, profile, action, agent_id)
-+        if scoped is not None:
-+            return scoped
-     cur.execute('''SELECT m.role,m.active,t.status,t.onboarding
-       FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
-       WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant_id, actor))
-@@ -308,13 +315,27 @@ def list_agents(profile):
-     with _connect() as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
--            tenant, _ = _authorize(cur, profile)
--            cur.execute('''SELECT a.id,a.tenant_id,a.name,a.instructions,a.enabled,a.mode,a.language,a.style,a.delay_seconds,
-+            tenant, _ = _authorize(cur, profile, action='view')
-+            from tenant_ai_scoped_access import context, allowed
-+            state = context(cur, profile, 'view')
-+            cur.execute('''SELECT a.id,a.tenant_id,a.access_responsible_id,a.name,a.instructions,a.enabled,a.mode,a.language,a.style,a.delay_seconds,
-               a.schedule,a.scopes,a.model,a.safety,a.response_policy,a.role,a.expert_policy,a.version,a.created_at,a.updated_at,
-               (SELECT count(*) FROM saas_ai_conversation_state cs WHERE cs.tenant_id=a.tenant_id AND cs.agent_id=a.id) AS assigned_dialog_count
-               FROM saas_ai_agents a
--              WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''', (tenant,))
--            rows = [_row(row) for row in cur.fetchall()]
-+              WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''' + (' FOR SHARE OF a' if state is not None else ''), (tenant,))
-+            candidates = cur.fetchall()
-+            rows = []
-+            for row in candidates:
-+                if state is not None and not allowed(cur, state, row):
-+                    continue
-+                item = _row(row)
-+                item.pop('access_responsible_id', None)
-+                if state is not None:
-+                    # Cross-agent bindings and dialog totals are unpartitioned
-+                    # projections, not part of scoped agent read authority.
-+                    item.pop('expert_policy', None)
-+                    item.pop('assigned_dialog_count', None)
-+                rows.append(item)
-     return rows
- 
- 
-@@ -418,7 +439,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
-     with (nullcontext(connection) if connection is not None else _connect()) as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
--            tenant, actor = _authorize(cur, profile)
-+            tenant, actor = _authorize(cur, profile, action='create' if creating else 'update', agent_id=agent_id)
-+            from tenant_ai_scoped_access import require_references, require_runtime_source_boundary
-+            require_runtime_source_boundary(cur, profile)
-+            require_references(cur, profile, patch)
-             if creating and patch.get('mode')!='automatic':
-                 patch['response_policy']['auto_case_dispatch_enabled']=False
-             if creating and patch.get('response_policy') and (patch['response_policy'].get('auto_case_dispatch_enabled') or patch['response_policy'].get('developer_routing')=='primary_reserve'):
-@@ -436,6 +460,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
-                             (tenant, actor, patch['setup_key']))
-                 existing = _row(cur.fetchone())
-                 if existing:
-+                    from tenant_ai_scoped_access import authorize
-+                    authorize(cur, profile, 'create', existing['id'])
-+                    require_references(cur, profile, existing)
-                     return existing
-                 # The original version of the night-operator wizard did not
-                 # send a setup key.  Match only one *identical*, disabled,
-@@ -454,6 +481,8 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
-                              _json(patch['scopes']), patch['model'], _json(patch['safety'])))
-                 legacy = cur.fetchall()
-                 if len(legacy) == 1:
-+                    from tenant_ai_scoped_access import authorize
-+                    authorize(cur, profile, 'create', legacy[0]['id'])
-                     cur.execute('''UPDATE saas_ai_agents SET setup_key=%s
-                       WHERE tenant_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
-                       RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-@@ -519,11 +548,11 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
-                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
-                 agent_uuid = uuid.uuid4()
-                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
--                  delay_seconds,schedule,scopes,model,safety,response_policy,created_by,setup_key,role,expert_policy) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s::jsonb)
-+                  delay_seconds,schedule,scopes,model,safety,response_policy,created_by,setup_key,role,expert_policy,access_responsible_id) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s::jsonb,%s)
-                   RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,response_policy,role,expert_policy,version,created_at,updated_at''',
-                   (agent_uuid, tenant, patch['name'], patch['instructions'], patch['enabled'], patch['mode'], patch['language'], patch['style'],
-                    patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), _json(patch['response_policy']), actor,
--                   patch.get('setup_key'),patch['role'],_json(patch['expert_policy'])))
-+                   patch.get('setup_key'),patch['role'],_json(patch['expert_policy']),actor))
-                 result = _row(cur.fetchone())
-                 cur.execute('''INSERT INTO saas_ai_agent_history_identities(tenant_id,id,display_name)
-                   VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT(tenant_id,id) DO UPDATE SET display_name=EXCLUDED.display_name,
-@@ -540,6 +569,7 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
-                     raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
-                 merged = {key: previous.get(key) for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model','safety','response_policy','role','expert_policy')}
-                 merged.update(patch)
-+                require_references(cur, profile, merged)
-                 from tenant_ai_expert_policy import validate_binding
-                 validate_binding(cur,tenant,agent_uuid,merged,previous)
-                 # The recipient binding is server-owned; it lives in the
-@@ -1389,10 +1419,14 @@ def list_triggers(profile,agent_id):
-     with _connect() as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
--            tenant,_=_authorize(cur,profile)
-+            tenant,_=_authorize(cur,profile,action='view',agent_id=agent)
-             cur.execute('''SELECT id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at
-               FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid ORDER BY created_at,id''',(tenant,agent))
-             rows=cur.fetchall()
-+            from tenant_ai_scoped_access import context
-+            if context(cur, profile, 'view') is not None:
-+                rows = [{**row, 'condition': {key: value for key, value in (row.get('condition') or {}).items()
-+                         if key != 'expert_agent_ids'}} for row in rows]
-     result=[]
-     for row in rows:
-         item=dict(row);item['id']=str(item['id']);item['agent_id']=str(item['agent_id'])
-@@ -1652,15 +1686,27 @@ def _assert_resume_allowed(cur, tenant, provider, conversation, channel_id):
-     return row
- 
- 
--def _conversation_authorize(cur, profile, provider, conversation, channel_id=''):
--    # Preserve existing configuration authority; ordinary operators get only their routes.
-+def _conversation_authorize(cur, profile, provider, conversation, channel_id='', *, action='view'):
-+    # AI configuration authority does not bypass an explicit dialog source scope.
-+    from tenant_operator_access import access, assert_route
-+    from tenant_scoped_access import scoped_access_enabled
-+    from tenant_dialog_access import require_independent_ai
-     try:
--        return _authorize(cur,profile)
-+        verified=_authorize(cur,profile)
-     except TenantLinearError as error:
-         if error.status != 403: raise
--    from tenant_operator_access import access, assert_route
--    tenant,actor,policy=access(cur,profile,'dialogs')
--    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''))
-+        verified=None
-+    if verified is not None:
-+        if scoped_access_enabled():
-+            from tenant_scoped_access_store import read_access_profile
-+            from tenant_policy import TenantPolicy
-+            policy=TenantPolicy(read_access_profile(cur,verified[0],verified[1],lock=True) or {})
-+            if policy.has_scoped_access('dialogs'):
-+                assert_route(cur,verified[0],policy,provider,conversation,str(channel_id or ''),action=action)
-+        return verified
-+    tenant,actor,policy=access(cur,profile,'dialogs',action=action)
-+    require_independent_ai(policy,management=True)
-+    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''),action=action)
-     return tenant,actor
- 
- 
-@@ -1678,7 +1724,7 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
-             connect_schema(conn)
-             conn.commit()  # Finish DDL before acquiring group/dialogue locks.
-         with conn.cursor() as cur:
--            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
-+            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id,action='update')
-             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
-             lock_dialog(cur, tenant, provider, resolved_channel, conversation)
-             if provider=='connect':
-@@ -1786,6 +1832,13 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
-                         'resume_allowed':False,'resume_block_reason':'legacy_channel_ambiguous','tracked':True}
-             from tenant_ai_group_coordination import group_jid,view as group_view
-             group_snapshot=group_view(cur,tenant,conversation) if provider=='connect' and group_jid(conversation) else None
-+            if group_snapshot:
-+                from tenant_scoped_access import scoped_access_enabled
-+                if scoped_access_enabled():
-+                    from tenant_scoped_access_store import read_access_profile
-+                    from tenant_policy import TenantPolicy
-+                    from tenant_dialog_access import filter_group
-+                    filter_group(cur,tenant,TenantPolicy(read_access_profile(cur,tenant,int(profile['telegram_id']),lock=True) or {}),group_snapshot)
-             # The route was verified above against tenant-owned Connect data.
-             # Diagnostics below intentionally expose only metadata and safe
-             # state/error codes; message bodies and external secrets never
-@@ -1889,6 +1942,8 @@ def read_conversation_for_lead(profile, lead_id):
-                     AND c.connect_channel_id::text=j.channel_id)))
-               ORDER BY j.provider,j.updated_at DESC LIMIT 2""", (tenant, lead))
-             rows = cur.fetchall()
-+            if len(rows)==1:
-+                _conversation_authorize(cur,profile,rows[0]['provider'],rows[0]['conversation_id'],rows[0].get('channel_id') or '')
-     if len(rows) != 1:
-         return None
-     row = rows[0]
-@@ -1920,6 +1975,8 @@ def list_handoffs(profile,limit=50):
-         from tenant_connect_transport import _schema as ensure_connect_schema
-         ensure_connect_schema(conn)
-         with conn.cursor() as cur:
-+            from tenant_ai_management_access import require_unrestricted_dialog_read
-+            require_unrestricted_dialog_read(cur, profile)
-             tenant,_=_authorize(cur,profile)
-             cur.execute('''SELECT cs.provider,cs.conversation_id,cs.state,cs.reason,cs.updated_at,
-                 COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,cs.last_inbound_message_id,cs.last_agent_message_id,
-@@ -1971,6 +2028,8 @@ def list_connect_diagnostics(profile, limit=50):
-     with _connect() as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
-+            from tenant_ai_management_access import require_unrestricted_dialog_read
-+            require_unrestricted_dialog_read(cur, profile)
-             tenant, _ = _authorize(cur, profile)
-             return read_connect_diagnostics(cur, tenant, limit)
- 
-diff --git a/beintaskbot-main/tenant_ai_group_coordination.py b/beintaskbot-main/tenant_ai_group_coordination.py
-index 5c6c50811de51111b6e8bdc4bcd001c684bc403e..cb4352f6e1bae3c5f2737a6d2f506ca0bdf88f2b 100644
---- a/beintaskbot-main/tenant_ai_group_coordination.py
-+++ b/beintaskbot-main/tenant_ai_group_coordination.py
-@@ -491,6 +491,50 @@ def reserve_delivery(tenant, channel, conversation, run_id):
-             return bool(cur.fetchone())
- 
- 
-+def _mutation_policy(cur, profile):
-+    """Fence current action grants before legacy AI authorization takes locks."""
-+    from tenant_scoped_access import scoped_access_enabled
-+    if not scoped_access_enabled():
-+        return None
-+    from tenant_scoped_access_store import read_access_profile
-+    from tenant_policy import TenantPolicy
-+    if not isinstance(profile, dict):
-+        raise TenantLinearError('Нет доступа.', 403)
-+    current = read_access_profile(cur, profile.get('tenant_id'), profile.get('telegram_id'), lock=True)
-+    if not current:
-+        raise TenantLinearError('Нет доступа.', 403)
-+    policy = TenantPolicy(current)
-+    if policy.action_scope('dialogs', 'update') == 'none':
-+        raise TenantLinearError('Изменение диалогов не разрешено.', 403)
-+    return policy
-+
-+
-+def _require_group_mutation(cur, tenant, policy, conversation, assignments):
-+    """Shared group state and pending work affect every represented source.
-+
-+    Narrow rights must cover all current routes, assignments and work items,
-+    including the previous assignment being removed. Unbound legacy work is
-+    not attributed to a permitted channel by guesswork.
-+    """
-+    if policy is None or policy.action_scope('dialogs', 'update') in (None, 'all'):
-+        return
-+    from tenant_dialog_access import require_source
-+    cur.execute('''SELECT connect_channel_id::text AS channel_id FROM saas_connect_conversations
-+      WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY connect_channel_id FOR SHARE''',
-+      (tenant, conversation))
-+    channels = {row['channel_id'] for row in cur.fetchall()}
-+    old = read(cur, tenant, conversation).get('assignments') or []
-+    channels.update(str(slot.get('channel_id') or '') for slot in [*old, *assignments])
-+    cur.execute('''SELECT channel_id FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid
-+      AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')
-+      ORDER BY channel_id,agent_id,revision FOR SHARE''', (tenant, conversation))
-+    channels.update(str(row['channel_id'] or '') for row in cur.fetchall())
-+    if not channels:
-+        raise TenantLinearError('Нет проверенного источника группы.', 403)
-+    for channel in sorted(channels):
-+        require_source(cur, tenant, policy, 'connect', channel, 'update')
-+
-+
- def configure(profile, data):
-     from tenant_ai_agents_store import _authorize, _audit
-     from tenant_ai_agents_schema import ensure_schema
-@@ -521,8 +565,10 @@ def configure(profile, data):
-                 cur.execute("SET LOCAL lock_timeout = '1500ms'")
-                 cur.execute("SET LOCAL statement_timeout = '5000ms'")
-         with conn.cursor() as cur:
-+            policy = _mutation_policy(cur, profile)
-             tenant, actor = _authorize(cur, profile)
-             lock_group(cur, tenant, conversation)
-+            _require_group_mutation(cur, tenant, policy, conversation, normalized)
-             if resolution is not None:
-                 from tenant_operator_legacy import admin
-                 from tenant_ai_dialog_scope import lock_dialog
-@@ -718,6 +764,9 @@ def configure(profile, data):
- 
- def transition(cur, tenant, conversation, state, reason, actor):
-     from tenant_ai_agents_store import _assert_resume_allowed
-+    policy = _mutation_policy(cur, {'tenant_id': tenant, 'telegram_id': actor})
-+    lock_group(cur, tenant, conversation)
-+    _require_group_mutation(cur, tenant, policy, conversation, [])
-     if state != 'active':
-         stop(cur, tenant, conversation, state, reason, actor)
-         return
-@@ -824,7 +873,11 @@ def register_employee(profile,data):
-     with _connect() as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
-+            policy=_mutation_policy(cur,profile)
-             tenant,actor=_authorize(cur,profile)
-+            if policy is not None:
-+                from tenant_dialog_access import require_source
-+                require_source(cur,tenant,policy,'connect',channel,'update')
-             cur.execute('''SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s
-               AND direction='outgoing' AND raw->>'fromMe'='true' AND raw->>'source'='linked_phone'
-               AND raw->>'participantJid'=%s AND COALESCE(raw->>'authorshipUncertain','false')<>'true'
-diff --git a/beintaskbot-main/tenant_ai_management_access.py b/beintaskbot-main/tenant_ai_management_access.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..1d8781dc2f3bce7b21cb33358af6d8e70ab4947f
---- /dev/null
-+++ b/beintaskbot-main/tenant_ai_management_access.py
-@@ -0,0 +1,24 @@
-+"""Fail-closed boundary for AI diagnostics not yet partitioned by source.
-+
-+This is not an AI-management grant. Callers must still apply their existing
-+management authorization. Unconverted aggregate readers must not turn a
-+narrow dialog grant into tenant-wide channel/customer metadata access.
-+"""
-+from tenant_linear_policy import TenantLinearError
-+from tenant_policy import TenantPolicy
-+from tenant_scoped_access import scoped_access_enabled
-+from tenant_scoped_access_store import read_access_profile
-+
-+
-+def require_unrestricted_dialog_read(cur, profile):
-+    if not scoped_access_enabled():
-+        return
-+    current = read_access_profile(cur, profile.get('tenant_id'), profile.get('telegram_id'), lock=True)
-+    if not current:
-+        raise TenantLinearError('İcazə yoxdur.', 403)
-+    policy = TenantPolicy(current)
-+    if policy.action_scope('support','view') not in {None,'all'}:
-+        raise TenantLinearError('ai_diagnostics_require_unrestricted_support_read',403)
-+    scope = policy.action_scope('dialogs', 'view')
-+    if scope not in {None, 'all'}:
-+        raise TenantLinearError('ai_diagnostics_require_unrestricted_dialog_read', 403)
-diff --git a/beintaskbot-main/tenant_ai_scoped_access.py b/beintaskbot-main/tenant_ai_scoped_access.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..a0c719ec017d28b849caa0c4150a135bf63a1193
---- /dev/null
-+++ b/beintaskbot-main/tenant_ai_scoped_access.py
-@@ -0,0 +1,93 @@
-+"""Dormant, resource-aware AI document authorization.
-+
-+Deliberately not in SCOPE_ACTION_CATALOG: shared workflows and employee deletion
-+still need coverage/product decisions. Synthetic persisted grants exercise this
-+boundary without making the unfinished feature configurable in the editor.
-+"""
-+from tenant_linear_policy import TenantLinearError, identifier
-+from tenant_policy import TenantPolicy
-+from tenant_scoped_access import SCOPES, allows_owned_resource, profile_actor, scoped_access_enabled
-+from tenant_scoped_access_store import read_access_profile, owned_resource_metadata
-+
-+
-+def context(cur, profile, action=None):
-+    if not scoped_access_enabled():
-+        return None
-+    current = read_access_profile(cur, profile['tenant_id'], profile['telegram_id'], lock=True)
-+    if not current:
-+        raise TenantLinearError('İcazə yoxdur.', 403)
-+    if current.get('role') == 'owner':
-+        return None
-+    settings = TenantPolicy(current).member_settings
-+    scopes = settings.get('access_scopes', {})
-+    if isinstance(scopes, dict) and 'ai_agents' not in scopes:
-+        return None
-+    # A malformed matrix is never a fallback to legacy management authority.
-+    actions = scopes.get('ai_agents') if isinstance(scopes, dict) else None
-+    if action is None:
-+        raise TenantLinearError('ai_shared_operation_requires_unscoped_management', 403)
-+    if not isinstance(actions, dict):
-+        return current, 'none'
-+    if action not in actions:
-+        return None
-+    value = actions[action]
-+    return current, value if isinstance(value, str) and value in SCOPES else 'none'
-+
-+
-+def allowed(cur, state, row):
-+    current, scope = state
-+    metadata = owned_resource_metadata(cur, current['tenant_id'], row, lock=True)
-+    return allows_owned_resource(profile_actor(current), metadata, scope)
-+
-+
-+def authorize(cur, profile, action, agent_id=None):
-+    state = context(cur, profile, action)
-+    if state is None:
-+        return None
-+    current, scope = state
-+    if agent_id is not None:
-+        # Match save_agent's configuration order: membership/policy fences,
-+        # tenant configuration mutex, then agent row. Never hold a row while
-+        # waiting for a creator/recovery holding the configuration mutex.
-+        mutating = action in {'update', 'delete'}
-+        if mutating:
-+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
-+                        ('ai-agent-config:' + str(current['tenant_id']),))
-+        cur.execute('''SELECT tenant_id,id,access_responsible_id FROM saas_ai_agents
-+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL''' + (' FOR UPDATE' if mutating else ' FOR SHARE'),
-+                    (str(current['tenant_id']), identifier(agent_id)))
-+        row = cur.fetchone()
-+        if not row or not allowed(cur, state, row):
-+            raise TenantLinearError('Agent tapılmadı.', 404)
-+    elif action == 'create':
-+        row = {'tenant_id': current['tenant_id'], 'access_responsible_id': current['telegram_id']}
-+        if not allowed(cur, state, row):
-+            raise TenantLinearError('AI Agents idarəetmə icazəsi yoxdur.', 403)
-+    elif scope == 'none':
-+        raise TenantLinearError('AI Agents idarəetmə icazəsi yoxdur.', 403)
-+    return str(current['tenant_id']), int(current['telegram_id'])
-+
-+
-+def require_references(cur, profile, config):
-+    """References cannot grant read/use access to another employee's agent."""
-+    if all(context(cur, profile, action) is None for action in ('view', 'create', 'update')):
-+        return
-+    policy = config.get('expert_policy') or {}
-+    ids = set(policy.get('expert_agent_ids') or []) | set(policy.get('allowed_primary_ids') or [])
-+    if policy.get('expert_agent_id'):
-+        ids.add(policy['expert_agent_id'])
-+    # The executor and diagnostic tools are not partitioned by responsible
-+    # employee yet. Even access to both rows cannot grant those shared tools.
-+    if ids or policy.get('tools'):
-+        raise TenantLinearError('ai_cross_agent_scope_not_ready', 403)
-+    response = config.get('response_policy') or {}
-+    if response.get('auto_case_dispatch_enabled') or response.get('developer_routing') == 'primary_reserve':
-+        raise TenantLinearError('ai_shared_dispatch_scope_not_ready', 403)
-+
-+
-+def require_runtime_source_boundary(cur, profile):
-+    """Do not activate unpartitioned runtime/configuration through narrow dialogs."""
-+    if context(cur, profile, 'update') is None and context(cur, profile, 'create') is None:
-+        return
-+    from tenant_ai_management_access import require_unrestricted_dialog_read
-+    require_unrestricted_dialog_read(cur, profile)
-diff --git a/beintaskbot-main/tenant_ai_state.py b/beintaskbot-main/tenant_ai_state.py
-index 3321fcb734953131167c494dff189158bae7b1c8..1dbf4ec9ac890205573a8387efde1eaedda5cb64 100644
---- a/beintaskbot-main/tenant_ai_state.py
-+++ b/beintaskbot-main/tenant_ai_state.py
-@@ -146,7 +146,11 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
-     with _connect() as conn:
-         ensure_schema(conn)
-         with conn.cursor() as cur:
-+            from tenant_ai_management_access import require_unrestricted_dialog_read
-+            require_unrestricted_dialog_read(cur, profile)
-             tenant, _, policy = access(cur, profile, 'dialogs')
-+            from tenant_dialog_access import require_independent_ai
-+            require_independent_ai(policy,management=True)
-             if technical:
-                 # Deliberately check the DB role/manage grant, never profile.role.
-                 _authorize(cur, profile)
-diff --git a/beintaskbot-main/tenant_auth_api.py b/beintaskbot-main/tenant_auth_api.py
-index 2ae2792034007d4c75e666533b09c006252bcb98..4948920815fabd6be3aea28fdd72a19e012741d1 100644
---- a/beintaskbot-main/tenant_auth_api.py
-+++ b/beintaskbot-main/tenant_auth_api.py
-@@ -366,7 +366,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
-             capabilities = context.capabilities(profile)
-             members = await asyncio.to_thread(
-                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
--            ) if capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'}) else []
-+            ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []
-             account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
-         except Exception:
-             context.logger.exception("Platform session lookup failed")
-diff --git a/beintaskbot-main/tenant_bein_api.py b/beintaskbot-main/tenant_bein_api.py
-index a3c145ed958dd00fb7870b1fbb0e503b6b89d4a0..e19577448e69b3d57eb9f2f9003e99bd89455233 100644
---- a/beintaskbot-main/tenant_bein_api.py
-+++ b/beintaskbot-main/tenant_bein_api.py
-@@ -8,6 +8,15 @@ from aiohttp import web
- from tenant_bein_integration import credential, save, set_primary, status
- from tenant_crm_provider import CrmProviderError
- from tenant_platform_core import TenantPlatformError
-+from tenant_linear_policy import TenantLinearError
-+from tenant_shared_integration_access import operation
-+from tenant_bein_integration import _connect, _ensure_schema
-+
-+
-+@operation('beinsystems', 'view')
-+def _test_connection(profile):
-+    client = credential(profile['tenant_id'])
-+    return asyncio.run(client.list_resource('pipelines', page=1))
- 
- 
- def _valid_write(request: web.Request, origin: str) -> bool:
-@@ -18,14 +27,22 @@ def _valid_write(request: web.Request, origin: str) -> bool:
- 
- def handler(member: Callable, origin: str, logger) -> Callable:
-     async def endpoint(request: web.Request) -> web.Response:
--        profile = member(request, owner_only=True)
-+        from tenant_scoped_access import scoped_access_enabled
-+        profile = member(request, owner_only=True) if not scoped_access_enabled() else member(request)
-         if not profile:
-             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-         if request.method == "GET":
-             try:
-                 return web.json_response({"success": True, "integration": await asyncio.to_thread(status, profile)})
-+            except TenantLinearError as exc:
-+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
-             except TenantPlatformError as exc:
-                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-+        if scoped_access_enabled():
-+            from tenant_request_origin import require_json_post
-+            try: require_json_post(request, origin)
-+            except TenantLinearError as exc:
-+                return web.json_response({'success':False,'error':str(exc)},status=exc.status)
-         if not _valid_write(request, origin):
-             return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."}, status=403)
-         try:
-@@ -43,20 +60,23 @@ def handler(member: Callable, origin: str, logger) -> Callable:
-                 item = await asyncio.to_thread(save, profile,
-                     base_url=str(data.get("base_url") or ""), token=str(data.get("token") or ""),
-                     branch_id=str(data.get("branch_id") or ""),
--                    primary=bool(data.get("primary")))
-+                    primary=bool(data.get("primary")), authorization=data)
-                 return web.json_response({"success": True, "integration": item,
-                                           "message": "BeinSystems API tokeni təhlükəsiz saxlanıldı.",
-                                           "catalog_available": False})
-             if action == "test":
--                client = await asyncio.to_thread(credential, profile["tenant_id"])
--                payload = await client.list_resource("pipelines", page=1)
-+                if scoped_access_enabled():
-+                    payload = await asyncio.to_thread(_test_connection, profile)
-+                else:
-+                    client = await asyncio.to_thread(credential, profile['tenant_id'])
-+                    payload = await client.list_resource('pipelines', page=1)
-                 return web.json_response({"success": True, "message": "BeinSystems ERP bağlantısı işləyir.",
-                                           "catalog_available": bool(payload)})
-             if action == "primary":
--                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""))
-+                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""), authorization=data)
-                 return web.json_response({"success": True, **selected})
-             return web.json_response({"success": False, "error": "Əməliyyat düzgün deyil."}, status=400)
--        except (TenantPlatformError, CrmProviderError) as exc:
-+        except (TenantPlatformError, CrmProviderError, TenantLinearError) as exc:
-             return web.json_response({"success": False, "error": str(exc)}, status=getattr(exc, "status", 400))
-         except Exception:
-             logger.exception("BeinSystems ERP integration command failed: tenant=%s action=%s",
-diff --git a/beintaskbot-main/tenant_bein_integration.py b/beintaskbot-main/tenant_bein_integration.py
-index bd6739d998f3ed82ecf5088a1027771aa571bccb..ceff4533975f1bc3a492c1593b32a297eb814185 100644
---- a/beintaskbot-main/tenant_bein_integration.py
-+++ b/beintaskbot-main/tenant_bein_integration.py
-@@ -9,12 +9,14 @@ from tenant_bein_crm import BeinCrm
- from tenant_crm_provider import CrmProviderError
- from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
- 
-+from tenant_shared_integration_access import operation, admitted
-+
- PROVIDER = "beinsystems"
- CRM_PROVIDERS = ("kommo", PROVIDER)
- 
- 
- def _owner(profile: dict | None) -> tuple[str, int]:
--    if not profile or profile.get("role") != "owner" or not profile.get("active", True):
-+    if not admitted(profile, PROVIDER) and (not profile or profile.get("role") != "owner" or not profile.get("active", True)):
-         raise TenantPlatformError("İcazə yoxdur.")
-     return str(profile.get("tenant_id") or ""), int(profile.get("telegram_id") or 0)
- 
-@@ -39,6 +41,7 @@ def _public(row: dict | None) -> dict:
-     }
- 
- 
-+@operation(PROVIDER, 'view')
- def status(profile: dict | None) -> dict:
-     tenant, _ = _owner(profile)
-     with _connect() as conn:
-@@ -78,8 +81,10 @@ def credential(tenant_id: str) -> BeinCrm:
-         raise TenantPlatformError(str(exc)) from exc
- 
- 
-+@operation(PROVIDER, 'connect', data_arg='authorization',
-+           required_actions=lambda values: ('update',) if values['primary'] else ())
- def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str = "",
--         primary: bool = False) -> dict:
-+         primary: bool = False, authorization=None) -> dict:
-     tenant, actor = _owner(profile)
-     # Validate before touching the currently working connection. Encryption is
-     # also performed before the transaction so a missing key cannot corrupt it.
-@@ -99,11 +104,11 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
--                        (tenant, actor))
--            current = cur.fetchone()
--            if not current or current.get("role") != "owner" or not current.get("active"):
--                raise TenantPlatformError("İcazə yoxdur.")
-+            if not admitted(profile, PROVIDER):
-+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
-+                current = cur.fetchone()
-+                if not current or current.get("role") != "owner" or not current.get("active"):
-+                    raise TenantPlatformError("İcazə yoxdur.")
-             cur.execute("""INSERT INTO saas_tenant_integrations
-                 (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
-                 VALUES (%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
-@@ -129,7 +134,8 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
-     return _public(row)
- 
- 
--def set_primary(profile: dict | None, provider: str) -> dict:
-+@operation(PROVIDER, 'update', data_arg='authorization')
-+def set_primary(profile: dict | None, provider: str, *, authorization=None) -> dict:
-     tenant, actor = _owner(profile)
-     selected = str(provider or "").casefold()
-     if selected not in CRM_PROVIDERS:
-@@ -137,11 +143,11 @@ def set_primary(profile: dict | None, provider: str) -> dict:
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
--                        (tenant, actor))
--            current = cur.fetchone()
--            if not current or current.get("role") != "owner" or not current.get("active"):
--                raise TenantPlatformError("İcazə yoxdur.")
-+            if not admitted(profile, PROVIDER):
-+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
-+                current = cur.fetchone()
-+                if not current or current.get("role") != "owner" or not current.get("active"):
-+                    raise TenantPlatformError("İcazə yoxdur.")
-             cur.execute("SELECT status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=%s",
-                         (tenant, selected))
-             integration = cur.fetchone()
-diff --git a/beintaskbot-main/tenant_chat_ai_api.py b/beintaskbot-main/tenant_chat_ai_api.py
-index 9d47d922f34cdb413fbd559b583f88654b0fea3a..168efc93d378bc535c86264dc208e0c4954a2dbc 100644
---- a/beintaskbot-main/tenant_chat_ai_api.py
-+++ b/beintaskbot-main/tenant_chat_ai_api.py
-@@ -55,7 +55,8 @@ def model_management_handler(member_from_request, canonical_origin, logger, *, p
-                 if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id'])
-                         or str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
-                     raise TenantLinearError('Кабинет изменился. Обновите страницу.', 409)
--                result = await asyncio.to_thread(test_model, profile, data.get('model'))
-+                from tenant_scoped_access import scoped_access_enabled
-+                result = await asyncio.to_thread(test_model, profile, data.get('model'), **({'authorization':data} if scoped_access_enabled() else {}))
-             else:
-                 if request.method != 'GET':
-                     raise TenantLinearError('Метод не поддерживается.', 405)
-diff --git a/beintaskbot-main/tenant_chat_ai_settings.py b/beintaskbot-main/tenant_chat_ai_settings.py
-index bc77d94a5eb85522606b2fb603376978d595c797..bf7425ea31a6973ca1be004d1635f8908b2e4077 100644
---- a/beintaskbot-main/tenant_chat_ai_settings.py
-+++ b/beintaskbot-main/tenant_chat_ai_settings.py
-@@ -7,10 +7,13 @@ from tenant_chat_ai_policy import configuration
- from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model
- from tenant_ai_agent_access import tenant_status_allows_management
- from tenant_linear_policy import TenantLinearError, identifier
-+from tenant_shared_integration_access import operation, admitted, principal
- 
- 
- def authorize(cur, session):
--    """Allow active company owners and admins to manage company Chat AI."""
-+    """Allow current scoped management or the unchanged legacy owner/admin path."""
-+    from tenant_shared_integration_access import admitted, principal
-+    if admitted(session, 'chat_ai'): return principal(session)
-     if not isinstance(session, dict):
-         raise TenantLinearError('İcazə yoxdur.', 403)
-     tenant = identifier(session.get('tenant_id'))
-@@ -63,6 +66,7 @@ def public(row, tenant_id=None):
-     return result
- 
- 
-+@operation('chat_ai', 'view')
- def read(session):
-     with _connect() as conn:
-         ensure_schema(conn)
-@@ -91,19 +95,22 @@ def _company_key(session):
-     return tenant, metadata, secret['api_key']
- 
- 
-+@operation('chat_ai', 'view')
- def available_models(session):
-     """Explicit owner/admin check; only IDs are returned and no tokens are generated."""
-     _tenant, _metadata, key = _company_key(session)
-     return {'models': provider_models(key)}
- 
- 
-+@operation('chat_ai', 'view')
- def realtime_model_availability(session,model):
-     """Use only the authorized company's saved key; never return the key."""
-     _tenant, _metadata, key = _company_key(session)
-     return check_realtime_model(key,model)
- 
- 
--def test_model(session, model):
-+@operation('chat_ai', 'update', data_arg='authorization')
-+def test_model(session, model, *, authorization=None):
-     """Explicit owner/admin, context-free minimal test of the selected Copilot model."""
-     model = str(model or '').strip()
-     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
-@@ -115,12 +122,24 @@ def test_model(session, model):
-     return {'model': model, 'available': True}
- 
- 
-+@operation('chat_ai', lambda v: 'delete' if v['data'].get('remove_key') is True else 'connect' if v['data'].get('api_key') else 'update', data_arg='data')
- def save(session, data):
--    preserve_models = data.get('preserve_models') is True
-+    from tenant_scoped_access import scoped_access_enabled
-+    preserve_settings = data.get('preserve_settings') is True
-+    if scoped_access_enabled() and data.get('remove_key') is True:
-+        preserve_settings = True
-+    if preserve_settings:
-+        allowed_fields = {'preserve_settings','preserve_models','api_key','remove_key',
-+                          'expected_updated_at','expected_tenant_id','expected_user_id','confirm_company_impact'}
-+        if set(data) - allowed_fields or (data.get('remove_key') is True and data.get('api_key')):
-+            raise TenantLinearError('integration_key_only_request_invalid',400)
-+        if not data.get('api_key') and data.get('remove_key') is not True:
-+            raise TenantLinearError('integration_key_only_request_invalid',400)
-+    preserve_models = preserve_settings or data.get('preserve_models') is True
-     model_fields = ('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
-     if preserve_models and any(field in data for field in model_fields):
-         raise TenantLinearError('Модели задаются у агента.',400)
--    config = configuration(data, models_required=not preserve_models)
-+    config = {} if preserve_settings else configuration(data, models_required=not preserve_models)
-     key = data.get('api_key', '')
-     if not isinstance(key, str) or (key and (not 20 <= len(key) <= 500 or any(c.isspace() for c in key))):
-         raise TenantLinearError('API açarı düzgün deyil.')
-@@ -136,6 +155,10 @@ def save(session, data):
-             # Older settings clients do not submit the Copilot subsection.
-             # Preserve its values so legacy Chat AI edits cannot couple models.
-             old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
-+            if preserve_settings:
-+                config = dict(old_metadata)
-+                if data.get('remove_key') is True:
-+                    config['enabled'] = False
-             if preserve_models:
-                 for field in model_fields:
-                     config[field] = old_metadata.get(field, False if field=='video_enabled' else '')
-@@ -183,7 +206,7 @@ def save(session, data):
-                 encrypted = None
-             elif key:
-                 encrypted = _fernet().encrypt(json.dumps({'tenant_id': tenant, 'provider': 'chat_ai', 'api_key': key}).encode())
--            if config['enabled'] and not encrypted:
-+            if config.get('enabled') and not encrypted:
-                 raise TenantLinearError('Şirkətin API açarını daxil edin.')
-             cur.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata)
-               VALUES(%s::uuid,'chat_ai','configured',%s,%s::jsonb) ON CONFLICT(tenant_id,provider) DO UPDATE
+ function errorMarkup(){return '<p id="staffSaveError" role="alert"></p><div id="staffConflict"></div><details id="staffErrorDetails" style="display:none"><summary>'+employeeWords().technical+'</summary><p id="staffTechnicalError"></p></details>'}
+ function clearErrors(form){form.querySelectorAll('[data-field-error]').forEach(node=>node.textContent='');form.querySelectorAll('[aria-invalid]').forEach(node=>node.removeAttribute('aria-invalid'));form.querySelector('#staffSaveError').textContent='';form.querySelector('#staffErrorDetails').style.display='none';}
+-function errorMessage(code){const w=employeeWords();return /duplicate|already|in_use|conflict.*(login|email|number)/.test(code)?w.duplicate:/required|missing/.test(code)?w.required:/inactive/.test(code)?w.inactiveMember:/forbidden|protected|denied|self_|read_only|permission_scope/.test(code)?w.denied:w.invalid}
++function errorMessage(code){const w=employeeWords();if(code==='source_mapping_required')return ({ru:'Сначала привяжите источники диалогов к сотрудникам в разделе данных карточки. Для Kommo настройка источников пока недоступна.',az:'Əvvəlcə kartın məlumatlar bölməsində dialoq mənbələrini əməkdaşlara bağlayın. Kommo mənbələri hələ dəstəklənmir.',en:'First assign conversation sources to employees in the card details. Kommo source mapping is not yet available.'})[window.tenantI18n?.language]||w.invalid;return /duplicate|already|in_use|conflict.*(login|email|number)/.test(code)?w.duplicate:/required|missing/.test(code)?w.required:/inactive/.test(code)?w.inactiveMember:/forbidden|protected|denied|self_|read_only|permission_scope/.test(code)?w.denied:w.invalid}
+ function showError(form,error,row,pane){const w=employeeWords();form.querySelector('#staffSaveError').textContent=error.status===403?w.denied:error.status===404?w.missing:w.saveError;for(let [key,code]of Object.entries(error.fields||{})){if(key==='email'&&form.elements.namedItem('new_email'))key='new_email';const node=[...form.querySelectorAll('[data-field-error]')].find(item=>item.dataset.fieldError===key);if(node)node.textContent=errorMessage(String(code));const input=form.elements.namedItem(key);if(input?.setAttribute)input.setAttribute('aria-invalid','true')}
+ const invalid=form.querySelector('[aria-invalid=true]')?.closest('[data-staff-pane]');if(invalid)form.querySelector('[data-staff-pane-tab="'+invalid.dataset.staffPane+'"]')?.click();
+ const conflict=error.status===409&&(['member_card_conflict','member_context_changed'].includes(error.code)||Object.values(error.fields||{}).includes('version_conflict')||!Object.keys(error.fields||{}).length);if(conflict){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=w.conflict;reviewButton(form,row,pane)}form.querySelector('#staffTechnicalError').textContent=String(error.code||error.message||'');form.querySelector('#staffErrorDetails').style.display='';}
+@@ -114,18 +119,18 @@ function reviewButton(form,row,pane){if(!row)return;const holder=form.querySelec
+ function writeIdentity(){return {expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id}}
+ function receiptValid(data,row,create){const applied=data?.applied;return !!applied&&typeof applied.card_version==='string'&&!!applied.card_version&&Number.isSafeInteger(Number(applied.telegram_id))&&Number(applied.telegram_id)>0&&(!row||String(applied.telegram_id)===String(row.telegram_id))&&(!create||applied.created===true)}
+ async function saveForm(form,command,row,pane){const current=formOperation(form),button=form.querySelector('[type=submit]');if(!current()||button.disabled||form.dataset.assignPending==='true'||form.dataset.blocked==='true'||form.dataset.applied==='true')return;saveNotice='';if($('staffSaveStatus'))$('staffSaveStatus').textContent='';clearErrors(form);button.disabled=true;pendingWrites.set(form,{row,pane});let applied=false;try{const result=await api('/api/platform/members',{method:'POST',body:JSON.stringify(command)});if(!current())return;if(!receiptValid(result,row,!row)){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=employeeWords().unknown;reviewButton(form,row,pane);return}applied=true;form.dataset.applied='true';wipeSecrets(form);dirty=false;saveNotice=row?employeeWords().saved:employeeWords().created;form.querySelector('#staffSaveError').textContent=saveNotice;if($('staffSaveStatus'))$('staffSaveStatus').textContent=saveNotice;const loaded=await load();if(!current())return;if(loaded){close()}else{saveNotice=employeeWords().savedReadError;form.querySelector('#staffSaveError').textContent=saveNotice;if($('staffSaveStatus'))$('staffSaveStatus').textContent=saveNotice}}catch(error){if(!current())return;if(![400,403,404,409].includes(error.status)){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=employeeWords().unknown;reviewButton(form,row,pane)}else showError(form,error,row,pane)}finally{pendingWrites.delete(form);if(current()&&!applied&&form.dataset.blocked!=='true')button.disabled=false}}
+-function openInvite(){if(!managed()||!visible())return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=c.add;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffInviteForm">${accountFields()}${accessFields()}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waAfter}</p></section>${passwordSection()}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');modal.querySelector('[data-staff-cancel]').onclick=close;form.addEventListener('input',()=>{form.elements.namedItem('display_name').value=[form.elements.namedItem('first_name').value.trim(),form.elements.namedItem('last_name').value.trim()].filter(Boolean).join(' ')});form.onsubmit=event=>{event.preventDefault();if(!formOperation(form)())return;const data=new FormData(form);if(data.get('password')!==data.get('confirm_password')){clearErrors(form);form.querySelector('[data-field-error=confirm_password]').textContent=employeeWords().mismatch;return}void saveForm(form,{action:'provision_member_account',...writeIdentity(),first_name:data.get('first_name'),last_name:data.get('last_name'),login:data.get('login'),email:data.get('email'),phone:data.get('phone'),role:data.get('role'),permissions:[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value),password:data.get('password'),confirm_password:data.get('confirm_password')},null,'profile')};open()}
++function openInvite(){if(!managed()||!visible()||capabilities.can_manage_employees!==true)return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=c.add;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffInviteForm">${accountFields()}${accessFields()}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waAfter}</p></section>${passwordSection()}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');modal.querySelector('[data-staff-cancel]').onclick=close;form.addEventListener('input',()=>{form.elements.namedItem('display_name').value=[form.elements.namedItem('first_name').value.trim(),form.elements.namedItem('last_name').value.trim()].filter(Boolean).join(' ')});form.onsubmit=event=>{event.preventDefault();if(!formOperation(form)())return;const data=new FormData(form);if(data.get('password')!==data.get('confirm_password')){clearErrors(form);form.querySelector('[data-field-error=confirm_password]').textContent=employeeWords().mismatch;return}void saveForm(form,{action:'provision_member_account',...writeIdentity(),first_name:data.get('first_name'),last_name:data.get('last_name'),login:data.get('login'),email:data.get('email'),phone:data.get('phone'),role:data.get('role'),permissions:[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value),password:data.get('password'),confirm_password:data.get('confirm_password')},null,'profile')};open()}
+ function installEmployeeTabs(form){
+  form.classList.add('staff-tabbed-form');
+  const words=({ru:['Данные','Права'],az:['Məlumatlar','Hüquqlar'],en:['Details','Permissions']})[window.tenantI18n?.language]||['Details','Permissions'];
+  const tabs=document.createElement('div');tabs.className='staff-tabs';tabs.setAttribute('role','tablist');
+  const panels=['details','rights'].map((key,index)=>{const panel=document.createElement('div');panel.className='staff-tab-panel';panel.id='staff-panel-'+key;panel.dataset.staffPane=key;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby','staff-tab-'+key);panel.hidden=index!==0;tabs.insertAdjacentHTML('beforeend',`<button type="button" role="tab" id="staff-tab-${key}" data-staff-pane-tab="${key}" aria-controls="${panel.id}" aria-selected="${index===0}" tabindex="${index===0?0:-1}">${esc(words[index])}</button>`);return panel});
+  const account=form.querySelector('[name=first_name]')?.closest('section'),access=form.querySelector('[name=role]')?.closest('section'),work=form.querySelector('[data-work-setting]')?.closest('details');
+- if(account&&access){for(const name of ['display_name','active']){const label=access.querySelector(`[name="${name}"]`)?.closest('label');if(label)account.querySelector('.grid').append(label);}}
++ if(account&&access){for(const name of ['display_name','active','department_id']){const label=access.querySelector(`[name="${name}"]`)?.closest('label');if(label)account.querySelector('.grid').append(label);}}
+  const scope=form.querySelector('[data-access-settings]');if(scope&&!scope.children.length)scope.remove();
+  for(const section of [...form.children].filter(node=>node.matches('section.staff-section,details.staff-section'))){panels[section===access||section===work?1:0].append(section);}
+  if(work){
+-  const area=access?.querySelector('[data-access-operations]')||access||panels[1];
++  let area=access?.querySelector('[data-access-operations]')||access||panels[1];if(form.querySelector('.staff-scope-matrix')){area=document.createElement('section');area.className='staff-section staff-working-settings';area.innerHTML='<h3>'+esc(workWords().title)+'</h3>';panels[1].append(area);}
+   const card=key=>{let node=area.querySelector('[data-permission-card="'+key+'"]');if(!node){node=document.createElement('fieldset');node.className='staff-permission-card';node.dataset.permissionCard=key;node.innerHTML='<legend>'+esc(accessPageLabel(key))+'</legend>';area.append(node)}return node};
+   const groups={ai_enabled:'dialogs',ai_agents_manage:'ai_agents',creation_requires_admin:'tasks',completion_requires_admin:'tasks',deal_completion_requires_admin:'deals',hot_order_create:'hot_orders',hot_order_claim:'hot_orders',hot_order_completion_requires_admin:'hot_orders'};
+   work.querySelectorAll('[data-work-setting]').forEach(input=>{const target=card(groups[input.dataset.workSetting]);let options=target.querySelector('.staff-work-options');if(!options){options=document.createElement('div');options.className='staff-work-options grid';target.append(options)}options.append(input.closest('label'))});
+@@ -142,7 +147,7 @@ function installEmployeeTabs(form){
+  form.addEventListener('invalid',event=>{const panel=event.target.closest('[data-staff-pane]');if(panel)select(panel.dataset.staffPane);},true);
+  if(!document.getElementById('staffTabStyles')){const style=document.createElement('style');style.id='staffTabStyles';style.textContent='.staff-tab-panel[hidden]{display:none!important}.staff-tabs [role=tab][aria-selected=true]{font-weight:700;border-bottom:2px solid currentColor}.staff-tab-panel{min-width:0}';document.head.append(style);}
+ }
+-function openEmployeeProfile(row){if(!managed()||!visible())return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=row.display_name||c.edit;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffEditForm">${accountFields(row)}${accessFields(row)}${workSettingsFields(row)}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waHelp}</p><p>${esc((row.whatsapp_numbers||[]).map(item=>item.phone).join(', ')||'—')}</p></section>${emailSection(row)}${passwordSection(row)}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');installEmployeeTabs(form);form.querySelectorAll('[data-permission-partial]').forEach(input=>{input.indeterminate=true;input.addEventListener('change',()=>{input.dataset.permissionTouched='true'})});modal.querySelector('[data-staff-cancel]').onclick=close;const pwd=form.querySelector('#staffAssignPassword'),mail=form.querySelector('#staffAssignEmail');if(pwd)pwd.onclick=()=>void assignAccount(form,row,'password');if(mail)mail.onclick=()=>void assignAccount(form,row,'email');form.querySelector('[type=submit]').disabled=!profileAllowed(row)&&!['display_name','role','permissions','active','work_settings','access_settings'].some(key=>permitted(row,key));form.onsubmit=async event=>{event.preventDefault();const current=formOperation(form);if(!current()||form.dataset.assignPending==='true')return;const changes={},data=new FormData(form);if(permitted(row,'display_name')&&data.get('display_name')!==row.display_name)changes.display_name=data.get('display_name');if(permitted(row,'role')&&data.get('role')!==row.role)changes.role=data.get('role');if(permitted(row,'active')&&form.elements.namedItem('active').checked!==row.active)changes.active=form.elements.namedItem('active').checked;if(permitted(row,'permission_changes')){const original=row.explicit_permissions||row.permissions||[],patch={};for(const input of form.querySelectorAll('[data-permission]')){const has=original.some(value=>value===input.value||value.startsWith(input.value+':'));if(input.checked!==has||input.dataset.permissionPartial==='true'&&input.dataset.permissionTouched==='true')patch[input.value]=input.checked}if(Object.keys(patch).length)changes.permission_changes=patch}else if(!hasAccessSettings(row)&&permitted(row,'permissions')){const known=new Set(rightsCatalog().map(item=>item[0])),original=Array.isArray(row.explicit_permissions)?row.explicit_permissions:row.permissions||[],permissions=[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value).concat(original.filter(key=>!known.has(key)));if(JSON.stringify([...permissions].sort())!==JSON.stringify([...original].sort()))changes.permissions=permissions}const accessPatch=readAccessSettings(form,row);if(accessPatch)changes.access_settings=accessPatch;const workPatch=readWorkSettings(form,row);if(workPatch)changes.work_settings=workPatch;const hasProfile=Object.keys(profileChanges(form,row)).length>0;if(hasProfile&&!(await assignAccount(form,row,'profile')))return;if(!current())return;if(changes.access_settings)changes.access_settings.expected_version=row.access_settings.version;if(!Object.keys(changes).length){if(!hasProfile)form.querySelector('#staffSaveError').textContent=w.unchanged;return}void saveForm(form,{action:'update_member_card',...writeIdentity(),telegram_id:row.telegram_id,expected_version:row.card_version,changes},row,'profile')};open()}
++function openEmployeeProfile(row){if(!managed()||!visible())return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=row.display_name||c.edit;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffEditForm">${accountFields(row)}${accessFields(row)}${workSettingsFields(row)}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waHelp}</p><p>${esc((row.whatsapp_numbers||[]).map(item=>item.phone).join(', ')||'—')}</p></section>${emailSection(row)}${passwordSection(row)}${scopedAccess(row)?'<section class="staff-section" id="staffDialogSourceBindings"></section>':''}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');installEmployeeTabs(form);installDepartmentForm(form,row);form.querySelectorAll('[data-permission-partial]').forEach(input=>{input.indeterminate=true;input.addEventListener('change',()=>{input.dataset.permissionTouched='true'})});modal.querySelector('[data-staff-cancel]').onclick=close;const pwd=form.querySelector('#staffAssignPassword'),mail=form.querySelector('#staffAssignEmail');if(pwd)pwd.onclick=()=>void assignAccount(form,row,'password');if(mail)mail.onclick=()=>void assignAccount(form,row,'email');form.querySelector('[type=submit]').disabled=!profileAllowed(row)&&!['display_name','role','permissions','active','work_settings','access_settings','department_id'].some(key=>permitted(row,key));form.onsubmit=async event=>{event.preventDefault();const current=formOperation(form);if(!current()||form.dataset.assignPending==='true')return;const changes={},data=new FormData(form);if(permitted(row,'department_id')&&form.elements.namedItem('department_id')&&String(data.get('department_id')||'')!==String(row.department_id||''))changes.department_id=data.get('department_id')||null;if(permitted(row,'display_name')&&data.get('display_name')!==row.display_name)changes.display_name=data.get('display_name');if(permitted(row,'role')&&data.get('role')!==row.role)changes.role=data.get('role');if(permitted(row,'active')&&form.elements.namedItem('active').checked!==row.active)changes.active=form.elements.namedItem('active').checked;if(permitted(row,'permission_changes')){const original=row.explicit_permissions||row.permissions||[],patch={};for(const input of form.querySelectorAll('[data-permission]')){const has=original.some(value=>value===input.value||value.startsWith(input.value+':'));if(input.checked!==has||input.dataset.permissionPartial==='true'&&input.dataset.permissionTouched==='true')patch[input.value]=input.checked}if(Object.keys(patch).length)changes.permission_changes=patch}else if(!hasAccessSettings(row)&&permitted(row,'permissions')){const known=new Set(rightsCatalog().map(item=>item[0])),original=Array.isArray(row.explicit_permissions)?row.explicit_permissions:row.permissions||[],permissions=[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value).concat(original.filter(key=>!known.has(key)));if(JSON.stringify([...permissions].sort())!==JSON.stringify([...original].sort()))changes.permissions=permissions}const accessPatch=readAccessSettings(form,row);if(accessPatch)changes.access_settings=accessPatch;const workPatch=readWorkSettings(form,row);if(workPatch)changes.work_settings=workPatch;const hasProfile=Object.keys(profileChanges(form,row)).length>0;if(hasProfile&&!(await assignAccount(form,row,'profile')))return;if(!current())return;if(changes.access_settings)changes.access_settings.expected_version=row.access_settings.version;if(!Object.keys(changes).length){if(!hasProfile)form.querySelector('#staffSaveError').textContent=w.unchanged;return}void saveForm(form,{action:'update_member_card',...writeIdentity(),telegram_id:row.telegram_id,expected_version:row.card_version,changes},row,'profile')};open();const container=form.querySelector('#staffDialogSourceBindings');if(container)document.dispatchEvent(new CustomEvent('tenant-member-card-open',{detail:{member:row,profile,container,isCurrent:formOperation(form)}}))}
+ function openEdit(row,pane){if(!row||!managed()||!visible())return;if(pane!=='numbers')return openEmployeeProfile(row);const c=copy(),w=employeeWords(),editable=permitted(row,'whatsapp_numbers');modal.querySelector('#staffModalTitle').textContent=c.numbers;const numberRow=item=>`<div class="staff-number-row"><input value="${esc(item.phone||'')}" data-number aria-label="${c.numbers}" ${editable?'':'readonly'}><label><input type="checkbox" data-recognition ${item.recognition_enabled!==false?'checked':''} ${editable?'':'disabled'}> ${c.recognize}</label><button type="button" class="outline danger" data-number-remove aria-label="${w.remove}" ${editable?'':'disabled'}>×</button></div>`;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffEditForm"><h3>${c.whatsapp}</h3><p class="sub">${w.waHelp}</p>${!editable?`<p class="sub">${esc(reason(row,'whatsapp_numbers'))}</p>`:''}<div id="staffNumbers">${(row.whatsapp_numbers||[]).map(numberRow).join('')}</div><button type="button" class="outline" id="staffNumberAdd" ${editable?'':'disabled'}>${c.numberAdd}</button>${fieldError('whatsapp_numbers')}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');form.querySelector('[type=submit]').disabled=!editable;form.querySelector('#staffNumberAdd').onclick=()=>{if(!editable)return;form.querySelector('#staffNumbers').insertAdjacentHTML('beforeend',numberRow({recognition_enabled:true}));dirty=true;form.querySelector('.staff-number-row:last-child [data-number]')?.focus()};form.onclick=event=>{if(editable&&event.target.matches('[data-number-remove]')){event.target.parentElement.remove();dirty=true}};form.onsubmit=event=>{event.preventDefault();if(!formOperation(form)())return;const whatsapp_numbers=[...form.querySelectorAll('.staff-number-row')].map(node=>({phone:node.querySelector('[data-number]').value,recognition_enabled:node.querySelector('[data-recognition]').checked})).filter(item=>item.phone.trim());void saveForm(form,{action:'update_member_card',...writeIdentity(),telegram_id:row.telegram_id,expected_version:row.card_version,changes:{whatsapp_numbers}},row,'numbers')};modal.querySelector('[data-staff-cancel]').onclick=close;open()}
+ function setProfile(data){const next=data?.member||null,key=fingerprint(data),resumed=paused,unchanged=key===profileKey&&!accessProof&&!!root?.querySelector('#staffContent');if(profileKey&&key!==profileKey){clearStaff();pendingFocus=null;if(identity(next)!==identity(profile))tab='members'}profile=next;capabilities=data?.capabilities||{};profileKey=key;paused=false;if(!unchanged||resumed)show(unchanged);if(resumed&&unchanged){returnFocusEpoch=epoch;if(pendingFocus?.isConnected&&modal?.contains(pendingFocus)&&managed()&&visible())pendingFocus.focus({preventScroll:true});if(readState==='idle')void load()}pendingFocus=null;return !unchanged}
+ function enhanceRights(){const input=modal?.querySelector('input[name="permissions"]');if(!input||input.dataset.enhanced)return;input.dataset.enhanced='true';const existing=String(input.value||'').split(',').map(x=>x.trim()).filter(Boolean),catalog=rightsCatalog(),known=new Set(catalog.map(x=>x[0])),legacy=existing.filter(x=>!known.has(x));const holder=document.createElement('fieldset');holder.className='staff-rights';holder.innerHTML=`<legend>${copy().permissions}</legend>`+catalog.map(([key,label,help])=>`<label class="staff-right"><input type="checkbox" value="${key}" ${existing.includes(key)?'checked':''}><span><b>${label}</b><small>${help}</small></span></label>`).join('')+(legacy.length?`<p class="sub">${esc(legacy.join(', '))}</p>`:'');input.type='hidden';input.value=existing.join(',');input.parentElement.before(holder);holder.addEventListener('change',()=>{input.value=[...holder.querySelectorAll('input:checked')].map(x=>x.value).concat(legacy).join(',');dirty=true});}
+diff --git a/beintaskbot-main/docs/tenant-news.js b/beintaskbot-main/docs/tenant-news.js
+index 74438dfe9b44413324c9e406ff0a18bdf74507cb..abda27f35270877e10a802335db6619f6a8aaee2 100644
+--- a/beintaskbot-main/docs/tenant-news.js
++++ b/beintaskbot-main/docs/tenant-news.js
+@@ -2,11 +2,11 @@
+ (() => {
+   const $=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+   let initialRoutePending=new URL(location.href).searchParams.get('view')==='news';
+-  let profile,allowed=false,epoch=0,rows=[],after=null,loading=false,sending=false,pending=null,channel=null;
++  let profile,allowed=false,canReview=false,epoch=0,rows=[],after=null,loading=false,sending=false,pending=null,channel=null;
+   document.head.insertAdjacentHTML('beforeend',`<style>.tn-toolbar,.tn-actions{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.tn-card{margin:14px 0;overflow-wrap:anywhere}.tn-card h2{font-weight:750}.tn-card .tn-body{white-space:pre-wrap;margin:12px 0}.tn-meta{font-size:12px;color:var(--muted)}#tnModal .modal-card{max-height:85dvh;overflow:auto;padding-bottom:calc(24px + env(safe-area-inset-bottom))}#tnModal textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:9px;resize:vertical;min-height:48px}#tnModal .tn-actions{position:sticky;bottom:0;background:white;padding:12px 0}</style>`);
+   document.querySelector('.nav').insertAdjacentHTML('beforeend','<button id="tnNav" data-view="news" hidden style="display:none"><span>▤</span> Xəbərlər</button>');
+   document.querySelector('main').insertAdjacentHTML('beforeend',`<section class="view" id="view-news"><div class="top"><h1>Xəbərlər</h1></div>
+-    <p>Saytda yalnız təsdiqlədiyiniz xəbər dərc olunur. Telegram üçün ayrıca seçim və yoxlanmış kanal lazımdır.</p><a id="tnPublic" target="_blank" rel="noopener">Şirkətin xəbər səhifəsi ↗</a>
++    <p id="tnHelp">Saytda yalnız təsdiqlədiyiniz xəbər dərc olunur. Telegram üçün ayrıca seçim və yoxlanmış kanal lazımdır.</p><a id="tnPublic" target="_blank" rel="noopener">Şirkətin xəbər səhifəsi ↗</a>
+     <div class="tn-toolbar"><select class="search" id="tnStatus"><option value="pending">Təsdiq gözləyir</option><option value="published">Dərc olunub</option><option value="rejected">İmtina edilib</option></select><button class="refresh" id="tnRefresh">Yenilə</button><button class="primary" id="tnCreate">+ Xəbər</button></div>
+     <p id="tnNotice" role="status"></p><button class="outline" id="tnRecover" hidden>Yarımçıq sorğunu yoxla</button><div id="tnRows"></div><button class="outline" id="tnMore" hidden>Daha çox</button></section>
+     <div class="modal" id="tnModal"><div class="modal-card panel"><div class="modal-head"><h2>Xəbəri hazırla</h2><button class="close" id="tnClose" aria-label="Bağla">×</button></div>
+@@ -15,23 +15,23 @@
+   function date(v){const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleString('en-GB',{timeZone:'Asia/Baku',hour12:false});}
+   async function api(params='',data){const response=await fetch('/api/platform/news'+params,{credentials:'same-origin',cache:'no-store',...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});
+     const result=await response.json();if(!response.ok||!result.success){const error=new Error(result.error||'Xəbər sorğusu alınmadı.');error.status=response.status;throw error;}return result;}
+-  function render(){ $('tnMore').hidden=!after;$('tnRecover').hidden=!pending;
++  function render(){ $('tnMore').hidden=!after;$('tnRecover').hidden=!canReview||!pending;
+     $('tnRows').innerHTML=rows.map(row=>`<article class="panel tn-card" data-news="${esc(row.id)}"><div class="tn-meta">${esc(row.project_name)}${row.identifier?' · '+esc(row.identifier):''} · ${date(row.published_at||row.created_at)}</div>
+-      <h2>${esc(row.title)}</h2><div class="tn-body">${esc(row.summary)}</div><div class="tn-meta">${esc(row.url)}${row.classification?.category?' · AI: '+esc(row.classification.category):' · Mənbə fraqmenti — əl ilə yoxlayın'}</div><div class="tn-meta">Telegram: ${esc(({pending:'Növbədə',sending:'Göndərilir',sent:'Göndərilib',unknown:'Nəticə naməlum — kanalı yoxlayın, təkrar göndərilmir',blocked:'Bloklanıb',cancelled:'Ləğv edilib',expired:'Müddəti bitib'})[row.telegram_status]||'Göndərilməyib')}</div>
+-      ${row.status==='pending'?'<div class="tn-actions"><button class="outline" data-edit>Yoxla və dərc et</button><button class="outline danger" data-reject>İmtina</button></div>':row.status==='published'?`<div class="tn-actions">${channel?.enabled&&![ 'sent','sending','unknown','pending','expired' ].includes(row.telegram_status)?'<button class="outline" data-telegram>Telegram-a göndər</button>':''}${['pending','blocked'].includes(row.telegram_status)?'<button class="outline danger" data-cancel-telegram>Növbədən çıxar</button>':''}</div>`:''}</article>`).join('')||'<div class="empty">Xəbər yoxdur.</div>';
++      <h2>${esc(row.title)}</h2><div class="tn-body">${esc(row.summary)}</div><div class="tn-meta">${esc(row.url)}${canReview?(row.classification?.category?' · AI: '+esc(row.classification.category):' · Mənbə fraqmenti — əl ilə yoxlayın'):''}</div>${canReview?`<div class="tn-meta">Telegram: ${esc(({pending:'Növbədə',sending:'Göndərilir',sent:'Göndərilib',unknown:'Nəticə naməlum — kanalı yoxlayın, təkrar göndərilmir',blocked:'Bloklanıb',cancelled:'Ləğv edilib',expired:'Müddəti bitib'})[row.telegram_status]||'Göndərilməyib')}</div>`:''}
++      ${canReview&&row.status==='pending'?'<div class="tn-actions"><button class="outline" data-edit>Yoxla və dərc et</button><button class="outline danger" data-reject>İmtina</button></div>':canReview&&row.status==='published'?`<div class="tn-actions">${channel?.enabled&&![ 'sent','sending','unknown','pending','expired' ].includes(row.telegram_status)?'<button class="outline" data-telegram>Telegram-a göndər</button>':''}${['pending','blocked'].includes(row.telegram_status)?'<button class="outline danger" data-cancel-telegram>Növbədən çıxar</button>':''}</div>`:''}</article>`).join('')||'<div class="empty">Xəbər yoxdur.</div>';
+   }
+   async function load(more=false){if(!profile||!allowed||loading)return;const current=epoch;loading=true;$('tnNotice').textContent='Yüklənir…';$('tnMore').disabled=$('tnRefresh').disabled=true;
+-    try{const result=await api('?status='+$('tnStatus').value+(more&&after?'&after='+encodeURIComponent(after):''));if(current!==epoch)return;
++    try{const result=await api((canReview?'?status='+$('tnStatus').value:'?feed=published')+(more&&after?'&after='+encodeURIComponent(after):''));if(current!==epoch)return;
+       if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib.');
+-      try{const config=await api('/telegram');if(current!==epoch)return;channel=config;}catch{if(current!==epoch)return;channel=null;}
++      if(canReview){try{const config=await api('/telegram');if(current!==epoch)return;channel=config;}catch{if(current!==epoch)return;channel=null;}}else channel=null;
+       rows=more?[...new Map([...rows,...result.news].map(row=>[row.id,row])).values()]:result.news;after=result.after;render();$('tnNotice').textContent='';$('tnNav').hidden=false;$('tnNav').style.display='';
+       if(new URL(location.href).searchParams.get('view')==='news'){document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-news'));document.querySelectorAll('.nav button').forEach(button=>button.classList.toggle('active',button.id==='tnNav'));}
+     }catch(error){if(current===epoch){rows=[];after=null;render();$('tnNotice').textContent=error.message;if(error.status===403){$('tnNav').hidden=true;$('tnNav').style.display='none';close();}}}
+     finally{if(current===epoch){loading=false;$('tnMore').disabled=$('tnRefresh').disabled=false;}}}
+   function close(){if(!sending){$('tnModal').classList.remove('show');window.tenantViewDemand.clean('#tnModal');}}
+   function grow(input){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
+-  function recover(){if(!pending)return;const current=epoch;$('tnFields').innerHTML='<p>Eyni məlumat və eyni sorğu ID-si ilə nəticəni yoxlayın. Yeni xəbər yaradılmır.</p>';$('tnMessage').textContent='';$('tnPublish').textContent='Eyni sorğunu yoxla';$('tnPublish').onclick=()=>send(pending,current);$('tnModal').classList.add('show');}
+-  function edit(row){if(pending){recover();return;}const current=epoch;$('tnFields').innerHTML=`<label>Layihə<input id="tnProject" maxlength="100" value="${esc(row?.project_name||'')}"></label>
++  function recover(){if(!allowed||!canReview||!pending)return;const current=epoch;$('tnFields').innerHTML='<p>Eyni məlumat və eyni sorğu ID-si ilə nəticəni yoxlayın. Yeni xəbər yaradılmır.</p>';$('tnMessage').textContent='';$('tnPublish').textContent='Eyni sorğunu yoxla';$('tnPublish').onclick=()=>send(pending,current);$('tnModal').classList.add('show');}
++  function edit(row){if(!allowed||!canReview)return;if(pending){recover();return;}const current=epoch;$('tnFields').innerHTML=`<label>Layihə<input id="tnProject" maxlength="100" value="${esc(row?.project_name||'')}"></label>
+     <label>Başlıq<textarea id="tnTitle" maxlength="255">${esc(row?.title||'')}</textarea></label><label>Qısa mətn<textarea id="tnSummary" maxlength="1200">${esc(row?.summary||'')}</textarea></label>
+     <label>URL və ya telefon nömrəsi<input id="tnUrl" maxlength="2048" value="${esc(row?.url||'')}" placeholder="Boş qala bilər"></label>
+     <label style="display:flex"><input id="tnConfirm" type="checkbox" style="width:auto">Bu mətnin saytda hamıya açıq dərc olunmasını təsdiqləyirəm</label>
+@@ -45,7 +45,7 @@
+         confirm_telegram:$('tnTelegramConfirm')?.checked===true,channel_version:channel?.binding_version,
+         expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id};send(data,current);};
+   }
+-  async function send(data,current=epoch){if(sending||current!==epoch)return;try{sessionStorage.setItem(key(),JSON.stringify(data));pending=data;}catch{$('tnMessage').textContent='Sorğunu təhlükəsiz saxlamaq alınmadı.';return;}
++  async function send(data,current=epoch){if(!allowed||!canReview||sending||current!==epoch)return;try{sessionStorage.setItem(key(),JSON.stringify(data));pending=data;}catch{$('tnMessage').textContent='Sorğunu təhlükəsiz saxlamaq alınmadı.';return;}
+     sending=true;$('tnStatus').disabled=true;$('tnPublish').disabled=true;$('tnPublish').textContent='Göndərilir…';$('tnMessage').textContent='';
+     try{const result=await api(data.telegram_operation?'/telegram':'',data);if(current!==epoch)return;
+       if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib.');
+@@ -54,23 +54,24 @@
+       if(!$('tnTitle')||error.status===403){sending=false;close();}if(error.status===403){rows=[];after=null;$('tnNav').hidden=true;$('tnNav').style.display='none';}}
+       else{recover();$('tnMessage').textContent='Nəticə məlum deyil. Eyni sorğunu yoxlayın.';}}}
+     finally{if(current===epoch){sending=false;$('tnStatus').disabled=false;$('tnPublish').disabled=false;$('tnPublish').textContent=pending?'Eyni sorğunu yoxla':'Saxla və dərc et';render();}}}
+-  function install(data){const next=data.member;allowed=window.tenantViewDemand.newsAvailable(data);const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.active,data.capabilities,data.integrations]);if(profile?.identity===identity)return;
++  function install(data){const next=data.member;allowed=window.tenantViewDemand.newsAvailable(data);canReview=window.tenantViewDemand.newsReviewAvailable(data);const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.active,data.capabilities,data.integrations]);if(profile?.identity===identity)return;
+     epoch++;profile={...next,identity};rows=[];after=null;channel=null;loading=sending=false;pending=null;$('tnStatus').disabled=$('tnPublish').disabled=false;$('tnModal').classList.remove('show');$('tnNav').hidden=true;$('tnNav').style.display='none';
+-    try{const value=JSON.parse(sessionStorage.getItem(key())||'null');if(value&&String(value.expected_tenant_id)===String(next.tenant_id)&&String(value.expected_user_id)===String(next.telegram_id))pending=value;}catch{}
++    try{const value=canReview?JSON.parse(sessionStorage.getItem(key())||'null'):null;if(value&&String(value.expected_tenant_id)===String(next.tenant_id)&&String(value.expected_user_id)===String(next.telegram_id))pending=value;}catch{}
++    $('tnCreate').hidden=!canReview;$('tnStatus').hidden=!canReview;if(!canReview)$('tnStatus').value='published';$('tnHelp').textContent=canReview?'Saytda yalnız təsdiqlədiyiniz xəbər dərc olunur. Telegram üçün ayrıca seçim və yoxlanmış kanal lazımdır.':({ru:'Опубликованные новости вашей компании.',az:'Şirkətinizin dərc olunmuş xəbərləri.',en:'Published news from your company.'}[window.tenantI18n?.language]||'Published company news.');
+     $('tnPublic').href='/updates/'+encodeURIComponent(next.tenant_id);render();$('tnNav').hidden=!allowed;$('tnNav').style.display=allowed?'':'none';
+     if(initialRoutePending&&allowed&&window.tenantAppNavigate&&new URL(location.href).searchParams.get('view')==='news'){initialRoutePending=false;window.tenantAppNavigate('news');}}
+   $('tnNav').onclick=()=>window.tenantAppNavigate?.('news',true);
+   $('tnRefresh').onclick=()=>load();$('tnMore').onclick=()=>load(true);$('tnCreate').onclick=()=>edit();$('tnRecover').onclick=recover;
+-  $('tnStatus').onchange=()=>{if(sending)return;close();epoch++;loading=false;rows=[];after=null;render();load();};$('tnClose').onclick=$('tnCancel').onclick=close;
+-  $('tnRows').onclick=event=>{const card=event.target.closest('[data-news]'),row=rows.find(item=>item.id===card?.dataset.news);if(!row)return;
++  $('tnStatus').onchange=()=>{if(!canReview||sending)return;close();epoch++;loading=false;rows=[];after=null;render();load();};$('tnClose').onclick=$('tnCancel').onclick=close;
++  $('tnRows').onclick=event=>{const card=event.target.closest('[data-news]'),row=rows.find(item=>item.id===card?.dataset.news);if(!canReview||!row)return;
+     if(event.target.closest('[data-edit]'))edit(row);
+     if(event.target.closest('[data-reject]')&&!pending&&confirm('Xəbərdən imtina edilsin?'))send({action:'reject',id:row.id,expected_updated_at:row.updated_at,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});};
+-  $('tnRows').addEventListener('click',event=>{const card=event.target.closest('[data-news]'),row=rows.find(item=>item.id===card?.dataset.news);if(!row||pending||sending)return;
++  $('tnRows').addEventListener('click',event=>{const card=event.target.closest('[data-news]'),row=rows.find(item=>item.id===card?.dataset.news);if(!canReview||!row||pending||sending)return;
+     const enqueue=event.target.closest('[data-telegram]'),cancel=event.target.closest('[data-cancel-telegram]');if(!enqueue&&!cancel)return;
+     if(confirm(enqueue?`Xəbər «${channel?.title||''}» kanalına göndərilsin?`:'Telegram növbəsindən çıxarılsın?'))send({telegram_operation:true,action:enqueue?'enqueue':'cancel',id:row.id,expected_updated_at:row.updated_at,confirm_telegram:!!enqueue,channel_version:channel?.binding_version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});
+   });
+   window.tenantViewDemand.watch({view:'news', editable:'#tnModal', prepare:install, activate:()=>load(),
+-    reset:()=>{epoch++;profile=null;allowed=false;rows=[];after=null;channel=null;loading=sending=false;pending=null;
++    reset:()=>{epoch++;profile=null;allowed=canReview=false;rows=[];after=null;channel=null;loading=sending=false;pending=null;
+       $('tnModal').classList.remove('show');$('tnFields').replaceChildren();$('tnMessage').textContent='';
+       $('tnNav').hidden=true;$('tnNav').style.display='none';$('tnPublic').removeAttribute('href');render();}});
+ })();
+diff --git a/beintaskbot-main/docs/tenant-operator-dialogs.js b/beintaskbot-main/docs/tenant-operator-dialogs.js
+index 7453e461bddfdb0e6b358cfc55566301bede563b..11ec8b66ae5d99599c3c1c1460f1d77274d82585 100644
+--- a/beintaskbot-main/docs/tenant-operator-dialogs.js
++++ b/beintaskbot-main/docs/tenant-operator-dialogs.js
+@@ -107,6 +107,7 @@
+   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
+   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
+   const afterLayout=callback=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(callback):Promise.resolve().then(callback);
++  const canCreateSupport=()=>capabilities.support?.create??hasRight('support');
+   const hasRight=right=>!!member&&member.active!==false&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
+   function closeCopilotPanel(fromHistory=false){
+     const panel=$('operatorCopilot');if(!panel)return;
+@@ -174,10 +175,10 @@
+   const manualCaseCopy=key=>({ru:{intro:'Создать обращение по этому диалогу? Разработчика можно спросить отдельно.',pending:'Предыдущий запрос ещё не подтверждён. Можно проверить тот же запрос.',check:'Проверить сохранённый запрос',mismatch:'Сервер не подтвердил точное обращение. Создание приостановлено; проверьте обращение в CRM.',storage:'Не удалось сохранить запрос в этом браузере. Обращение не создавалось.',cancel:'Закрыть'},az:{intro:'Bu dialoq üzrə müraciət yaradılsın? Tərtibatçı ilə ayrıca məsləhətləşmək olar.',pending:'Əvvəlki sorğu hələ təsdiqlənməyib. Eyni sorğunu yoxlamaq olar.',check:'Saxlanmış sorğunu yoxla',mismatch:'Server dəqiq müraciəti təsdiqləmədi. Yaratma dayandırılıb; CRM-də müraciəti yoxlayın.',storage:'Sorğunu bu brauzerdə saxlamaq olmadı. Müraciət yaradılmadı.',cancel:'Bağla'},en:{intro:'Create a case for this conversation? You can consult a developer separately.',pending:'The previous request is unconfirmed. Check the same request.',check:'Check saved request',mismatch:'The server did not confirm the exact case. Creation is on hold; check the case in CRM.',storage:'Could not save this request in the browser. No case was created.',cancel:'Close'}}[i18n.language]||{})[key]||key;
+   const manualCaseFlights=new Set();
+   async function openManualCaseCreate(source,button,isCurrent){
+-    if(button.disabled||$('operatorCreateCaseModal')||!hasRight('support')||!hasRight('dialogs'))return;
++    if(button.disabled||$('operatorCreateCaseModal')||!canCreateSupport()||!hasRight('dialogs'))return;
+     button.disabled=true;
+     const owner=identity(member),key='tenant.operator.manual-case.'+owner+'.'+String(source.lead_id);
+-    const same=()=>owner===identity(member)&&hasRight('support')&&hasRight('dialogs')&&isCurrent();
++    const same=()=>owner===identity(member)&&canCreateSupport()&&hasRight('dialogs')&&isCurrent();
+     try{
+       let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error(manualCaseCopy('mismatch'));}
+       let route={...source};
+@@ -205,7 +206,8 @@
+         paintSaved();posting=true;manualCaseFlights.add(key);submit.disabled=true;cancel.disabled=true;
+         try{
+           const created=await api('support-tickets','POST',saved.payload),ticket=created.ticket,payload=saved.payload;
+-          if(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
++          const writeOnly=created.readable===false&&ticket?.id&&ticket.create_request_id===payload.request_id&&created.create_receipt?.request_id===payload.request_id&&String(created.create_receipt.tenant_id)===String(payload.expected_tenant_id)&&String(created.create_receipt.actor_id)===String(payload.expected_user_id);
++          if(!writeOnly&&(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id)))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
+           sessionStorage.removeItem(key);dispose();if(same()){button.textContent=t('ticketSaved');button.setAttribute('aria-label',t('ticketSaved'));button.title=t('ticketSaved');document.dispatchEvent(new CustomEvent('tenant-support-changed'));}
+         }catch(error){if(modal.isConnected){status.textContent=error.message+' '+manualCaseCopy(saved.hold?'mismatch':'pending');}}
+         finally{posting=false;manualCaseFlights.delete(key);if(modal.isConnected){submit.disabled=!!saved?.hold;cancel.disabled=false;if(!card.contains(document.activeElement))cancel.focus();}}
+@@ -855,7 +857,7 @@
+     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
+     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
+     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
+-    if(route.provider==='connect'&&hasRight('support')){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
++    if(route.provider==='connect'&&canCreateSupport()){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
+     const diagnostics=document.createElement('button');diagnostics.type='button';diagnostics.textContent=t('diagnostics');diagnostics.dataset.operatorDiagnostics='true';diagnostics.onclick=()=>{menu.open=false;openDialogDiagnostics(route);};appendMenu(diagnostics);
+     const trainingButton=$('operatorTraining'),caseAllowed=hasRight('dialogs')&&hasRight('support');trainingButton.disabled=route.provider!=='connect'||!route.agent_id||!caseAllowed;trainingButton.title=!route.agent_id?trainingText('noAgent'):trainingButton.disabled?trainingText('noAccess'):trainingText('button');trainingButton.onclick=()=>openTraining(route,same);
+     if(route.provider==='connect'){
+@@ -864,7 +866,7 @@
+     const sendDraftKey=contextKey('draft',route),sendAllowed=route.can_send&&hasRight('dialogs');$('sendChat').disabled=!sendAllowed;$('chatText').disabled=!sendAllowed;
+     let copilotMode=interactionState?.copilotMode||'chat',copilotBusy=false,copilotAnswer='',editingCopilotTemplateId=interactionState?.templateId||'';
+     const copilotPanel=$('operatorCopilot'),copilotStatus=$('operatorCopilotStatus'),copilotResult=$('operatorCopilotResult'),copilotAsk=$('operatorCopilotAsk'),copilotInsert=$('operatorCopilotInsert');
+-    const dialogAiAssigned=route.provider==='connect'&&!!route.agent_id;
++    const dialogAiAssigned=route.provider==='connect'&&!!route.agent_id&&route.can_use_copilot!==false;
+     for(const node of [$('operatorAIReply'),$('operatorCopilotToggle'),$('operatorCopilotVoiceToggle'),copilotAsk,...host.querySelectorAll('[data-copilot-mode]')]){node.disabled=!dialogAiAssigned;if(!dialogAiAssigned)node.title=trainingText('noAgent');}
+     if(!dialogAiAssigned)$('operatorAIReplyStatus').textContent=trainingText('noAgent');
+     const templateSection=$('operatorCopilotTemplates'),templateList=$('operatorCopilotTemplateList'),templateForm=$('operatorCopilotTemplateForm'),templateName=$('operatorCopilotTemplateName'),templateQuestion=$('operatorCopilotTemplateQuestion'),templateStatus=$('operatorCopilotTemplateStatus');

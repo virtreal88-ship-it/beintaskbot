@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..7635cbd9bbfae83b4b9e780d9a6147709ca51ec2
+index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144d5fc86b9
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,152 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -80,16 +80,33 @@ index 0000000000000000000000000000000000000000..7635cbd9bbfae83b4b9e780d9a614770
 +          tests/test_tenant_news_member_read_postgres.py
 +          tests/test_support_access_ownership_postgres.py
 +          tests/test_support_inbox_scopes.py
++          tests/test_support_ai_projection_scopes.py
++          tests/test_tenant_support_inbox.py
++          tests/test_tenant_internal_consultations_api.py
++          tests/test_case_consultations_unified.py
 +          tests/test_support_inbox_scopes_postgres.py
 +          tests/test_instruction_member_access_postgres.py
 +          tests/test_ai_scoped_documents.py
 +          tests/test_ai_scoped_documents_postgres.py
++          tests/test_tenant_policy.py
++          tests/test_tenant_scoped_access.py
++          tests/test_tenant_ai_agents_api_diagnostics.py
++          tests/test_tenant_web_routes.py
 +          tests/test_shared_integration_scopes.py
 +          tests/test_shared_integration_scopes_postgres.py
 +          tests/test_tenant_crm_relation_contract.py
 +          tests/test_tenant_crm_relation_kommo.py
 +          tests/test_tenant_crm_relation_delivery_postgres.py
 +          tests/test_crm_relation_fences_postgres.py
++          tests/test_crm_scoped_scalar_postgres.py
++          tests/test_crm_scoped_scalar_api_transport.py
++          tests/test_crm_scalar_fences_postgres.py
++          tests/test_tenant_crm_external_sync.py
++          tests/test_crm_native_deals.py
++          tests/test_crm_native_deal_api.py
++          tests/test_crm_native_contacts.py
++          tests/test_crm_native_api.py
++          tests/test_tenant_ai_native_crm_actions.py
 +          tests/test_tenant_integration_store.py
 +          tests/test_tenant_bein_integration.py
 +          tests/test_tenant_linear.py
@@ -108,6 +125,9 @@ index 0000000000000000000000000000000000000000..7635cbd9bbfae83b4b9e780d9a614770
 +          node tests/test_employee_scope_settings_ui.cjs
 +          node tests/test_task_read_save_flow_ui.cjs
 +          node tests/test_contacts_directory_ui.cjs
++          node tests/test_crm_save_receipt_ui.cjs
++          node tests/test_tenant_crm_native_workflow_ui.cjs
++          node tests/test_tenant_app_syntax.cjs
 +          node tests/test_native_company_relation_ui.cjs
 +          node tests/test_tenant_crm_native_modal_ui.cjs
 +          node tests/test_employee_finance_scopes_ui.cjs
@@ -115,14 +135,18 @@ index 0000000000000000000000000000000000000000..7635cbd9bbfae83b4b9e780d9a614770
 +          node tests/test_tenant_ai_business_analyst_ui.cjs
 +          node tests/test_tenant_news_member_ui.cjs
 +          node tests/test_support_inbox_scopes_ui.cjs
++          node tests/test_support_consultation_flow_ui.cjs
 +          node tests/test_shared_integration_settings.cjs
 +          node tests/test_tenant_kommo_settings.cjs
 +          node tests/test_tenant_linear_settings.cjs
 +          node tests/test_tenant_linear_employee_settings.cjs
 +          node tests/test_tenant_chat_ai_ui.cjs
++          node tests/test_ai_scoped_documents_ui.cjs
++          node tests/test_tenant_ai_agent_connect_scope_ui.cjs
 +      - name: Chromium employee matrix, tasks and CRM
 +        run: |
 +          node tests/employee_scope_matrix_browser.cjs
++          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
 +          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
 +          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
 +      - name: Save synthetic matrix screenshots
@@ -158,10 +182,20 @@ index 171b9ab785a973d51afb3c55fba37052f8ef3bed..aff8f32bf6c75456330e7bd70c204063
            tests/test_tenant_kommo.py
            tests/test_tenant_integration_store.py
 diff --git a/beintaskbot-main/bot.py b/beintaskbot-main/bot.py
-index 09a1230ec3565e412c36b08252c7e9cf5af6d039..0d676d65c88bca115a592306800d3e392c83e8a0 100644
+index 09a1230ec3565e412c36b08252c7e9cf5af6d039..1451ffcc433bb92d738571ae8f751dfcf694feec 100644
 --- a/beintaskbot-main/bot.py
 +++ b/beintaskbot-main/bot.py
-@@ -18683,6 +18683,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
+@@ -16863,7 +16863,8 @@ async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
+         await run_sync_batch(_tenant_kommo_request, logger)
+         from tenant_crm_sync_outbox import run_batch as run_crm_sync_outbox
+         from tenant_bein_integration import credential as bein_crm_credential
+-        await run_crm_sync_outbox(_tenant_kommo_request,bein_crm_credential,logger)
++        await run_crm_sync_outbox(_tenant_kommo_request,bein_crm_credential,logger,
++            bound_request=_tenant_kommo_service.request_bound)
+     except Exception:
+         logger.error('Tenant CRM background sync unavailable')
+ 
+@@ -18683,6 +18684,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
      from tenant_member_password_assign import assign_member_password
      from tenant_member_email_assign import assign_member_email
      from tenant_member_profile_assign import assign_member_profile
@@ -169,7 +203,7 @@ index 09a1230ec3565e412c36b08252c7e9cf5af6d039..0d676d65c88bca115a592306800d3e39
      member_api = tenant_member_handlers(MemberApiContext(
          member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
          telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
-@@ -18692,6 +18693,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
+@@ -18692,6 +18694,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
          assign_member_password=assign_member_password,
          assign_member_email=assign_member_email,
          assign_member_profile=assign_member_profile,
@@ -340,21 +374,17 @@ index 0000000000000000000000000000000000000000..735c9ffd69d0fd8e1bd87731f77fcaed
 +No real provider or paid model was called. The test cluster was stopped.
 diff --git a/beintaskbot-main/docs/employee-ai-integration-scope-audit.md b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..f7106d3e8da7ed9f9c2cffef32073c464d944f72
+index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c899e20fe8
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,77 @@
 +# AI and integration scope audit
 +
-+This is a code audit and an implementation boundary for the employee-rights specification, version 2. It is not a report of production configuration or a release approval. No real rights, credentials, connections, customer messages, or imports were changed during this work.
++This describes implementation boundaries, not production configuration or release approval. The rollout gate remains off by default. No real rights, credentials, connections, customer messages or imports were changed by this work.
 +
-+## Implemented without expanding authority
++## Historical preparation
 +
-+1. AI agents now have a separate, hidden `access_responsible_id`. Historical rows use the same one-time unambiguous company-owner migration as native documents. `created_by` remains historical, and new user-created agents store the authenticated creator as the responsible member. Browser patches cannot change that field.
-+2. AI schema readiness checks include the ownership column, tenant-composite FK, index, and durable migration receipt. A cold schema repair does not reinterpret new NULL-owned system rows as historical documents.
-+3. The AI configuration-options GET checks current database management authority before its optional Kommo catalog request. A logged-in session without AI-management authority does not trigger a provider request. Remote failure can still use the already authorized local catalog; a successful refresh reauthorizes in its store transaction.
-+4. Tenant-wide handoff diagnostics, Connect diagnostics, and the unified AI-state snapshot are blocked for a member with an explicit narrow/denied dialog read scope until those aggregate projections are partitioned by source. Their existing legacy and tenant-wide paths are unchanged. This closes an indirect metadata bypass; it does not grant AI management through dialog rights.
-+5. Shared integrations now publish independent CRUD scopes using the approved company-owner responsibility model. See [shared integration scopes](shared-integration-scopes.md) for current behavior and retained provider restrictions. The global employee-scopes rollout gate remains off by default.
++The initial audit added hidden AI `access_responsible_id` ownership, tenant-bound foreign keys, readiness checks and an idempotent migration receipt. Historical ownership was backfilled only for an unambiguous active company owner; new user-created agents use the authenticated employee, and browser patches cannot reassign ownership. That checkpoint deliberately exposed no AI matrix or UI. It has since been replaced by the limited C/R/U feature below; the earlier absence of a configurable row is no longer the current state.
 +
 +## Shared integration management
 +
@@ -370,60 +400,61 @@ index 0000000000000000000000000000000000000000..f7106d3e8da7ed9f9c2cffef32073c46
 +This is local implementation, not rollout permission or evidence of deployment.
 +See `shared-integration-scopes.md` and its isolated tests for exact coverage.
 +
-+## AI agents: real operations and their indirect paths
++## Current limited AI document feature (C/R/U only)
 +
-+The core API has real create/list/update/delete operations. Updating `enabled` is an existing agent update, not a new independent grant. However, row-filtering only `list_agents` and `save_agent` would leave the following connected paths unprotected:
++This feature covers **agent documents only**, not the entire AI administration surface. `ai_agents` now registers exactly view/create/update in the employee scope catalog. There is no employee delete cell. The global rollout gate is still off by default; no production settings or rights were changed.
 +
-+- Agent triggers, teams, primary/expert bindings, and replacement/archive operations reference more than one agent.
-+- Knowledge sources can be company-wide or agent-bound. Upload, archive, restore, deduplication, and publication have existing separate constraints.
-+- Dashboard, reliability, handoffs, channel catalog, state snapshots, and deletion previews aggregate agents, dialogs, jobs, identities, or usage beyond a single agent row.
-+- Virtual tests, simulations, historical replay, instructor/learning workflows, analysis campaigns, and AI-administrator drafts/approvals can read configuration and execute operations indirectly.
-+- Pause/resume/handoff and dialog assignments require source access and independent AI authority. Broad AI-management privilege must not override a newly explicit narrow dialog scope. The dialog-scope implementation handles exact-source conversation endpoints separately from the aggregate guards above.
-+- Company emergency stop, automatic sending, native CRM actions, extraction and provider spending are shared runtime controls. Permission over an employee-owned agent does not automatically authorize changing them for the company.
-+- Permanent deletion currently requires company-owner authority, exact-agent confirmation, expected version, and safety checks against active work. It must not become an ordinary employee operation merely because a generic D cell exists.
-+- Background workers execute under admitted jobs/runtime safety policy, not a current interactive employee request. Revocation, queued work, creator identity, and post-revocation execution must be resolved explicitly before using employee scopes as a worker policy.
++- Separate `ai_documents` capabilities expose action-specific navigation while the coarse `modules.ai_agents` management capability remains false for scoped actors. Shared AI applications therefore do not become accessible through a document grant. A dedicated scoped console loads only the authorized agent list and local source-bound editor options. It supports create, edit, source/model/mode selection and enable/disable, with per-document update eligibility. Create-only users never request the list; read-only users never load editing catalogs. Stale identity responses and repeated saves are fenced, and Cancel closes the editor without writing.
++- Create always produces a disabled agent for scoped actors; activation is a subsequent update. All scoped mutation responses contain only id/version, including retries and trigger writes. Updating without read permission cannot reveal old instructions, policies or bindings.
++- Agent reads use an explicit field whitelist. Response policies, helper bindings, shared tool configuration and dialog totals are omitted. Sources are included only after current source-view authorization; update eligibility additionally requires source update rights. Trigger reads whitelist identity/name/type/status/version fields and omit arbitrary nested actions/conditions.
++- Scoped options use only local catalogs, never provider refresh or job-derived channel identifiers. Connect choices require current source view and update rights. Kommo choices additionally require the current pipeline/stage grant; unverified Kommo channel identifiers are rejected. Writes recheck both existing and resulting sources under the same transaction. Configuration-triggered reconciliation is restricted to authorized resulting Connect channels, never a tenant-wide sweep.
++- Trigger create/update/delete is parent-agent U, not generic agent C/D. Both the persisted and resulting trigger contracts are checked for updates, and the persisted contract is locked and checked before deletion. Only handoff/handoff-after-reply actions and phrase conditions are permitted; cross-agent execution and native/Kommo CRM effects require separate existing management. Configurations with shared expert tools, delegation or shared dispatch remain management-only.
++- Operator assignment/recovery, employee case-learning bypasses, and dialog projections no longer restore broad agent identities/configuration to scoped document users. Shared group/candidate enrichment is skipped; agent filters are rejected, agent metadata is removed, and shared AI controls are disabled. Ordinary authorized dialogue/message reads remain available. The support worker's separate ticket projection filtering must also be retained during integration.
++- Independent integration/Chat AI settings permissions remain separate and unchanged. This matrix does not create or revoke provider-configuration authority. The scoped editor does not depend on those management endpoints.
 +
-+The common AI store `_authorize` currently means company owner or active admin with the existing `ai_agents_manage` flag. Many independent modules use it. Replacing it with one Boolean “some scoped action is allowed” would make view/create/update interchangeable and would bypass both resource scope and operation-specific authority.
++Shared knowledge, team management, diagnostic dashboards, simulations, historical replay, paid tests, instructor/learning and administrator workflows are not document CRUD and remain behind their existing owner/unscoped-management boundaries. No scoped user is newly admitted to personal test/learning jobs. Company runtime execution continues under its existing company/agent runtime safety policy; this change does not retroactively cancel company runtime when an employee loses editor rights. Employee deletion semantics remain a product decision; both existing archive/transfer and permanent deletion remain owner-only.
 +
-+Primary sources: `tenant_ai_agents_store.py`, `tenant_ai_agents_api.py`, `tenant_ai_dashboard.py`, `tenant_ai_state.py`, `tenant_ai_reliability.py`, `tenant_ai_testing_store.py`, `tenant_ai_simulation_engine.py`, `tenant_ai_historical_replay.py`, `tenant_ai_instructor_store.py`, `tenant_ai_learning.py`, `tenant_ai_administrator_apply.py`, `tenant_knowledge_candidates_store.py`, `tenant_operator_assignment.py`, and `tenant_web_routes.py`.
++Verification adds a real JSDOM test (`tests/test_ai_scoped_documents_ui.cjs`), strict source/pipeline and receipt/projection backend regressions, and real PostgreSQL concurrency tests collected for CI. Local PostgreSQL tests remain skipped without an isolated DSN. Full Chromium and concurrent PostgreSQL release validation remain integration-CI responsibilities.
 +
-+## Required decisions and remaining implementation
 +
-+- Shared integration ownership and company-impact behavior are implemented separately; keep source/dialog data rights independent from connection management.
-+- Specify the treatment of shared AI/knowledge/runtime resources and cross-agent operations, including the retained owner-only safety actions.
-+- Decide which related-dialog/AI aggregate information should remain available inside an authorized AI document versus its general section. Narrow-dialog users currently receive a deliberate blocked response for unconverted tenant-wide diagnostics.
-+- Enumerate every interactive and background route for each registered action, apply the same effective scope, and compare rights before/after on a synthetic copy before activating the matrix.
++## Transaction and revocation boundaries
 +
-+The current work supplies safe ownership metadata and closes concrete authorization gaps. Shared integration CRUD is implemented separately; AI CRUD is not complete.
++Current membership, policy, responsible member, department and source grants are checked from the database in the operation's transaction. Cached browser roles and grants do not authorize access. Scoped updates acquire the existing tenant configuration advisory mutex before taking the agent row `FOR UPDATE`, avoiding shared-lock upgrades and lock inversion against wizard recovery. Read-only setup retries use `FOR SHARE`; recovery locks candidates `FOR UPDATE` before writing the setup key.
 +
-+## Dormant AI document implementation (2026-11-11)
++Scoped trigger deletion takes the parent update boundary, then locks the exact tenant/agent/trigger row `FOR UPDATE` and checks its persisted actions and condition. A shared CRM, native task or helper trigger cannot be deleted or rewritten into a safe-looking handoff through scoped U. Existing owner and gate-off legacy paths retain their authority.
 +
-+This is an intermediate safety implementation, **not completed AI CRUD coverage or release approval**. `ai_agents` remains absent from `SCOPE_ACTION_CATALOG`, so the normal employee editor and validated settings writer cannot publish it. The global gate remains off by default. The internal `tenant_ai_scoped_access` evaluator accepts synthetic database AI matrices for tests/future integration only. It intentionally does not change the shared catalog.
++Employee revocation stops subsequent editor operations; it does not retroactively cancel company runtime. Already-admitted company runtime continues under existing runtime policy and safety controls. Shared paid test/learning workflows are not newly admitted through these document grants.
 +
-+Implemented in the core store:
++## Remaining decisions and release checks
 +
-+- Independent create, view, and update scopes evaluate current database membership, policy, responsible employee and department in the same transaction. Policy/member/agent/department read locks fence those decisions. Cached browser role and settings do not authorize access. Missing action overrides retain existing legacy semantics; explicit denial never falls back.
-+- New agents belong to the authenticated employee; create scope is evaluated against that employee. Wizard retry and legacy wizard recovery check the existing row's current responsible employee before returning or modifying it, not just historical `created_by`.
-+- List filters agent documents and hides responsibility metadata. Scoped lists omit unpartitioned expert bindings and assigned-dialog totals. Trigger reads require parent-agent view access and omit referenced helper IDs.
-+- Enable/disable is an update. Shared runtime consent, credentials and company flags are not granted by any agent scope. Explicit narrow dialog read blocks scoped configuration writes until source-aware runtime configuration is implemented.
-+- Cross-agent bindings, expert diagnostic tools and shared dispatch configurations are deliberately blocked for scoped writers, including preservation of existing such configuration during a patch. This is a temporary safety block, not a product decision to remove those features.
-+- Generic `_authorize` entrypoints do not infer shared management from any AI CRUD grant, even all four `all` grants. Explicit AI matrices close the unconverted settings/options, knowledge, dashboard, diagnostics, test/learning/instructor and similar common-gate workflows. Existing owner authority and gate-off behavior remain unchanged.
++- **Employee D remains unimplemented and absent from the catalog.** Existing archive transfers dialogs, rewrites other teams/triggers and cancels work; permanent deletion has stronger confirmation/version checks. Both remain owner-only. Whether employee D should allow archiving only an unused/unbound agent remains a product decision.
++- Shared knowledge, teams, diagnostics, simulation, replay, paid tests, instructor/learning and administrator workflows are not covered by document C/R/U. Their owner/unscoped-management boundaries must remain intact. This is not a claim of complete AI CRUD coverage.
++- Preserve independent integration/provider permissions and the separate support/employee guards when combining changes. Source rights must not become credential-management authority, and a document grant must not become manage-all.
++- Keep the global gate off until combined synthetic comparisons, full release tests and rollout review are complete.
 +
-+### Not implemented / must remain gated
++## Verification evidence
 +
-+1. Employee delete has no defined safe operation. Current archive requires a replacement and transfers dialogs, modifies other teams/triggers, and cancels work. Both archive and permanent deletion remain owner-only. Smallest product decision: should employee D permit archive only for an unused/unbound agent, with no transfers or cross-agent rewrites? No such operation was invented here.
-+2. Cross-agent team/binding writes, trigger writes, shared and agent-bound knowledge mutations, provider configuration options, diagnostic projections, virtual tests, simulations, historical replay, learning/instructor and administrator workflows still need individually scoped contracts. Their generic management gates fail closed for synthetic scoped actors. This is not evidence that every separate legacy permission entrypoint has been converted.
-+3. No scoped actor is newly admitted into those test/learning workflows. Already-admitted background execution is **not fully converted**: testing rechecks `_authorize` at completion, but simulation/runtime worker paths use admitted execution policy and do not uniformly carry/recheck the requesting employee's matrix. Product semantics must distinguish revoking interactive management from withdrawing an already approved company runtime or paid job. No automatic cancellation of existing company runtime was added.
-+4. Real PostgreSQL concurrent revocation/ownership races must run in isolated CI. PGlite validates SQL and transaction-path behavior but cannot establish multi-connection race coverage.
-+5. No UI eligibility was enabled. Publication must wait for complete route/worker inventory, defined D semantics, scoped shared-workflow contracts, integration tests, and synthetic before/after comparison.
++The local isolated backend regression command covers `test_ai_scoped_documents.py`, `test_ai_scoped_documents_postgres.py`, `test_ai_integration_access_preparation.py`, `test_tenant_policy.py`, `test_tenant_scoped_access.py`, `test_analytics_scoped_dialog_guard.py`, `test_business_analyst_scoped_boundary.py`, `test_dialog_mutation_source_scopes.py` and `test_tenant_ai_agents_api_diagnostics.py`. Before the persisted-trigger fix this run passed 126 tests and 10 subtests; 4 real PostgreSQL concurrency tests were skipped locally because no disposable DSN was available. The follow-up adds four parameterized persisted-trigger regressions covering delete and rewrite denial, unchanged rows/audit state, and retained owner deletion.
 +
-+Local regression coverage: `tests/test_ai_scoped_documents.py` uses disposable PGlite and blocked provider/DB fallbacks. It covers scopes and NULL owners, foreign tenants, independent actions, forged cached role, membership/rights/department revocation, ownership-bound create/retry, enable/disable, helper/diagnostic safety blocks, and owner/gate-off behavior.
++The real PostgreSQL suite checks competing updates, configuration-mutex/row ordering, revocation before admission and admitted-update fencing. It uses `pg_blocking_pids` observations and requires a disposable localhost `BEINTASKBOT_TEST_POSTGRES_DSN`; PGlite is not a substitute for these races.
 +
-+### Follow-up transaction ordering
++The real JSDOM suite `tests/test_ai_scoped_documents_ui.cjs` checks independent C/R/U, no shared fetch dependencies, duplicate submission, Cancel, stale tenant responses and revocation. Existing `test_tenant_ai_agent_connect_scope_ui.cjs` and `test_tenant_chat_ai_ui.cjs` also passed locally. Full Chromium and concurrent PostgreSQL release results belong to the combined integration CI report, not this local audit.
 +
-+Scoped updates acquire the existing tenant configuration advisory mutex before taking the agent row `FOR UPDATE`; they do not take `FOR SHARE` and later upgrade. This also preserves ordering against wizard recovery, which takes the mutex before touching agent rows. Existing setup-key retries are read-only (`FOR SHARE`); legacy recovery selects candidate rows `FOR UPDATE` before changing a setup key, so its ownership recheck does not introduce a shared-lock upgrade.
++### Browser acceptance boundary
 +
-+`tests/test_ai_scoped_documents_postgres.py` adds real multi-connection tests for competing versioned updates, mutex-before-row ordering against recovery, revocation committed before admission, and an admitted update fencing revocation until commit. They require a disposable localhost `BEINTASKBOT_TEST_POSTGRES_DSN` and use actual `pg_blocking_pids` observations rather than timing alone. Local result: 24 PGlite tests passed; these 4 PostgreSQL tests skipped because no DSN was available. CI must run them before relying on race coverage.
++`tests/test_ai_scoped_documents_browser.py` launches Chromium against localhost
++with the production HTML DOM and the complete `tenant-ai-agents.js` controller.
++Other app controllers and external resources are omitted. Its HTTP responses
++are deliberately synthetic: it checks independent C/R/U rendering, C-only no
++list fetch, per-row edit controls, source-denial handling, minimal receipt
++handling, 404 revocation cleanup, stale-identity response rejection, and no
++shared API dependencies. It does **not** prove cookie authentication or database
++authorization; the backend scope and PostgreSQL suites supply separate evidence.
++The browser assertions dispatch actual DOM events, not native pointer input.
++Run with `python -m pytest tests/test_ai_scoped_documents_browser.py`; Chromium
++must be installed and allowed to create local sockets. A missing executable
++skips; a failed browser launch or assertion fails. This environment's sandbox
++blocked Chromium's singleton socket, so local execution is not a browser pass.
 diff --git a/beintaskbot-main/docs/employee-card-scopes.md b/beintaskbot-main/docs/employee-card-scopes.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..7a0585fb99ee66a65acc7d5badf337c59fd8f464
@@ -451,7 +482,7 @@ index 0000000000000000000000000000000000000000..7a0585fb99ee66a65acc7d5badf337c5
 +- `tests/test_employee_card_scopes_ui.cjs`: actual app read-only card, hidden management controls, revocation cleanup and zero writes.
 diff --git a/beintaskbot-main/docs/employee-scoped-access-foundation.md b/beintaskbot-main/docs/employee-scoped-access-foundation.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..7b20778ff2ae8e23a4cf887422904abec36c1697
+index 0000000000000000000000000000000000000000..da5756e6cd275d3fd6a7d12f07790c5503a88e9b
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-scoped-access-foundation.md
 @@ -0,0 +1,55 @@
@@ -461,7 +492,7 @@ index 0000000000000000000000000000000000000000..7b20778ff2ae8e23a4cf887422904abe
 +
 +`TENANT_SCOPED_ACCESS_ENABLED` is **off by default**. Additive schema installation does not rewrite permissions, `native_crm_actions`, roles, source bindings, integration configuration, AI settings, services, or notification preferences. While the gate is off, legacy authorization remains in force, the scoped editor catalog is empty, and the employee-card writer rejects scoped edits.
 +
-+Enabling this flag is a separate rollout decision after all applicable routes and their tests are verified. A passing foundation test suite is not sufficient evidence to enable it. The initial catalog contains native task/deal/contact/company CRUD, real dialog read/update operations, and finance read only. No dialog create/delete operation is invented. Other sections must be added only when their server implementation is complete.
++Enabling this flag is a separate rollout decision after all applicable routes and their tests are verified. A passing foundation test suite is not sufficient evidence to enable it. The current catalog contains native task/deal/contact/company CRUD, real dialog read/update operations, finance read, AI document create/read/update, employee-card read/update, support-ticket create/read/update, and shared-integration CRUD. No dialog create/delete, employee create/delete, support delete, or AI delete operation is invented. Each section retains the narrower contracts documented in its scope audit; catalog presence is not rollout approval.
 +
 +For a member with any explicit scope in a section, coarse legacy entry points for that section fail closed. This prevents unconverted external-provider/AI/legacy routes from bypassing a restriction. It may remove previously available provider operations, so rollout requires a source-specific access comparison and resolution, not silent activation. Existing source bindings are never inferred or imported.
 +
@@ -477,7 +508,7 @@ index 0000000000000000000000000000000000000000..7b20778ff2ae8e23a4cf887422904abe
 +
 +## Historical document ownership
 +
-+The migration adds `access_responsible_id` to native contacts, companies, deals, and tasks. AI schema installation uses the same transaction-safe migration for AI-agent ownership metadata, without registering AI scopes. All existing `responsible_id` and `created_by` values remain unchanged. In particular, a task's original `responsible_id` continues to mean its executor.
++The migration adds `access_responsible_id` to native contacts, companies, deals, and tasks. AI agents and support tickets use the same transaction-safe ownership approach. Schema installation alone does not enable the registered scopes. All existing `responsible_id` and `created_by` values remain unchanged. In particular, a task's original `responsible_id` continues to mean its executor.
 +
 +For each existing resource table, the initial migration assigns unowned historical rows to the company's owner only if:
 +
@@ -672,52 +703,50 @@ index 0000000000000000000000000000000000000000..1ff06696b1819552f04cb94ee4901ccd
 +so real PostgreSQL locking/races remain CI verification, not a claimed local pass.
 +No production configuration, customer message, upload, provider call, push,
 +merge or deployment is part of this change.
-diff --git a/beintaskbot-main/docs/tenant-app.html b/beintaskbot-main/docs/tenant-app.html
-index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..630bf8f69b2aa0eb230e7cbc460894fc1c654e2d 100644
---- a/beintaskbot-main/docs/tenant-app.html
-+++ b/beintaskbot-main/docs/tenant-app.html
-@@ -338,8 +338,8 @@
-   const routeAllowed=view=>pageAllowed(view)||['employees','customers','tasks'].includes(view);
-   window.tenantPageAllowed=pageAllowed;
-   const nativeAction=(module,action)=>state.capabilities.actions?state.capabilities.actions[module]?.[action]===true:!!state.capabilities.modules?.[module];
--  const nativeCompanyAction=action=>state.capabilities.actions?nativeAction('customers',action):['owner','admin','manager'].includes(state.me?.role)&&nativeAction('customers',action);
--  const nativeCompanyRelationAllowed=action=>action.startsWith('unlink_')?nativeCompanyAction('delete'):nativeCompanyAction('update')&&(!action.endsWith('_deal')||nativeAction('deals','update'));
-+  const nativeCompanyAction=action=>state.capabilities.actions?nativeAction(state.capabilities.actions.companies?'companies':'customers',action):['owner','admin','manager'].includes(state.me?.role)&&nativeAction('customers',action);
-+  const nativeCompanyRelationAllowed=(action,row=null)=>action.endsWith('_contact')&&row?.relation_actions?row.relation_actions[action]===true:action.startsWith('unlink_')?nativeCompanyAction('delete'):nativeCompanyAction('update')&&(!action.endsWith('_deal')||nativeAction('deals','update'));
-   const navigationRoute=node=>node.dataset.view||node.dataset.reportLink||node.dataset.appOpen||(node.hasAttribute('data-app-instructions')?'instructions':'');
-   // Page capabilities govern navigation; API authorization enforces data access.
-   function restrictPageNavigation(){
-@@ -364,7 +364,7 @@
-   function applyCapabilities(data){
-     window.tenantProfileSnapshot=data;
-     state.me=data.member;state.capabilities=data.capabilities||{};state.rolePermissions=data.role_permissions||{};
--    const modules={...(state.capabilities.modules||{})};modules.employees=state.me?.active===true&&state.capabilities.can_manage_employees===true;modules.news=window.tenantViewDemand.newsAvailable(data);modules.knowledge_center=!!modules.ai_agents;modules.ai_teams=!!modules.ai_agents;const nativeCrmAdmin=['owner','admin','manager'].includes(state.me.role);modules.companies=nativeCrmAdmin&&!!(modules.deals||modules.customers);document.querySelectorAll('[data-native-crm-admin]').forEach(el=>{el.hidden=!nativeCrmAdmin});document.querySelectorAll('[data-native-operation]').forEach(el=>{el.hidden=!nativeAction('deals',el.dataset.nativeOperation)});$('nativeCompanyCreate').hidden=!nativeCompanyAction('create');
-+    const modules={...(state.capabilities.modules||{})};modules.employees=state.me?.active===true&&(state.capabilities.can_view_employees??state.capabilities.can_manage_employees)===true;modules.news=window.tenantViewDemand.newsAvailable(data);modules.knowledge_center=!!modules.ai_agents;modules.ai_teams=!!modules.ai_agents;const nativeCrmAdmin=['owner','admin','manager'].includes(state.me.role);modules.companies=nativeCrmAdmin&&!!(modules.deals||modules.customers);document.querySelectorAll('[data-native-crm-admin]').forEach(el=>{el.hidden=!nativeCrmAdmin});document.querySelectorAll('[data-native-operation]').forEach(el=>{el.hidden=!nativeAction('deals',el.dataset.nativeOperation)});$('nativeCompanyCreate').hidden=!nativeCompanyAction('create');
-     modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders||modules.deals);modules.ai_administrator=!!modules.ai_agents&&state.me.role==='owner';modules.ai_testing=!!modules.ai_agents;modules.ai_dashboard=!!modules.ai_agents&&['owner','admin'].includes(state.me.role);modules.support_cases=!!modules.ai_agents&&['owner','admin'].includes(state.me.role);
-     const pages=state.capabilities.pages?{...state.capabilities.pages,news:state.capabilities.pages.news===true&&modules.news}:modules;
-     document.querySelectorAll('.nav [data-view]').forEach(button=>{
-@@ -425,7 +425,7 @@
-     try{let x,title='';if(type==='company'){x=(await api('/api/platform/crm/native/companies/'+id)).company;title=x.name;nativeCardCompanyId=id;await renderNativeCompanyCard(x)}else if(type==='deal'){x=(await api('/api/platform/crm/native/deals/'+id)).deal;title=x.title;const td=nativeAction('tasks','view')?await api('/api/platform/crm/native/tasks'):{tasks:[]};await renderNativeDealCard(x,(td.tasks||[]).filter(t=>String(t.deal_id)===String(x.id)))}else{x=(await api('/api/platform/crm/native/tasks/'+id)).task;title=x.text;body.innerHTML=`<div class="crm-relation-tabs"><button class="active" data-task-tab="general">Ümumi</button><button data-task-tab="related">Əlaqəli qeydlər</button></div><section data-task-panel="general"><div class="meta"><div><b>Son tarix</b>${esc(x.due_at?date(x.due_at):'Təyin edilməyib')}</div><div><b>Status</b>${esc(x.status==='completed'?'Tamamlandı':'Açıq')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'—')}</div></div></section><section data-task-panel="related" hidden><div class="meta"><div><b>Sövdələşmə</b><span data-native-open="deal:${esc(x.deal_id)}">${esc(x.deal_title||'—')}</span></div><div><b>Müştəri</b>${esc(x.contact_name||'—')}</div><div><b>Mənbə</b>${x.channel_id&&x.conversation_id?'Connect dialoqu tapşırığa bağlıdır.':'Dialoq bağlı deyil.'}</div></div><p class="sub">Tapşırığı başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil.</p></section>`;body.querySelectorAll('[data-task-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-task-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-task-panel]').forEach(panel=>panel.hidden=panel.dataset.taskPanel!==b.dataset.taskTab)})}$('nativeEntityTitle').textContent=title||'Kart';const privileged=['owner','admin','manager'].includes(state.me?.role),canArchive=privileged||(type==='task'&&Number(x.created_by)===Number(state.me?.telegram_id));modal.querySelector('[data-native-card-archive]').hidden=type==='company'?!nativeCompanyAction('delete'):!nativeAction(type==='deal'?'deals':'tasks','delete')||!canArchive;modal.querySelector('[data-native-card-edit]').hidden=type==='company'?!nativeCompanyAction('update'):!nativeAction(type==='deal'?'deals':'tasks','update')}
-     catch(e){body.innerHTML=`<div class="notice show">${esc(e.message||'Kartı yükləmək mümkün olmadı.')}</div>`}
-   }
--  async function renderNativeCompanyCard(x){const body=$('nativeEntityBody');const contacts=x.contacts||[],deals=x.deals||[];const [contactRows,dealRows]=await Promise.all([api('/api/platform/crm/native/contacts'),nativeAction('deals','view')?api('/api/platform/crm/native/deals'):{deals:[]}]);const tabs='<div class="crm-relation-tabs"><button class="active" data-company-tab="general">Ümumi</button><button data-company-tab="contacts">Əlaqələr</button><button data-company-tab="deals">Sövdələşmələr</button></div>';body.innerHTML=tabs+`<div class="crm-relation-panel" data-company-panel="general"><div class="meta"><div><b>Telefon</b>${esc(x.phone||'—')}</div><div><b>Email</b>${esc(x.email||'—')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'Təyin edilməyib')}</div><div><b>Təsvir</b>${esc(x.description||'—')}</div></div></div><div class="crm-relation-panel" data-company-panel="contacts" hidden><div id="companyCardContacts">${contacts.map(c=>`<div class="crm-relation-row"><span data-native-open="contact:${esc(c.id)}" style="cursor:pointer">${esc(c.display_name)} · ${esc(c.phone||c.email||'')}</span><button class="outline danger" data-company-unlink="contact" data-entity-id="${esc(c.id)}">Ayır</button></div>`).join('')||'<p class="sub">Bağlı əlaqə yoxdur.</p>'}</div><div class="crm-relation-add"><select id="companyCardContactSelect"><option value="">Əlaqə seçin</option>${(contactRows.data||[]).filter(c=>!contacts.some(r=>String(r.id)===String(c.id))).map(c=>`<option value="${esc(c.id)}">${esc(c.display_name)} · ${esc(c.phone||'')}</option>`).join('')}</select><button class="outline" data-company-link="contact">Əlavə et</button></div></div><div class="crm-relation-panel" data-company-panel="deals" hidden><div>${deals.map(d=>`<div class="crm-relation-row"><span data-native-open="deal:${esc(d.id)}" style="cursor:pointer">${esc(d.title)}</span><button class="outline danger" data-company-unlink="deal" data-entity-id="${esc(d.id)}">Ayır</button></div>`).join('')||'<p class="sub">Bağlı sövdələşmə yoxdur.</p>'}</div><div class="crm-relation-add"><select id="companyCardDealSelect"><option value="">Sövdələşmə seçin</option>${(dealRows.deals||[]).filter(d=>!deals.some(r=>String(r.id)===String(d.id))).map(d=>`<option value="${esc(d.id)}">${esc(d.title)}</option>`).join('')}</select><button class="outline" data-company-link="deal">Əlavə et</button></div></div>`;body.querySelectorAll('[data-company-link]').forEach(b=>{b.closest('.crm-relation-add').hidden=!nativeCompanyRelationAllowed('link_'+b.dataset.companyLink)});body.querySelectorAll('[data-company-unlink]').forEach(b=>{b.hidden=!nativeCompanyRelationAllowed('unlink_'+b.dataset.companyUnlink)});body.querySelectorAll('[data-company-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-company-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-company-panel]').forEach(p=>p.hidden=p.dataset.companyPanel!==b.dataset.companyTab)});body.querySelectorAll('[data-company-link]').forEach(b=>b.onclick=async()=>{const kind=b.dataset.companyLink;if(!nativeCompanyRelationAllowed('link_'+kind))return;const select=$('companyCard'+(kind==='contact'?'Contact':'Deal')+'Select'),entity=select.value;if(!entity)return;const prompt=kind==='contact'?'Əlaqəni bu şirkətə bağlamaq? Əgər o başqa şirkətə bağlıdırsa, əlaqə yeni şirkətə keçiriləcək.':'Sövdələşməni bu şirkətə bağlamaq? Əgər o başqa şirkətə bağlıdırsa, sövdələşmə yeni şirkətə keçiriləcək.';if(!confirm(prompt))return;try{await api('/api/platform/crm/native/companies/'+nativeCardCompanyId,{method:'POST',body:JSON.stringify({action:'link_'+kind,entity_id:entity})});const updated=(await api('/api/platform/crm/native/companies/'+nativeCardCompanyId)).company;await renderNativeCompanyCard(updated);await loadNativeCompanies($('companySearch').value)}catch(e){notice('nativeCompaniesNotice',e.message)}});body.querySelectorAll('[data-company-unlink]').forEach(b=>b.onclick=async()=>{if(!nativeCompanyRelationAllowed('unlink_'+b.dataset.companyUnlink))return;if(!confirm('Ayırmaq istəyirsiniz? Qeyd özü silinməyəcək.'))return;try{await api('/api/platform/crm/native/companies/'+nativeCardCompanyId,{method:'POST',body:JSON.stringify({action:'unlink_'+b.dataset.companyUnlink,entity_id:b.dataset.entityId})});const updated=(await api('/api/platform/crm/native/companies/'+nativeCardCompanyId)).company;await renderNativeCompanyCard(updated);await loadNativeCompanies($('companySearch').value)}catch(e){notice('nativeCompaniesNotice',e.message)}});}
-+  async function renderNativeCompanyCard(x){const body=$('nativeEntityBody'),current=()=>String(nativeCardCompanyId)===String(x.id);if(!current())return;const contacts=x.contacts||[],deals=x.deals||[];const related=await Promise.allSettled([nativeAction('customers','view')?api('/api/platform/crm/native/contacts'):Promise.reject(new Error('forbidden')),nativeAction('deals','view')?api('/api/platform/crm/native/deals'):{deals:[]}]);if(!current())return;const contactRows=related[0].status==='fulfilled'?related[0].value:{data:[]},dealRows=related[1].status==='fulfilled'?related[1].value:{deals:[]};const tabs='<div class="crm-relation-tabs"><button class="active" data-company-tab="general">Ümumi</button><button data-company-tab="contacts">Əlaqələr</button><button data-company-tab="deals">Sövdələşmələr</button></div>';body.innerHTML=tabs+`<div class="crm-relation-panel" data-company-panel="general"><div class="meta"><div><b>Telefon</b>${esc(x.phone||'—')}</div><div><b>Email</b>${esc(x.email||'—')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'Təyin edilməyib')}</div><div><b>Təsvir</b>${esc(x.description||'—')}</div></div></div><div class="crm-relation-panel" data-company-panel="contacts" hidden><div id="companyCardContacts">${contacts.map(c=>`<div class="crm-relation-row"><span data-native-open="contact:${esc(c.id)}" style="cursor:pointer">${esc(c.display_name)} · ${esc(c.phone||c.email||'')}</span><button class="outline danger" data-company-unlink="contact" data-entity-id="${esc(c.id)}">Ayır</button></div>`).join('')||'<p class="sub">Bağlı əlaqə yoxdur.</p>'}</div>${related[0].status==='rejected'?'<p class="sub" data-company-contacts-unavailable>Əlaqə siyahısı əlçatan deyil.</p>':''}<div class="crm-relation-add"><select id="companyCardContactSelect"><option value="">Əlaqə seçin</option>${(contactRows.data||[]).filter(c=>!contacts.some(r=>String(r.id)===String(c.id))).map(c=>`<option value="${esc(c.id)}">${esc(c.display_name)} · ${esc(c.phone||'')}</option>`).join('')}</select><button class="outline" data-company-link="contact">Əlavə et</button></div></div><div class="crm-relation-panel" data-company-panel="deals" hidden><div>${deals.map(d=>`<div class="crm-relation-row"><span data-native-open="deal:${esc(d.id)}" style="cursor:pointer">${esc(d.title)}</span><button class="outline danger" data-company-unlink="deal" data-entity-id="${esc(d.id)}">Ayır</button></div>`).join('')||'<p class="sub">Bağlı sövdələşmə yoxdur.</p>'}</div><div class="crm-relation-add"><select id="companyCardDealSelect"><option value="">Sövdələşmə seçin</option>${(dealRows.deals||[]).filter(d=>!deals.some(r=>String(r.id)===String(d.id))).map(d=>`<option value="${esc(d.id)}">${esc(d.title)}</option>`).join('')}</select><button class="outline" data-company-link="deal">Əlavə et</button></div></div>`;body.querySelectorAll('[data-company-link]').forEach(b=>{b.closest('.crm-relation-add').hidden=!nativeCompanyRelationAllowed('link_'+b.dataset.companyLink,x)});body.querySelectorAll('[data-company-unlink]').forEach(b=>{b.hidden=!nativeCompanyRelationAllowed('unlink_'+b.dataset.companyUnlink,x)});body.querySelectorAll('[data-company-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-company-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-company-panel]').forEach(p=>p.hidden=p.dataset.companyPanel!==b.dataset.companyTab)});body.querySelectorAll('[data-company-link]').forEach(b=>b.onclick=async()=>{const kind=b.dataset.companyLink;if(!current()||!nativeCompanyRelationAllowed('link_'+kind,x))return;const select=$('companyCard'+(kind==='contact'?'Contact':'Deal')+'Select'),entity=select.value;if(!entity)return;const prompt=kind==='contact'?'Əlaqəni bu şirkətə bağlamaq? Əgər o başqa şirkətə bağlıdırsa, əlaqə yeni şirkətə keçiriləcək.':'Sövdələşməni bu şirkətə bağlamaq? Əgər o başqa şirkətə bağlıdırsa, sövdələşmə yeni şirkətə keçiriləcək.';if(!confirm(prompt))return;try{await api('/api/platform/crm/native/companies/'+x.id,{method:'POST',body:JSON.stringify({action:'link_'+kind,entity_id:entity})});if(!current())return;const updated=(await api('/api/platform/crm/native/companies/'+x.id)).company;await renderNativeCompanyCard(updated);await loadNativeCompanies($('companySearch').value)}catch(e){notice('nativeCompaniesNotice',e.message==='scoped_relation_sync_not_configured'?'Əlaqə dəyişdirilmədi: xarici CRM ilə təhlükəsiz sinxronizasiya hələ qurulmayıb.':e.message)}});body.querySelectorAll('[data-company-unlink]').forEach(b=>b.onclick=async()=>{if(!current()||!nativeCompanyRelationAllowed('unlink_'+b.dataset.companyUnlink,x))return;if(!confirm('Ayırmaq istəyirsiniz? Qeyd özü silinməyəcək.'))return;try{await api('/api/platform/crm/native/companies/'+x.id,{method:'POST',body:JSON.stringify({action:'unlink_'+b.dataset.companyUnlink,entity_id:b.dataset.entityId})});if(!current())return;const updated=(await api('/api/platform/crm/native/companies/'+x.id)).company;await renderNativeCompanyCard(updated);await loadNativeCompanies($('companySearch').value)}catch(e){notice('nativeCompaniesNotice',e.message==='scoped_relation_sync_not_configured'?'Əlaqə dəyişdirilmədi: xarici CRM ilə təhlükəsiz sinxronizasiya hələ qurulmayıb.':e.message)}});}
-   document.addEventListener('click',e=>{const edit=e.target.closest('[data-native-edit]');if(edit){const [type,id]=edit.dataset.nativeEdit.split(':');if(type==='contact')editNativeContact(id);if(type==='company')editNativeCompany(id);if(type==='deal')editNativeDeal(id);if(type==='task')editNativeTask(id);return}const b=e.target.closest('[data-native-open]');if(b){const [type,id]=b.dataset.nativeOpen.split(':');openNativeEntityCard(type,id)}});
-   function loadNativeContacts(query=$('customerSearch').value){return window.tenantContactsDirectory?.refresh(query)}
-   let nativeDealOptions={workflows:[],members:[],contacts:[],companies:[]};
-@@ -660,6 +660,7 @@
- <script src="/assets/tenant-hot-order-completion.js"></script>
- <script src="/assets/tenant-finance.js"></script>
- <script src="/assets/tenant-linear-rules.js"></script>
-+<script src="/assets/tenant-shared-integration-settings.js"></script>
- <script src="/assets/tenant-linear-settings.js"></script>
- <script src="/assets/tenant-kommo-settings.js"></script>
- <script src="/assets/tenant-linear-board.js"></script>
-@@ -714,6 +715,7 @@
- <script src="/assets/tenant-push.js"></script>
- <script src="/assets/tenant-workspace.js"></script>
- <script src="/assets/tenant-members-ui.js"></script>
-+<script src="/assets/tenant-dialog-source-members.js"></script>
- <script src="/assets/tenant-telegram-binding.js"></script>
- <script type="module" src="/assets/tenant-chakra-ui.js"></script>
- <script src="/assets/tenant-pwa.js"></script>
+diff --git a/beintaskbot-main/docs/tenant-ai-agents.js b/beintaskbot-main/docs/tenant-ai-agents.js
+index 5b807fae9adbb1112ded22e7e5d1ff024ab19064..c88949201b66536b0824a633159d66a7c04327cb 100644
+--- a/beintaskbot-main/docs/tenant-ai-agents.js
++++ b/beintaskbot-main/docs/tenant-ai-agents.js
+@@ -399,18 +399,40 @@
+  async function syncChatAgentControl(force=false){if(!profile||!aiAllowed)return;const input=$('deal-chat-input')||$('notice-reply-input'),leadId=String(history.state?.leadId||'').trim();if(!input||!leadId){$('aiAgentChatToggle')?.remove();chatControlInput=input;chatControlLead=leadId;return}if(!force&&input===chatControlInput&&leadId===chatControlLead&&($('aiAgentChatToggle')||Date.now()-chatControlAttempt<5000))return;const request=++chatControlEpoch;chatControlInput=input;chatControlLead=leadId;chatControlAttempt=Date.now();$('aiAgentChatToggle')?.remove();let conversation='';let provider='kommo',channelId='';try{if(!conversation){const owned=await api(`conversations/for-lead/${encodeURIComponent(leadId)}`);conversation=String(owned?.conversation_id||'');provider=String(owned?.provider||'kommo');channelId=String(owned?.channel_id||'')}if(!conversation)return;const routeQuery=new URLSearchParams({provider,channel_id:channelId});const state=await api(`conversations/${encodeURIComponent(conversation)}/state?${routeQuery}`);if(request!==chatControlEpoch||input!==($('deal-chat-input')||$('notice-reply-input'))||String(history.state?.leadId||'')!==leadId)return;const meta=dialogStateMeta(state.display_state||state.state),box=document.createElement('div');box.id='aiAgentChatToggle';box.className='ai-agent-chat-toggle';const summary=document.createElement('div');summary.className='ai-agent-chat-summary';const stateText=document.createElement('span');stateText.className=`ai-agent-chat-state is-${meta.state}`;stateText.textContent=`${state.agent_name||'AI Agent'} · ${meta.label}`;summary.append(stateText);const reason=dialogReason(state.display_reason||state.resume_block_reason||state.reason);if(reason){const detail=document.createElement('small');detail.dataset.reason='';detail.textContent=`Причина: ${reason}`;summary.append(detail)}if(state.updated_at){const detail=document.createElement('small');detail.textContent=`Изменено: ${dialogTime(state.updated_at)}`;summary.append(detail)}box.append(summary);const addAction=(label,action,className='outline')=>{const button=document.createElement('button');button.type='button';button.className=`ai-agent-chat-toggle-button ${className}`;button.textContent=label;button.onclick=async()=>{button.disabled=true;const before=button.textContent;button.textContent='Сохраняю…';try{await setConversationAction(conversation,action,{provider,channelId,reason:action==='pause'?'webapp_chat_pause':action==='handoff'?'webapp_chat_handoff':'webapp_chat_resume'});await syncChatAgentControl(true);await loadHandoffs()}catch(error){button.textContent=error.message;button.disabled=false;setTimeout(()=>{if(!button.disabled)button.textContent=before},2800)}};box.append(button)};if(meta.state==='active'){addAction('Приостановить AI','pause');addAction('Передать человеку','handoff','outline danger')}else if((meta.state==='paused'||meta.state==='human')&&state.resume_allowed!==false){addAction('Возобновить AI','resume','primary')}else if(meta.state==='paused'||meta.state==='human'){const blocked=document.createElement('small');blocked.textContent=`Resume недоступен: ${dialogReason(state.resume_block_reason)||'обязательная блокировка'}`;box.append(blocked)}const field=input.closest('.notice-reply-field')||input.closest('.wa-composer')||input.parentElement,aiButton=field?.querySelector('#notice-reply-ai,#deal-chat-ai');if(aiButton)aiButton.insertAdjacentElement('afterend',box);else field.append(box)}catch{/* The server must resolve a tenant-owned dialogue before exposing control. */}}
+  document.addEventListener('tenant-ai-agent-created',()=>load());
+  document.addEventListener('tenant-ai-edit-created-agent',async event=>{try{const rows=await api('agents'),agent=rows.find(row=>row.id===event.detail?.agentId);if(agent)editAgent(agent)}catch(error){notice(window.aiExpertEditor?.error(error.message)||error.message)}});
++ // Scoped agent documents deliberately do not load company settings, teams,
++ // knowledge, diagnostics, simulations, destinations or provider refreshes.
++ function createScopedAgentConsole(){
++  let generation=0,identity='',snapshot=null,rows=[],options=null,loading=null,busy=false;
++  const page=$('view-ai_agents'),host=document.createElement('article'),hidden=new Map();
++  host.id='aiScopedDocuments';host.hidden=true;page?.append(host);
++  const words=()=>({ru:{title:'AI-агенты',create:'Создать агента',refresh:'Обновить',name:'Название',instructions:'Инструкции',model:'Модель',sources:'Источники',mode:'Режим',manual:'Вручную',automatic:'Автоматически',enabled:'Включён',save:'Сохранить',cancel:'Отмена',edit:'Изменить',limited:'Только документы агентов. Общие настройки, знания, команды и удаление доступны отдельно.',noRead:'Просмотр агентов не разрешён.',saved:'Сохранено',error:'Не удалось выполнить операцию'},az:{title:'AI agentləri',create:'Agent yarat',refresh:'Yenilə',name:'Ad',instructions:'Təlimatlar',model:'Model',sources:'Mənbələr',mode:'Rejim',manual:'Əl ilə',automatic:'Avtomatik',enabled:'Aktiv',save:'Saxla',cancel:'Ləğv et',edit:'Dəyiş',limited:'Yalnız agent sənədləri. Ümumi ayarlar, bilik, komandalar və silmə ayrıdır.',noRead:'Agentlərə baxış icazəsi yoxdur.',saved:'Saxlanıldı',error:'Əməliyyat alınmadı'},en:{title:'AI agents',create:'Create agent',refresh:'Refresh',name:'Name',instructions:'Instructions',model:'Model',sources:'Sources',mode:'Mode',manual:'Manual',automatic:'Automatic',enabled:'Enabled',save:'Save',cancel:'Cancel',edit:'Edit',limited:'Agent documents only. Shared settings, knowledge, teams and deletion are separate.',noRead:'Agent viewing is not allowed.',saved:'Saved',error:'Operation failed'}}[window.tenantI18n?.language||'az']);
++  const allowed=action=>snapshot?.capabilities?.ai_documents?.[action]===true;
++  function clear(){rows=[];options=null;host.replaceChildren();}
++  function show(){for(const child of page?.children||[]){if(child===host)continue;if(!hidden.has(child))hidden.set(child,child.hidden);child.hidden=true;}host.hidden=false;}
++  function restore(){host.hidden=true;for(const [child,value]of hidden)child.hidden=value;hidden.clear();}
++  async function request(path,method='GET',body){const epoch=generation,who=identity,member=snapshot.member;const response=await fetch(endpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:{'X-Tenant-Id':String(member.tenant_id),'X-User-Id':String(member.telegram_id),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify({...body,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id})}:{})});const payload=await response.json();if(epoch!==generation||who!==identity)throw new Error('companyChanged');if(!response.ok||!payload.success){if([401,403,404].includes(response.status)){clear();host.textContent=payload.error||words().error;}throw new Error(payload.error||words().error);}return payload.result;}
++  function render(){show();const w=words();host.innerHTML=`<h2>${esc(w.title)}</h2><p>${esc(w.limited)}</p><p role="status" data-scoped-notice></p><button type="button" data-scoped-refresh>${esc(w.refresh)}</button>${allowed('create')?`<button type="button" data-scoped-create>${esc(w.create)}</button>`:''}<div data-scoped-list></div><div data-scoped-editor></div>`;host.querySelector('[data-scoped-refresh]').onclick=()=>load();host.querySelector('[data-scoped-create]')?.addEventListener('click',()=>edit(null));const list=host.querySelector('[data-scoped-list]');if(!allowed('view'))list.textContent=w.noRead;for(const row of rows){const card=document.createElement('article');const name=document.createElement('h3');name.textContent=row.name;card.append(name);const text=document.createElement('p');text.textContent=row.instructions;card.append(text);if(allowed('update')&&row.capabilities?.update){const button=document.createElement('button');button.textContent=w.edit;button.onclick=()=>edit(row);card.append(button);}list.append(card);}}
++  function edit(row){if(busy||!(row?allowed('update')&&row.capabilities?.update:allowed('create')))return;const w=words(),editor=host.querySelector('[data-scoped-editor]');const sources=[...(options?.connect_channels||[]).map(item=>({label:item.name,scope:{provider:'connect',channel_id:item.id}})),...(options?.stages||[]).map(item=>({label:((options.pipelines||[]).find(p=>String(p.pipeline_id)===String(item.pipeline_id))?.name||'')+' / '+item.name,scope:{provider:'kommo',pipeline_id:item.pipeline_id,stage_id:item.stage_id}}))];const key=source=>[source.provider||'kommo',source.channel_id||'',source.pipeline_id||'',source.stage_id||''].join(':');const saved=new Map((row?.scopes||[]).map(source=>[key(source),source]));editor.innerHTML=`<form><label>${esc(w.mode)}<select name="mode"><option value="manual">${esc(w.manual)}</option><option value="automatic" ${row?.mode==='automatic'?'selected':''}>${esc(w.automatic)}</option></select></label><label>${esc(w.name)}<input name="name" required maxlength="120" value="${esc(row?.name||'')}"></label><label>${esc(w.instructions)}<textarea name="instructions" required>${esc(row?.instructions||'')}</textarea></label><label>${esc(w.model)}<select name="model"><option value=""></option>${(options?.models||[]).map(item=>`<option value="${esc(item.id)}" ${item.id===row?.model?'selected':''}>${esc(item.label||item.id)}</option>`).join('')}</select></label><label>${esc(w.sources)}<select name="sources" multiple>${sources.map((item,index)=>`<option value="${index}" ${saved.has(key(item.scope))?'selected':''}>${esc(item.label)}</option>`).join('')}</select></label><label><input name="enabled" type="checkbox" ${row?.enabled?'checked':''} ${row?'':'disabled'}>${esc(w.enabled)}</label><button type="submit">${esc(w.save)}</button><button type="button" data-scoped-cancel>${esc(w.cancel)}</button></form>`;
++   const form=editor.querySelector('form'),epoch=generation;editor.querySelector('[data-scoped-cancel]').onclick=()=>{if(!busy)editor.replaceChildren();};form.onsubmit=async event=>{event.preventDefault();if(busy||epoch!==generation)return;busy=true;for(const button of form.querySelectorAll('button'))button.disabled=true;const data={name:form.elements.name.value,instructions:form.elements.instructions.value,mode:form.elements.mode.value,scopes:[...form.elements.sources.selectedOptions].map(option=>{const scope=sources[Number(option.value)].scope;return saved.get(key(scope))||scope;}),...(row?{enabled:form.elements.enabled.checked,expected_version:row.version}:{enabled:false})};if(form.elements.model.value)data.model=form.elements.model.value;try{await request(row?'agents/'+row.id:'agents',row?'PATCH':'POST',data);if(epoch!==generation)return;editor.replaceChildren();await load();if(epoch===generation)host.querySelector('[data-scoped-notice]').textContent=w.saved;}catch(error){if(epoch===generation){const notice=host.querySelector('[data-scoped-notice]');if(notice)notice.textContent=error.message;}}finally{if(epoch===generation){busy=false;for(const button of form.querySelectorAll('button'))button.disabled=false;}}};
++  }
++  function load(){if(!snapshot?.capabilities?.ai_documents?.scoped||!agentsVisible())return Promise.resolve();if(loading)return loading;const epoch=generation;loading=(async()=>{try{const result=await Promise.all([allowed('view')?request('agents'):[],(allowed('create')||allowed('update'))?request('agents/options?cached=1'):null]);if(epoch!==generation)return;[rows,options]=result;render();}catch(error){if(epoch===generation){clear();show();host.textContent=error.message;}}finally{if(epoch===generation)loading=null;}})();return loading;}
++  return {profile(data){generation++;identity=JSON.stringify([data?.member?.tenant_id,data?.member?.telegram_id,data?.capabilities?.ai_documents]);snapshot=data;loading=null;busy=false;clear();if(data?.member?.active!==false&&data?.capabilities?.ai_documents?.scoped){show();render();void load();return true;}restore();return false;},load};
++ }
++ const scopedAgentConsole=createScopedAgentConsole();
++
+  function receiveProfile(data){
+   if($('view-ai_agents'))$('view-ai_agents').style.visibility='';
+   const next=data?.member||null,nextScope=JSON.stringify([next?.tenant_id,next?.telegram_id,next?.role,next?.active,next?.permissions,data?.capabilities,data?.role_permissions]);
+   if(nextScope!==profileScope){stashKnowledgeDraft();clearKnowledgeFields();knowledgeDraftScope='';document.querySelectorAll('[data-ai-overview-create],[data-ai-overview-settings]').forEach(button=>button.disabled=true);aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiLoadState='idle';closeModal();settings=null;simulationConfig=null;pilotState=null;agents=[];selected=null;agentOptions={pipelines:[],stages:[],channels:[],models:[]};$('aiKnowledgeList').replaceChildren();$('aiStatusSummary').textContent='';$('aiAgentChatToggle')?.remove();if(editorPage)returnEditorHome();renderAgents();}
+   profileScope=nextScope;profile=next;aiAllowed=!!next&&next.active!==false&&data?.capabilities?.modules?.ai_agents!==false;
++  if(scopedAgentConsole.profile(data)){aiAllowed=false;return;}
+   if(aiAllowed&&agentsVisible())void load();
+   if(!aiAllowed){$('aiAgentList').textContent=t('noAccess');$('aiAgentList').setAttribute('aria-busy','false');}
+  }
+  document.addEventListener('tenant-profile',event=>receiveProfile(event.detail));
+  document.addEventListener('tenant-auth-invalid',()=>receiveProfile(null));
+- document.addEventListener('tenant-auth-pending',()=>{aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiAllowed=false;if(aiLoadState==='loading')aiLoadState='idle';if($('view-ai_agents'))$('view-ai_agents').style.visibility='hidden';});
+- document.addEventListener('tenant-view',event=>{if(event.detail?.view==='ai_agents')void load();});
++ document.addEventListener('tenant-auth-pending',()=>{scopedAgentConsole.profile(null);aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiAllowed=false;if(aiLoadState==='loading')aiLoadState='idle';if($('view-ai_agents'))$('view-ai_agents').style.visibility='hidden';});
++ document.addEventListener('tenant-view',event=>{if(event.detail?.view==='ai_agents'){void scopedAgentConsole.load();void load();}});
+  if(window.tenantProfileSnapshot)receiveProfile(window.tenantProfileSnapshot);
+  else fetch(uiConfig.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{if(!profile&&data?.member)receiveProfile(data)}).catch(()=>{});
+ })();

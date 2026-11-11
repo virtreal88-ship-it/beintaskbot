@@ -1,1126 +1,1138 @@
-diff --git a/beintaskbot-main/tenant_crm_native_company_api.py b/beintaskbot-main/tenant_crm_native_company_api.py
-index 8155f02cc41d00fe8569cb0e10884ac177b59967..6d4ea6275ed214ff41dd7c1e4c92a1c868c9872f 100644
---- a/beintaskbot-main/tenant_crm_native_company_api.py
-+++ b/beintaskbot-main/tenant_crm_native_company_api.py
-@@ -7,6 +7,8 @@ from tenant_crm_native_companies import create_company,get_company,list_companie
- from tenant_request_origin import require_json_post
- from tenant_linear_policy import TenantLinearError
- from tenant_policy import TenantPolicy
-+from tenant_scoped_access import scoped_access_enabled
-+from tenant_crm_native_access import CRMAccessError
- from tenant_crm_request_context import require_expected_context, CRMContextError, native_policy_profile
- 
- 
-@@ -20,11 +22,11 @@ def _jsonable(v):
- 
- def relation_actions(policy):
-     """Use the same effective CRUD permissions as the native editing UI."""
--    update = policy.allows_action('customers', 'update')
--    delete = policy.allows_action('customers', 'delete')
-+    update = policy.allows_action('companies', 'update')
-+    delete = policy.allows_action('companies', 'delete')
-     return {'link_contact': update,
-             'link_deal': update and policy.allows_action('deals', 'update'),
--            'unlink_contact': delete, 'unlink_deal': delete}
-+            'unlink_contact': update if scoped_access_enabled() else delete, 'unlink_deal': delete}
- 
- 
- def handler(member_from_request,origin,logger):
-@@ -35,15 +37,16 @@ def handler(member_from_request,origin,logger):
-         profile = native_policy_profile(profile)
-         policy=TenantPolicy(profile)
-         tenant=str(profile['tenant_id']); ident=request.match_info.get('id')
-+        actor = profile.get('telegram_id') or 0
-         if ident:
-             try:UUID(ident)
-             except (TypeError,ValueError):return web.json_response({'success':False,'error':'invalid_id'},status=400)
-         try:
-             require_expected_context(request, profile)
-             if request.method=='GET':
--                if not policy.allows_action('customers','view'):
-+                if not policy.allows_action('companies','view'):
-                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
--                result=await asyncio.to_thread(get_company,tenant,ident) if ident else await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),50)
-+                result=await asyncio.to_thread(get_company,tenant,ident,actor_id=actor) if ident else await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),50,actor_id=actor)
-                 if ident and result is None:return web.json_response({'success':False,'error':'not_found'},status=404)
-                 return web.json_response({'success':True,('company' if ident else 'companies'):_jsonable(result)},headers={'Cache-Control':'no-store'})
-             require_json_post(request,origin); body=await request.json()
-@@ -57,25 +60,30 @@ def handler(member_from_request,origin,logger):
-                 return web.json_response({'success': False, 'error': 'invalid_action'}, status=400)
-             permission_action = 'delete' if action == 'archive' else 'create' if not ident else 'update'
-             relations = relation_actions(policy)
--            allowed = relations[action] if action in relations else policy.allows_action('customers', permission_action)
-+            allowed = relations[action] if action in relations else policy.allows_action('companies', permission_action)
-             if not allowed:
-                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-+            if scoped_access_enabled() and action in {'link_contact', 'unlink_contact'} and set(body) != {'action', 'entity_id'}:
-+                raise ValueError('invalid relation fields')
-             if body.get('action')=='archive' and ident:
--                result=await asyncio.to_thread(archive_company,tenant,ident)
-+                result=await asyncio.to_thread(archive_company,tenant,ident,actor_id=actor)
-             elif body.get('action') in ('link_contact','link_deal') and ident:
--                result=await asyncio.to_thread(link_entity,tenant,ident,'contact' if body['action']=='link_contact' else 'deal',body.get('entity_id'))
-+                result=await asyncio.to_thread(link_entity,tenant,ident,'contact' if body['action']=='link_contact' else 'deal',body.get('entity_id'),actor_id=actor)
-             elif body.get('action') in ('unlink_contact','unlink_deal') and ident:
--                result=await asyncio.to_thread(unlink_entity,tenant,ident,'contact' if body['action']=='unlink_contact' else 'deal',body.get('entity_id'))
-+                result=await asyncio.to_thread(unlink_entity,tenant,ident,'contact' if body['action']=='unlink_contact' else 'deal',body.get('entity_id'),actor_id=actor)
-             elif ident and body.get('action')=='update':
--                result=await asyncio.to_thread(update_company,tenant,ident,body.get('name'),body.get('phone',''),body.get('email',''),body.get('description',''),body.get('responsible_id'))
-+                result=await asyncio.to_thread(update_company,tenant,ident,body.get('name'),body.get('phone',''),body.get('email',''),body.get('description',''),body.get('responsible_id'),actor_id=actor)
-             elif not ident:
--                result=await asyncio.to_thread(create_company,tenant,body.get('name'),body.get('phone',''),body.get('email',''),body.get('description',''),body.get('responsible_id'),company_id=body.get('id'))
-+                result=await asyncio.to_thread(create_company,tenant,body.get('name'),body.get('phone',''),body.get('email',''),body.get('description',''),body.get('responsible_id'),company_id=body.get('id'),actor_id=actor)
-             else:return web.json_response({'success':False,'error':'method_not_allowed'},status=405)
-             if result is None or result is False:return web.json_response({'success':False,'error':'not_found'},status=404)
-             return web.json_response({'success':True,'data':_jsonable(result)},headers={'Cache-Control':'no-store'})
-         except CRMContextError as exc:
-             return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
-                                      headers={'Cache-Control':'no-store','Vary':'Cookie'})
-+        except CRMAccessError as exc:
-+            return web.json_response({'success': False, 'error': exc.code}, status=exc.status,
-+                                     headers={'Cache-Control': 'no-store'})
-         except TenantLinearError:return web.json_response({'success':False,'error':'invalid_origin'},status=403)
-         except (ValueError,TypeError):return web.json_response({'success':False,'error':'invalid_company'},status=400)
-         except Exception:
-diff --git a/beintaskbot-main/tenant_crm_native_contacts.py b/beintaskbot-main/tenant_crm_native_contacts.py
-index cef7db4950544668f5a051ff6c501fa62b8a72c0..2c1b61d57ab54101275c464e500f582cdd97aa22 100644
---- a/beintaskbot-main/tenant_crm_native_contacts.py
-+++ b/beintaskbot-main/tenant_crm_native_contacts.py
-@@ -4,6 +4,9 @@ import uuid
- import re
- 
- from tenant_platform_core import _connect, _ensure_schema
-+from tenant_policy import TenantPolicy
-+from tenant_scoped_access import scoped_access_enabled
-+from tenant_crm_native_access import current_access, scoped_sql, authorize_create, locked_resource, action_columns, public_row, CRMAccessError, require_local_relation
- 
- 
- def _valid_id(value):
-@@ -22,83 +25,168 @@ def _fields(name, phone='', email=''):
-     return name, phone, email
- 
- 
--def create_contact(tenant_id: str, name: str, phone: str = '', email: str = '', *, contact_id=None):
-+def create_contact(tenant_id: str, name: str, phone: str = '', email: str = '', *, contact_id=None, actor_id=None):
-     name, phone, email = _fields(name, phone, email)
-     ident = _valid_id(contact_id) if contact_id is not None else str(uuid.uuid4())
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'create')
-+            authorize_create(cur, profile, 'customers', tenant_id, actor_id)
-             cur.execute("""INSERT INTO saas_crm_native_contacts
--                (id, tenant_id, display_name, phone, email)
--                VALUES (%s::uuid,%s::uuid,%s,%s,%s)
-+                (id, tenant_id, display_name, phone, email, access_responsible_id)
-+                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s)
-                 ON CONFLICT (id) DO NOTHING RETURNING id, display_name, phone, email""",
--                (ident, tenant_id, name, phone, email))
-+                (ident, tenant_id, name, phone, email, actor_id))
-             row = cur.fetchone()
-             if row is None:
--                cur.execute("""SELECT id, display_name, phone, email
--                    FROM saas_crm_native_contacts WHERE id=%s::uuid AND tenant_id=%s::uuid
--                    AND archived_at IS NULL""", (ident, tenant_id))
--                row = cur.fetchone()
--                if row is None or (row['display_name'], row['phone'], row['email']) != (name, phone, email):
-+                # An idempotent create must not read a record outside this
-+                # action's scope, even when the caller knows its UUID/fields.
-+                row = locked_resource(cur, profile, 'customers', 'create',
-+                    'saas_crm_native_contacts', tenant_id, ident)
-+                if (row is None or (profile is not None and TenantPolicy(profile).has_scoped_access('customers')
-+                        and str(row.get('access_responsible_id')) != str(actor_id))
-+                        or (row['display_name'], row['phone'], row['email']) != (name, phone, email)):
-                     raise ValueError('contact id conflict')
-         conn.commit()
--    return row
-+    return public_row(row)
- 
- 
--def get_contact(tenant_id: str, contact_id: str):
-+def get_contact(tenant_id: str, contact_id: str, *, actor_id=None):
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'view')
-+            where, params = scoped_sql(profile, 'customers', 'view', 'c')
-+            columns, action_params = action_columns(profile, 'customers', 'c')
-+            cur.execute(f"""SELECT c.id, c.display_name, c.phone, c.email, c.company_id,
-+                co.name AS company_name, c.created_at, c.updated_at {columns}
-                 FROM saas_crm_native_contacts c
-                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
--                WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL""", (tenant_id, _valid_id(contact_id)))
--            return cur.fetchone()
-+                WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL
-+                AND ({where})""", [*action_params, tenant_id, _valid_id(contact_id), *params])
-+            return public_row(cur.fetchone())
- 
- 
--def list_contacts(tenant_id: str, search: str = '', limit: int = 50):
-+def list_contacts(tenant_id: str, search: str = '', limit: int = 50, *, actor_id=None):
-     query = '%' + str(search or '').strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'view')
-+            where, params = scoped_sql(profile, 'customers', 'view', 'c')
-+            columns, action_params = action_columns(profile, 'customers', 'c')
-+            cur.execute(f"""SELECT c.id, c.display_name, c.phone, c.email, c.company_id,
-+                co.name AS company_name, c.created_at, c.updated_at {columns}
-                 FROM saas_crm_native_contacts c
-                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
--                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL
-+                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({where})
-                 AND (c.display_name ILIKE %s ESCAPE '\\' OR c.phone ILIKE %s ESCAPE '\\' OR c.email ILIKE %s ESCAPE '\\')
-                 ORDER BY c.updated_at DESC, c.id LIMIT %s""",
--                (tenant_id, query, query, query, max(1, min(int(limit), 100))))
--            return cur.fetchall()
-+                [*action_params, tenant_id, *params, query, query, query, max(1, min(int(limit), 100))])
-+            return [public_row(row) for row in cur.fetchall()]
- 
- 
--def update_contact(tenant_id: str, contact_id: str, name: str, phone: str = '', email: str = ''):
-+def update_contact(tenant_id: str, contact_id: str, name: str, phone: str = '', email: str = '', *, actor_id=None):
-     name, phone, email = _fields(name, phone, email)
-+    ident = _valid_id(contact_id)
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
-+            if actor_id is not None and not locked_resource(cur, profile, 'customers', 'update',
-+                    'saas_crm_native_contacts', tenant_id, ident):
-+                return None
-             cur.execute("""UPDATE saas_crm_native_contacts
-                 SET display_name=%s, phone=%s, email=%s, updated_at=now()
-                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
-                 RETURNING id, display_name, phone, email""",
--                (name, phone, email, tenant_id, _valid_id(contact_id)))
-+                (name, phone, email, tenant_id, ident))
-             row = cur.fetchone()
-         conn.commit()
-     return row
- 
- 
--def archive_contact(tenant_id: str, contact_id: str):
-+def archive_contact(tenant_id: str, contact_id: str, *, actor_id=None):
-+    ident = _valid_id(contact_id)
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'delete')
-+            if actor_id is not None and not locked_resource(cur, profile, 'customers', 'delete',
-+                    'saas_crm_native_contacts', tenant_id, ident):
-+                return False
-             cur.execute("""UPDATE saas_crm_native_contacts
-                 SET archived_at=now(), updated_at=now()
-                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
--                RETURNING id""", (tenant_id, _valid_id(contact_id)))
-+                RETURNING id""", (tenant_id, ident))
-             row = cur.fetchone()
-         conn.commit()
-     return row is not None
- 
- 
-+def set_contact_deal_link(tenant_id, contact_id, deal_id, *, unlink=False, actor_id):
-+    """Edit a contact card's deal relation using only that contact's U scope.
-+
-+    No deal contents, fields or authority are returned through this route.
-+    Unlink is conditional on the exact current contact, so it cannot remove
-+    somebody else's link by presenting an unrelated editable contact.
-+    """
-+    if not scoped_access_enabled():
-+        raise CRMAccessError('scoped_relation_unavailable', 403)
-+    contact = _valid_id(contact_id)
-+    deal = _valid_id(deal_id)
-+    with _connect() as conn:
-+        _ensure_schema(conn)
-+        with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
-+            if not locked_resource(cur, profile, 'customers', 'update',
-+                    'saas_crm_native_contacts', tenant_id, contact):
-+                return None
-+            cur.execute("""SELECT id,contact_id FROM saas_crm_native_deals
-+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE""",
-+                (tenant_id, deal))
-+            target = cur.fetchone()
-+            if not target or (unlink and str(target['contact_id'] or '') != contact):
-+                return None
-+            require_local_relation(cur, tenant_id, 'deal')
-+            cur.execute("""UPDATE saas_crm_native_deals SET contact_id=%s::uuid,updated_at=clock_timestamp()
-+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL""",
-+                (None if unlink else contact, tenant_id, deal))
-+        conn.commit()
-+    return {'id': contact, 'deal_id': deal, 'linked': not unlink}
+diff --git a/beintaskbot-main/tenant_bein_api.py b/beintaskbot-main/tenant_bein_api.py
+index a3c145ed958dd00fb7870b1fbb0e503b6b89d4a0..e19577448e69b3d57eb9f2f9003e99bd89455233 100644
+--- a/beintaskbot-main/tenant_bein_api.py
++++ b/beintaskbot-main/tenant_bein_api.py
+@@ -8,6 +8,15 @@ from aiohttp import web
+ from tenant_bein_integration import credential, save, set_primary, status
+ from tenant_crm_provider import CrmProviderError
+ from tenant_platform_core import TenantPlatformError
++from tenant_linear_policy import TenantLinearError
++from tenant_shared_integration_access import operation
++from tenant_bein_integration import _connect, _ensure_schema
 +
 +
-+
-+def set_contact_company_link(tenant_id, contact_id, company_id, *, unlink=False, actor_id):
-+    """Change only an authorized contact's company relation, never company data."""
-+    if not scoped_access_enabled():
-+        raise CRMAccessError('scoped_relation_unavailable', 403)
-+    contact = _valid_id(contact_id)
-+    company = _valid_id(company_id)
-+    with _connect() as conn:
-+        _ensure_schema(conn)
-+        with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
-+            row = locked_resource(cur, profile, 'customers', 'update',
-+                'saas_crm_native_contacts', tenant_id, contact)
-+            if not row or (unlink and str(row.get('company_id') or '') != company):
-+                return None
-+            # A target's membership and active state are required, not its R/U/D.
-+            # Do not fetch or expose target contents or mutate any company field.
-+            cur.execute("""SELECT id FROM saas_crm_native_companies
-+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE""",
-+                (tenant_id, company))
-+            if not cur.fetchone():
-+                return None
-+            require_local_relation(cur, tenant_id, 'contact')
-+            cur.execute("""UPDATE saas_crm_native_contacts SET company_id=%s::uuid,updated_at=clock_timestamp()
-+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL""",
-+                (None if unlink else company, tenant_id, contact))
-+        conn.commit()
-+    return {'id': contact, 'company_id': company, 'linked': not unlink}
-+
-+
- def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_id: str,
-                             phone: str, display_name: str = '', message_id: str = ''):
-     """Resolve a direct WhatsApp conversation to a tenant-owned native contact.
-diff --git a/beintaskbot-main/tenant_crm_native_deal_api.py b/beintaskbot-main/tenant_crm_native_deal_api.py
-index 2b042704a9767b433b66b53634c303b1aeca0d38..09c536b62f2f6015049835793c31588b7964d68a 100644
---- a/beintaskbot-main/tenant_crm_native_deal_api.py
-+++ b/beintaskbot-main/tenant_crm_native_deal_api.py
-@@ -7,6 +7,7 @@ from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,
- from tenant_request_origin import require_json_post
- from tenant_linear_policy import TenantLinearError
- from tenant_policy import TenantPolicy
-+from tenant_crm_native_access import CRMAccessError
- from tenant_crm_request_context import require_expected_context, CRMContextError, native_policy_profile
++@operation('beinsystems', 'view')
++def _test_connection(profile):
++    client = credential(profile['tenant_id'])
++    return asyncio.run(client.list_resource('pipelines', page=1))
  
  
-@@ -26,18 +27,22 @@ def handler(member_from_request,origin,logger):
-         profile = native_policy_profile(profile)
-         policy=TenantPolicy(profile)
-         tenant_id=str(profile['tenant_id']); deal_id=request.match_info.get('id')
-+        actor = profile.get('telegram_id') or 0
-         if deal_id:
-             try: UUID(deal_id)
-             except (TypeError,ValueError): return web.json_response({'success':False,'error':'invalid_id'},status=400)
-         try:
-             require_expected_context(request, profile)
-             if request.method=='GET':
--                if not policy.allows_action('deals','view'):
--                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-                 if request.query.get('options')=='1':
--                    result=await asyncio.to_thread(deal_options,tenant_id)
-+                    action = next((item for item in ('view', 'create', 'update') if policy.allows_action('deals', item)), None)
-+                    if action is None:
-+                        return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-+                    result=await asyncio.to_thread(deal_options,tenant_id,actor_id=actor,action=action)
-                     return web.json_response({'success':True,**_jsonable(result)},headers={'Cache-Control':'no-store'})
--                result=await asyncio.to_thread(get_deal,tenant_id,deal_id) if deal_id else await asyncio.to_thread(list_deals,tenant_id,request.query.get('search',''),50)
-+                if not policy.allows_action('deals','view'):
-+                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-+                result=await asyncio.to_thread(get_deal,tenant_id,deal_id,actor_id=actor) if deal_id else await asyncio.to_thread(list_deals,tenant_id,request.query.get('search',''),50,actor_id=actor)
-                 if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
-                 return web.json_response({'success':True,'deal' if deal_id else 'deals':_jsonable(result)},headers={'Cache-Control':'no-store'})
-             require_json_post(request,origin)
-@@ -54,11 +59,11 @@ def handler(member_from_request,origin,logger):
-             if not policy.allows_action('deals',permission_action):
-                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-             if data.get('action')=='archive' and deal_id:
--                result=await asyncio.to_thread(archive_deal,tenant_id,deal_id)
-+                result=await asyncio.to_thread(archive_deal,tenant_id,deal_id,actor_id=actor)
-                 return web.json_response({'success':True,'archived':result})
-             fields={k:data.get(k) for k in ('title','pipeline_id','stage_id','contact_id','responsible_id','channel_id','conversation_id','description')}
--            if deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields)
--            else: result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'))
-+            if deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields,actor_id=actor)
-+            else: result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'),actor_id=actor)
-             if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
+ def _valid_write(request: web.Request, origin: str) -> bool:
+@@ -18,14 +27,22 @@ def _valid_write(request: web.Request, origin: str) -> bool:
+ 
+ def handler(member: Callable, origin: str, logger) -> Callable:
+     async def endpoint(request: web.Request) -> web.Response:
+-        profile = member(request, owner_only=True)
++        from tenant_scoped_access import scoped_access_enabled
++        profile = member(request, owner_only=True) if not scoped_access_enabled() else member(request)
+         if not profile:
+             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+         if request.method == "GET":
              try:
-                 from tenant_crm_sync_outbox import enqueue_change
-@@ -69,6 +74,9 @@ def handler(member_from_request,origin,logger):
-         except CRMContextError as exc:
-             return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
-                                      headers={'Cache-Control':'no-store','Vary':'Cookie'})
+                 return web.json_response({"success": True, "integration": await asyncio.to_thread(status, profile)})
++            except TenantLinearError as exc:
++                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
+             except TenantPlatformError as exc:
+                 return web.json_response({"success": False, "error": str(exc)}, status=400)
++        if scoped_access_enabled():
++            from tenant_request_origin import require_json_post
++            try: require_json_post(request, origin)
++            except TenantLinearError as exc:
++                return web.json_response({'success':False,'error':str(exc)},status=exc.status)
+         if not _valid_write(request, origin):
+             return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."}, status=403)
+         try:
+@@ -43,20 +60,23 @@ def handler(member: Callable, origin: str, logger) -> Callable:
+                 item = await asyncio.to_thread(save, profile,
+                     base_url=str(data.get("base_url") or ""), token=str(data.get("token") or ""),
+                     branch_id=str(data.get("branch_id") or ""),
+-                    primary=bool(data.get("primary")))
++                    primary=bool(data.get("primary")), authorization=data)
+                 return web.json_response({"success": True, "integration": item,
+                                           "message": "BeinSystems API tokeni təhlükəsiz saxlanıldı.",
+                                           "catalog_available": False})
+             if action == "test":
+-                client = await asyncio.to_thread(credential, profile["tenant_id"])
+-                payload = await client.list_resource("pipelines", page=1)
++                if scoped_access_enabled():
++                    payload = await asyncio.to_thread(_test_connection, profile)
++                else:
++                    client = await asyncio.to_thread(credential, profile['tenant_id'])
++                    payload = await client.list_resource('pipelines', page=1)
+                 return web.json_response({"success": True, "message": "BeinSystems ERP bağlantısı işləyir.",
+                                           "catalog_available": bool(payload)})
+             if action == "primary":
+-                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""))
++                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""), authorization=data)
+                 return web.json_response({"success": True, **selected})
+             return web.json_response({"success": False, "error": "Əməliyyat düzgün deyil."}, status=400)
+-        except (TenantPlatformError, CrmProviderError) as exc:
++        except (TenantPlatformError, CrmProviderError, TenantLinearError) as exc:
+             return web.json_response({"success": False, "error": str(exc)}, status=getattr(exc, "status", 400))
+         except Exception:
+             logger.exception("BeinSystems ERP integration command failed: tenant=%s action=%s",
+diff --git a/beintaskbot-main/tenant_bein_integration.py b/beintaskbot-main/tenant_bein_integration.py
+index bd6739d998f3ed82ecf5088a1027771aa571bccb..ceff4533975f1bc3a492c1593b32a297eb814185 100644
+--- a/beintaskbot-main/tenant_bein_integration.py
++++ b/beintaskbot-main/tenant_bein_integration.py
+@@ -9,12 +9,14 @@ from tenant_bein_crm import BeinCrm
+ from tenant_crm_provider import CrmProviderError
+ from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
+ 
++from tenant_shared_integration_access import operation, admitted
++
+ PROVIDER = "beinsystems"
+ CRM_PROVIDERS = ("kommo", PROVIDER)
+ 
+ 
+ def _owner(profile: dict | None) -> tuple[str, int]:
+-    if not profile or profile.get("role") != "owner" or not profile.get("active", True):
++    if not admitted(profile, PROVIDER) and (not profile or profile.get("role") != "owner" or not profile.get("active", True)):
+         raise TenantPlatformError("İcazə yoxdur.")
+     return str(profile.get("tenant_id") or ""), int(profile.get("telegram_id") or 0)
+ 
+@@ -39,6 +41,7 @@ def _public(row: dict | None) -> dict:
+     }
+ 
+ 
++@operation(PROVIDER, 'view')
+ def status(profile: dict | None) -> dict:
+     tenant, _ = _owner(profile)
+     with _connect() as conn:
+@@ -78,8 +81,10 @@ def credential(tenant_id: str) -> BeinCrm:
+         raise TenantPlatformError(str(exc)) from exc
+ 
+ 
++@operation(PROVIDER, 'connect', data_arg='authorization',
++           required_actions=lambda values: ('update',) if values['primary'] else ())
+ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str = "",
+-         primary: bool = False) -> dict:
++         primary: bool = False, authorization=None) -> dict:
+     tenant, actor = _owner(profile)
+     # Validate before touching the currently working connection. Encryption is
+     # also performed before the transaction so a missing key cannot corrupt it.
+@@ -99,11 +104,11 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
+     with _connect() as conn:
+         _ensure_schema(conn)
+         with conn.cursor() as cur:
+-            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
+-                        (tenant, actor))
+-            current = cur.fetchone()
+-            if not current or current.get("role") != "owner" or not current.get("active"):
+-                raise TenantPlatformError("İcazə yoxdur.")
++            if not admitted(profile, PROVIDER):
++                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
++                current = cur.fetchone()
++                if not current or current.get("role") != "owner" or not current.get("active"):
++                    raise TenantPlatformError("İcazə yoxdur.")
+             cur.execute("""INSERT INTO saas_tenant_integrations
+                 (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
+                 VALUES (%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
+@@ -129,7 +134,8 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
+     return _public(row)
+ 
+ 
+-def set_primary(profile: dict | None, provider: str) -> dict:
++@operation(PROVIDER, 'update', data_arg='authorization')
++def set_primary(profile: dict | None, provider: str, *, authorization=None) -> dict:
+     tenant, actor = _owner(profile)
+     selected = str(provider or "").casefold()
+     if selected not in CRM_PROVIDERS:
+@@ -137,11 +143,11 @@ def set_primary(profile: dict | None, provider: str) -> dict:
+     with _connect() as conn:
+         _ensure_schema(conn)
+         with conn.cursor() as cur:
+-            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
+-                        (tenant, actor))
+-            current = cur.fetchone()
+-            if not current or current.get("role") != "owner" or not current.get("active"):
+-                raise TenantPlatformError("İcazə yoxdur.")
++            if not admitted(profile, PROVIDER):
++                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
++                current = cur.fetchone()
++                if not current or current.get("role") != "owner" or not current.get("active"):
++                    raise TenantPlatformError("İcazə yoxdur.")
+             cur.execute("SELECT status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=%s",
+                         (tenant, selected))
+             integration = cur.fetchone()
+diff --git a/beintaskbot-main/tenant_chat_ai_api.py b/beintaskbot-main/tenant_chat_ai_api.py
+index 9d47d922f34cdb413fbd559b583f88654b0fea3a..168efc93d378bc535c86264dc208e0c4954a2dbc 100644
+--- a/beintaskbot-main/tenant_chat_ai_api.py
++++ b/beintaskbot-main/tenant_chat_ai_api.py
+@@ -55,7 +55,8 @@ def model_management_handler(member_from_request, canonical_origin, logger, *, p
+                 if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id'])
+                         or str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
+                     raise TenantLinearError('Кабинет изменился. Обновите страницу.', 409)
+-                result = await asyncio.to_thread(test_model, profile, data.get('model'))
++                from tenant_scoped_access import scoped_access_enabled
++                result = await asyncio.to_thread(test_model, profile, data.get('model'), **({'authorization':data} if scoped_access_enabled() else {}))
+             else:
+                 if request.method != 'GET':
+                     raise TenantLinearError('Метод не поддерживается.', 405)
+diff --git a/beintaskbot-main/tenant_chat_ai_settings.py b/beintaskbot-main/tenant_chat_ai_settings.py
+index bc77d94a5eb85522606b2fb603376978d595c797..bf7425ea31a6973ca1be004d1635f8908b2e4077 100644
+--- a/beintaskbot-main/tenant_chat_ai_settings.py
++++ b/beintaskbot-main/tenant_chat_ai_settings.py
+@@ -7,10 +7,13 @@ from tenant_chat_ai_policy import configuration
+ from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model
+ from tenant_ai_agent_access import tenant_status_allows_management
+ from tenant_linear_policy import TenantLinearError, identifier
++from tenant_shared_integration_access import operation, admitted, principal
+ 
+ 
+ def authorize(cur, session):
+-    """Allow active company owners and admins to manage company Chat AI."""
++    """Allow current scoped management or the unchanged legacy owner/admin path."""
++    from tenant_shared_integration_access import admitted, principal
++    if admitted(session, 'chat_ai'): return principal(session)
+     if not isinstance(session, dict):
+         raise TenantLinearError('İcazə yoxdur.', 403)
+     tenant = identifier(session.get('tenant_id'))
+@@ -63,6 +66,7 @@ def public(row, tenant_id=None):
+     return result
+ 
+ 
++@operation('chat_ai', 'view')
+ def read(session):
+     with _connect() as conn:
+         ensure_schema(conn)
+@@ -91,19 +95,22 @@ def _company_key(session):
+     return tenant, metadata, secret['api_key']
+ 
+ 
++@operation('chat_ai', 'view')
+ def available_models(session):
+     """Explicit owner/admin check; only IDs are returned and no tokens are generated."""
+     _tenant, _metadata, key = _company_key(session)
+     return {'models': provider_models(key)}
+ 
+ 
++@operation('chat_ai', 'view')
+ def realtime_model_availability(session,model):
+     """Use only the authorized company's saved key; never return the key."""
+     _tenant, _metadata, key = _company_key(session)
+     return check_realtime_model(key,model)
+ 
+ 
+-def test_model(session, model):
++@operation('chat_ai', 'update', data_arg='authorization')
++def test_model(session, model, *, authorization=None):
+     """Explicit owner/admin, context-free minimal test of the selected Copilot model."""
+     model = str(model or '').strip()
+     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
+@@ -115,12 +122,24 @@ def test_model(session, model):
+     return {'model': model, 'available': True}
+ 
+ 
++@operation('chat_ai', lambda v: 'delete' if v['data'].get('remove_key') is True else 'connect' if v['data'].get('api_key') else 'update', data_arg='data')
+ def save(session, data):
+-    preserve_models = data.get('preserve_models') is True
++    from tenant_scoped_access import scoped_access_enabled
++    preserve_settings = data.get('preserve_settings') is True
++    if scoped_access_enabled() and data.get('remove_key') is True:
++        preserve_settings = True
++    if preserve_settings:
++        allowed_fields = {'preserve_settings','preserve_models','api_key','remove_key',
++                          'expected_updated_at','expected_tenant_id','expected_user_id','confirm_company_impact'}
++        if set(data) - allowed_fields or (data.get('remove_key') is True and data.get('api_key')):
++            raise TenantLinearError('integration_key_only_request_invalid',400)
++        if not data.get('api_key') and data.get('remove_key') is not True:
++            raise TenantLinearError('integration_key_only_request_invalid',400)
++    preserve_models = preserve_settings or data.get('preserve_models') is True
+     model_fields = ('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
+     if preserve_models and any(field in data for field in model_fields):
+         raise TenantLinearError('Модели задаются у агента.',400)
+-    config = configuration(data, models_required=not preserve_models)
++    config = {} if preserve_settings else configuration(data, models_required=not preserve_models)
+     key = data.get('api_key', '')
+     if not isinstance(key, str) or (key and (not 20 <= len(key) <= 500 or any(c.isspace() for c in key))):
+         raise TenantLinearError('API açarı düzgün deyil.')
+@@ -136,6 +155,10 @@ def save(session, data):
+             # Older settings clients do not submit the Copilot subsection.
+             # Preserve its values so legacy Chat AI edits cannot couple models.
+             old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
++            if preserve_settings:
++                config = dict(old_metadata)
++                if data.get('remove_key') is True:
++                    config['enabled'] = False
+             if preserve_models:
+                 for field in model_fields:
+                     config[field] = old_metadata.get(field, False if field=='video_enabled' else '')
+@@ -183,7 +206,7 @@ def save(session, data):
+                 encrypted = None
+             elif key:
+                 encrypted = _fernet().encrypt(json.dumps({'tenant_id': tenant, 'provider': 'chat_ai', 'api_key': key}).encode())
+-            if config['enabled'] and not encrypted:
++            if config.get('enabled') and not encrypted:
+                 raise TenantLinearError('Şirkətin API açarını daxil edin.')
+             cur.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata)
+               VALUES(%s::uuid,'chat_ai','configured',%s,%s::jsonb) ON CONFLICT(tenant_id,provider) DO UPDATE
+diff --git a/beintaskbot-main/tenant_chat_ai_store.py b/beintaskbot-main/tenant_chat_ai_store.py
+index 7969bbe499b899ad5763dcfc275cc30262e536cd..53ac903a77910473bd516ee4ec5777843915c676 100644
+--- a/beintaskbot-main/tenant_chat_ai_store.py
++++ b/beintaskbot-main/tenant_chat_ai_store.py
+@@ -9,20 +9,32 @@ from tenant_chat_ai_policy import fingerprint, audio, media_identity
+ 
+ def access(cur, session, lead_id):
+     tenant, user = identifier(session['tenant_id']), int(session['telegram_id'])
+-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
+-    person = cur.fetchone()
++    from tenant_scoped_access import scoped_access_enabled
++    if scoped_access_enabled():
++        from tenant_scoped_access_store import read_access_profile
++        person = read_access_profile(cur, tenant, user, lock=True)
++    else:
++        cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
++          JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
++        person = cur.fetchone()
++        if person:
++            person = {**person, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
+     if not person or person['active'] is not True or person['tenant_status'] != 'active':
+         raise TenantLinearError('İcazə yoxdur.', 403)
+-    policy = TenantPolicy({**person, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
++    policy = TenantPolicy(person)
+     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
+     if not policy.can_use_chat_ai() or not policy.can_access_deal(cur.fetchone()):
+         raise TenantLinearError('Bu çatın AI funksiyalarına icazə yoxdur.', 403)
++    from tenant_dialog_access import require_lead
++    require_lead(cur,tenant,policy,lead_id)
+     cur.execute("SELECT secrets,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai' FOR SHARE", (tenant,))
+     connection = cur.fetchone()
+     if not connection or not connection['secrets'] or connection['metadata'].get('enabled') is not True or connection['metadata'].get('consent') is not True:
+         raise TenantLinearError('Şirkətin çat AI ayarlarını aktiv edin.', 409)
+-    return tenant, user, connection
++    from tenant_dialog_access import lead_message_filter,scope
++    if scope(policy) is None:return tenant,user,connection
++    return tenant,user,{**connection,'_dialog_scoped':True,
++      '_dialog_message_filter':lead_message_filter(cur,tenant,policy,lead_id)}
+ 
+ 
+ def reserve(session, command):
+@@ -37,24 +49,25 @@ def reserve(session, command):
+             if existing:
+                 if existing['requested_by'] != user or existing['input_hash'] != fingerprint(command):
+                     raise TenantLinearError('Sorğu kodu başqa əməliyyata aiddir.', 409)
+-                if existing['status'] == 'completed' and existing['result'] and existing['config_version'] == str(connection['updated_at']):
++                if existing['status'] == 'completed' and existing['result'] and existing['config_version'] == str(connection['updated_at']) and not connection.get('_dialog_scoped'):
+                     return {'cached_result': existing['result']}
+                 error = TenantLinearError('Əvvəlki sorğunun nəticəsi hazır deyil və ya naməlumdur. Avtomatik təkrarlanmır.', 409)
+                 error.keep_request = True
+                 raise error
++            source_guard=connection.get('_dialog_message_filter','TRUE')
+             config = connection['metadata']
+             if command['mode'] == 'transcribe':
+                 if config.get('audio_enabled') is not True:
+                     raise TenantLinearError('Səs transkripsiyası aktiv deyil.', 409)
+                 cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
+-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s''', (tenant, command['lead_id'], command['message_id']))
++                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s AND '''+source_guard, (tenant, command['lead_id'], command['message_id']))
+                 row = cur.fetchone()
+                 if not row or not audio(row):
+                     raise TenantLinearError('Səs mesajı tapılmadı.', 404)
+                 rows = [row]
+             else:
+                 cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
+-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
++                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND '''+source_guard+'''
+                   ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 30''', (tenant, command['lead_id']))
+                 rows = list(reversed(cur.fetchall()))
+                 if not rows:
+@@ -91,7 +104,7 @@ def reserve(session, command):
+             cur.execute("DELETE FROM saas_chat_transcripts WHERE (tenant_id,lead_id,media_hash) IN (SELECT tenant_id,lead_id,media_hash FROM saas_chat_transcripts WHERE tenant_id=%s::uuid AND created_at<now()-interval '90 days' LIMIT 100)", (tenant,))
+         conn.commit()
+     return {'tenant_id': tenant, 'user_id': user, 'config_version': str(connection['updated_at']),
+-            'command': command, 'config': config, 'api_key': secret['api_key'], 'rows': rows,
++            '_dialog_message_filter':source_guard,'command': command, 'config': config, 'api_key': secret['api_key'], 'rows': rows,
+             'pending_audio': pending, 'transcripts': transcripts}
+ 
+ 
+@@ -100,7 +113,7 @@ def validate(item):
+         ensure_schema(conn)
+         with conn.cursor() as cur:
+             _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
+-            if str(connection['updated_at']) != item['config_version']:
++            if str(connection['updated_at']) != item['config_version'] or connection.get('_dialog_message_filter','TRUE')!=item.get('_dialog_message_filter','TRUE'):
+                 raise TenantLinearError('AI ayarları dəyişib.', 409)
+ 
+ 
+@@ -109,7 +122,7 @@ def cache_transcript(item, row, text):
+         ensure_schema(conn)
+         with conn.cursor() as cur:
+             _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
+-            if str(connection['updated_at']) != item['config_version']:
++            if str(connection['updated_at']) != item['config_version'] or connection.get('_dialog_message_filter','TRUE')!=item.get('_dialog_message_filter','TRUE'):
+                 raise TenantLinearError('AI ayarları dəyişib.', 409)
+             cur.execute('''INSERT INTO saas_chat_transcripts(tenant_id,lead_id,media_hash,transcript)
+               VALUES(%s::uuid,%s,%s,%s) ON CONFLICT(tenant_id,lead_id,media_hash) DO UPDATE
+@@ -125,7 +138,8 @@ def finish(item, result):
+             if result is not None:
+                 try:
+                     _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
+-                    status = 'completed' if str(connection['updated_at']) == item['config_version'] else 'skipped'
++                    status = 'completed' if (str(connection['updated_at']) == item['config_version']
++                        and connection.get('_dialog_message_filter','TRUE') == item.get('_dialog_message_filter','TRUE')) else 'skipped'
+                 except TenantLinearError:
+                     status = 'skipped'
+             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
+diff --git a/beintaskbot-main/tenant_chat_api.py b/beintaskbot-main/tenant_chat_api.py
+index cd5090dc26480d6d3aee8a22bfede5f27cc49f2c..d54af41a07fb2c203fd03fe747843fff473255d2 100644
+--- a/beintaskbot-main/tenant_chat_api.py
++++ b/beintaskbot-main/tenant_chat_api.py
+@@ -21,6 +21,8 @@ def _can_read(context: ChatApiContext, profile: dict | None) -> bool:
+     if not profile:
+         return False
+     policy = context.policy(profile)
++    if policy.action_scope("dialogs","view") is not None:
++        return policy.action_scope("dialogs","view")!="none"
+     return policy.allows("deals") or policy.allows("customers")
+ 
+ 
+@@ -37,6 +39,16 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
+         if lead_id <= 0:
+             return web.json_response(
+                 {"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
++        if context.policy(profile).action_scope('dialogs','view') is not None:
++            # The old lead-only reader cannot inherit a deal grant to bypass
++            # source restrictions. Reuse the current transactional page reader.
++            from tenant_chat_history_store import page
++            from tenant_linear_policy import TenantLinearError
++            try:
++                result=await asyncio.to_thread(page,profile,lead_id)
++                return web.json_response({'success':True,**result,'stale':False,'warning':''})
++            except TenantLinearError as error:
++                return web.json_response({'success':False,'error':str(error)},status=error.status)
+         deal = await asyncio.to_thread(
+             context.get_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
+         if not context.policy(profile).can_access_deal(deal):
+diff --git a/beintaskbot-main/tenant_chat_attachment_store.py b/beintaskbot-main/tenant_chat_attachment_store.py
+index 24e5e1fecc72b796d018e7a61292148efaeb1a68..34696e7522b2b750eeb42acf55c1bd952c4bbaff 100644
+--- a/beintaskbot-main/tenant_chat_attachment_store.py
++++ b/beintaskbot-main/tenant_chat_attachment_store.py
+@@ -14,10 +14,15 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
+     is_connect = message_id.startswith('connect:')
+     with _connect() as conn:
+         with conn.cursor() as cur:
+-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid
+-              AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+-            member = cur.fetchone()
++            from tenant_scoped_access import scoped_access_enabled
++            if scoped_access_enabled():
++                from tenant_scoped_access_store import read_access_profile
++                member = read_access_profile(cur, tenant, actor, lock=True)
++            else:
++                cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
++                  JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid
++                  AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
++                member = cur.fetchone()
+             # Read-only Connect previews follow the same lifecycle gate as Dialogs.
+             status_allowed = bool(member) and (tenant_status_allows_management(member['tenant_status'])
+                 if is_connect else member['tenant_status'] == 'active')
+@@ -28,7 +33,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
+               AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE''', (tenant, lead))
+             deal = cur.fetchone()
+             policy = TenantPolicy(profile)
+-            allowed = policy.allows('dialogs') if is_connect else policy.can_access_deal(deal)
++            selected_scope=policy.action_scope('dialogs','view')
++            allowed = selected_scope!='none' if selected_scope is not None else policy.legacy_allows('dialogs') if is_connect else policy.can_access_deal(deal)
+             if not allowed:
+                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)
+             cur.execute('''SELECT id,external_id,channel,direction,body,media_url,message_type,raw FROM saas_crm_messages
+@@ -51,12 +57,16 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
+                         or kind not in {'image', 'audio', 'voice', 'video', 'document'}
+                         or row.get('direction') not in {'incoming', 'outgoing'}):
+                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
++                from tenant_dialog_access import require_source
++                require_source(cur,tenant,policy,'connect',route['channel_id'],'view')
+                 row=dict(row)
+                 row['message_type']=kind
+                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
+                 if raw.get('conversationId') and raw['conversationId'] != route['conversation_id']:
+                     raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)
+                 return {'provider': 'connect', 'row': dict(row), 'route': route, 'message_id': reference}
++            from tenant_dialog_access import require_source
++            require_source(cur,tenant,policy,'kommo','','view')
+             cur.execute('''SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations
+               WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE''', (tenant,))
+             connection = cur.fetchone()
+diff --git a/beintaskbot-main/tenant_chat_history_store.py b/beintaskbot-main/tenant_chat_history_store.py
+index ebfc196430aea8518f807d19057c633a80490947..5737127374106d480c57ad4b536e59bb4c3eaff1 100644
+--- a/beintaskbot-main/tenant_chat_history_store.py
++++ b/beintaskbot-main/tenant_chat_history_store.py
+@@ -17,20 +17,29 @@ def page(session: dict, lead_id: object, cursor: str = '', limit: object = 120)
+     with _connect() as conn:
+         ensure_schema(conn)
+         with conn.cursor() as cur:
+-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+-            profile = cur.fetchone()
++            from tenant_scoped_access import scoped_access_enabled
++            if scoped_access_enabled():
++                from tenant_scoped_access_store import read_access_profile
++                profile = read_access_profile(cur, tenant, actor, lock=True)
++            else:
++                cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
++                  JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
++                profile = cur.fetchone()
+             if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
+                 raise TenantLinearError('İcazə yoxdur.', 403)
+             policy = TenantPolicy({**profile, 'tenant_id':tenant, 'workflow':_read_tenant_workflow(cur, tenant)})
+             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
+-            if not policy.can_access_deal(cur.fetchone()):
++            deal=cur.fetchone()
++            from tenant_dialog_access import scope,require_source,sql_filter
++            if scope(policy) is None and not policy.can_access_deal(deal):
+                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
++            from tenant_dialog_access import lead_message_filter
++            source_guard=lead_message_filter(cur,tenant,policy,lead)
+             condition = ' AND (COALESCE(happened_at,created_at),external_id)<(%s::timestamptz,%s)' if position else ''
+             values = [tenant, lead, *(position or ()), size + 1]
+             cur.execute('''SELECT external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,
+               COALESCE(happened_at,created_at) AS position_at FROM saas_crm_messages
+-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s''' + condition + '''
++              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND '''+source_guard+condition + '''
+               ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT %s''', values)
+             rows = cur.fetchall()
+         conn.commit()
+diff --git a/beintaskbot-main/tenant_chat_import_store.py b/beintaskbot-main/tenant_chat_import_store.py
+index 8fafa8470385672a6e25aceaff05044db0258c52..460cfeb484c41d797788a36224ccf9914da66757 100644
+--- a/beintaskbot-main/tenant_chat_import_store.py
++++ b/beintaskbot-main/tenant_chat_import_store.py
+@@ -10,15 +10,22 @@ def authorize(session: dict, lead: int) -> str:
+     with _connect() as conn:
+         _ensure_schema(conn)
+         with conn.cursor() as cur:
+-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s''', (tenant, actor))
+-            member = cur.fetchone()
++            from tenant_scoped_access import scoped_access_enabled
++            if scoped_access_enabled():
++                from tenant_scoped_access_store import read_access_profile
++                member = read_access_profile(cur, tenant, actor, lock=True)
++            else:
++                cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
++                  JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s''', (tenant, actor))
++                member = cur.fetchone()
+             if not member or member['active'] is not True or member['tenant_status'] != 'active':
+                 raise TenantLinearError('İcazə yoxdur.', 403)
+             policy = TenantPolicy({**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
+             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL', (tenant, lead))
+             if not policy.can_access_deal(cur.fetchone()):
+                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
++            from tenant_dialog_access import require_lead
++            require_lead(cur,tenant,policy,lead)
+             cur.execute("SELECT account_domain,connected_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected'", (tenant,))
+             integration = cur.fetchone()
+             if not integration or not integration.get('account_domain'):
+diff --git a/beintaskbot-main/tenant_chat_review_store.py b/beintaskbot-main/tenant_chat_review_store.py
+index 2b4b2ed3a093dc73ab450394ac3164f0d8f1eca2..e59b9d0dac3802b594bd47d055ff9683191c9c98 100644
+--- a/beintaskbot-main/tenant_chat_review_store.py
++++ b/beintaskbot-main/tenant_chat_review_store.py
+@@ -17,15 +17,22 @@ def positive(value):
+ 
+ def authorize(cur, session, lead):
+     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), positive(session['telegram_id'])
+-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+-    member = cur.fetchone()
++    from tenant_scoped_access import scoped_access_enabled
++    if scoped_access_enabled():
++        from tenant_scoped_access_store import read_access_profile
++        member = read_access_profile(cur, tenant, actor, lock=True)
++    else:
++        cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
++          JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
++        member = cur.fetchone()
+     if not member or member['active'] is not True or member['tenant_status'] != 'active':
+         raise TenantLinearError('İcazə yoxdur.', 403)
+     policy = TenantPolicy({**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
+     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
+     if not policy.privileged or not policy.allows('deals') or not policy.can_access_deal(cur.fetchone()):
+         raise TenantLinearError('Yalnız icazəli administrator yoxlaya bilər.', 403)
++    from tenant_dialog_access import require_lead
++    require_lead(cur,tenant,policy,lead)
+     return tenant, actor
+ 
+ 
+diff --git a/beintaskbot-main/tenant_chat_send_service.py b/beintaskbot-main/tenant_chat_send_service.py
+index 1928d7898b89cb13875751968175cafde2f9b3be..0038896d2116c7a5d86fc00994a677908b2c8ea1 100644
+--- a/beintaskbot-main/tenant_chat_send_service.py
++++ b/beintaskbot-main/tenant_chat_send_service.py
+@@ -1,7 +1,7 @@
+ """Prepare, check source and authority, checkpoint, send once, record receipt."""
+ import asyncio
+ from tenant_chat_send_policy import command, resolve_route
+-from tenant_chat_send_store import reserve, mark_sending, finish, quoted_status_credentials, record_quoted_delivery, accept_quoted_lookup
++from tenant_chat_send_store import dispatch_guarded, reserve, mark_sending, finish, quoted_status_credentials, record_quoted_delivery, accept_quoted_lookup
+ from tenant_chat_send_provider import send
+ from tenant_policy import TenantPolicy
+ from tenant_linear_policy import TenantLinearError
+@@ -38,13 +38,13 @@ async def run(session, data, request, wait_slot, logger):
+                 route = await resolve_route(tenant, lead_id, request)
+                 live = await request(tenant, 'GET', f'leads/{lead_id}')
+             profile, credentials = await asyncio.to_thread(mark_sending, item, route)
+-            if int(live.get('id') or 0) != lead_id or not TenantPolicy(profile).can_access_deal({
+-                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
++            if int(live.get('id') or 0) != lead_id or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({
++                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id})):
+                 raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
+         external_started = True
+-        message_id = await asyncio.to_thread(send_connect, credentials, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
++        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send_connect, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, item['command']['text'], wait_slot)
+         if is_connect and not scoped_quote:
+-            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
++            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, author=profile.get('display_name') or str(profile['telegram_id']), actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
+         await asyncio.to_thread(finish, item, 'accepted', message_id)
+         return {'state':'accepted','message_id':message_id,'origin':route['origin'],**(await _quoted_status(item,message_id) if scoped_quote else {})}
+     except TenantLinearError:
+@@ -68,7 +68,7 @@ async def _quoted_status(item,message_id):
+         status=await asyncio.to_thread(quoted_delivery_status,credentials,message_id,item['command']['request_id'],item['quote'])
+         if status.get('message_id'):
+             if status.get('provider_accepted'):
+-                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],actor=item['key'][1],quoted_message_id=item['quote'])
++                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],author=(item.get('profile') or {}).get('display_name') or str(item['key'][1]),actor=item['key'][1],quoted_message_id=item['quote'])
+             await asyncio.to_thread(record_quoted_delivery,item,status['message_id'],status)
+         return status
+     except Exception:
+diff --git a/beintaskbot-main/tenant_chat_send_store.py b/beintaskbot-main/tenant_chat_send_store.py
+index d30ca305bae6a1dd4c1dbc0606dacbba70c46b21..a6d146fb1046cdca548e6baa329c347dd78afe38 100644
+--- a/beintaskbot-main/tenant_chat_send_store.py
++++ b/beintaskbot-main/tenant_chat_send_store.py
+@@ -11,22 +11,27 @@ from tenant_connect_transport import connect_route
+ 
+ def authority(cur, session, lead_id):
+     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
+-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+-    profile = cur.fetchone()
++    from tenant_scoped_access_store import read_access_profile
++    profile=read_access_profile(cur,tenant,actor,lock=True)
+     if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
+         raise TenantLinearError('İcazə yoxdur.', 403)
+-    profile = {**profile, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
++    profile = {**profile, 'tenant_id': tenant}
+     policy = TenantPolicy(profile)
+     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
+     deal = cur.fetchone()
+-    if not policy.allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
++    from tenant_dialog_access import require_source,scope
++    if scope(policy,'update') is None and not policy.legacy_allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
+         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
+     connect = connect_route(cur, tenant, lead_id)
+     if connect:
++        require_source(cur,tenant,policy,'connect',connect['channel_id'],'update')
+         return profile, ['connect', connect['channel_id'], connect['conversation_id']], {'provider': 'connect', 'route': connect}
+-    if not policy.allows('deals') or not policy.can_access_deal(deal):
++    cur.execute('SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND lead_id=%s',(tenant,lead_id))
++    if cur.fetchone():
++        raise TenantLinearError('Исходный Connect-канал недоступен; отправка через другой канал запрещена.',409)
++    if scope(policy,'update') is None and (not policy.allows('deals') or not policy.can_access_deal(deal)):
+         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
++    require_source(cur,tenant,policy,'kommo','','update')
+     cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
+     integration = cur.fetchone()
+     if not integration or integration['status'] != 'connected' or not integration['secrets']:
+@@ -224,3 +229,25 @@ def read_quoted_receipt(session,lead_id,request_id=None):
+             if quote and quote!=route.get('quoted_external_message_id'):raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
+             return {'key':(profile['tenant_id'],profile['telegram_id'],row['request_id']),'command':command,'connection':connection,
+                 'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id']}}
++
++
++def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
++    """Final authority and source locks span the single provider operation.
++
++    Scope revocation, employee deactivation, department reassignment and source
++    unbinding serialize against this boundary. An operation already accepted
++    by the provider cannot be recalled; receipts retain that ordering.
++    """
++    from tenant_scoped_access import scoped_access_enabled
++    if not scoped_access_enabled():return callback(expected_credentials,*args,**kwargs)
++    with _connect() as conn:
++        with conn.cursor() as cur:
++            profile,connection,integration=authority(cur,
++              {'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
++            if connection!=item['connection']:
++                raise TenantLinearError('Источник диалога изменился.',409)
++            if connection[0]=='connect':
++                current=integration['route']
++                if any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id')):
++                    raise TenantLinearError('Источник диалога изменился.',409)
++            return callback(expected_credentials,*args,**kwargs)
+diff --git a/beintaskbot-main/tenant_chat_sync.py b/beintaskbot-main/tenant_chat_sync.py
+index bb52f5d0f93ee898ec2488b9ba2379fe32f3946c..86065ebcea5c3772467f4ddad69410c3373658b4 100644
+--- a/beintaskbot-main/tenant_chat_sync.py
++++ b/beintaskbot-main/tenant_chat_sync.py
+@@ -18,6 +18,8 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
+         deal = await asyncio.to_thread(get_deal, tenant_id=tenant, kommo_lead_id=lead_id)
+         if not current or current.get('tenant_status') != 'active' or not TenantPolicy(current).can_access_deal(deal):
+             raise TenantPlatformError('Çat tarixçəsi üçün icazəniz yoxdur.')
++        if TenantPolicy(current).action_scope('dialogs','view') not in (None,'all'):
++            raise TenantPlatformError('Источник переписки требует отдельной проверки прав.')
+         return current, deal
+ 
+     await authorize()
+diff --git a/beintaskbot-main/tenant_chat_upload_service.py b/beintaskbot-main/tenant_chat_upload_service.py
+index d38e121ea5973f0c3d32cb1e0af631485c9aa14a..9a6a8c92eb76489d2a3e7a2f4341b290fd59d79e 100644
+--- a/beintaskbot-main/tenant_chat_upload_service.py
++++ b/beintaskbot-main/tenant_chat_upload_service.py
+@@ -1,6 +1,6 @@
+ """Reserve file hash, upload, re-route/re-authorize, checkpoint and send once."""
+ import asyncio
+-from tenant_chat_send_store import reserve, upload_credentials, mark_sending, finish
++from tenant_chat_send_store import dispatch_guarded, reserve, upload_credentials, mark_sending, finish
+ from tenant_chat_send_policy import resolve_route
+ from tenant_chat_upload_provider import upload
+ from tenant_chat_send_provider import send
+@@ -12,6 +12,9 @@ async def run(session, command, content, request, wait_slot, logger):
+     item = await asyncio.to_thread(reserve, session, command)
+     if 'cached_result' in item:
+         return item['cached_result']
++    if item.get('connection',[None])[0]=='connect':
++        await asyncio.to_thread(finish,item,'blocked')
++        raise TenantLinearError('Отправка файлов через этот Connect-маршрут ещё не поддерживается.',409)
+     started = False
+     try:
+         tenant = item['key'][0]
+@@ -24,10 +27,10 @@ async def run(session, command, content, request, wait_slot, logger):
+             route = await resolve_route(tenant, command['lead_id'], request)
+             live = await request(tenant, 'GET', f"leads/{command['lead_id']}")
+         profile, credentials = await asyncio.to_thread(mark_sending, item, {**route, 'attachment': attachment})
+-        if int(live.get('id') or 0) != command['lead_id'] or not TenantPolicy(profile).can_access_deal({**live,'tenant_id':tenant}):
++        if int(live.get('id') or 0) != command['lead_id'] or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({**live,'tenant_id':tenant})):
+             raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
+         started = True
+-        message_id = await asyncio.to_thread(send, credentials, route, command['text'], wait_slot, attachment=attachment)
++        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, command['text'], wait_slot, attachment=attachment)
+         await asyncio.to_thread(finish, item, 'accepted', message_id)
+         return {'state': 'accepted', 'message_id': message_id, 'origin': route['origin']}
+     except Exception as error:
+diff --git a/beintaskbot-main/tenant_connect_api.py b/beintaskbot-main/tenant_connect_api.py
+index 99576e2224e3454784160dac713ce7f76c6a8d58..ec3fd65d208c5ab09b3e1025fc1ef0285e3afe6e 100644
+--- a/beintaskbot-main/tenant_connect_api.py
++++ b/beintaskbot-main/tenant_connect_api.py
+@@ -33,9 +33,9 @@ def settings_handler(member_from_request, origin: str, logger):
+                 if not isinstance(data, dict):
+                     raise TenantPlatformError('Sorğu düzgün deyil.')
+                 if data.get('action') == 'disconnect':
+-                    result = await asyncio.to_thread(disconnect, profile)
++                    result = await asyncio.to_thread(disconnect, profile, authorization=data)
+                 elif data.get('action') == 'disconnect_channel':
+-                    result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''))
++                    result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''), authorization=data)
+                 elif data.get('action') == 'retire_channel':
+                     if set(data)!={'action','channel_id','confirm'}:
+                         raise TenantLinearError('channel_retirement_request_invalid',400)
+@@ -52,10 +52,10 @@ def settings_handler(member_from_request, origin: str, logger):
+                     result = await asyncio.to_thread(
+                         channel_status, profile, str(data.get('channel_id') or ''),
+                         reconnect=data.get('action') == 'reconnect_channel',
+-                        callback_url=origin.rstrip('/') + '/api/platform/connect/webhook',
++                        callback_url=origin.rstrip('/') + '/api/platform/connect/webhook', authorization=data,
+                     )
+                 elif data.get('action') == 'channels':
+-                    result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''))}
++                    result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''), authorization=data)}
+                 else:
+                     result = await asyncio.to_thread(configure, profile, data, origin.rstrip('/') + '/api/platform/connect/webhook')
+             return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
+diff --git a/beintaskbot-main/tenant_connect_transport.py b/beintaskbot-main/tenant_connect_transport.py
+index 99fc3a19187f2ced669e5668db51c35052fa2c90..3cbb3b9558014e46b9290978fdffb9eff3946cd3 100644
+--- a/beintaskbot-main/tenant_connect_transport.py
++++ b/beintaskbot-main/tenant_connect_transport.py
+@@ -305,8 +305,10 @@ def _schema(conn) -> None:
+           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
+ 
+ 
++from tenant_shared_integration_access import operation, admitted
++
+ def _owner(profile: dict) -> None:
+-    if not profile or profile.get('role') not in {'owner', 'admin'}:
++    if not admitted(profile, 'connect') and (not profile or profile.get('role') not in {'owner', 'admin'}):
+         raise TenantPlatformError('Connect bağlantısını yalnız administrator idarə edə bilər.')
+ 
+ 
+@@ -363,6 +365,7 @@ def _request(key: str, method: str, path: str, payload: dict | None = None, *,
+     return data if isinstance(data, dict) else {}
+ 
+ 
++@operation('connect', 'view', legacy_member_read=True)
+ def status(profile: dict) -> dict:
+     tenant = str(profile['tenant_id'])
+     with _connect() as conn:
+@@ -399,6 +402,7 @@ def _diagnostic_error(value) -> str:
+     return 'Çatdırılma uğursuz oldu'
+ 
+ 
++@operation('connect', 'view')
+ def diagnostics(profile: dict) -> dict:
+     """Read tenant-owned Connect diagnostics without changing remote state."""
+     _owner(profile)
+@@ -534,6 +538,7 @@ def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirme
+     return {'disabledWebhookIds': disabled, 'preservedWebhookId': current_id}
+ 
+ 
++@operation('connect', 'connect', data_arg='payload')
+ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
+     _owner(profile)
+     with _tenant_connect_lock(str(profile['tenant_id'])):
+@@ -633,10 +638,11 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
+             _request(old_key, 'PATCH', '/v1/webhooks/' + old_id, {'active': False})
+         except Exception:
+             pass
+-    return status(profile)
++    return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
+ 
+ 
+-def channels(profile: dict, api_key: str) -> list[dict]:
++@operation('connect', lambda v: 'connect' if v['api_key'] else 'view', data_arg='authorization')
++def channels(profile: dict, api_key: str, *, authorization=None) -> list[dict]:
+     _owner(profile)
+     key = str(api_key or '').strip()
+     if not key:
+@@ -658,7 +664,8 @@ def channels(profile: dict, api_key: str) -> list[dict]:
+             for row in rows if isinstance(row, dict) and row.get('id')]
+ 
+ 
+-def disconnect(profile: dict) -> dict:
++@operation('connect', 'delete', data_arg='authorization')
++def disconnect(profile: dict, *, authorization=None) -> dict:
+     _owner(profile)
+     raise TenantPlatformError('Hər WhatsApp nömrəsini ayrıca ayırın; şirkət bağlantısı və webhook saxlanılır.')
+ 
+@@ -680,7 +687,8 @@ def _stored_connect_credentials(profile: dict) -> dict:
+     return credentials
+ 
+ 
+-def disconnect_channel(profile: dict, channel_id: str) -> dict:
++@operation('connect', 'delete', data_arg='authorization')
++def disconnect_channel(profile: dict, channel_id: str, *, authorization=None) -> dict:
+     _owner(profile)
+     with _tenant_connect_lock(str(profile['tenant_id'])):
+         return _disconnect_channel_locked(profile, channel_id)
+@@ -705,11 +713,12 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
+                 cur.execute('''UPDATE saas_connect_channels SET active=FALSE,status='disconnected',updated_at=now()
+                                WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''', (tenant, channel_id))
+             conn.commit()
+-    return status(profile)
++    return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
+ 
+ 
++@operation('connect', lambda v: 'update' if v['reconnect'] else 'view', data_arg='authorization')
+ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
+-                   callback_url: str = '') -> dict:
++                   callback_url: str = '', authorization=None) -> dict:
+     _owner(profile)
+     if not re.fullmatch(r'[0-9a-fA-F-]{36}', str(channel_id or '')):
+         raise TenantPlatformError('WhatsApp kanal ID-si düzgün deyil.')
+@@ -721,7 +730,7 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
+                 raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
+     credentials = _stored_connect_credentials(profile)
+     if reconnect:
+-        configure(profile, {'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
++        configure(profile, {**(authorization or {}), 'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
+     current = _request(str(credentials['api_key']), 'GET', '/v1/channels/' + channel_id + '/status')
+     result = {'id': channel_id, 'status': str(current.get('status') or 'unknown'),
+               'phone': str(current.get('phone') or '')}
+@@ -1541,7 +1550,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
+             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
+             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
+               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
+-                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
++                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
+             saved=cur.fetchone()
+             if author != 'AI Agent' and saved:
+                 from tenant_ai_agent_connect import mark_operator_reply
+diff --git a/beintaskbot-main/tenant_crm_contact_listing.py b/beintaskbot-main/tenant_crm_contact_listing.py
+index 1775ff03d356b8c0a07e15518261deb7fce26398..e5fe989bce4a3d1f4012b308838dbf162c97f198 100644
+--- a/beintaskbot-main/tenant_crm_contact_listing.py
++++ b/beintaskbot-main/tenant_crm_contact_listing.py
+@@ -10,6 +10,7 @@ from tenant_platform_core import _connect
+ from tenant_policy import TenantPolicy
+ from tenant_workflow_store import _read_tenant_workflow
+ from tenant_crm_request_context import native_policy_profile
++from tenant_crm_native_access import scoped_sql, action_columns, public_row
+ 
+ 
+ class ContactsDirectoryError(ValueError):
+@@ -31,25 +32,11 @@ def _require_schema(conn):
+ 
+ 
+ def _current_policy(cur, tenant, actor):
+-    # Same order as current task/member/workflow writers. These are read
+-    # fences, held only until the selected directory snapshot is complete.
+-    cur.execute('SELECT id,modules,onboarding FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
+-    company = cur.fetchone()
+-    if not company:
++    from tenant_scoped_access_store import read_access_profile
++    profile = read_access_profile(cur, tenant, actor, lock=True)
++    if profile is None:
+         raise ContactsDirectoryError('contacts_forbidden', 403)
+-    cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
+-      WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
+-      ORDER BY policy_key FOR SHARE''', (tenant, ['members', 'modules']))
+-    cur.fetchall()
+-    cur.execute('''SELECT * FROM saas_tenant_members WHERE tenant_id=%s::uuid
+-      AND telegram_id=%s FOR SHARE''', (tenant, actor))
+-    member = cur.fetchone()
+-    if not member or member.get('active') is not True:
+-        raise ContactsDirectoryError('contacts_forbidden', 403)
+-    member = native_policy_profile(dict(member))
+-    return TenantPolicy({**dict(member), 'tenant_id': tenant,
+-        'modules': company.get('modules') or {}, 'onboarding': company.get('onboarding') or {},
+-        'workflow': _read_tenant_workflow(cur, tenant)})
++    return TenantPolicy(native_policy_profile(profile))
+ 
+ 
+ def _positive_json(expression):
+@@ -200,13 +187,15 @@ def _directory_snapshot(profile, *, source=None, search='', limit=50, offset=0,
+                 if row_key:
+                     base += ' WHERE key=%s'; args.append(str(row_key))
+             else:
+-                base = '''SELECT 'native:'||c.id::text AS key,'native_contact'::text AS kind,
++                native_where, native_args = scoped_sql(policy.profile, 'customers', 'view', 'c')
++                columns, column_args = action_columns(policy.profile, 'customers', 'c')
++                base = f'''SELECT 'native:'||c.id::text AS key,'native_contact'::text AS kind,
+                   'native'::text AS source,c.id,c.display_name,c.phone,c.email,c.company_id,
+-                  co.name AS company_name,c.created_at,c.updated_at,c.updated_at AS sort_at
++                  co.name AS company_name,c.created_at,c.updated_at,c.updated_at AS sort_at {columns}
+                   FROM saas_crm_native_contacts c LEFT JOIN saas_crm_native_companies co
+                     ON co.tenant_id=c.tenant_id AND co.id=c.company_id
+-                  WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL'''
+-                args.append(tenant)
++                  WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({native_where})'''
++                args.extend([*column_args, tenant, *native_args])
+             search_columns = ['display_name', 'phone'] + (['email'] if selected == 'native' else ['lead_name', 'stage_name'])
+             search_sql = 'TRUE' if lookup else '(' + ' OR '.join(f"{name} ILIKE %s ESCAPE '\\'" for name in search_columns) + ')'
+             if not lookup:
+@@ -229,9 +218,16 @@ def _directory_snapshot(profile, *, source=None, search='', limit=50, offset=0,
+             actions = {action: policy.allows_action('customers', grant) for action, grant in (
+                 ('view', 'view'), ('create', 'create'), ('update', 'update'), ('archive', 'delete'), ('assign', 'assign'))}
+             actions['update_deals'] = policy.allows_action('deals', 'update')
++            from tenant_scoped_access import scoped_access_enabled
++            actions['scoped_relations'] = scoped_access_enabled()
+             readonly = {key: key == 'view' for key in actions}
+-            for entry in result['data']:
+-                entry['actions'] = actions if entry['source'] == 'native' else readonly
++            for index, entry in enumerate(result['data']):
++                if entry['source'] == 'native':
++                    entry = public_row(entry)
++                    entry['actions'] = {**actions, **entry.get('actions', {})}
++                    result['data'][index] = entry
++                else:
++                    entry['actions'] = readonly
+             external_available = external_allowed and (result['connected'] or result['has_external_cache'])
+             sources = [
+                 {'source': 'native', 'allowed': native_allowed, 'available': native_allowed,
+diff --git a/beintaskbot-main/tenant_crm_native_access.py b/beintaskbot-main/tenant_crm_native_access.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d958c2b45927db7779703673c5cadff2db4b117
+--- /dev/null
++++ b/beintaskbot-main/tenant_crm_native_access.py
+@@ -0,0 +1,116 @@
++"""Current, transaction-bound authorization for native CRM stores.
++
++The optional actor is absent only for trusted internal integrations. HTTP
++boundaries always pass the authenticated actor; their request snapshot alone
++never authorizes a database read or mutation.
++"""
++from tenant_policy import TenantPolicy
++
++
++class CRMAccessError(ValueError):
++    def __init__(self, code='forbidden', status=403):
++        super().__init__(code)
++        self.code, self.status = code, status
++
++
++def current_access(cur, tenant, actor, module, action):
++    if actor is None:
++        return None
++    from tenant_scoped_access_store import read_access_profile
++    profile = read_access_profile(cur, tenant, actor, lock=True)
++    if (not profile or profile.get('active') is not True
++            or str(profile.get('tenant_id')) != str(tenant)
++            or not TenantPolicy(profile).allows_action(module, action)):
++        raise CRMAccessError()
++    return profile
++
++
++def scoped_sql(profile, module, action, alias):
++    if profile is None:
++        return 'TRUE', []
++    if not TenantPolicy(profile).allows_action(module, action):
++        return 'FALSE', []
++    from tenant_scoped_access_store import resource_scope_sql
++    return resource_scope_sql(profile, module, action, alias=alias,
++                              responsible_column='access_responsible_id')
++
++
++
++def related_scope_sql(profile, module, alias):
++    """Retain legacy embedded-list behavior until that section is scoped."""
++    if profile is None or not TenantPolicy(profile).has_scoped_access(module):
++        return 'TRUE', []
++    return scoped_sql(profile, module, 'view', alias)
++
++
++
++def require_defined_relation(profile, *modules):
++    """Relationship semantics are a rollout prerequisite, not an implicit grant."""
++    if profile is not None and any(TenantPolicy(profile).has_scoped_access(module) for module in modules):
++        raise CRMAccessError('scoped_relation_not_configured', 409)
++
++
++def authorize_create(cur, profile, module, tenant, actor):
++    if profile is None:
++        return
++    predicate, params = scoped_sql(profile, module, 'create', 'r')
++    cur.execute(f'''SELECT 1 FROM (SELECT %s::uuid AS tenant_id,
++      %s::bigint AS access_responsible_id) r WHERE {predicate}''',
++      [tenant, actor, *params])
++    if not cur.fetchone():
++        raise CRMAccessError()
++
++
++def locked_resource(cur, profile, module, action, table, tenant, ident):
++    # All identifiers are constant literals supplied by native store code.
++    predicate, params = scoped_sql(profile, module, action, 'r')
++    cur.execute(f'''SELECT r.* FROM {table} r WHERE r.tenant_id=%s::uuid
++      AND r.id=%s::uuid AND r.archived_at IS NULL AND ({predicate}) FOR UPDATE OF r''',
++      [tenant, ident, *params])
++    row = cur.fetchone()
++    if row and profile is not None and TenantPolicy(profile).action_scope(module, action) == 'department':
++        from tenant_scoped_access_store import owned_resource_metadata
++        resource = owned_resource_metadata(cur, tenant, row, lock=True)
++        if not TenantPolicy(profile).allows_resource(module, action, resource):
++            return None
++    return row
++
++
++def action_columns(profile, module, alias):
++    if profile is None:
++        return '', []
++    columns, params = [], []
++    for action in ('view', 'update', 'delete'):
++        predicate, values = scoped_sql(profile, module, action, alias)
++        columns.append(f',({predicate}) AS _allowed_{action}')
++        params.extend(values)
++    return ''.join(columns), params
++
++
++def public_row(row):
++    if not row:
++        return row
++    row = dict(row)
++    row.pop('access_responsible_id', None)
++    actions = {}
++    for action, public in (('view', 'view'), ('update', 'update'), ('delete', 'archive')):
++        key = '_allowed_' + action
++        if key in row:
++            actions[public] = bool(row.pop(key))
++    if actions:
++        row['actions'] = actions
++    return row
++
++
++def require_local_relation(cur, tenant, entity_type):
++    """No scoped relation may trigger an ambiguous full-record provider export.
++
++    The current outbound queue has no field-scoped relationship/unlink event.
++    Hold the existing sync setting stable for the local transaction and deny
++    an active outbound configuration until that separate contract is defined.
++    """
++    cur.execute("""SELECT sync_direction,allowed_fields FROM saas_crm_provider_settings
++        WHERE tenant_id=%s::uuid AND entity_type=%s FOR SHARE""", (tenant, entity_type))
++    settings = cur.fetchone() or {}
++    if settings.get('sync_direction') in {'to_external','bidirectional'} and settings.get('allowed_fields'):
++        raise CRMAccessError('scoped_relation_sync_not_configured', 409)
+diff --git a/beintaskbot-main/tenant_crm_native_api.py b/beintaskbot-main/tenant_crm_native_api.py
+index aaa63aa489410970fdc5be402f63c1ebe1d798ee..638656b87d0f5a05d7a8aef74d3dcb89c68427bc 100644
+--- a/beintaskbot-main/tenant_crm_native_api.py
++++ b/beintaskbot-main/tenant_crm_native_api.py
+@@ -3,10 +3,11 @@ import asyncio
+ from datetime import date, datetime
+ from uuid import UUID
+ from aiohttp import web
+-from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact
++from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact, set_contact_deal_link, set_contact_company_link
+ from tenant_request_origin import require_json_post
+ from tenant_linear_policy import TenantLinearError
+ from tenant_policy import TenantPolicy
++from tenant_crm_native_access import CRMAccessError
+ from tenant_crm_contact_listing import directory, ContactsDirectoryError
+ from tenant_crm_request_context import require_expected_context as _expected_identity, CRMContextError, native_policy_profile
+ 
+@@ -47,6 +48,7 @@ def handler(member_from_request, origin, logger):
+         profile = native_policy_profile(profile)
+         policy=TenantPolicy(profile)
+         tenant_id = str(profile['tenant_id'])
++        actor = profile.get('telegram_id') or 0
+         contact_id = request.match_info.get('id')
+         if contact_id:
+             try:
+@@ -66,10 +68,10 @@ def handler(member_from_request, origin, logger):
+                 if not policy.allows_action('customers','view'):
+                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+                 if contact_id:
+-                    result = await asyncio.to_thread(get_contact, tenant_id, contact_id)
++                    result = await asyncio.to_thread(get_contact, tenant_id, contact_id, actor_id=actor)
+                 else:
+                     result = await asyncio.to_thread(list_contacts, tenant_id,
+-                        request.query.get('search', ''), 50)
++                        request.query.get('search', ''), 50, actor_id=actor)
+                 if contact_id and result is None:
+                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
+             else:
+@@ -85,24 +87,36 @@ def handler(member_from_request, origin, logger):
+                         raise ValueError('unknown fields')
+                     result = await asyncio.to_thread(create_contact, tenant_id,
+                         body.get('name'), body.get('phone', ''), body.get('email', ''),
+-                        contact_id=body.get('id'))
++                        contact_id=body.get('id'), actor_id=actor)
+                 elif request.method == 'POST' and contact_id and body.get('action') == 'update':
+                     if set(body) - {'action', 'name', 'phone', 'email'} or 'name' not in body:
+                         raise ValueError('invalid fields')
+                     result = await asyncio.to_thread(update_contact, tenant_id, contact_id,
+-                        body['name'], body.get('phone', ''), body.get('email', ''))
++                        body['name'], body.get('phone', ''), body.get('email', ''), actor_id=actor)
++                elif request.method == 'POST' and contact_id and body.get('action') in {'link_deal', 'unlink_deal'}:
++                    if set(body) != {'action', 'deal_id'}:
++                        raise ValueError('invalid relation fields')
++                    result = await asyncio.to_thread(set_contact_deal_link, tenant_id, contact_id,
++                        body['deal_id'], unlink=body['action'] == 'unlink_deal', actor_id=actor)
++                elif request.method == 'POST' and contact_id and body.get('action') in {'link_company', 'unlink_company'}:
++                    if set(body) != {'action', 'company_id'}:
++                        raise ValueError('invalid relation fields')
++                    result = await asyncio.to_thread(set_contact_company_link, tenant_id, contact_id,
++                        body['company_id'], unlink=body['action'] == 'unlink_company', actor_id=actor)
+                 elif request.method == 'POST' and contact_id and body.get('action') == 'archive':
+                     if body != {'action': 'archive'}:
+                         raise ValueError('invalid archive action')
+-                    result = await asyncio.to_thread(archive_contact, tenant_id, contact_id)
++                    result = await asyncio.to_thread(archive_contact, tenant_id, contact_id, actor_id=actor)
+                 else:
+                     return web.json_response({'success': False, 'error': 'method_not_allowed'}, status=405)
+                 if result is None or result is False:
+                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
+-                if request.method=='POST' and (not contact_id or body.get('action')=='update'):
++                if request.method=='POST' and (not contact_id or body.get('action') == 'update'):
+                     try:
+                         from tenant_crm_sync_outbox import enqueue_change
+-                        await asyncio.to_thread(enqueue_change,tenant_id,'contact',str(result['id']))
++                        if (result.get('sync') or {}).get('mode') != 'scoped_scalar':
++                            await asyncio.to_thread(enqueue_change,tenant_id,
++                                'contact', str(result['id']))
+                     except Exception:
+                         logger.warning('CRM contact sync enqueue unavailable: tenant=%s',tenant_id)
+             return web.json_response({'success': True, 'data': _jsonable(result)},
+@@ -110,6 +124,9 @@ def handler(member_from_request, origin, logger):
+         except (ContactsDirectoryError, CRMContextError) as exc:
+             return web.json_response({'success': False, 'error': exc.code, 'code': exc.code},
+                                      status=exc.status, headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
 +        except CRMAccessError as exc:
 +            return web.json_response({'success': False, 'error': exc.code}, status=exc.status,
 +                                     headers={'Cache-Control': 'no-store'})
          except TenantLinearError:
-             return web.json_response({'success':False,'error':'invalid_origin'},status=403,headers={'Cache-Control':'no-store'})
-         except (ValueError,TypeError) as exc:
-diff --git a/beintaskbot-main/tenant_crm_native_deals.py b/beintaskbot-main/tenant_crm_native_deals.py
-index ec7c87196e0c63495fa389a3cdb0e334b7317a36..71f5d51c0cef3e3d538ecdaa5a0c09a7a4e05f37 100644
---- a/beintaskbot-main/tenant_crm_native_deals.py
-+++ b/beintaskbot-main/tenant_crm_native_deals.py
-@@ -3,6 +3,8 @@ from __future__ import annotations
- import uuid
- 
- from tenant_platform_core import _connect, _ensure_schema
-+from tenant_policy import TenantPolicy
-+from tenant_crm_native_access import current_access, scoped_sql, authorize_create, locked_resource, action_columns, public_row, CRMAccessError, require_defined_relation, related_scope_sql, require_local_relation
- 
- 
- def _uuid(value, label):
-@@ -31,8 +33,21 @@ def _fields(title, pipeline_id, stage_id, *, contact_id=None, responsible_id=Non
-             _uuid(channel_id, 'channel id'), conversation_id, description)
- 
- 
--def _related(cur, tenant_id, values):
-+def _related(cur, tenant_id, values, *, profile=None, previous=None):
-     _, pipeline, stage, contact, responsible, channel, conversation, _ = values
-+    editing_existing = previous is not None
-+    previous = previous or {}
-+    if (editing_existing and profile is not None and TenantPolicy(profile).has_scoped_access('deals')
-+            and str(contact or '') != str(previous.get('contact_id') or '')):
-+        # The API's legacy outbox exports whole records. A relationship edit
-+        # must never fall back to that path while the narrow adapter is dormant.
-+        require_local_relation(cur, tenant_id, 'deal')
-+    if not editing_existing and contact:
-+        # Initial relationship selection under C is not covered by the
-+        # approved rule for editing an existing deal card.
-+        require_defined_relation(profile, 'deals', 'customers')
-+    if (str(channel or ''), conversation) != (str(previous.get('channel_id') or ''), previous.get('conversation_id') or ''):
-+        require_defined_relation(profile, 'deals', 'dialogs')
-     cur.execute("""SELECT 1 FROM saas_tenant_pipeline_stages s JOIN saas_tenant_pipelines p
-         USING (tenant_id,pipeline_id) WHERE s.tenant_id=%s::uuid AND s.pipeline_id=%s
-         AND s.stage_id=%s AND p.active=TRUE""", (tenant_id, pipeline, stage))
-@@ -50,75 +65,101 @@ def _related(cur, tenant_id, values):
- 
- 
- def create_deal(tenant_id, title, pipeline_id, stage_id, *, contact_id=None, responsible_id=None,
--                channel_id=None, conversation_id='', description='', deal_id=None):
-+                channel_id=None, conversation_id='', description='', deal_id=None, actor_id=None):
-     fields = _fields(title, pipeline_id, stage_id, contact_id=contact_id, responsible_id=responsible_id,
-                      channel_id=channel_id, conversation_id=conversation_id, description=description)
-     ident = _uuid(deal_id, 'deal id') if deal_id else str(uuid.uuid4())
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            _related(cur, tenant_id, fields)
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'create')
-+            authorize_create(cur, profile, 'deals', tenant_id, actor_id)
-+            _related(cur, tenant_id, fields, profile=profile)
-             if fields[5]:
-                 cur.execute("""SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at
-                     FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
-                     AND conversation_id=%s AND archived_at IS NULL FOR UPDATE""", (tenant_id,fields[5],fields[6]))
-                 existing=cur.fetchone()
-                 if existing:
-+                    if profile is not None:
-+                        authorized = locked_resource(cur, profile, 'deals', 'create', 'saas_crm_native_deals', tenant_id, existing['id'])
-+                        if not authorized or (TenantPolicy(profile).has_scoped_access('deals')
-+                                and str(authorized.get('access_responsible_id')) != str(actor_id)):
-+                            raise ValueError('deal id conflict')
-                     if str(existing['id']) != ident or (existing['title'],existing['pipeline_id'],existing['stage_id'],str(existing['contact_id'] or ''),existing['responsible_id'],str(existing['channel_id']),existing['conversation_id'],existing['description']) != (fields[0],fields[1],fields[2],fields[3] or '',fields[4],fields[5],fields[6],fields[7]):
-                         raise ValueError('conversation already linked to another deal')
-                     conn.commit()
-                     return existing
-             cur.execute("""INSERT INTO saas_crm_native_deals
--                (id,tenant_id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description)
--                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s,%s::uuid,%s,%s)
-+                (id,tenant_id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,access_responsible_id)
-+                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s,%s::uuid,%s,%s,%s)
-                 ON CONFLICT (id) DO NOTHING
-                 RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at""",
--                (ident,tenant_id,*fields))
-+                (ident,tenant_id,*fields,actor_id))
-             row = cur.fetchone()
-             if row is None:
-                 cur.execute("SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL", (tenant_id, ident))
-                 row = cur.fetchone()
-+                if profile is not None:
-+                    row = locked_resource(cur, profile, 'deals', 'create', 'saas_crm_native_deals', tenant_id, ident)
-+                    if row and TenantPolicy(profile).has_scoped_access('deals') and str(row.get('access_responsible_id')) != str(actor_id):
-+                        row = None
-                 if not row or (row['title'],row['pipeline_id'],row['stage_id'],str(row['contact_id'] or ''),row['responsible_id'],str(row['channel_id'] or ''),row['conversation_id'],row['description']) != (fields[0],fields[1],fields[2],fields[3] or '',fields[4],fields[5] or '',fields[6],fields[7]): raise ValueError('deal id conflict')
-             from tenant_crm_native_tasks import maybe_create_stage_task
-             maybe_create_stage_task(cur,tenant_id,row,event_key='deal-created:'+str(row['id']))
-         conn.commit()
--    return row
-+    return public_row(row)
- 
- 
--def get_deal(tenant_id, deal_id):
-+def get_deal(tenant_id, deal_id, *, actor_id=None):
-     ident = _uuid(deal_id, 'deal id')
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
--                d.company_id,co.name AS company_name,d.responsible_id,m.display_name AS responsible_name,
--                d.channel_id,d.conversation_id,d.description,d.created_at,d.updated_at
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'view')
-+            where, params = scoped_sql(profile, 'deals', 'view', 'd')
-+            columns, action_params = action_columns(profile, 'deals', 'd')
-+            # The allowed deal contains its related client information, even
-+            # when the separate contact/company directory is closed.
-+            cur.execute(f"""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
-+                c.phone AS contact_phone,c.email AS contact_email,
-+                d.company_id,co.name AS company_name,co.phone AS company_phone,co.email AS company_email,
-+                d.responsible_id,m.display_name AS responsible_name,
-+                d.channel_id,d.conversation_id,d.description,d.created_at,d.updated_at {columns}
-                 FROM saas_crm_native_deals d LEFT JOIN saas_crm_native_contacts c
-                   ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
-                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id
-                 LEFT JOIN saas_tenant_members m ON m.tenant_id=d.tenant_id AND m.telegram_id=d.responsible_id
--                WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.archived_at IS NULL""", (tenant_id, ident))
--            return cur.fetchone()
-+                WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.archived_at IS NULL AND ({where})""",
-+                [*action_params, tenant_id, ident, *params])
-+            return public_row(cur.fetchone())
- 
- 
--def list_deals(tenant_id, search='', limit=50):
-+def list_deals(tenant_id, search='', limit=50, *, actor_id=None):
-     needle = '%' + str(search or '').strip()[:120].replace('\\','\\\\').replace('%','\\%').replace('_','\\_') + '%'
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
--                d.company_id,co.name AS company_name,d.responsible_id,d.channel_id,d.conversation_id,d.updated_at FROM saas_crm_native_deals d
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'view')
-+            where, params = scoped_sql(profile, 'deals', 'view', 'd')
-+            columns, action_params = action_columns(profile, 'deals', 'd')
-+            cur.execute(f"""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
-+                d.company_id,co.name AS company_name,d.responsible_id,d.channel_id,d.conversation_id,d.updated_at {columns}
-+                FROM saas_crm_native_deals d
-                 LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
-                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id
--                WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL AND (d.title ILIKE %s ESCAPE '\\' OR c.display_name ILIKE %s ESCAPE '\\')
--                ORDER BY d.updated_at DESC,d.id LIMIT %s""",(tenant_id,needle,needle,max(1,min(int(limit),100))))
--            return cur.fetchall()
-+                WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL AND ({where})
-+                AND (d.title ILIKE %s ESCAPE '\\' OR c.display_name ILIKE %s ESCAPE '\\')
-+                ORDER BY d.updated_at DESC,d.id LIMIT %s""",
-+                [*action_params, tenant_id, *params, needle, needle, max(1,min(int(limit),100))])
-+            return [public_row(row) for row in cur.fetchall()]
- 
- 
--def deal_options(tenant_id):
-+def deal_options(tenant_id, *, actor_id=None, action='view'):
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', action)
-             cur.execute("""SELECT p.pipeline_id,p.name AS pipeline_name,s.stage_id,s.name AS stage_name,s.sort_order
-                 FROM saas_tenant_pipelines p JOIN saas_tenant_pipeline_stages s
-                 USING (tenant_id,pipeline_id) WHERE p.tenant_id=%s::uuid AND p.active=TRUE
-@@ -126,22 +167,32 @@ def deal_options(tenant_id):
-             workflows=cur.fetchall()
-             cur.execute("SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY display_name",(tenant_id,))
-             members=cur.fetchall()
--            cur.execute("SELECT id,display_name FROM saas_crm_native_contacts WHERE tenant_id=%s::uuid AND archived_at IS NULL ORDER BY display_name LIMIT 250",(tenant_id,))
-+            where, params = related_scope_sql(profile, 'customers', 'c')
-+            cur.execute(f"""SELECT c.id,c.display_name FROM saas_crm_native_contacts c
-+              WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({where})
-+              ORDER BY c.display_name LIMIT 250""", [tenant_id, *params])
-             contacts=cur.fetchall()
-     return {'workflows':workflows,'members':members,'contacts':contacts}
- 
- 
- def update_deal(tenant_id, deal_id, title, pipeline_id, stage_id, *, contact_id=None, responsible_id=None,
--                channel_id=None, conversation_id='', description=''):
-+                channel_id=None, conversation_id='', description='', actor_id=None):
-     ident = _uuid(deal_id, 'deal id')
-     fields = _fields(title,pipeline_id,stage_id,contact_id=contact_id,responsible_id=responsible_id,
-                      channel_id=channel_id,conversation_id=conversation_id,description=description)
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            _related(cur,tenant_id,fields)
--            cur.execute("SELECT stage_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE",(tenant_id,ident))
--            previous=cur.fetchone()
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'update')
-+            if actor_id is not None:
-+                previous = locked_resource(cur, profile, 'deals', 'update', 'saas_crm_native_deals', tenant_id, ident)
-+                if not previous:
-+                    return None
-+                _related(cur, tenant_id, fields, profile=profile, previous=previous)
-+            else:
-+                _related(cur, tenant_id, fields)
-+                cur.execute("SELECT stage_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE",(tenant_id,ident))
-+                previous=cur.fetchone()
-             cur.execute("""UPDATE saas_crm_native_deals SET title=%s,pipeline_id=%s,stage_id=%s,contact_id=%s::uuid,
-                 responsible_id=%s,channel_id=%s::uuid,conversation_id=%s,description=%s,updated_at=now()
-                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
-@@ -156,10 +207,14 @@ def update_deal(tenant_id, deal_id, title, pipeline_id, stage_id, *, contact_id=
-     return row
- 
- 
--def archive_deal(tenant_id, deal_id):
-+def archive_deal(tenant_id, deal_id, *, actor_id=None):
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
-+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'delete')
-+            if actor_id is not None and not locked_resource(cur, profile, 'deals', 'delete',
-+                    'saas_crm_native_deals', tenant_id, _uuid(deal_id, 'deal id')):
-+                return False
-             cur.execute("UPDATE saas_crm_native_deals SET archived_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(tenant_id,_uuid(deal_id,'deal id')))
-             row=cur.fetchone()
-         conn.commit()
-diff --git a/beintaskbot-main/tenant_crm_native_task_api.py b/beintaskbot-main/tenant_crm_native_task_api.py
-index 386fdbf273c399a30fd08128351f9dcaca53e106..5d91959766626ba9f98865cbf5277aae7dbcdcf3 100644
---- a/beintaskbot-main/tenant_crm_native_task_api.py
-+++ b/beintaskbot-main/tenant_crm_native_task_api.py
-@@ -5,6 +5,7 @@ from uuid import UUID
- from aiohttp import web
- from tenant_crm_native_tasks import create_task,get_task,list_tasks,update_task,set_task_state,archive_task,task_options,NativeTaskAccessError,task_access_allowed
- from tenant_policy import TenantPolicy
-+from tenant_scoped_access import scoped_access_enabled
- from tenant_linear_policy import TenantLinearError
- from tenant_request_origin import require_json_post
- from tenant_task_flow import query as flow_query,read as read_flow,TaskFlowError
-@@ -13,7 +14,8 @@ from tenant_crm_request_context import native_policy_profile
- def _jsonable(value):
-     if isinstance(value,UUID):return str(value)
-     if isinstance(value,(date,datetime)):return value.isoformat()
--    if isinstance(value,dict):return {k:_jsonable(v) for k,v in value.items()}
-+    if isinstance(value,dict):return {k:_jsonable(v) for k,v in value.items()
-+        if k not in {'access_responsible_id','access_responsible_department_id'}}
-     if isinstance(value,list):return [_jsonable(v) for v in value]
-     return value
- 
-@@ -33,9 +35,11 @@ def handler(member_from_request,origin,logger):
-         profile=member_from_request(request)
-         profile=native_policy_profile(profile) if profile else None
-         policy=TenantPolicy(profile or {})
--        if not profile or not (policy.allows('tasks') or
--                any(str(item).startswith('tasks:') for item in (profile.get('permissions') or [])) or
--                any(policy.allows_action('tasks', action) for action in ('view', 'create', 'update', 'delete'))):
-+        # Assignment is a row-level read/completion exception. Do not require a
-+        # generic read/update grant before the transactional store evaluates it.
-+        if not profile or profile.get('active') is False:
-+            return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-+        if not scoped_access_enabled() and not any(policy.allows_action('tasks', action) for action in ('view','create','update','delete')):
-             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-         tenant=str(profile['tenant_id']); actor=int(profile['telegram_id']); task_id=request.match_info.get('id')
-         if task_id:
-@@ -45,7 +49,7 @@ def handler(member_from_request,origin,logger):
-             params=flow_query(request,profile)
-             if request.method=='GET':
-                 _expected(request.query,tenant,actor)
--                if not policy.allows_action('tasks','view'):
-+                if not scoped_access_enabled() and not policy.allows_action('tasks','view'):
-                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-                 if not task_id and request.query.get('options')=='1':
-                     options=await asyncio.to_thread(task_options,tenant,actor,policy.privileged,
-@@ -55,10 +59,10 @@ def handler(member_from_request,origin,logger):
-                     result=await asyncio.to_thread(read_flow,profile,source='native',task_id=task_id,search=request.query.get('search',''))
-                     return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store'})
-                 if task_id:
--                    row=await asyncio.to_thread(get_task,tenant,task_id)
--                    if not _allowed(policy,row,actor):return web.json_response({'success':False,'error':'not_found'},status=404)
-+                    row=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor)
-+                    if not row:return web.json_response({'success':False,'error':'not_found'},status=404)
-                     return web.json_response({'success':True,'task':_jsonable(row)},headers={'Cache-Control':'no-store'})
--                rows=await asyncio.to_thread(list_tasks,tenant,search=request.query.get('search',''),responsible_id=None if policy.privileged else actor,scope=policy.pipeline_scope() if profile.get('role')=='manager' else None,limit=100)
-+                rows=await asyncio.to_thread(list_tasks,tenant,search=request.query.get('search',''),actor_id=actor,limit=100)
-                 return web.json_response({'success':True,'tasks':_jsonable(rows)},headers={'Cache-Control':'no-store'})
-             require_json_post(request,origin)
-             data=await request.json()
-@@ -71,7 +75,7 @@ def handler(member_from_request,origin,logger):
-                     return web.json_response({'success':False,'error':'invalid_task_version'},status=400)
-                 version={'expected_updated_at':data.pop('expected_updated_at')}
-             permission_action='create' if not task_id else ('delete' if data.get('action')=='archive' else 'update')
--            if not policy.allows_action('tasks',permission_action):
-+            if (data.get('action')!='complete' or not scoped_access_enabled()) and not policy.allows_action('tasks',permission_action):
-                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-             if not task_id:
-                 if set(data)-{'deal_id','text','responsible_id','due_at','request_id'}:return web.json_response({'success':False,'error':'invalid_fields'},status=400)
-@@ -80,19 +84,17 @@ def handler(member_from_request,origin,logger):
-                 if not policy.privileged and policy.requires_task_approval(creator_id=actor,executor_id=responsible):return web.json_response({'success':False,'error':'approval_required'},status=403)
-                 row=await asyncio.to_thread(create_task,tenant,data.get('deal_id'),data.get('text'),responsible,due_at=data.get('due_at'),created_by=actor,idempotency_key=data.get('request_id'),actor_id=actor)
-             else:
--                current=await asyncio.to_thread(get_task,tenant,task_id)
--                if not _allowed(policy,current,actor):return web.json_response({'success':False,'error':'not_found'},status=404)
-+                current=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor,operation='complete' if data.get('action')=='complete' else permission_action)
-+                if not current:return web.json_response({'success':False,'error':'not_found'},status=404)
-                 action=data.get('action')
-                 if action=='archive' and data=={'action':'archive'}:
--                    if not policy.privileged and int(current.get('created_by') or 0)!=actor:return web.json_response({'success':False,'error':'forbidden'},status=403)
-                     result=await asyncio.to_thread(archive_task,tenant,task_id,actor_id=actor,**version)
-                     return web.json_response({'success':True,'archived':result})
-                 if action in {'complete','reopen'} and data=={'action':action}:
--                    if action=='complete' and not policy.privileged and policy.requires_task_approval(creator_id=int(current.get('created_by') or 0),executor_id=int(current.get('responsible_id') or 0),completion=True):return web.json_response({'success':False,'error':'approval_required'},status=403)
-                     row=await asyncio.to_thread(set_task_state,tenant,task_id,'completed' if action=='complete' else 'open',actor_id=actor,**version)
-                 elif action=='update' and not (set(data)-{'action','text','responsible_id','due_at'}):
-                     responsible=int(data.get('responsible_id') or current['responsible_id'])
--                    if not policy.privileged and responsible!=actor:return web.json_response({'success':False,'error':'forbidden_assignment'},status=403)
-+                    if not policy.privileged and (not scoped_access_enabled() or responsible!=int(current['responsible_id'])) and responsible!=actor:return web.json_response({'success':False,'error':'forbidden_assignment'},status=403)
-                     row=await asyncio.to_thread(update_task,tenant,task_id,data.get('text',current['text']),responsible,due_at=data.get('due_at',current['due_at']),actor_id=actor,**version)
-                 else:return web.json_response({'success':False,'error':'invalid_action'},status=400)
-             return web.json_response({'success':True,'task':_jsonable(row)},headers={'Cache-Control':'no-store'})
-diff --git a/beintaskbot-main/tenant_crm_native_tasks.py b/beintaskbot-main/tenant_crm_native_tasks.py
-index d337530b48ac48dd1f9c995bf7a3f92be527fe01..544a5644630b9e765811852f7de558dcf3961a19 100644
---- a/beintaskbot-main/tenant_crm_native_tasks.py
-+++ b/beintaskbot-main/tenant_crm_native_tasks.py
-@@ -5,7 +5,11 @@ import hashlib
- from datetime import datetime,timedelta,timezone
- from tenant_platform_core import _connect
- from tenant_policy import TenantPolicy
-+from tenant_scoped_access import scoped_access_enabled, ACTIVE_TENANT_STATUSES
-+from tenant_scoped_access_store import resource_scope_sql
- from tenant_member_access import page_capabilities
-+from tenant_native_task_access import allows as scoped_task_allowed, capabilities as task_capabilities, read_where
-+
- from tenant_workflow_store import _read_tenant_workflow
- 
- 
-@@ -28,9 +32,9 @@ def _require_schema(conn):
- 
- 
- def _tenant(cur,tenant_id,*,lock=False):
--    cur.execute('SELECT id,modules FROM saas_tenants WHERE id=%s::uuid'+(' FOR SHARE' if lock else ''),(tenant_id,))
-+    cur.execute('SELECT id,modules,status FROM saas_tenants WHERE id=%s::uuid'+(' FOR SHARE' if lock else ''),(tenant_id,))
-     row=cur.fetchone()
--    if not row:raise NativeTaskAccessError('task_access_revoked')
-+    if not row or row.get('status','active') not in ACTIVE_TENANT_STATUSES:raise NativeTaskAccessError('task_access_revoked')
-     return row
- 
- 
-@@ -46,7 +50,7 @@ def _profiles(cur,tenant_id,company,ids=None,*,lock=False):
-     clause=''
-     if ids is not None:
-         clause=' AND telegram_id=ANY(%s::bigint[])';args.append(sorted(set(ids)))
--    cur.execute('''SELECT tenant_id,telegram_id,display_name,role,permissions,active
-+    cur.execute('''SELECT tenant_id,telegram_id,display_name,role,permissions,active,department_id
-       FROM saas_tenant_members WHERE tenant_id=%s::uuid'''+clause+
-       ' ORDER BY telegram_id'+(' FOR SHARE' if lock else ''),args)
-     rows=cur.fetchall()
-@@ -55,7 +59,7 @@ def _profiles(cur,tenant_id,company,ids=None,*,lock=False):
-     workflow=_read_tenant_workflow(cur,tenant_id)
-     return {int(row['telegram_id']):{**dict(row),'tenant_id':str(tenant_id),
-         'permissions':row['permissions'] if isinstance(row['permissions'],list) else [],
--        'modules':company.get('modules') or {},'workflow':workflow} for row in rows}
-+        'modules':company.get('modules') or {},'tenant_status':company.get('status','active'),'workflow':workflow} for row in rows}
- 
- 
- def _actor(profiles,actor_id,action):
-@@ -75,19 +79,25 @@ def _in_manager_scope(policy,deal):
- 
- def _eligible(profile,deal):
-     policy=TenantPolicy(profile or {})
-+    if profile and policy.has_scoped_access('tasks'):
-+        return profile.get('active') is True
-     return bool(profile and page_capabilities(profile)['tasks'] and policy.allows_action('tasks','view')
-         and policy.allows_action('tasks','update')
-         and (profile.get('role')!='manager' or _in_manager_scope(policy,deal)))
- 
- 
--def task_access_allowed(policy,row,actor_id):
--    if not row:return False
--    if policy.privileged:return True
--    if int(actor_id) not in {int(row.get('responsible_id') or 0),int(row.get('created_by') or 0)}:return False
--    return policy.profile.get('role')!='manager' or _in_manager_scope(policy,row)
-+def task_access_allowed(policy,row,actor_id,operation='view'):
-+    return scoped_task_allowed(policy,row,actor_id,operation)
- 
- 
- def _creation_deal_allowed(policy,deal,actor_id):
-+    # Creating a new task/deal link is not permission to enumerate an otherwise
-+    # closed deal section. Preserve legacy creation restrictions as an additional
-+    # condition; related data in an already-authorized task is handled separately.
-+    if policy.has_scoped_access('deals','view') and not policy.allows_resource('deals','view',{
-+            **deal,'responsible_member_id':deal.get('access_responsible_id'),
-+            'responsible_department_id':deal.get('access_responsible_department_id')}):
-+        return False
-     return bool(policy.privileged or (int(deal.get('responsible_id') or 0)==int(actor_id)
-       and (policy.profile.get('role')!='manager' or _in_manager_scope(policy,deal))))
- 
-@@ -95,20 +105,37 @@ def _creation_deal_allowed(policy,deal,actor_id):
- def _admit(cur,tenant_id,company,deal,responsible_id,actor_id=None,*,task=None,action='create'):
-     ids=[int(responsible_id)]
-     if actor_id is not None:ids.append(int(actor_id))
-+    if task and task.get('access_responsible_id'):ids.append(int(task['access_responsible_id']))
-+    if task is None and deal.get('access_responsible_id'):ids.append(int(deal['access_responsible_id']))
-     profiles=_profiles(cur,tenant_id,company,ids,lock=True)
-     if actor_id is not None:
-+        if task is None:
-+            deal_owner=profiles.get(int(deal.get('access_responsible_id') or 0)) or {}
-+            deal={**deal,'access_responsible_department_id':deal_owner.get('department_id')}
-         policy=_actor(profiles,actor_id,action)
-         if task is not None:
--            if not task_access_allowed(policy,{**task,**deal,'created_by':task.get('created_by'),
--                    'responsible_id':task.get('responsible_id')},actor_id):
-+            owner=profiles.get(int(task.get('access_responsible_id') or 0)) or {}
-+            current={**deal,**task,'tenant_id':str(tenant_id),
-+                'access_responsible_department_id':owner.get('department_id')}
-+            if not task_access_allowed(policy,current,actor_id,action):
-                 raise NativeTaskAccessError('task_unavailable',404)
-         elif not _creation_deal_allowed(policy,deal,actor_id):
-             raise NativeTaskAccessError('deal_unavailable',404)
--        if not policy.privileged and int(responsible_id)!=int(actor_id):
-+        if task is None and policy.has_scoped_access('tasks','create') and not policy.allows_resource('tasks','create',
-+                {'tenant_id':str(tenant_id),'responsible_member_id':int(actor_id),
-+                 'responsible_department_id':profiles[int(actor_id)].get('department_id')}):
-+            raise NativeTaskAccessError('task_access_revoked')
-+        # Creation always owns the new document. Assignment scope is a separate
-+        # unresolved policy: preserve the existing self-only non-admin rule.
-+        changing_assignee=not scoped_access_enabled() or task is None or int(task['responsible_id'])!=int(responsible_id)
-+        if changing_assignee and not policy.privileged and int(responsible_id)!=int(actor_id):
-             raise NativeTaskAccessError('forbidden_assignment')
-         if action=='create' and not policy.privileged and policy.requires_task_approval(
-                 creator_id=int(actor_id),executor_id=int(responsible_id)):
-             raise NativeTaskAccessError('approval_required')
-+    # An unchanged assigned member need not retain generic task update rights.
-+    if scoped_access_enabled() and task and int(task['responsible_id'])==int(responsible_id):
-+        return int(responsible_id)
-     return _assignee(cur,tenant_id,responsible_id,deal=deal,profiles=profiles)
- 
- 
-@@ -139,19 +166,25 @@ def _assignee(cur,tenant_id,responsible_id,*,deal=None,profiles=None):
-     return person
- 
- def _deal(cur,tenant_id,deal_id,*,lock=True):
--    cur.execute("""SELECT id,title,contact_id,responsible_id,channel_id,conversation_id,pipeline_id,stage_id
--        FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL"""+(' FOR UPDATE' if lock else ''),(tenant_id,deal_id))
-+    cur.execute("""SELECT d.id,d.title,d.contact_id,d.responsible_id,d.channel_id,d.conversation_id,d.pipeline_id,d.stage_id,
-+        d.tenant_id,d.access_responsible_id,owner.department_id AS access_responsible_department_id
-+        FROM saas_crm_native_deals d
-+        LEFT JOIN saas_tenant_members owner ON owner.tenant_id=d.tenant_id AND owner.telegram_id=d.access_responsible_id
-+        WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.archived_at IS NULL"""+(' FOR UPDATE OF d' if lock else ''),(tenant_id,deal_id))
-     row=cur.fetchone()
-     if not row:raise NativeTaskAccessError('deal_unavailable',404)
-     return row
- 
-+
- def _row(cur,tenant_id,task_id):
-     cur.execute("""SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
-         t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
--        t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id
-+        t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
-+        t.tenant_id,t.access_responsible_id,owner.department_id AS access_responsible_department_id
-         FROM saas_crm_native_tasks t JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
-         LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=t.tenant_id AND c.id=t.contact_id
-         LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
-+        LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
-         WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.archived_at IS NULL""",(tenant_id,task_id))
-     return cur.fetchone()
- 
-@@ -169,10 +202,10 @@ def create_task(tenant_id,deal_id,text,responsible_id,*,due_at=None,created_by=N
-             deal=_deal(cur,tenant_id,deal_id)
-             assignee=_admit(cur,tenant_id,company,deal,responsible_id,actor_id)
-             cur.execute("""INSERT INTO saas_crm_native_tasks
--                (id,tenant_id,deal_id,contact_id,channel_id,conversation_id,text,due_at,responsible_id,created_by,idempotency_key)
--                VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s)
-+                (id,tenant_id,deal_id,contact_id,channel_id,conversation_id,text,due_at,responsible_id,created_by,access_responsible_id,idempotency_key)
-+                VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s)
-                 ON CONFLICT(tenant_id,idempotency_key) WHERE idempotency_key<>'' DO NOTHING RETURNING id""",
--                (str(uuid.uuid4()),tenant_id,deal_id,deal['contact_id'],deal['channel_id'],deal['conversation_id'],text,due,assignee,created_by,key))
-+                (str(uuid.uuid4()),tenant_id,deal_id,deal['contact_id'],deal['channel_id'],deal['conversation_id'],text,due,assignee,created_by,created_by,key))
-             inserted=cur.fetchone()
-             if inserted:task_id=str(inserted['id'])
-             else:
-@@ -182,10 +215,12 @@ def create_task(tenant_id,deal_id,text,responsible_id,*,due_at=None,created_by=N
-                 if previous['archived_at'] is not None:raise ValueError('idempotent task is archived')
-                 task_id=str(previous['id'])
-             result=_row(cur,tenant_id,task_id)
-+            if actor_id is not None:
-+                result['capabilities']=task_capabilities(TenantPolicy(_profiles(cur,tenant_id,company,[actor_id])[actor_id]),result,actor_id)
-         conn.commit()
-     return result
- 
--def list_tasks(tenant_id,*,search='',responsible_id=None,scope=None,limit=100):
-+def list_tasks(tenant_id,*,search='',responsible_id=None,scope=None,limit=100,actor_id=None):
-     q='%'+str(search or '').strip()[:120].replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
-     args=[tenant_id,q,q]
-     clause='t.tenant_id=%s::uuid AND t.archived_at IS NULL AND (t.text ILIKE %s ESCAPE \'\\\' OR d.title ILIKE %s ESCAPE \'\\\')'
-@@ -201,46 +236,68 @@ def list_tasks(tenant_id,*,search='',responsible_id=None,scope=None,limit=100):
-     with _connect() as conn:
-         _require_schema(conn)
-         with conn.cursor() as cur:
-+            policy=None
-+            if actor_id is not None:
-+                company=_tenant(cur,tenant_id,lock=True)
-+                profiles=_profiles(cur,tenant_id,company,lock=True)
-+                profile=profiles.get(int(actor_id))
-+                if not profile or profile.get('active') is not True:raise NativeTaskAccessError('task_access_revoked')
-+                policy=TenantPolicy(profile)
-+                clause,args=read_where(profile)
-+                clause+=" AND (t.text ILIKE %s ESCAPE '\\' OR d.title ILIKE %s ESCAPE '\\')"
-+                args.extend([q,q])
-             cur.execute(f"""SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
-                 t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
--                t.status,t.completed_at,t.created_by,t.created_at,t.updated_at FROM saas_crm_native_tasks t
-+                t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
-+                t.tenant_id,t.access_responsible_id,owner.department_id AS access_responsible_department_id FROM saas_crm_native_tasks t
-                 JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
-                 LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=t.tenant_id AND c.id=t.contact_id
-                 LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
-+        LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
-                 WHERE {clause} ORDER BY (t.status='open') DESC,t.due_at ASC NULLS LAST,t.created_at DESC LIMIT %s""",[*args,max(1,min(int(limit),200))])
--            return cur.fetchall()
-+            rows=cur.fetchall()
-+            if policy:
-+                for row in rows:row['capabilities']=task_capabilities(policy,row,int(actor_id))
-+            return rows
- 
- def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None):
-     """The legacy privilege argument is not authority; resolve current rows."""
-     actor_id=int(actor_id)
-     with _connect() as conn:
--        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
-+        conn.execute('SET TRANSACTION ISOLATION LEVEL '+('READ COMMITTED' if scoped_access_enabled() else 'REPEATABLE READ'))
-         _require_schema(conn)
-         with conn.cursor() as cur:
--            company=_tenant(cur,tenant_id)
--            profiles=_profiles(cur,tenant_id,company)
--            policy=_actor(profiles,actor_id,'view')
-+            company=_tenant(cur,tenant_id,lock=scoped_access_enabled())
-+            profiles=_profiles(cur,tenant_id,company,lock=scoped_access_enabled())
-+            policy=TenantPolicy(profiles.get(actor_id) or {})
-+            if not profiles.get(actor_id) or profiles[actor_id].get('active') is not True:
-+                raise NativeTaskAccessError('task_access_revoked')
-+            action=('update' if task_id else 'create') if scoped_access_enabled() else 'view'
-+            if not policy.allows_action('tasks',action):raise NativeTaskAccessError('task_access_revoked')
-             args=[tenant_id]
-             scope=''
-             if not policy.privileged:
--                scope=' AND responsible_id=%s';args.append(actor_id)
-+                scope=' AND d.responsible_id=%s';args.append(actor_id)
-                 if policy.profile.get('role')=='manager':
-                     parts=[]
-                     for item in policy.pipeline_scope():
--                        part='pipeline_id=%s';args.append(str(item['pipeline_id']))
-+                        part='d.pipeline_id=%s';args.append(str(item['pipeline_id']))
-                         if item['status_ids']:
--                            part+=' AND stage_id=ANY(%s::text[])'
-+                            part+=' AND d.stage_id=ANY(%s::text[])'
-                             args.append([str(value) for value in item['status_ids']])
-                         parts.append('('+part+')')
-                     scope+=' AND ('+' OR '.join(parts)+')' if parts else ' AND FALSE'
--            cur.execute('''SELECT id,title,contact_id,channel_id,conversation_id,responsible_id,pipeline_id,stage_id
--              FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL'''+scope+
--              ' ORDER BY updated_at DESC,id LIMIT 200',args)
-+            if policy.has_scoped_access('deals','view'):
-+                allowed,values=resource_scope_sql(policy.profile,'deals','view',alias='d')
-+                scope+=' AND ('+allowed+')';args.extend(values)
-+            cur.execute('''SELECT d.id,d.title,d.contact_id,d.channel_id,d.conversation_id,d.responsible_id,d.pipeline_id,d.stage_id
-+              FROM saas_crm_native_deals d WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL'''+scope+
-+              ' ORDER BY d.updated_at DESC,d.id LIMIT 200',args)
-             deals=cur.fetchall()
-             selected=None
-             if task_id:
-                 task=_row(cur,tenant_id,_id(task_id,'task id'))
--                if not task_access_allowed(policy,task,actor_id):raise NativeTaskAccessError('task_unavailable',404)
-+                if not task_access_allowed(policy,task,actor_id,'update' if scoped_access_enabled() else 'view'):raise NativeTaskAccessError('task_unavailable',404)
-                 selected=_deal(cur,tenant_id,str(task['deal_id']),lock=False)
-                 if deal_id and _id(deal_id,'deal id')!=str(selected['id']):raise NativeTaskAccessError('deal_unavailable',404)
-             elif deal_id:
-@@ -259,19 +316,32 @@ def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None
-     fields=('id','title','contact_id','channel_id','conversation_id')
-     return {'deals':[{key:row.get(key) for key in fields} for row in deals], 'members':members,
-       'selected_deal_id':str(selected['id']) if selected else None,
--      'assignment':{'scope':'tenant' if policy.privileged else 'self','criterion':'active_tasks_view_update',
-+      'assignment':{'scope':'tenant' if policy.privileged else 'self','criterion':'active_tasks_assignment' if scoped_access_enabled() else 'active_tasks_view_update',
-         'status':'ready' if members else 'no_eligible_members' if selected else 'no_deals',
-         'can_manage_employees':policy.allows_action('employees','manage'),
-         'settings_available':policy.allows('settings')}}
- 
--def get_task(tenant_id,task_id):
-+def get_task(tenant_id,task_id,*,actor_id=None,operation='view'):
-     task_id=_id(task_id,'task id')
-     with _connect() as conn:
-         _require_schema(conn)
--        with conn.cursor() as cur:return _row(cur,tenant_id,task_id)
-+        with conn.cursor() as cur:
-+            row=_row(cur,tenant_id,task_id)
-+            if actor_id is not None:
-+                company=_tenant(cur,tenant_id,lock=True)
-+                profiles=_profiles(cur,tenant_id,company,lock=True)
-+                profile=profiles.get(int(actor_id))
-+                if not profile or profile.get('active') is not True:raise NativeTaskAccessError('task_access_revoked')
-+                # Re-read after the membership/department fence, not before it.
-+                row=_row(cur,tenant_id,task_id)
-+                policy=TenantPolicy(profile)
-+                if not task_access_allowed(policy,row,actor_id,operation):return None
-+                row['capabilities']=task_capabilities(policy,row,int(actor_id))
-+            return row
-+
- 
- def _locked_task(cur,tenant_id,task_id):
--    cur.execute('''SELECT id,deal_id,responsible_id,created_by,updated_at FROM saas_crm_native_tasks
-+    cur.execute('''SELECT id,tenant_id,deal_id,responsible_id,created_by,access_responsible_id,status,updated_at FROM saas_crm_native_tasks
-       WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE''',(tenant_id,task_id))
-     return cur.fetchone()
- 
-@@ -287,12 +357,18 @@ def _check_version(task,expected_updated_at):
- 
- def _task_actor(cur,tenant_id,company,task,deal,actor_id,action,*,completion=False,archive=False):
-     if actor_id is None:return
--    policy=_actor(_profiles(cur,tenant_id,company,[int(actor_id)],lock=True),actor_id,action)
--    current={**deal,**task}
--    if not task_access_allowed(policy,current,actor_id):raise NativeTaskAccessError('task_unavailable',404)
--    if archive and not policy.privileged and int(task.get('created_by') or 0)!=int(actor_id):
--        raise NativeTaskAccessError('task_access_revoked')
--    if completion and not policy.privileged and policy.requires_task_approval(
-+    ids=[int(actor_id)]
-+    if task.get('access_responsible_id'):ids.append(int(task['access_responsible_id']))
-+    profiles=_profiles(cur,tenant_id,company,ids,lock=True)
-+    profile=profiles.get(int(actor_id))
-+    if not profile or profile.get('active') is not True:raise NativeTaskAccessError('task_access_revoked')
-+    policy=TenantPolicy(profile)
-+    owner=profiles.get(int(task.get('access_responsible_id') or 0)) or {}
-+    current={**deal,**task,'tenant_id':str(tenant_id),
-+        'access_responsible_department_id':owner.get('department_id')}
-+    operation='complete' if completion else 'delete' if archive else action
-+    if not task_access_allowed(policy,current,actor_id,operation):raise NativeTaskAccessError('task_unavailable',404)
-+    if not scoped_access_enabled() and completion and not policy.privileged and policy.requires_task_approval(
-             creator_id=int(task.get('created_by') or 0),executor_id=int(task['responsible_id']),completion=True):
-         raise NativeTaskAccessError('approval_required')
- 
-@@ -312,6 +388,8 @@ def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None,actor_id=Non
-             _check_version(task,expected_updated_at)
-             cur.execute("UPDATE saas_crm_native_tasks SET text=%s,responsible_id=%s,due_at=%s,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL",(text,assignee,due,tenant_id,task_id))
-             row=_row(cur,tenant_id,task_id)
-+            if actor_id is not None:
-+                row['capabilities']=task_capabilities(TenantPolicy(_profiles(cur,tenant_id,company,[actor_id])[actor_id]),row,actor_id)
-         conn.commit()
-     return row
- 
-@@ -329,6 +407,8 @@ def set_task_state(tenant_id,task_id,status,*,actor_id=None,expected_updated_at=
-             cur.execute("UPDATE saas_crm_native_tasks SET status=%s,completed_at=CASE WHEN %s='completed' THEN COALESCE(completed_at,now()) ELSE NULL END,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(status,status,tenant_id,_id(task_id,'task id')))
-             row=cur.fetchone()
-             result=_row(cur,tenant_id,task_id) if row else None
-+            if result and actor_id is not None:
-+                result['capabilities']=task_capabilities(TenantPolicy(_profiles(cur,tenant_id,company,[actor_id])[actor_id]),result,actor_id)
-         conn.commit()
-     return result
- 
-diff --git a/beintaskbot-main/tenant_crm_notice_outbox.py b/beintaskbot-main/tenant_crm_notice_outbox.py
-index ab44a6966b0cd9069a7b1024092b2407d282597c..0c3f2ec279bd0cf475b9d10cbc4c00ef3a3b319f 100644
---- a/beintaskbot-main/tenant_crm_notice_outbox.py
-+++ b/beintaskbot-main/tenant_crm_notice_outbox.py
-@@ -3,7 +3,7 @@ from datetime import datetime, timezone
- from urllib.parse import urlencode
- from tenant_platform import _connect
- from tenant_crm_notice_schema import ensure_schema
--from tenant_crm_notice_store import profiles, resource, connection_id, connect_dialog_route
-+from tenant_crm_notice_store import profiles, resource, connection_id, connect_dialog_route, source_eligible
- from tenant_crm_notice_policy import eligible, task_route, timestamp
- from tenant_policy import TenantPolicy
- 
-@@ -80,7 +80,7 @@ def claim(channel: str) -> dict | None:
-                           'text':latest.get('body') or '', 'message_type':latest.get('message_type') or ''}
-             allowed = bool(member and item['payload'].get('connection') == connection_id(cur, tenant)
-                            and fresh(item['event'], row, item['payload']) and connect_route_ok
--                           and eligible(member, item['event'], row, channel))
-+                           and source_eligible(cur,member, item['event'], row, channel))
-             if channel == 'push':
-                 allowed = bool(allowed and item['device_active'] is True and item['subscription'] and item['owner_telegram_id'] == item['recipient_id'])
-             cur.execute('''UPDATE saas_crm_notice_deliveries SET status=%s,updated_at=now()
-@@ -108,3 +108,43 @@ def finish(item: dict, status: str, message_id: int | None = None) -> None:
-                   WHERE tenant_id=%s::uuid AND telegram_id=%s AND endpoint_hash=%s''',
-                   (str(item['tenant_id']), item['recipient_id'], item['endpoint_hash']))
-         conn.commit()
-+
-+
-+def dispatch_guarded(item, callback):
-+    """Hold the current dialog grant through provider acceptance, never retry.
-+
-+    The callback is the already prepared delivery, not a second queue claim.
-+    This also covers first activation of scoped rights after the claim.
-+    """
-+    from tenant_scoped_access import scoped_access_enabled
-+    if item.get('event') != 'incoming_message' or not scoped_access_enabled():
-+        return callback()
-+    from tenant_scoped_access_store import read_access_profile
-+    tenant, actor = str(item['tenant_id']), int(item['recipient_id'])
-+    with _connect() as conn:
-+        with conn.cursor() as cur:
-+            current = read_access_profile(cur, tenant, actor, lock=True)
-+            member = next((m for m in profiles(cur, tenant) if m['telegram_id'] == actor), None) if current else None
-+            row = resource(cur, tenant, item['kind'], item['source_key'])
-+            original = item.get('resource') or {}
-+            allowed = bool(member and row and str(row.get('channel') or '') == str(original.get('channel') or '')
-+                and row.get('kommo_lead_id') == original.get('kommo_lead_id')
-+                and item['payload'].get('connection') == connection_id(cur, tenant)
-+                and fresh(item['event'],row,item['payload'])
-+                and source_eligible(cur,member,item['event'],row,item['channel']))
-+            if allowed and str(row.get('channel') or '').startswith('connect:'):
-+                allowed = bool(connect_dialog_route(row) and connect_dialog_route(row) == connect_dialog_route(original))
-+            cur.execute('''SELECT status FROM saas_crm_notice_deliveries WHERE tenant_id=%s::uuid
-+              AND event_id=%s::uuid AND recipient_id=%s AND channel=%s AND endpoint_hash=%s FOR UPDATE''',key(item))
-+            allowed = allowed and (cur.fetchone() or {}).get('status') == 'sending'
-+            if not allowed:
-+                cur.execute('''UPDATE saas_crm_notice_deliveries SET status='skipped',updated_at=now()
-+                  WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s AND channel=%s
-+                    AND endpoint_hash=%s AND status='sending' ''',key(item))
-+                conn.commit()
-+                return None
-+            if not TenantPolicy(current).can_access_deal((item.get('resource') or {}).get('deal')):
-+                item['resource'] = {**item['resource'], 'deal':None}
-+            result = callback()
-+        conn.commit()
-+    return result
-diff --git a/beintaskbot-main/tenant_crm_notice_policy.py b/beintaskbot-main/tenant_crm_notice_policy.py
-index cba8c2806b885976d211e584c2a0a199c3b150a7..ec93891d21a97150425382b080c1c121ce1b0c85 100644
---- a/beintaskbot-main/tenant_crm_notice_policy.py
-+++ b/beintaskbot-main/tenant_crm_notice_policy.py
-@@ -52,7 +52,7 @@ def task_owner(profile: dict, task: dict) -> bool:
-                for item in personal.pipeline_scope())
- 
- 
--def eligible(profile: dict, event: str, row: dict, channel: str) -> bool:
-+def eligible(profile: dict, event: str, row: dict, channel: str, *, source_allowed=None) -> bool:
-     if (event not in EVENTS or profile.get('active') is not True or profile.get('tenant_status') != 'active'
-             or str(profile.get('tenant_id')) != str(row.get('tenant_id'))):
-         return False
-@@ -63,6 +63,10 @@ def eligible(profile: dict, event: str, row: dict, channel: str) -> bool:
-         policy.allows('dialogs') if is_connect_message else
-         (not deal.get('deleted_at') and policy.can_access_deal(deal)))
-     if event == 'incoming_message':
-+        # This legacy worker has no employee-source membership snapshot. Never
-+        # infer source access from a deal or an AI permission for scoped users.
-+        dialog_scope=policy.action_scope('dialogs','view')
-+        if dialog_scope is not None:allowed=dialog_scope!='none' and (dialog_scope=='all' or source_allowed is True)
-         allowed = allowed and row.get('direction') == 'incoming'
-         if not is_connect_message:
-             allowed = allowed and positive_id((row.get('deal') or {}).get('status_id')) != 142
-diff --git a/beintaskbot-main/tenant_crm_notice_store.py b/beintaskbot-main/tenant_crm_notice_store.py
-index bf1acf1442739417ae0644b5fd0a565341be54ad..d7b0ce8686cfb444fb713fb1fd4859483fb41765 100644
---- a/beintaskbot-main/tenant_crm_notice_store.py
-+++ b/beintaskbot-main/tenant_crm_notice_store.py
-@@ -80,10 +80,10 @@ def plan(cur, tenant: str, kind: str, key: str, row: dict, event: str, version:
-     if not cur.fetchone(): return
-     for member in members:
-         recipient = member['telegram_id']
--        if 'telegram' in channels and eligible(member, event, row, 'telegram'):
-+        if 'telegram' in channels and source_eligible(cur,member, event, row, 'telegram'):
-             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel)
-               VALUES(%s::uuid,%s::uuid,%s,'telegram') ON CONFLICT DO NOTHING''', (tenant, event_id, recipient))
--        if 'push' in channels and eligible(member, event, row, 'push'):
-+        if 'push' in channels and source_eligible(cur,member, event, row, 'push'):
-             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel,endpoint_hash)
-               SELECT %s::uuid,%s::uuid,b.telegram_id,'push',b.endpoint_hash
-               FROM saas_member_push_devices b JOIN saas_push_devices p USING(endpoint_hash)
-@@ -180,3 +180,24 @@ def observe() -> int:
-             cur.execute("UPDATE saas_crm_notice_scan SET positions=%s::jsonb,next_scan=now()+interval '1 minute' WHERE tenant_id=%s::uuid", (json.dumps(positions), tenant))
-         conn.commit()
-     return count
-+
-+
-+def source_eligible(cur,member,event,row,channel):
-+    """Exact source check at both enqueue and current-recipient claim."""
-+    from tenant_policy import TenantPolicy
-+    from tenant_dialog_access import scope,require_source
-+    from tenant_linear_policy import TenantLinearError
-+    from tenant_scoped_access import scoped_access_enabled
-+    if event!='incoming_message' or not scoped_access_enabled():
-+        return eligible(member,event,row,channel)
-+    from tenant_scoped_access_store import read_access_profile
-+    current=read_access_profile(cur,member['tenant_id'],member['telegram_id'],lock=True)
-+    if not current:return False
-+    member={**member,**current};policy=TenantPolicy(member)
-+    if scope(policy) is None:return eligible(member,event,row,channel)
-+    source=str(row.get('channel') or '')
-+    try:
-+        require_source(cur,str(member['tenant_id']),policy,
-+          'connect' if source.startswith('connect:') else 'kommo',source.removeprefix('connect:'))
-+    except TenantLinearError:return False
-+    return eligible(member,event,row,channel,source_allowed=True)
+             return web.json_response({'success': False, 'error': 'invalid_origin'}, status=403,
+                                      headers={'Cache-Control': 'no-store'})
