@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == 'f499badea0d0b4297fd8c73c22c73d65928f71c2990be05e6d66c674c7befbc9'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == '7fc8fc4201ad407b3e20be6f6edb093e8269b0baaa202e5cbd4e5e218c72a3a1'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == '0dfc7bbea16110dd451ca49e4187de5762c0be1b', actual
+          assert actual == manifest['target_tree'] == '68f4d8e05edf9ae8bae0db4bdb96b5ffd2b852e8', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -99,6 +99,8 @@ jobs:
           tests/test_scoped_access_foundation.py
           tests/test_scoped_access_foundation_postgres.py
           tests/test_employee_scope_settings_postgres.py
+          tests/test_employee_card_scopes.py
+          tests/test_employee_card_scopes_postgres.py
           tests/test_employee_task_scopes.py
           tests/test_task_b4_scope_regression.py
           tests/test_crm_scoped_access_postgres.py
@@ -114,8 +116,33 @@ jobs:
           tests/test_tenant_ai_business_analyst.py
           tests/test_tenant_ai_business_analytics.py
           tests/test_tenant_news_member_read_postgres.py
+          tests/test_support_access_ownership_postgres.py
+          tests/test_support_inbox_scopes.py
+          tests/test_support_inbox_scopes_postgres.py
+          tests/test_instruction_member_access_postgres.py
+          tests/test_ai_scoped_documents.py
+          tests/test_ai_scoped_documents_postgres.py
+          tests/test_shared_integration_scopes.py
+          tests/test_shared_integration_scopes_postgres.py
+          tests/test_tenant_crm_relation_contract.py
+          tests/test_tenant_crm_relation_kommo.py
+          tests/test_tenant_crm_relation_delivery_postgres.py
+          tests/test_crm_relation_fences_postgres.py
+          tests/test_tenant_integration_store.py
+          tests/test_tenant_bein_integration.py
+          tests/test_tenant_linear.py
+          tests/test_tenant_chat_ai.py
+          tests/test_tenant_chat_ai_api.py
+          tests/test_tenant_kommo.py
+          tests/test_tenant_connect_api.py
+          tests/test_connect_webhook_deactivation.py
+          tests/test_tenant_connect_channel_management.py
+          tests/test_tenant_connect_configure.py
+          tests/test_tenant_connect_diagnostics.py
+          tests/test_tenant_connect_access_api.py
       - name: Interface regressions
         run: |
+          node tests/test_employee_card_scopes_ui.cjs
           node tests/test_employee_scope_settings_ui.cjs
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_contacts_directory_ui.cjs
@@ -125,6 +152,12 @@ jobs:
           node tests/test_dialog_source_members_ui.cjs
           node tests/test_tenant_ai_business_analyst_ui.cjs
           node tests/test_tenant_news_member_ui.cjs
+          node tests/test_support_inbox_scopes_ui.cjs
+          node tests/test_shared_integration_settings.cjs
+          node tests/test_tenant_kommo_settings.cjs
+          node tests/test_tenant_linear_settings.cjs
+          node tests/test_tenant_linear_employee_settings.cjs
+          node tests/test_tenant_chat_ai_ui.cjs
       - name: Chromium employee matrix, tasks and CRM
         run: |
           node tests/employee_scope_matrix_browser.cjs

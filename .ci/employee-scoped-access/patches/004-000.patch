@@ -1,41 +1,37 @@
-diff --git a/beintaskbot-main/docs/tenant-members-ui.css b/beintaskbot-main/docs/tenant-members-ui.css
-index 37dd29f946751bb7e1acea5c995b7e11e7463207..0dadcddea5a7d1c9a744a1409687b936ab46e3f4 100644
---- a/beintaskbot-main/docs/tenant-members-ui.css
-+++ b/beintaskbot-main/docs/tenant-members-ui.css
-@@ -61,3 +61,29 @@
- 
- /* Secondary actions must remain readable in both color schemes. */
- #staffMemberModal .outline{background:var(--card);color:var(--ink);border:1px solid var(--line)}
-+
-+/* Real server-backed CRUD scopes. On phones each section is a labeled 2×2 card. */
-+#staffMemberModal .staff-scope-matrix{border:1px solid var(--line);border-radius:10px;overflow:hidden;min-width:0}
-+#staffMemberModal .staff-scope-heading,#staffMemberModal .staff-scope-row{display:grid;grid-template-columns:minmax(110px,1.2fr) repeat(4,minmax(0,1fr));gap:10px;padding:12px}
-+#staffMemberModal .staff-scope-heading{font-size:12px;font-weight:650;background:var(--paper)}
-+#staffMemberModal .staff-scope-row{align-items:start;border-top:1px solid var(--line)}
-+#staffMemberModal .staff-scope-row>strong{font-size:13px;overflow-wrap:anywhere;align-self:center}
-+#staffMemberModal .staff-scope-row>div{min-width:0}
-+#staffMemberModal .staff-scope-row select{padding:7px 5px;font-size:12px;min-height:38px}
-+#staffMemberModal .staff-scope-caption{display:none}
-+#staffMemberModal .staff-scope-legacy{display:block;color:var(--muted);font-size:10px;margin-top:4px}
-+#staffMemberModal .staff-scope-unavailable{text-align:center;color:var(--muted);padding:8px 0}
-+#staffMemberModal [data-department-create][hidden]{display:none}
-+#staffMemberModal [data-department-create]{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
-+#staffMemberModal [data-department-status]{grid-column:1/-1;font-size:12px;font-weight:400}
-+#staffMemberModal [data-department-add]{justify-self:start;width:fit-content}
-+#staffMemberModal .staff-department>button{align-self:flex-start}
-+@media(max-width:600px){
-+ #staffMemberModal .staff-scope-heading{display:none}
-+ #staffMemberModal .staff-scope-row{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
-+ #staffMemberModal .staff-scope-row:first-of-type{border-top:0}
-+ #staffMemberModal .staff-scope-row>strong{grid-column:1/-1;padding-bottom:2px}
-+ #staffMemberModal .staff-scope-caption{display:block;font-size:12px;font-weight:550}
-+ #staffMemberModal .staff-scope-row select{font-size:13px;min-height:42px}
-+ #staffMemberModal .staff-scope-unavailable{text-align:left;padding:0;display:flex;flex-direction:column;gap:8px}
-+}
 diff --git a/beintaskbot-main/docs/tenant-members-ui.js b/beintaskbot-main/docs/tenant-members-ui.js
-index 61fcfbfff7dbef1bc9b928edec73ae1e2e5d817c..ead59f29f82b0e6e3cb6c6690cfab8f5180259e3 100644
+index 61fcfbfff7dbef1bc9b928edec73ae1e2e5d817c..e931452abc736a60f542f92816ed1030d98896ee 100644
 --- a/beintaskbot-main/docs/tenant-members-ui.js
 +++ b/beintaskbot-main/docs/tenant-members-ui.js
+@@ -8,9 +8,9 @@ function rightsCatalog(){const basic=baseRightsCatalog();if(profile?.role!=='own
+ const entryWords=()=>({ru:{title:'Сотрудники и доступ',hint:'Управляйте сотрудниками и доступом в текущей компании.',checking:'Проверяем текущий доступ…',denied:'Для управления сотрудниками требуется соответствующее разрешение компании. Обратитесь к сотруднику с правом управления доступом.',inactive:'Доступ пользователя неактивен. Обратитесь к администратору компании.',loading:'Загружаем сотрудников…',loadingRequests:'Загружаем запросы доступа…',error:'Не удалось загрузить данные. Проверьте текущий доступ и повторите попытку.',retry:'Повторить',technical:'Технические подробности',requestsEmpty:'Запросов доступа нет.'},az:{title:'Əməkdaşlar və giriş',hint:'Cari şirkətin əməkdaşlarını və giriş hüquqlarını idarə edin.',checking:'Cari giriş yoxlanılır…',denied:'Əməkdaşları idarə etmək üçün şirkətin müvafiq icazəsi tələb olunur. Girişi idarə etmək hüququ olan əməkdaşa müraciət edin.',inactive:'İstifadəçinin girişi qeyri-aktivdir. Şirkət administratoruna müraciət edin.',loading:'Əməkdaşlar yüklənir…',loadingRequests:'Giriş sorğuları yüklənir…',error:'Məlumatları yükləmək olmadı. Cari girişi yoxlayıb yenidən cəhd edin.',retry:'Yenidən yoxla',technical:'Texniki təfərrüatlar',requestsEmpty:'Giriş sorğusu yoxdur.'},en:{title:'Employees and access',hint:'Manage employees and access in the current company.',checking:'Checking current access…',denied:'Managing employees requires the company’s employee management permission. Contact someone authorized to manage access.',inactive:'This user’s access is inactive. Contact your company administrator.',loading:'Loading employees…',loadingRequests:'Loading access requests…',error:'Could not load the data. Check current access and try again.',retry:'Retry',technical:'Technical details',requestsEmpty:'No access requests.'}}[window.tenantI18n?.language]||{title:'Employees and access',checking:'Checking current access…',denied:'Employee management permission is required.',loading:'Loading employees…',error:'Could not load the data.',retry:'Retry'});
+ const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
+ const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
+-const fingerprint=data=>JSON.stringify(stable([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.active,data?.member?.role,[...(data?.member?.permissions||[])].sort(),data?.capabilities?.can_manage_employees,data?.capabilities?.pages?.employees,data?.capabilities?.actions?.employees,Object.fromEntries(Object.entries(data?.role_permissions||{}).map(([key,value])=>[key,Array.isArray(value)?[...value].sort():value]))]));
++const fingerprint=data=>JSON.stringify(stable([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.active,data?.member?.role,[...(data?.member?.permissions||[])].sort(),data?.capabilities?.can_manage_employees,data?.capabilities?.can_view_employees,data?.capabilities?.can_update_employees,data?.capabilities?.pages?.employees,data?.capabilities?.actions?.employees,Object.fromEntries(Object.entries(data?.role_permissions||{}).map(([key,value])=>[key,Array.isArray(value)?[...value].sort():value]))]));
+ let pendingFocus=null;const pendingWrites=new WeakMap();
+-function managed(){return !paused&&!accessProof&&profile?.active===true&&capabilities.can_manage_employees===true}
++function managed(){return !paused&&!accessProof&&profile?.active===true&&(capabilities.can_view_employees??capabilities.can_manage_employees)===true}
+ const canonical=()=>!!$('employeesManagementHost');
+ function visible(){const page=$(canonical()?'view-employees':'view-settings');return !!page&&(page.classList.contains('active')||!canonical()&&new URLSearchParams(location.search).get('view')==='settings')}
+ async function api(path,opt={}){const version=epoch,owner=identity(profile),response=await fetch(path,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});const data=await response.json().catch(()=>({}));if(path!=='/api/platform/me'&&(version!==epoch||owner!==identity(profile)||!managed())){const error=Error('Employee request scope changed');error.stale=true;throw error}if(!response.ok||!data.success){const error=Error(data.error||'Request failed');error.status=response.status;error.code=data.code||'';error.fields=data.fields||{};throw error}return data}
+@@ -32,7 +32,7 @@ async function verifyAccess(){
+   if(!data?.success||!data.member){const error=Error('Current authentication could not be verified');error.status=401;throw error}
+   setProfile(data);
+   if(accessProof!==token||epoch!==token.epoch||identity(profile)!==token.owner)return false;
+-  if(data.member.active!==true||data.capabilities?.can_manage_employees!==true){clearStaff();show();return false}
++  if(data.member.active!==true||(data.capabilities?.can_view_employees??data.capabilities?.can_manage_employees)!==true){clearStaff();show();return false}
+   accessProof=null;show();
+   if(modalRevision===token.revision&&visible()&&modal.classList.contains('show')&&token.focus?.isConnected&&modal.contains(token.focus))token.focus.focus({preventScroll:true});
+   return true;
+@@ -46,7 +46,7 @@ async function verifyAccess(){
+ }
+ function stateMarkup(){const c=entryWords();if(readState==='idle'||readState==='loading')return '<p role="status">'+esc(tab==='requests'?c.loadingRequests:c.loading)+'</p>';if(readState==='error')return '<p id="staffLoadError" role="alert">'+esc(c.error)+'</p><button type="button" class="outline" id="staffRetry">'+esc(c.retry)+'</button><details><summary>'+esc(c.technical)+'</summary><p>'+esc(readError)+'</p></details>';return ''}
+ function wireRetry(){const retry=$('staffRetry');if(retry)retry.onclick=()=>load()}
+-function render(){const c=copy();root.innerHTML=`<div class="staff-head"><div><h2>${c.title}</h2><p>${c.sub}</p></div><button class="primary" type="button" id="staffAdd">${c.add}</button></div><p id="staffSaveStatus" role="status">${esc(saveNotice)}</p><div class="staff-tabs" role="tablist"><button role="tab" data-staff-tab="members" aria-selected="${tab==='members'}">${c.members}</button><button role="tab" data-staff-tab="invites" aria-selected="${tab==='invites'}">${c.invites}</button><button role="tab" data-staff-tab="requests" aria-selected="${tab==='requests'}">${c.requests}</button></div><div id="staffContent" aria-live="polite"></div>`;root.querySelector('#staffAdd').onclick=()=>openInvite();root.querySelectorAll('[data-staff-tab]').forEach(button=>button.onclick=()=>{tab=button.dataset.staffTab;loadRevision++;loadFlight=null;readState='idle';readError='';render();void load()});renderContent()}
++function render(){if(capabilities.can_manage_employees!==true)tab='members';const c=copy();root.innerHTML=`<div class="staff-head"><div><h2>${c.title}</h2><p>${c.sub}</p></div><button class="primary" type="button" id="staffAdd" ${capabilities.can_manage_employees===true?'':'hidden'}>${c.add}</button></div><p id="staffSaveStatus" role="status">${esc(saveNotice)}</p><div class="staff-tabs" role="tablist"><button role="tab" data-staff-tab="members" aria-selected="${tab==='members'}">${c.members}</button><button role="tab" data-staff-tab="invites" ${capabilities.can_manage_employees===true?'':'hidden'} aria-selected="${tab==='invites'}">${c.invites}</button><button role="tab" data-staff-tab="requests" ${capabilities.can_manage_employees===true?'':'hidden'} aria-selected="${tab==='requests'}">${c.requests}</button></div><div id="staffContent" aria-live="polite"></div>`;root.querySelector('#staffAdd').onclick=()=>openInvite();root.querySelectorAll('[data-staff-tab]').forEach(button=>button.onclick=()=>{tab=button.dataset.staffTab;loadRevision++;loadFlight=null;readState='idle';readError='';render();void load()});renderContent()}
+ function renderContent(){if(!root?.querySelector('#staffContent'))return;if(tab==='members'){renderMembers();return}const content=$('staffContent');if(tab==='invites'){content.innerHTML=`<div class="staff-empty">${copy().invitesEmpty}</div>`;return}const state=stateMarkup();if(state){content.innerHTML=state;wireRetry();return}content.innerHTML=requestRows.filter(x=>x.status==='pending').map(x=>`<div class="member"><div><b>${esc(x.display_name||x.card_name)}</b><small>${esc(x.role)}</small></div><div class="request-actions"><button class="outline" data-request="approve:${esc(x.id)}">✓</button><button class="outline danger" data-request="reject:${esc(x.id)}">×</button></div></div>`).join('')||`<div class="staff-empty">${esc(entryWords().requestsEmpty)}</div>`;root.querySelectorAll('[data-request]').forEach(button=>button.onclick=async()=>{const [action,request_id]=button.dataset.request.split(':');await api('/api/platform/access-requests',{method:'POST',body:JSON.stringify({action,request_id})});load()})}
+ function date(value){return value?new Date(value).toLocaleString():'—'}
+ function renderMembers(){const c=copy(),content=root.querySelector('#staffContent'),state=stateMarkup();if(state){content.innerHTML=state;wireRetry();return}content.innerHTML=rows.length?`<div class="staff-table"><div class="staff-row head"><span>${c.name}</span><span>${c.email}</span><span>${c.role}</span><span>${c.whatsapp}</span><span>${c.last}</span><span>${c.status}</span><span></span></div>${rows.map(row=>`<div class="staff-row"><div class="staff-person"><b>${esc(row.display_name||'—')}</b><small>${esc(row.phone||'')}</small></div><div class="staff-email staff-person"><span>${esc(row.email||'—')}</span></div><div class="staff-role">${esc(row.role||'—')}</div><div class="staff-numbers">${esc((row.whatsapp_numbers||[]).map(x=>x.phone).join(', ')||'—')}</div><div class="staff-login">${esc(date(row.last_login_at||row.account_last_login_at))}</div><div><span class="staff-status ${row.active?'active':'inactive'}">${row.active?c.active:c.inactive}</span></div><div class="staff-actions"><button class="outline" data-staff-edit="${row.telegram_id}">${c.edit}</button><button class="outline" data-staff-number="${row.telegram_id}">${c.numbers}</button></div></div>`).join('')}</div>`:`<div class="staff-empty">${c.empty}</div>`;content.querySelectorAll('[data-staff-edit]').forEach(button=>button.onclick=()=>openEdit(rows.find(row=>String(row.telegram_id)===button.dataset.staffEdit),'profile'));content.querySelectorAll('[data-staff-number]').forEach(button=>button.onclick=()=>openEdit(rows.find(row=>String(row.telegram_id)===button.dataset.staffNumber),'numbers'));}
 @@ -85,11 +85,16 @@ function readWorkSettings(form,row){if(!permitted(row,'work_settings')||!row.wor
  function accessWords(){return ({ru:{operations:'Операции',coarseHelp:'Общее право раздела. Ограничения роли и специальные правила сохраняются.',nativeHelp:'Операции с данными Beintaskbot. Доступ к Kommo и Linear настраивается отдельно.',contactsCompanies:'Контакты и компании',partial:'Частичный доступ сохранён. Изменение галочки включит или отключит общее право раздела.',view:'Просмотр',create:'Создание',update:'Изменение',delete:'Удаление'},az:{operations:'Əməliyyatlar',coarseHelp:'Bölmənin ümumi icazəsi. Rol məhdudiyyətləri və xüsusi qaydalar qüvvədə qalır.',nativeHelp:'Beintaskbot məlumatları ilə əməliyyatlar. Kommo və Linear girişi ayrıca tənzimlənir.',contactsCompanies:'Kontaktlar və şirkətlər',partial:'Qismən giriş saxlanılıb. Xananı dəyişmək bölmənin ümumi icazəsini aktiv və ya deaktiv edəcək.',view:'Baxış',create:'Yaratma',update:'Dəyişmə',delete:'Silmə'},en:{operations:'Operations',coarseHelp:'Broad section permission. Role restrictions and special rules still apply.',nativeHelp:'Operations on Beintaskbot data. Kommo and Linear access is configured separately.',contactsCompanies:'Contacts and companies',partial:'Partial access is retained. Changing this checkbox enables or disables the broad section permission.',view:'View',create:'Create',update:'Update',delete:'Delete'}})[window.tenantI18n?.language]||{}}
  function accessPageLabel(id){const labels={ru:{instructions:'Инструкции',tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',employees:'Сотрудники',dialogs:'Диалоги',support:'Обращения',night_report:'Ночной отчёт',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',ai_administrator:'AI-администратор',ai_teams:'Команды AI',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI',hot_orders:'Заказы',approvals:'Подтверждения',finance:'Финансы',integrations:'Интеграции',settings:'Настройки',linear:'Linear',news:'Новости',profile:'Профиль'},az:{instructions:'Təlimatlar',tasks:'Tapşırıqlar',customers:'Kontaktlar',companies:'Şirkətlər',deals:'Sövdələşmələr',employees:'Əməkdaşlar',dialogs:'Dialoqlar',support:'Müraciətlər',night_report:'Gecə hesabatı',ai_agents:'AI agentləri',ai_dashboard:'AI paneli',ai_administrator:'AI administrator',ai_teams:'AI komandaları',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək işləri',ai_testing:'AI sınaqları',hot_orders:'Sifarişlər',approvals:'Təsdiqlər',finance:'Maliyyə',integrations:'İnteqrasiyalar',settings:'Tənzimləmələr',linear:'Linear',news:'Xəbərlər',profile:'Profil'},en:{instructions:'Instructions',tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',employees:'Employees',dialogs:'Conversations',support:'Support',night_report:'Night report',ai_agents:'AI agents',ai_dashboard:'AI dashboard',ai_administrator:'AI administrator',ai_teams:'AI teams',knowledge_center:'Knowledge center',support_cases:'Support cases',ai_testing:'AI testing',hot_orders:'Orders',approvals:'Approvals',finance:'Finance',integrations:'Integrations',settings:'Settings',linear:'Linear',news:'News',profile:'Profile'}};return labels[window.tenantI18n?.language]?.[id]||id}
@@ -47,7 +43,7 @@ index 61fcfbfff7dbef1bc9b928edec73ae1e2e5d817c..ead59f29f82b0e6e3cb6c6690cfab8f5
  function sectionPermissionCards(row,disabled){const selected=row.explicit_permissions||row.permissions||[];return permissionControls(selected,[],disabled,true,rightsCatalog().filter(([module])=>!['tasks','deals','customers','linear'].includes(module)))}
 -function separateAccessFields(row){const w=accessWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner';return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(w.operations)}</h3><p class="sub">${esc(w.nativeHelp)}</p>`+Object.entries(s.action_catalog||{}).map(([module,actions])=>`<fieldset class="staff-permission-card staff-native-permission" data-permission-card="${esc(module)}"><legend>${esc(module==='customers'?w.contactsCompanies:accessPageLabel(module))}</legend><div class="staff-permission-options">`+actions.map(action=>`<label class="staff-right"><input type="checkbox" data-access-action="${esc(action)}" ${editable?'':'disabled'} data-access-module="${esc(module)}" ${s.actions?.[module]?.[action]===true?'checked':''}>${esc(w[action]||action)}</label>`).join('')+'</div></fieldset>').join('')+sectionPermissionCards(row,!editable||!permitted(row,'permission_changes'))+fieldError('access_settings')+'</div></section>'}
 -function readAccessSettings(form,row){if(!hasAccessSettings(row)||!permitted(row,'access_settings')||row.role==='owner')return null;const s=row.access_settings,actions={};form.querySelectorAll('[data-access-action]').forEach(input=>{if(input.disabled||input.closest('fieldset[disabled]'))return;const module=input.dataset.accessModule,action=input.dataset.accessAction;if(input.checked!==(s.actions?.[module]?.[action]===true))(actions[module]??={})[action]=input.checked});return Object.keys(actions).length?{expected_version:s.version,changes:{actions}}:null}
-+function scopedAccessFields(row){const w=accessWords(),t=scopeWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner',actions=['create','view','update','delete'],levels=['none','self','department','all'];return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(t.title)}</h3><p class="sub">${esc(t.help)}</p><p class="sub">${esc(t.retained)}</p><div class="staff-scope-matrix" role="table" aria-label="${esc(t.title)}"><div class="staff-scope-heading" role="row"><span role="columnheader">${esc(t.section)}</span>${actions.map(action=>`<span role="columnheader">${esc(w[action])}</span>`).join('')}</div>`+Object.entries(s.scope_catalog||{}).filter(([module])=>!['instructions','news'].includes(module)).map(([module,supported])=>`<div class="staff-scope-row" role="row" data-scope-row="${esc(module)}"><strong role="rowheader">${esc(accessPageLabel(module))}</strong>${actions.map(action=>{if(!Array.isArray(supported)||!supported.includes(action))return `<div role="cell" class="staff-scope-unavailable"><span class="staff-scope-caption">${esc(w[action])}</span><span title="${esc(t.unsupported)}" aria-label="${esc(w[action]+': '+t.unsupported)}">—</span></div>`;const value=s.scoped_actions?.[module]?.[action]??null,legacy=value===null,allowed=s.legacy_actions?.[module]?.[action]??s.actions?.[module]?.[action];return `<div role="cell"><label><span class="staff-scope-caption">${esc(w[action])}</span><select data-access-scope="${esc(action)}" data-access-module="${esc(module)}" aria-label="${esc(accessPageLabel(module)+' · '+w[action])}" ${editable?'':'disabled'}>${legacy?`<option value="legacy" selected disabled>${esc(t.legacy)}</option>`:''}${levels.map(scope=>`<option value="${scope}" ${value===scope?'selected':''}>${esc(t[scope])}</option>`).join('')}</select></label>${legacy?`<small class="staff-scope-legacy">${esc(allowed?t.allowed:t.denied)}</small>`:''}</div>`}).join('')}</div>`).join('')+`</div><p class="sub">${esc(t.common)}</p>${fieldError('access_settings')}</div></section>`}
++function scopedAccessFields(row){const w=accessWords(),t=scopeWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner',actions=['create','view','update','delete'],levels=['none','self','department','all'];return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(t.title)}</h3><p class="sub">${esc(t.help)}</p><p class="sub">${esc(t.retained)}</p><div class="staff-scope-matrix" role="table" aria-label="${esc(t.title)}"><div class="staff-scope-heading" role="row"><span role="columnheader">${esc(t.section)}</span>${actions.map(action=>`<span role="columnheader">${esc(w[action])}</span>`).join('')}</div>`+Object.entries(s.scope_catalog||{}).filter(([module])=>!['instructions','news'].includes(module)).map(([module,supported])=>`<div class="staff-scope-row" role="row" data-scope-row="${esc(module)}"><strong role="rowheader">${esc(accessPageLabel(module))}${module==='integrations'?`<small>${esc(({ru:'Общее подключение компании. Ответственный — владелец компании.',az:'Şirkətin ortaq bağlantısı. Məsul şəxs şirkət sahibidir.',en:'Company-wide connection. The company owner is responsible.'})[window.tenantI18n?.language]||'Company-wide connection. The company owner is responsible.')}</small>`:''}</strong>${actions.map(action=>{if(!Array.isArray(supported)||!supported.includes(action))return `<div role="cell" class="staff-scope-unavailable"><span class="staff-scope-caption">${esc(w[action])}</span><span title="${esc(t.unsupported)}" aria-label="${esc(w[action]+': '+t.unsupported)}">—</span></div>`;const value=s.scoped_actions?.[module]?.[action]??null,legacy=value===null,allowed=s.legacy_actions?.[module]?.[action]??s.actions?.[module]?.[action];return `<div role="cell"><label><span class="staff-scope-caption">${esc(w[action])}</span><select data-access-scope="${esc(action)}" data-access-module="${esc(module)}" aria-label="${esc(accessPageLabel(module)+' · '+w[action])}" ${editable?'':'disabled'}>${legacy?`<option value="legacy" selected disabled>${esc(t.legacy)}</option>`:''}${levels.map(scope=>`<option value="${scope}" ${value===scope?'selected':''}>${esc(t[scope])}</option>`).join('')}</select></label>${legacy?`<small class="staff-scope-legacy">${esc(allowed?t.allowed:t.denied)}</small>`:''}</div>`}).join('')}</div>`).join('')+`</div><p class="sub">${esc(t.common)}</p>${fieldError('access_settings')}</div></section>`}
 +function separateAccessFields(row){if(scopedAccess(row))return scopedAccessFields(row);const w=accessWords(),s=row.access_settings,editable=permitted(row,'access_settings')&&row.role!=='owner';return `<section class="staff-section" data-access-settings><div data-access-operations><h3>${esc(w.operations)}</h3><p class="sub">${esc(w.nativeHelp)}</p>`+Object.entries(s.action_catalog||{}).map(([module,actions])=>`<fieldset class="staff-permission-card staff-native-permission" data-permission-card="${esc(module)}"><legend>${esc(module==='customers'?w.contactsCompanies:accessPageLabel(module))}</legend><div class="staff-permission-options">`+actions.map(action=>`<label class="staff-right"><input type="checkbox" data-access-action="${esc(action)}" ${editable?'':'disabled'} data-access-module="${esc(module)}" ${s.actions?.[module]?.[action]===true?'checked':''}>${esc(w[action]||action)}</label>`).join('')+'</div></fieldset>').join('')+sectionPermissionCards(row,!editable||!permitted(row,'permission_changes'))+fieldError('access_settings')+'</div></section>'}
 +function readAccessSettings(form,row){if(!hasAccessSettings(row)||!permitted(row,'access_settings')||row.role==='owner')return null;const s=row.access_settings,actions={};if(scopedAccess(row)){form.querySelectorAll('[data-access-scope]').forEach(input=>{if(input.disabled||input.value==='legacy')return;const module=input.dataset.accessModule,action=input.dataset.accessScope;if(input.value!==s.scoped_actions?.[module]?.[action])(actions[module]??={})[action]=input.value});return Object.keys(actions).length?{expected_version:s.version,changes:{scopes:actions}}:null}form.querySelectorAll('[data-access-action]').forEach(input=>{if(input.disabled||input.closest('fieldset[disabled]'))return;const module=input.dataset.accessModule,action=input.dataset.accessAction;if(input.checked!==(s.actions?.[module]?.[action]===true))(actions[module]??={})[action]=input.checked});return Object.keys(actions).length?{expected_version:s.version,changes:{actions}}:null}
  function accessFields(row){const c=copy(),w=employeeWords(),creating=!row,explicit=Array.isArray(row?.explicit_permissions)?row.explicit_permissions:row?.permissions||[],known=new Set(rightsCatalog().map(item=>item[0])),legacy=explicit.filter(key=>!known.has(key));return `<section class="staff-section"><h3>${w.access}</h3><div class="grid">`+
@@ -65,7 +61,15 @@ index 61fcfbfff7dbef1bc9b928edec73ae1e2e5d817c..ead59f29f82b0e6e3cb6c6690cfab8f5
  function showError(form,error,row,pane){const w=employeeWords();form.querySelector('#staffSaveError').textContent=error.status===403?w.denied:error.status===404?w.missing:w.saveError;for(let [key,code]of Object.entries(error.fields||{})){if(key==='email'&&form.elements.namedItem('new_email'))key='new_email';const node=[...form.querySelectorAll('[data-field-error]')].find(item=>item.dataset.fieldError===key);if(node)node.textContent=errorMessage(String(code));const input=form.elements.namedItem(key);if(input?.setAttribute)input.setAttribute('aria-invalid','true')}
  const invalid=form.querySelector('[aria-invalid=true]')?.closest('[data-staff-pane]');if(invalid)form.querySelector('[data-staff-pane-tab="'+invalid.dataset.staffPane+'"]')?.click();
  const conflict=error.status===409&&(['member_card_conflict','member_context_changed'].includes(error.code)||Object.values(error.fields||{}).includes('version_conflict')||!Object.keys(error.fields||{}).length);if(conflict){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=w.conflict;reviewButton(form,row,pane)}form.querySelector('#staffTechnicalError').textContent=String(error.code||error.message||'');form.querySelector('#staffErrorDetails').style.display='';}
-@@ -121,11 +126,11 @@ function installEmployeeTabs(form){
+@@ -114,18 +119,18 @@ function reviewButton(form,row,pane){if(!row)return;const holder=form.querySelec
+ function writeIdentity(){return {expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id}}
+ function receiptValid(data,row,create){const applied=data?.applied;return !!applied&&typeof applied.card_version==='string'&&!!applied.card_version&&Number.isSafeInteger(Number(applied.telegram_id))&&Number(applied.telegram_id)>0&&(!row||String(applied.telegram_id)===String(row.telegram_id))&&(!create||applied.created===true)}
+ async function saveForm(form,command,row,pane){const current=formOperation(form),button=form.querySelector('[type=submit]');if(!current()||button.disabled||form.dataset.assignPending==='true'||form.dataset.blocked==='true'||form.dataset.applied==='true')return;saveNotice='';if($('staffSaveStatus'))$('staffSaveStatus').textContent='';clearErrors(form);button.disabled=true;pendingWrites.set(form,{row,pane});let applied=false;try{const result=await api('/api/platform/members',{method:'POST',body:JSON.stringify(command)});if(!current())return;if(!receiptValid(result,row,!row)){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=employeeWords().unknown;reviewButton(form,row,pane);return}applied=true;form.dataset.applied='true';wipeSecrets(form);dirty=false;saveNotice=row?employeeWords().saved:employeeWords().created;form.querySelector('#staffSaveError').textContent=saveNotice;if($('staffSaveStatus'))$('staffSaveStatus').textContent=saveNotice;const loaded=await load();if(!current())return;if(loaded){close()}else{saveNotice=employeeWords().savedReadError;form.querySelector('#staffSaveError').textContent=saveNotice;if($('staffSaveStatus'))$('staffSaveStatus').textContent=saveNotice}}catch(error){if(!current())return;if(![400,403,404,409].includes(error.status)){form.dataset.blocked='true';form.querySelector('#staffSaveError').textContent=employeeWords().unknown;reviewButton(form,row,pane)}else showError(form,error,row,pane)}finally{pendingWrites.delete(form);if(current()&&!applied&&form.dataset.blocked!=='true')button.disabled=false}}
+-function openInvite(){if(!managed()||!visible())return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=c.add;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffInviteForm">${accountFields()}${accessFields()}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waAfter}</p></section>${passwordSection()}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');modal.querySelector('[data-staff-cancel]').onclick=close;form.addEventListener('input',()=>{form.elements.namedItem('display_name').value=[form.elements.namedItem('first_name').value.trim(),form.elements.namedItem('last_name').value.trim()].filter(Boolean).join(' ')});form.onsubmit=event=>{event.preventDefault();if(!formOperation(form)())return;const data=new FormData(form);if(data.get('password')!==data.get('confirm_password')){clearErrors(form);form.querySelector('[data-field-error=confirm_password]').textContent=employeeWords().mismatch;return}void saveForm(form,{action:'provision_member_account',...writeIdentity(),first_name:data.get('first_name'),last_name:data.get('last_name'),login:data.get('login'),email:data.get('email'),phone:data.get('phone'),role:data.get('role'),permissions:[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value),password:data.get('password'),confirm_password:data.get('confirm_password')},null,'profile')};open()}
++function openInvite(){if(!managed()||!visible()||capabilities.can_manage_employees!==true)return;const c=copy(),w=employeeWords();modal.querySelector('#staffModalTitle').textContent=c.add;modal.querySelector('#staffModalBody').innerHTML=`<form id="staffInviteForm">${accountFields()}${accessFields()}<section class="staff-section"><h3>${c.numbers}</h3><p class="sub">${w.waAfter}</p></section>${passwordSection()}${errorMarkup()}${actions()}</form>`;const form=modal.querySelector('form');modal.querySelector('[data-staff-cancel]').onclick=close;form.addEventListener('input',()=>{form.elements.namedItem('display_name').value=[form.elements.namedItem('first_name').value.trim(),form.elements.namedItem('last_name').value.trim()].filter(Boolean).join(' ')});form.onsubmit=event=>{event.preventDefault();if(!formOperation(form)())return;const data=new FormData(form);if(data.get('password')!==data.get('confirm_password')){clearErrors(form);form.querySelector('[data-field-error=confirm_password]').textContent=employeeWords().mismatch;return}void saveForm(form,{action:'provision_member_account',...writeIdentity(),first_name:data.get('first_name'),last_name:data.get('last_name'),login:data.get('login'),email:data.get('email'),phone:data.get('phone'),role:data.get('role'),permissions:[...form.querySelectorAll('[data-permission]:checked')].map(node=>node.value),password:data.get('password'),confirm_password:data.get('confirm_password')},null,'profile')};open()}
+ function installEmployeeTabs(form){
+  form.classList.add('staff-tabbed-form');
+  const words=({ru:['Данные','Права'],az:['Məlumatlar','Hüquqlar'],en:['Details','Permissions']})[window.tenantI18n?.language]||['Details','Permissions'];
   const tabs=document.createElement('div');tabs.className='staff-tabs';tabs.setAttribute('role','tablist');
   const panels=['details','rights'].map((key,index)=>{const panel=document.createElement('div');panel.className='staff-tab-panel';panel.id='staff-panel-'+key;panel.dataset.staffPane=key;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby','staff-tab-'+key);panel.hidden=index!==0;tabs.insertAdjacentHTML('beforeend',`<button type="button" role="tab" id="staff-tab-${key}" data-staff-pane-tab="${key}" aria-controls="${panel.id}" aria-selected="${index===0}" tabindex="${index===0?0:-1}">${esc(words[index])}</button>`);return panel});
   const account=form.querySelector('[name=first_name]')?.closest('section'),access=form.querySelector('[name=role]')?.closest('section'),work=form.querySelector('[data-work-setting]')?.closest('details');
@@ -178,10 +182,50 @@ index 74438dfe9b44413324c9e406ff0a18bdf74507cb..abda27f35270877e10a802335db6619f
        $('tnNav').hidden=true;$('tnNav').style.display='none';$('tnPublic').removeAttribute('href');render();}});
  })();
 diff --git a/beintaskbot-main/docs/tenant-operator-dialogs.js b/beintaskbot-main/docs/tenant-operator-dialogs.js
-index 7453e461bddfdb0e6b358cfc55566301bede563b..8149d6e0fb187cc7de810e4d65dcd5942c75c617 100644
+index 7453e461bddfdb0e6b358cfc55566301bede563b..11ec8b66ae5d99599c3c1c1460f1d77274d82585 100644
 --- a/beintaskbot-main/docs/tenant-operator-dialogs.js
 +++ b/beintaskbot-main/docs/tenant-operator-dialogs.js
-@@ -864,7 +864,7 @@
+@@ -107,6 +107,7 @@
+   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
+   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
+   const afterLayout=callback=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(callback):Promise.resolve().then(callback);
++  const canCreateSupport=()=>capabilities.support?.create??hasRight('support');
+   const hasRight=right=>!!member&&member.active!==false&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
+   function closeCopilotPanel(fromHistory=false){
+     const panel=$('operatorCopilot');if(!panel)return;
+@@ -174,10 +175,10 @@
+   const manualCaseCopy=key=>({ru:{intro:'Создать обращение по этому диалогу? Разработчика можно спросить отдельно.',pending:'Предыдущий запрос ещё не подтверждён. Можно проверить тот же запрос.',check:'Проверить сохранённый запрос',mismatch:'Сервер не подтвердил точное обращение. Создание приостановлено; проверьте обращение в CRM.',storage:'Не удалось сохранить запрос в этом браузере. Обращение не создавалось.',cancel:'Закрыть'},az:{intro:'Bu dialoq üzrə müraciət yaradılsın? Tərtibatçı ilə ayrıca məsləhətləşmək olar.',pending:'Əvvəlki sorğu hələ təsdiqlənməyib. Eyni sorğunu yoxlamaq olar.',check:'Saxlanmış sorğunu yoxla',mismatch:'Server dəqiq müraciəti təsdiqləmədi. Yaratma dayandırılıb; CRM-də müraciəti yoxlayın.',storage:'Sorğunu bu brauzerdə saxlamaq olmadı. Müraciət yaradılmadı.',cancel:'Bağla'},en:{intro:'Create a case for this conversation? You can consult a developer separately.',pending:'The previous request is unconfirmed. Check the same request.',check:'Check saved request',mismatch:'The server did not confirm the exact case. Creation is on hold; check the case in CRM.',storage:'Could not save this request in the browser. No case was created.',cancel:'Close'}}[i18n.language]||{})[key]||key;
+   const manualCaseFlights=new Set();
+   async function openManualCaseCreate(source,button,isCurrent){
+-    if(button.disabled||$('operatorCreateCaseModal')||!hasRight('support')||!hasRight('dialogs'))return;
++    if(button.disabled||$('operatorCreateCaseModal')||!canCreateSupport()||!hasRight('dialogs'))return;
+     button.disabled=true;
+     const owner=identity(member),key='tenant.operator.manual-case.'+owner+'.'+String(source.lead_id);
+-    const same=()=>owner===identity(member)&&hasRight('support')&&hasRight('dialogs')&&isCurrent();
++    const same=()=>owner===identity(member)&&canCreateSupport()&&hasRight('dialogs')&&isCurrent();
+     try{
+       let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error(manualCaseCopy('mismatch'));}
+       let route={...source};
+@@ -205,7 +206,8 @@
+         paintSaved();posting=true;manualCaseFlights.add(key);submit.disabled=true;cancel.disabled=true;
+         try{
+           const created=await api('support-tickets','POST',saved.payload),ticket=created.ticket,payload=saved.payload;
+-          if(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
++          const writeOnly=created.readable===false&&ticket?.id&&ticket.create_request_id===payload.request_id&&created.create_receipt?.request_id===payload.request_id&&String(created.create_receipt.tenant_id)===String(payload.expected_tenant_id)&&String(created.create_receipt.actor_id)===String(payload.expected_user_id);
++          if(!writeOnly&&(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id)))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
+           sessionStorage.removeItem(key);dispose();if(same()){button.textContent=t('ticketSaved');button.setAttribute('aria-label',t('ticketSaved'));button.title=t('ticketSaved');document.dispatchEvent(new CustomEvent('tenant-support-changed'));}
+         }catch(error){if(modal.isConnected){status.textContent=error.message+' '+manualCaseCopy(saved.hold?'mismatch':'pending');}}
+         finally{posting=false;manualCaseFlights.delete(key);if(modal.isConnected){submit.disabled=!!saved?.hold;cancel.disabled=false;if(!card.contains(document.activeElement))cancel.focus();}}
+@@ -855,7 +857,7 @@
+     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
+     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
+     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
+-    if(route.provider==='connect'&&hasRight('support')){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
++    if(route.provider==='connect'&&canCreateSupport()){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
+     const diagnostics=document.createElement('button');diagnostics.type='button';diagnostics.textContent=t('diagnostics');diagnostics.dataset.operatorDiagnostics='true';diagnostics.onclick=()=>{menu.open=false;openDialogDiagnostics(route);};appendMenu(diagnostics);
+     const trainingButton=$('operatorTraining'),caseAllowed=hasRight('dialogs')&&hasRight('support');trainingButton.disabled=route.provider!=='connect'||!route.agent_id||!caseAllowed;trainingButton.title=!route.agent_id?trainingText('noAgent'):trainingButton.disabled?trainingText('noAccess'):trainingText('button');trainingButton.onclick=()=>openTraining(route,same);
+     if(route.provider==='connect'){
+@@ -864,7 +866,7 @@
      const sendDraftKey=contextKey('draft',route),sendAllowed=route.can_send&&hasRight('dialogs');$('sendChat').disabled=!sendAllowed;$('chatText').disabled=!sendAllowed;
      let copilotMode=interactionState?.copilotMode||'chat',copilotBusy=false,copilotAnswer='',editingCopilotTemplateId=interactionState?.templateId||'';
      const copilotPanel=$('operatorCopilot'),copilotStatus=$('operatorCopilotStatus'),copilotResult=$('operatorCopilotResult'),copilotAsk=$('operatorCopilotAsk'),copilotInsert=$('operatorCopilotInsert');
@@ -190,175 +234,3 @@ index 7453e461bddfdb0e6b358cfc55566301bede563b..8149d6e0fb187cc7de810e4d65dcd594
      for(const node of [$('operatorAIReply'),$('operatorCopilotToggle'),$('operatorCopilotVoiceToggle'),copilotAsk,...host.querySelectorAll('[data-copilot-mode]')]){node.disabled=!dialogAiAssigned;if(!dialogAiAssigned)node.title=trainingText('noAgent');}
      if(!dialogAiAssigned)$('operatorAIReplyStatus').textContent=trainingText('noAgent');
      const templateSection=$('operatorCopilotTemplates'),templateList=$('operatorCopilotTemplateList'),templateForm=$('operatorCopilotTemplateForm'),templateName=$('operatorCopilotTemplateName'),templateQuestion=$('operatorCopilotTemplateQuestion'),templateStatus=$('operatorCopilotTemplateStatus');
-diff --git a/beintaskbot-main/docs/tenant-task-flow.js b/beintaskbot-main/docs/tenant-task-flow.js
-index 311bc3d171858c6433a10fdf4fc0a162c9cb1694..bf4da36204a86820043f35abb20b533c03d51f16 100644
---- a/beintaskbot-main/docs/tenant-task-flow.js
-+++ b/beintaskbot-main/docs/tenant-task-flow.js
-@@ -21,6 +21,12 @@
-   const capture = () => ({epoch,key,...identity()});
-   const current = scope => scope.epoch===epoch && scope.key===key && allowed();
-   const sourceActions = source => Object.values(rows).map(value=>value.page?.sources?.find(item=>item.source===source)).find(Boolean) || {};
-+  // Source permissions establish which feed can be opened; each native task
-+  // carries the authoritative actions for this particular row.
-+  const taskActions = (source, task, sourcePermissions={}) => source==='native' && task?.capabilities
-+    ? {update:task.capabilities.update===true, complete:task.capabilities.complete===true,
-+       reopen:task.capabilities.reopen===true, archive:task.capabilities.delete===true}
-+    : sourcePermissions;
-   const canEnter = source => sourceActions(source).view===true&&(sourceActions(source).create===true||(source==='native'?!!pending('native'):window.tenantExternalTasks?.hasPending()));
-   const staleError = () => Object.assign(new Error('task_context_changed'),{stale:true});
-   async function api(path, {method='GET',body,scope=capture(),flow=false}={}) {
-@@ -101,22 +107,22 @@
-   function closeCard(){const value=card;cardRevision++;card=null;const modal=$('taskFlowCard');if(modal)hide(modal,false);clearTarget();if(allowed()){const currentButton=value?[...$(value.source==='native'?'nativeTasksList':'tasksList').querySelectorAll('[data-task-flow-open]')].find(node=>node.dataset.taskFlowOpen===value.id):null;(currentButton||opener?.isConnected&&opener||$('nativeTaskCreate')).focus();}}
-   function renderCard(){if(!card?.task)return;const c=text(),row=card.task,source=card.source,actions=card.actions||{},body=$('taskFlowCardBody');$('taskFlowCardTitle').textContent=cleanText(row.text);$('taskFlowCard').querySelector('[data-task-card-close]').setAttribute('aria-label',c.close);body.innerHTML=`<p class="sub">${esc(c[source])}</p><div class="meta"><div><b>${esc(c.status)}</b><span data-task-card-status>${esc(c[row.status])}</span></div><div><b>${esc(c.assignee)}</b>${esc(row.responsible_name||c.none)}</div><div><b>${esc(c.due)}</b>${esc(date(row.due_at))}</div><div><b>${esc(c.deal)}</b>${esc(row.deal_title||c.none)}</div></div>`;const footer=$('taskFlowCardActions');footer.replaceChildren();
-     const add=(label,callback,attribute)=>{const button=document.createElement('button');button.className='outline';button.type='button';button.textContent=label;if(attribute)button.setAttribute(attribute,'');button.onclick=callback;footer.append(button);};
--    if(source==='native'){if(actions.update===true)add(c.edit,()=>edit(row.id),'data-task-card-edit');if(actions.complete===true)add(c[row.status==='completed'?'reopen':'complete'],()=>changeState(row.id,row.status==='completed'?'reopen':'complete'),'data-task-card-state');if(actions.archive===true)add(c.archive,()=>changeState(row.id,'archive'),'data-task-card-archive');}
-+    if(source==='native'){if(actions.update===true)add(c.edit,()=>edit(row.id),'data-task-card-edit');if(row.status==='open'&&actions.complete===true)add(c.complete,()=>changeState(row.id,'complete'),'data-task-card-state');if(row.status==='completed'&&(row.capabilities?actions.reopen===true:actions.complete===true))add(c.reopen,()=>changeState(row.id,'reopen'),'data-task-card-state');if(actions.archive===true)add(c.archive,()=>changeState(row.id,'archive'),'data-task-card-archive');}
-     else if(actions.complete===true&&row.status==='open'){if(Number.isSafeInteger(Number(row.id))){add(c.complete,()=>{},'data-task-complete');footer.lastChild.setAttribute('data-task-complete',row.id);}else{const reason=document.createElement('p');reason.textContent=c.unsafeComplete;footer.append(reason);}}
-     add(c.close,closeCard);}
-   async function open(source,id,{push=true,revision=routeRevision}={}){
-     id=taskId(source,id);if(!id||!allowed()||!visible())return false;
-     const target=routeTarget();if(target?.error){bindingNotice(true);return false;}
-     const scope=capture(),serial=++cardRevision,modal=ensureCard();opener=document.activeElement;card={source,id,task:null};$('taskFlowCardTitle').textContent=text().loading;$('taskFlowCardBody').replaceChildren();$('taskFlowCardActions').replaceChildren();$('taskFlowCardNotice').classList.remove('show');modal.classList.add('show');
--    try{const data=await read(source,{task_id:id},scope);if(!current(scope)||serial!==cardRevision||revision!==routeRevision||!visible()||!modal.classList.contains('show'))return false;if(data.sources?.find(value=>value.source===source)?.view!==true||data.source!==source||!rowValid(source,data.task)||data.task.id!==id)throw new Error('invalid_task');card={source,id,task:data.task,actions:data.sources?.find(value=>value.source===source)||{}};renderCard();if(push)updateRoute(source,id);modal.querySelector('[data-task-card-close]').focus();return true;}
-+    try{const data=await read(source,{task_id:id},scope);if(!current(scope)||serial!==cardRevision||revision!==routeRevision||!visible()||!modal.classList.contains('show'))return false;if(data.sources?.find(value=>value.source===source)?.view!==true||data.source!==source||!rowValid(source,data.task)||data.task.id!==id)throw new Error('invalid_task');card={source,id,task:data.task,actions:taskActions(source,data.task,data.sources?.find(value=>value.source===source)||{})};renderCard();if(push)updateRoute(source,id);modal.querySelector('[data-task-card-close]').focus();return true;}
-     catch(error){if(!current(scope)||serial!==cardRevision||error.stale)return false;$('taskFlowCardTitle').textContent=text().unavailable;$('taskFlowCardBody').replaceChildren();const box=$('taskFlowCardNotice');box.textContent=text().unavailable;box.classList.add('show');if(error.status===403||error.status===409)void proveAccess();return false;}
-   }
-   function edit(id){if(card?.source==='native'&&card.actions?.update===true){hide($('taskFlowCard'),false);return window.tenantTaskBridge?.edit(id);}}
-   async function changeState(id,action){
--    if(!card||card.source!=='native'||card.id!==id||!allowed())return;const snapshot=card,scope=capture(),serial=cardRevision;
-+    if(!card||card.source!=='native'||card.id!==id||!allowed()||!(card.actions?.[action]===true||(action==='reopen'&&!card.task?.capabilities&&card.actions?.complete===true)))return;const snapshot=card,scope=capture(),serial=cardRevision;
-     if(action==='archive'&&!confirm(text().confirmArchive))return;
-     $('taskFlowCardActions').querySelectorAll('button').forEach(button=>button.disabled=true);
--    try{const data=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id),{method:'POST',scope,body:{action,...identity(),expected_updated_at:snapshot.task.updated_at}});if(!current(scope)||serial!==cardRevision||card!==snapshot)return;if(action==='archive'){if(data.archived!==true)throw Object.assign(new Error('invalid_receipt'),{unknown:true});closeCard();await refreshSource('native',{force:true});return;}if(!rowValid('native',{...data.task,source:'native',status:data.task?.status})||data.task.id!==id||data.task.status!==(action==='complete'?'completed':'open'))throw Object.assign(new Error('invalid_receipt'),{unknown:true});card={...snapshot,task:{...data.task,source:'native'}};renderCard();confirmed('native',data.task);}
-+    try{const data=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id),{method:'POST',scope,body:{action,...identity(),expected_updated_at:snapshot.task.updated_at}});if(!current(scope)||serial!==cardRevision||card!==snapshot)return;if(action==='archive'){if(data.archived!==true)throw Object.assign(new Error('invalid_receipt'),{unknown:true});closeCard();await refreshSource('native',{force:true});return;}if(!rowValid('native',{...data.task,source:'native',status:data.task?.status})||data.task.id!==id||data.task.status!==(action==='complete'?'completed':'open'))throw Object.assign(new Error('invalid_receipt'),{unknown:true});card={...snapshot,task:{...data.task,source:'native'},actions:taskActions('native',data.task,snapshot.actions)};renderCard();confirmed('native',data.task);}
-     catch(error){if(!current(scope)||serial!==cardRevision||card!==snapshot||error.stale)return;const box=$('taskFlowCardNotice');box.textContent=error.unknown?text().unknown:error.code==='task_conflict'?text().conflict:text().writeDenied;box.classList.add('show');const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=text().readAgain;button.onclick=()=>open('native',id,{push:false});$('taskFlowCardActions').replaceChildren(button);if(error.status===403||error.status===409&&error.code!=='task_conflict')void proveAccess();}
-   }
-   function storageKey(source,scope=capture()){return `task-flow:${scope.expected_tenant_id}:${scope.expected_user_id}:${source}`;}
-@@ -134,7 +140,7 @@
-   function beginEditor(){editorProofSerial++;editorPaused=false;const box=$('tasksFlowNotice');if(box.dataset.taskEditorProof==='true'){box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;}}
-   async function proveEditor({fromOptions=false}={}){const id=$('nativeTaskId').value,modal=$('nativeTaskModal');if(!id||!modal.classList.contains('show')||!allowed())return;const serial=++editorProofSerial,scope=capture(),token=window.tenantTaskBridge.snapshot();editorPaused=true;modal.style.visibility='hidden';window.tenantTaskBridge.render();const box=$('tasksFlowNotice');box.dataset.taskEditorProof='true';box.textContent=text().auth;box.classList.add('show');
-     const relevant=()=>serial===editorProofSerial&&current(scope)&&window.tenantTaskBridge.same(token)&&$('nativeTaskId').value===id&&modal.classList.contains('show');
--    try{const data=await read('native',{task_id:id},scope);if(!relevant())return;if(!rowValid('native',data.task)||data.task.id!==id||data.sources?.find(row=>row.source==='native')?.view!==true)throw new Error('invalid_view_proof');rows.native.page={...rows.native.page,sources:data.sources,limit:data.limit};editorPaused=false;modal.style.visibility='';box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;window.tenantTaskBridge.render();if(sourceActions('native').update!==true)window.tenantTaskBridge.readOnly();else if(fromOptions)window.tenantTaskBridge.blockOptions();else void window.tenantTaskBridge.refreshOptions();}
-+    try{const data=await read('native',{task_id:id},scope);if(!relevant())return;if(!rowValid('native',data.task)||data.task.id!==id||data.sources?.find(row=>row.source==='native')?.view!==true)throw new Error('invalid_view_proof');rows.native.page={...rows.native.page,sources:data.sources,limit:data.limit};editorPaused=false;modal.style.visibility='';box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;window.tenantTaskBridge.render();if(taskActions('native',data.task,sourceActions('native')).update!==true)window.tenantTaskBridge.readOnly();else if(fromOptions)window.tenantTaskBridge.blockOptions();else void window.tenantTaskBridge.refreshOptions();}
-     catch(error){if(!relevant())return;if(error.status===403||error.status===404){delete box.dataset.taskEditorProof;modal.classList.remove('show');window.tenantTaskBridge.reset();box.textContent=text().unavailable;box.classList.add('show');if(card?.source==='native'&&card.id===id){card=null;cardRevision++;clearCardPrivate();}rows.native.rows=rows.native.rows.filter(row=>row.id!==id);void refreshSource('native',{force:true});}else{box.textContent=text().error;const retry=document.createElement('button');retry.className='outline';retry.type='button';retry.dataset.taskEditorRetry='true';retry.textContent=text().readAgain;retry.onclick=()=>{if(relevant())void proveEditor({fromOptions});};box.append(retry);}}
-   }
-   function conceal(){for(const id of ['nativeTaskModal','tenantTaskModal','tenantCompleteModal','taskFlowCard'])if($(id))$(id).style.visibility='hidden';}
-diff --git a/beintaskbot-main/docs/tenant-view-demand.js b/beintaskbot-main/docs/tenant-view-demand.js
-index 2972664819227fe62bf026f272264ef2623180c6..a059b5aa25868c4fcf9ff1965ff3344ff782610c 100644
---- a/beintaskbot-main/docs/tenant-view-demand.js
-+++ b/beintaskbot-main/docs/tenant-view-demand.js
-@@ -29,7 +29,9 @@
-   const freshness = (item, data) => employees(item) ? JSON.stringify(stable([
-     memberData(data?.member), Array.isArray(data?.members) ? data.members.map(memberData) : undefined
-   ])) : snapshot(data);
--  const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
-+  const newsAvailable = data => !!(data?.member?.active === true && data.member.tenant_id && data.member.telegram_id
-+    && (data.member.tenant_status || 'active') === 'active' && data?.capabilities?.pages?.news !== false);
-+  const newsReviewAvailable = data => !!(newsAvailable(data) && data?.capabilities?.modules?.linear && (
-     data.member.role === 'owner' || binding(data)?.can_review_news === true));
-   const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
-     '#integrationMarketplaceDialog,#tenantLinearPanel,#tenantKommoPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
-@@ -125,7 +127,7 @@
-         .finally(() => { bootstrap = null; });
-     }
-   }
--  window.tenantViewDemand = {watch, newsAvailable, clean: selector => {
-+  window.tenantViewDemand = {watch, newsAvailable, newsReviewAvailable, clean: selector => {
-     for (const item of subscriptions) if (item.editable === selector) item.dirty = false;
-   }};
- })();
-diff --git a/beintaskbot-main/tenant_ai_agents_api.py b/beintaskbot-main/tenant_ai_agents_api.py
-index 538cacfdf5db4dd092ec40fdc5460fe7003ad2c1..fd7926bbb3e5cfaa442c66cd9397890447aab8f0 100644
---- a/beintaskbot-main/tenant_ai_agents_api.py
-+++ b/beintaskbot-main/tenant_ai_agents_api.py
-@@ -146,6 +146,10 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
-                     # Use the tenant's existing Kommo adapter, not a browser
-                     # supplied account.  This keeps the pick-list current and
-                     # prevents saved agent scopes from narrowing it.
-+                    # Revalidate current management authority before making
-+                    # even a read-only provider request. A verified browser
-+                    # session alone is not an AI management grant.
-+                    result = await asyncio.to_thread(configuration_options, profile)
-                     if request_provider is not None and request.query.get('cached') != '1':
-                         try:
-                             remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
-@@ -154,14 +158,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
-                             # the last tenant-owned catalog usable while Kommo
-                             # is disconnected or temporarily unavailable.
-                             logger.warning('AI Agents pipeline catalog unavailable; using cached tenant configuration')
--                            result = await asyncio.to_thread(configuration_options, profile)
-                         else:
-                             result = await asyncio.to_thread(
-                                 refresh_configuration_catalog, profile,
-                                 ((remote.get('_embedded') or {}).get('pipelines') or []),
-                             )
--                    else:
--                        result = await asyncio.to_thread(configuration_options, profile)
-                 elif resource == 'handoffs':
-                     result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
-                 elif resource == 'triggers':
-diff --git a/beintaskbot-main/tenant_ai_agents_schema.py b/beintaskbot-main/tenant_ai_agents_schema.py
-index 4898ac69f84c7cce2472262fefc2ca08a1257e5d..1d1c423a1144dcb872d0089ae1d0385b984e3364 100644
---- a/beintaskbot-main/tenant_ai_agents_schema.py
-+++ b/beintaskbot-main/tenant_ai_agents_schema.py
-@@ -11,6 +11,7 @@ _lock = Lock()
- # Read PostgreSQL catalogs on every call: readiness belongs to this database,
- # search_path and transaction, never to a process-local Boolean.
- _SCHEMA_COLUMNS = {
-+    'saas_access_schema_migrations': ['migration_key', 'applied_at'],
-     'saas_ai_agent_action_runs': (
-         'action_key action_type agent_id created_at event_fingerprint id payload result state '
-         'tenant_id updated_at '
-@@ -48,7 +49,7 @@ _SCHEMA_COLUMNS = {
-         'trigger_type updated_at version '
-     ).split(),
-     'saas_ai_agents': (
--        'archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
-+        'access_responsible_id archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
-         'enabled expert_policy id instructions language mode model name response_policy role '
-         'safety schedule scopes setup_key style tenant_id updated_at version '
-     ).split(),
-@@ -204,7 +205,7 @@ _SCHEMA_COLUMNS = {
-         'created_at event_key message_id tenant_id ticket_id '
-     ).split(),
-     'saas_support_tickets': (
--        'assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
-+        'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
-         'channel_id completion_note completion_outcome conversation_id created_at created_by '
-         'description history_scope id knowledge_candidate_requested next_steps reason '
-         'resolved_at source status suggestions summary summary_agent_binding '
-@@ -219,6 +220,8 @@ _SCHEMA_COLUMNS = {
-     ).split(),
- }
- _SCHEMA_INDEXES = [
-+    'saas_ai_agents_access_owner_idx',
-+    'saas_support_tickets_access_owner_idx',
-     'saas_ai_accepted_run_idx',
-     'saas_ai_agent_drafts_pending_idx',
-     'saas_ai_agent_jobs_ready_idx',
-@@ -273,6 +276,16 @@ def _schema_current(conn):
-         cur.execute("""SELECT
-           EXISTS(SELECT 1 FROM saas_ai_scope_migrations WHERE version=1)
-           AND EXISTS(SELECT 1 FROM saas_ai_compat_migrations WHERE version=1)
-+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
-+            WHERE migration_key='historical-access-owner-v1:saas_ai_agents')
-+          AND EXISTS(SELECT 1 FROM pg_constraint
-+            WHERE conrelid='saas_ai_agents'::regclass AND conname='saas_ai_agents_access_owner_fk'
-+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
-+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
-+            WHERE migration_key='historical-access-owner-v1:saas_support_tickets')
-+          AND EXISTS(SELECT 1 FROM pg_constraint
-+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_tickets_access_owner_fk'
-+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
-           AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_settings
-             WHERE operating_mode='test' OR
-               (support_case_extraction_enabled AND support_case_extraction_mode='off'))
-@@ -425,6 +438,8 @@ def ensure_schema(conn):
-               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-               UNIQUE(tenant_id,id),
-               FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
-+            from tenant_scoped_access_schema import migrate_resource_ownership
-+            migrate_resource_ownership(cur, ('saas_ai_agents',))
-             cur.execute('ALTER TABLE saas_ai_agents DROP CONSTRAINT IF EXISTS saas_ai_agents_mode_check')
-             cur.execute("ALTER TABLE saas_ai_agents ADD CONSTRAINT saas_ai_agents_mode_check CHECK(mode IN ('manual','automatic'))")
-             # This is deliberately additive: existing agents receive the

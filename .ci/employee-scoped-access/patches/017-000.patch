@@ -1,291 +1,76 @@
-diff --git a/beintaskbot-main/tests/test_tenant_crm_notice.py b/beintaskbot-main/tests/test_tenant_crm_notice.py
-index aa10080ceef7d45b548cd747556fc10fa18a9f96..29ca9507e51e164e4149ec0a8140e8914d89d98e 100644
---- a/beintaskbot-main/tests/test_tenant_crm_notice.py
-+++ b/beintaskbot-main/tests/test_tenant_crm_notice.py
-@@ -159,7 +159,7 @@ class OutboxTests(unittest.TestCase):
-         self.p=member();self.row=task()
-         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
-             'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
--            'connect_dialog_route':connect_dialog_route},
-+            'connect_dialog_route':connect_dialog_route,'source_eligible':lambda cur,*args:eligible(*args)},
-             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
-         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
-                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
-@@ -229,7 +229,7 @@ class OutboxTests(unittest.TestCase):
- class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
-     async def test_complete_text_and_one_delivery_attempt(self):
-         worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
--            'send_push':Mock()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-         row=task();row['deal'].update(contact_name='Client',phone='+994123')
-         item={'resource':row,'event':'task_assigned','send':True,'recipient_id':20,'tenant_name':'Company'}
-         self.assertIn('Call client',worker.message(item));self.assertIn('+994123',worker.message(item))
-@@ -237,3 +237,21 @@ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
-         await worker.deliver(bot,'',{},Mock())
-         bot.send_message.assert_awaited_once()
-         self.assertEqual(worker.finish.call_args.args[1],'unknown')
-+
-+
-+class ScopedNoticeDeadline(unittest.IsolatedAsyncioTestCase):
-+    async def test_scoped_provider_timeout_is_unknown_without_retry(self):
-+        import asyncio
-+        from unittest.mock import patch
-+        worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
-+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()},
-+            {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-+        worker.deliver.__globals__['DELIVERY_TIMEOUT']=.01
-+        item={'resource':{'body':'synthetic'},'event':'incoming_message','send':True,'recipient_id':20}
-+        worker.claim.side_effect=[item,None]
-+        async def slow(**kwargs):await asyncio.sleep(5)
-+        bot=AsyncMock();bot.send_message.side_effect=slow
-+        with patch.dict('os.environ',{'TENANT_SCOPED_ACCESS_ENABLED':'true'}):
-+            await asyncio.wait_for(worker.deliver(bot,'',{},Mock()),timeout=2)
-+        bot.send_message.assert_awaited_once()
-+        assert worker.finish.call_args.args[1]=='unknown'
-diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_contract.py b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b2c974d6a4fbb11022bff23f465906e30edf36af
+index 0000000000000000000000000000000000000000..b6b21e3c27fa89646defa85fdbf690e9c908bc46
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
-@@ -0,0 +1,238 @@
-+"""Synthetic, I/O-free checks for the deliberately inactive relation contract."""
-+from dataclasses import FrozenInstanceError, replace
-+from datetime import datetime, timedelta, timezone
-+import hashlib
-+import json
-+
++++ b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
+@@ -0,0 +1,67 @@
++"""Pure planning tests: no provider network or credentials."""
 +import pytest
-+
-+from tenant_crm_relation_contract import (
-+    BoundIdentity, ProviderBinding, ProviderExpectation, RecordRef,
-+    RelationContractError, RelationIntent, classify_observation,
-+)
++from tenant_crm_relation_kommo import plan, snapshot, digest, RelationConflict
 +
 +
-+TENANT = '10000000-0000-4000-8000-000000000001'
-+EVENT = '20000000-0000-4000-8000-000000000001'
-+DEAL = RecordRef('deal', '30000000-0000-4000-8000-000000000001')
-+CONTACT_A = RecordRef('contact', '40000000-0000-4000-8000-000000000001')
-+CONTACT_B = RecordRef('contact', '40000000-0000-4000-8000-000000000002')
-+COMPANY = RecordRef('company', '50000000-0000-4000-8000-000000000001')
-+BINDING = ProviderBinding(TENANT, 'kommo', 'synthetic-account', 'synthetic-generation-1')
-+REVISION = datetime(2026, 11, 11, 12, 0, 0, 123456, timezone.utc)
-+EXPECTED, DESIRED, OTHER = 'a' * 64, 'b' * 64, 'c' * 64
++def test_replace_main_preserves_all_secondaries_and_uses_narrow_payloads():
++    p = plan('deal_contact', '10', '1', '3', {'1': True, '2': False, '3': False})
++    assert p.states == ({'1': True, '2': False, '3': False},
++                        {'1': False, '2': False, '3': True}, {'2': False, '3': True})
++    assert p.request(0) == ('POST', 'leads/10/link', [
++        {'to_entity_id': 3, 'to_entity_type': 'contacts', 'metadata': {'is_main': True}}])
++    assert p.request(1) == ('POST', 'leads/10/unlink', [{'to_entity_id': 1, 'to_entity_type': 'contacts'}])
++    assert p.read_path() == 'leads/10/links'
 +
 +
-+def identity(record, external_id, binding=BINDING):
-+    return BoundIdentity(record, external_id, binding)
++def test_unlink_never_deletes_secondary_contacts():
++    p = plan('deal_contact', '10', '1', None, {'1': True, '2': False})
++    assert p.states[-1] == {'2': False}
++    assert len(p.steps) == 1 and p.steps[0].target_id == '1'
 +
 +
-+def intent(**overrides):
-+    values = dict(event_id=EVENT, actor_id=42, source=CONTACT_B, relation='deal_contact',
-+                  changed=identity(DEAL, '101'), before=identity(CONTACT_A, '201'),
-+                  after=identity(CONTACT_B, '202'), local_revision=REVISION)
-+    values.update(overrides)
-+    return RelationIntent(**values)
++def test_company_replacement_is_two_explicit_steps():
++    p = plan('contact_company', '7', '1', '2', {'1': False})
++    assert p.states == ({'1': False}, {}, {'2': False})
++    assert p.request(0) == ('POST', 'contacts/7/unlink', [{'to_entity_id': 1, 'to_entity_type': 'companies'}])
++    assert p.request(1) == ('POST', 'contacts/7/link', [{'to_entity_id': 2, 'to_entity_type': 'companies'}])
 +
 +
-+def planned():
-+    # Synthetic digests test the classifier. No production Kommo/BEIN adapter
-+    # or approved relation semantics are implied by this fixture.
-+    return intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, DESIRED))
++@pytest.mark.parametrize('payload', [{}, {'_embedded': {'links': None}},
++    {'_embedded': {'links': []}, '_links': {'next': {'href': 'next'}}},
++    {'_embedded': {'links': []}, '_links': []},
++    {'_embedded': {'links': []}, '_total_items': 2},
++    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts'}]}},
++    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': 1}}]}}])
++def test_incomplete_or_ambiguous_remote_graph_is_not_empty(payload):
++    with pytest.raises(RelationConflict): snapshot(payload, 'deal_contact', '10')
 +
 +
-+def classify(event=None, **overrides):
-+    event = event or planned()
-+    values = dict(event_fingerprint=event.fingerprint(), binding=event.changed.binding,
-+                  contract_version='synthetic-v1', observed_digest=EXPECTED,
-+                  attempt_outcome='not_started')
-+    values.update(overrides)
-+    return classify_observation(event, **values)
++def test_snapshot_main_metadata_is_part_of_full_digest():
++    raw = {'_embedded': {'links': [
++        {'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': True}},
++        {'to_entity_id': 2, 'to_entity_type': 'contacts', 'metadata': {'main_contact': False}}]}}
++    assert snapshot(raw, 'deal_contact', '10') == {'1': True, '2': False}
++    assert digest({'1': True, '2': False}, 'deal_contact') != digest({'1': False, '2': True}, 'deal_contact')
++    assert digest({'1': True}, 'deal_contact') != digest({'1': True, '2': False}, 'deal_contact')
 +
 +
-+def test_event_round_trip_is_strict_narrow_and_detached_from_mutable_payload():
-+    event = intent()
-+    payload = json.loads(json.dumps(event.to_payload()))
-+    assert RelationIntent.from_payload(payload) == event
-+    assert payload['source_action'] == 'update'
-+    assert payload['provider_expectation'] is None
-+    assert set(payload['changed']) == {'entity_type', 'internal_id', 'external_id'}
-+    assert not {'name', 'title', 'phone', 'email', 'description', 'pipeline_id',
-+                'stage_id', 'responsible_id', 'access_token', 'secrets'} & set(payload)
-+    payload['after']['external_id'] = '999'
-+    assert event.after.external_id == '202'
-+    with pytest.raises(FrozenInstanceError):
-+        event.actor_id = 99
-+    with pytest.raises(FrozenInstanceError):
-+        event.after.external_id = '999'
++@pytest.mark.parametrize('before,after,initial', [('1', '3', {'2': True}),
++    (None, '3', {'2': True}), ('1', '3', {'1': True, '2': True})])
++def test_conflicting_main_never_plans_write(before, after, initial):
++    with pytest.raises(RelationConflict): plan('deal_contact', '10', before, after, initial)
 +
 +
-+@pytest.mark.parametrize('source', [DEAL, CONTACT_B])
-+def test_deal_card_and_contact_card_share_narrow_change_with_distinct_source(source):
-+    event = intent(source=source)
-+    assert event.source == source
-+    assert event.changed.record == DEAL
-+    assert event.after.record == CONTACT_B
-+
-+
-+@pytest.mark.parametrize('source', [CONTACT_A, COMPANY])
-+@pytest.mark.parametrize('unlink', [False, True])
-+def test_company_contact_directions_preserve_changed_entity_and_exact_unlink(source, unlink):
-+    company = identity(COMPANY, '301')
-+    event = intent(source=source, relation='contact_company', changed=identity(CONTACT_A, '201'),
-+                   before=company if unlink else None, after=None if unlink else company)
-+    assert event.changed.record == CONTACT_A
-+    assert event.source == source
-+    assert RelationIntent.from_payload(event.to_payload()) == event
-+
-+
-+def test_contact_card_unlink_retains_exact_old_contact():
-+    event = intent(source=CONTACT_A, after=None)
-+    assert event.before.record == CONTACT_A and event.after is None
-+    with pytest.raises(RelationContractError, match='source_not_in_relation'):
-+        intent(source=CONTACT_B, after=None)
-+    with pytest.raises(RelationContractError, match='source_action_mismatch'):
-+        intent(source=CONTACT_A)
-+
-+
-+@pytest.mark.parametrize('changes', [
-+    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
-+    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
-+    {'connection_generation': 'synthetic-generation-2'},
-+])
-+@pytest.mark.parametrize('target', ['before', 'after'])
-+def test_mixed_tenant_provider_account_or_connection_identity_is_rejected(changes, target):
-+    event = intent()
-+    changed_identity = replace(getattr(event, target), binding=replace(BINDING, **changes))
-+    with pytest.raises(RelationContractError, match='relation_binding_mismatch'):
-+        replace(event, **{target: changed_identity})
-+
-+
-+@pytest.mark.parametrize('actor', [None, 0, -1, True, 42.0, '42'])
-+def test_exact_human_actor_is_required_without_integration_fallback(actor):
-+    with pytest.raises(RelationContractError, match='human_actor_required'):
-+        intent(actor_id=actor)
-+
-+
-+@pytest.mark.parametrize('changes,error', [
-+    ({'relation': 'company_deal'}, 'invalid_local_relation'),
-+    ({'changed': identity(CONTACT_A, '201')}, 'invalid_changed_entity'),
-+    ({'after': identity(COMPANY, '301')}, 'invalid_relation_target'),
-+    ({'source': COMPANY}, 'source_not_in_relation'),
-+    ({'before': None, 'after': None}, 'no_local_relation_change'),
-+    ({'before': identity(CONTACT_B, '999')}, 'no_local_relation_change'),
-+    ({'after': identity(CONTACT_B, '201')}, 'external_identity_collision'),
-+    ({'local_revision': datetime(2026, 11, 11)}, 'timezone_aware_revision_required'),
-+    ({'event_id': 'not-a-uuid'}, 'invalid_record_identity'),
-+])
-+def test_invalid_or_ambiguous_local_intent_is_rejected(changes, error):
-+    with pytest.raises(RelationContractError, match=error):
-+        intent(**changes)
-+
-+
-+@pytest.mark.parametrize('location,key', [
-+    (None, 'title'), ('source', 'phone'), ('changed', 'name'),
-+    ('before', 'email'), ('after', 'description'), ('binding', 'access_token'),
-+    ('provider_expectation', 'json_body'),
-+])
-+def test_payload_cannot_smuggle_record_fields_credentials_or_wire_requests(location, key):
-+    payload = planned().to_payload()
-+    target = payload if location is None else payload[location]
-+    target[key] = 'SYNTHETIC-NOT-A-SECRET'
-+    with pytest.raises(RelationContractError, match='invalid_relation_payload'):
-+        RelationIntent.from_payload(payload)
-+
-+
-+@pytest.mark.parametrize('key,value', [('version', 2), ('version', True),
-+                                      ('source_action', 'delete'), ('source_action', 'view')])
-+def test_unknown_contract_and_non_update_source_actions_are_rejected(key, value):
-+    payload = intent().to_payload()
-+    payload[key] = value
-+    with pytest.raises(RelationContractError, match='unsupported_relation_contract'):
-+        RelationIntent.from_payload(payload)
-+
-+
-+@pytest.mark.parametrize('value', ['', ' ', ' account', 'account ', 'account\nsecret', 101])
-+def test_binding_identifier_must_be_explicit_and_canonical(value):
-+    with pytest.raises(RelationContractError, match='invalid_binding_identifier'):
-+        replace(BINDING, connection_generation=value)
-+
-+
-+def test_fingerprint_is_canonical_and_not_just_event_id():
-+    event = planned()
-+    reverse_order = dict(reversed(list(event.to_payload().items())))
-+    assert RelationIntent.from_payload(reverse_order).fingerprint() == event.fingerprint()
-+    offset_revision = REVISION.astimezone(timezone(timedelta(hours=4)))
-+    assert replace(event, local_revision=offset_revision).fingerprint() == event.fingerprint()
-+    changes = [replace(event, actor_id=43), replace(event, source=DEAL),
-+               replace(event, local_revision=REVISION + timedelta(microseconds=1)),
-+               replace(event, before=None), replace(event, provider_expectation=None),
-+               replace(event, provider_expectation=ProviderExpectation('other-contract', EXPECTED, DESIRED))]
-+    assert all(other.event_id == event.event_id and other.fingerprint() != event.fingerprint()
-+               for other in changes)
-+
-+
-+def test_no_provider_semantics_or_digests_are_inferred_from_local_foreign_key():
-+    event = intent()
-+    assert event.provider_expectation is None
-+    assert classify(event) == 'provider_contract_missing'
-+    # Different possible full remote states remain distinct evidence. The
-+    # contract does not choose which one implements the local change.
-+    def digest(value):
-+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-+    add = digest([{'id': 201, 'is_main': True}, {'id': 202, 'is_main': False}])
-+    replace_primary = digest([{'id': 201, 'is_main': False}, {'id': 202, 'is_main': True}])
-+    replace_all = digest([{'id': 202, 'is_main': True}])
-+    assert len({add, replace_primary, replace_all}) == 3
-+    assert len({replace(event, provider_expectation=ProviderExpectation('synthetic', EXPECTED, desired))
-+                .fingerprint() for desired in (add, replace_primary, replace_all)}) == 3
-+
-+
-+@pytest.mark.parametrize('attempt', ['not_started', 'definitely_not_sent', 'unknown', 'acknowledged'])
-+@pytest.mark.parametrize('observed,expected_result', [
-+    (None, 'observation_unknown'), (OTHER, 'relation_conflict'), (DESIRED, 'desired_observed'),
-+])
-+def test_reconciliation_does_not_replay_missing_conflicting_or_desired_state(attempt, observed, expected_result):
-+    assert classify(attempt_outcome=attempt, observed_digest=observed) == expected_result
-+
-+
-+@pytest.mark.parametrize('attempt,result', [
-+    ('not_started', 'expected_observed'), ('definitely_not_sent', 'expected_observed'),
-+    ('unknown', 'outcome_unknown'), ('acknowledged', 'outcome_unknown'),
-+])
-+def test_unchanged_read_after_timeout_or_acknowledgement_does_not_prove_safe_retry(attempt, result):
-+    assert classify(attempt_outcome=attempt) == result
-+
-+
-+@pytest.mark.parametrize('changes', [
-+    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
-+    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
-+    {'connection_generation': 'synthetic-generation-2'},
-+])
-+def test_read_back_from_another_connection_never_settles_this_event(changes):
-+    assert classify(binding=replace(BINDING, **changes), observed_digest=DESIRED) == 'connection_changed'
-+
-+
-+def test_old_event_or_contract_observation_never_settles_new_intent():
-+    event = planned()
-+    assert classify(event, event_fingerprint=replace(event, actor_id=43).fingerprint(),
-+                    observed_digest=DESIRED) == 'event_changed'
-+    assert classify(contract_version='old-contract', observed_digest=DESIRED) == 'provider_contract_changed'
-+
-+
-+@pytest.mark.parametrize('digest', ['', 'a' * 63, 'G' * 64, {}, None])
-+def test_invalid_state_evidence_cannot_be_interpreted_as_empty_relation(digest):
-+    with pytest.raises(RelationContractError, match='invalid_relation_digest'):
-+        ProviderExpectation('synthetic', digest, DESIRED)
-+
-+
-+def test_expired_lease_is_not_definitely_not_sent_evidence():
-+    with pytest.raises(RelationContractError, match='invalid_attempt_outcome'):
-+        classify(attempt_outcome='lease_expired')
-+
-+
-+def test_empty_remote_operation_is_observed_without_forcing_a_write():
-+    # Some approved adapter might determine that the full remote relation set
-+    # already satisfies a local change. Do not impose a remote cardinality rule.
-+    event = intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, EXPECTED))
-+    assert classify(event) == 'desired_observed'
++def test_binding_refresh_stable_reconnect_distinct_and_malformed_generation_closed():
++    from datetime import datetime, timezone, timedelta
++    from tenant_crm_relation_identity import connection_binding
++    from uuid import UUID
++    tenant = str(UUID(int=1)); stamp = datetime.now(timezone.utc)
++    row = {'provider': 'kommo', 'status': 'connected', 'account_domain': 'synthetic.kommo.com', 'connected_at': stamp}
++    first = connection_binding(tenant, row)
++    assert connection_binding(tenant, {**row, 'updated_at': stamp + timedelta(seconds=1)}) == first
++    assert connection_binding(tenant, {**row, 'connected_at': stamp + timedelta(seconds=1)}) != first
++    assert connection_binding(tenant, {**row, 'account_domain': 'other.kommo.com'}) != first
++    assert connection_binding(tenant, {**row, 'provider': 'kommo_manual'}) != first
++    for changed in ({'connected_at': 'bad'}, {'connected_at': stamp.replace(tzinfo=None)},
++                    {'status': 'disconnected'}, {'provider': 'beinsystems'}):
++        assert connection_binding(tenant, {**row, **changed}) is None
 diff --git a/beintaskbot-main/tests/test_tenant_customer_voice_service.py b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
 index 084032d34f2ebe7411bc4dc74e8d0d849587e61b..9a5514b91be11606d95dd6854597f80a948d0b65 100644
 --- a/beintaskbot-main/tests/test_tenant_customer_voice_service.py
@@ -298,6 +83,69 @@ index 084032d34f2ebe7411bc4dc74e8d0d849587e61b..9a5514b91be11606d95dd6854597f80a
          self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
          self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
          self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()
+diff --git a/beintaskbot-main/tests/test_tenant_linear.py b/beintaskbot-main/tests/test_tenant_linear.py
+index 7224a28ab388ea004dab07ec6c5eb1f05932cd54..269692657ae4aa6b8a09aff4fa8947da82f8970e 100644
+--- a/beintaskbot-main/tests/test_tenant_linear.py
++++ b/beintaskbot-main/tests/test_tenant_linear.py
+@@ -53,7 +53,7 @@ class StorageTests(unittest.TestCase):
+         self.conn.commit.assert_called_once()
+ 
+     def test_encryption_failure_stops_before_provider(self):
+-        self.service.command.__globals__['_fernet'].side_effect = RuntimeError('configuration')
++        self.service.command.__wrapped__.__globals__['_fernet'].side_effect = RuntimeError('configuration')
+         with self.assertRaises(RuntimeError): self.service.command(PROFILE, {'action': 'connect', 'api_key': 'key'})
+         self.verify.assert_not_called(); self.connect.assert_not_called()
+ 
+@@ -87,7 +87,7 @@ class StorageTests(unittest.TestCase):
+         with self.assertRaises(TenantLinearError): self.service.credential(PROFILE)
+ 
+     def test_foreign_status_or_project_fails_before_write(self):
+-        self.service.command.__globals__['choices'] = Mock(return_value={'team': {
++        self.service.command.__wrapped__.__globals__['choices'] = Mock(return_value={'team': {
+             'states': {'nodes': []}, 'projects': {'nodes': []}}})
+         with self.assertRaises(TenantLinearError):
+             self.service.command(PROFILE, {'action': 'settings', 'settings': {'team_id': ID, 'done_state_ids': [ID]}})
+diff --git a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
+index 02546487b40ce72c0fc99d942a593867870ceb7d..1a81406d946135b65c02c0f2ab45e447448d3c30 100644
+--- a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
++++ b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
+@@ -29,6 +29,7 @@ async function harness(){
+   if(url==='/api/platform/members'){state.memberReads++;return {ok:true,json:async()=>({success:true,members:state.rows})};}
+   return {ok:true,json:async()=>({success:true,status:'disconnected',updated_at:'v1',settings:{},members:state.rows})};
+  };
++ w.eval(fs.readFileSync(require("node:path").join(__dirname,"../docs/tenant-shared-integration-settings.js"),"utf8"));
+  w.eval(source);watcher.activate({member:{tenant_id:'A',telegram_id:1,role:'owner'}});
+  w.document.getElementById('tlLoad').click();await flush();
+  return {w,state,watcher,root:id=>w.document.querySelector(`[data-tl-employee="${id}"]`)};
+diff --git a/beintaskbot-main/tests/test_tenant_members_api.py b/beintaskbot-main/tests/test_tenant_members_api.py
+index dc362de69483b9840e4b7cd0d4293c14aac4639e..f5ee0a2fb09d392d66be23df7d2b09178bd73b2c 100644
+--- a/beintaskbot-main/tests/test_tenant_members_api.py
++++ b/beintaskbot-main/tests/test_tenant_members_api.py
+@@ -54,6 +54,24 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual((await self.api["invite_requests"](self.request("GET"))).status, 403)
+         self.listing.assert_not_called(); self.create.assert_not_called(); self.requests.assert_not_called()
+ 
++    async def test_scoped_update_without_read_returns_receipt_not_failed_readback(self):
++        from test_employee_card_scopes import actor
++        self.member.return_value = actor('none', 'all')
++        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
++            response = await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))
++        self.assertEqual(response.status, 200)
++        self.assertEqual(self.payload(response), {'success': True, 'applied': True})
++        self.deactivate.assert_called_once_with(tenant_id='a', owner_id=2, telegram_id=3)
++        self.listing.assert_not_called()
++
++    async def test_scoped_read_does_not_admit_update(self):
++        from test_employee_card_scopes import actor
++        self.member.return_value = actor('all', 'none')
++        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
++            self.assertEqual((await self.api['members'](self.request('GET'))).status, 200)
++            self.assertEqual((await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))).status, 403)
++        self.deactivate.assert_not_called()
++
+     async def test_member_list_upsert_and_deactivate(self):
+         result = self.payload(await self.api["members"](self.request("GET")))
+         self.assertEqual(result["members"], [{"telegram_id": 22}])
 diff --git a/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..1edc19f4d7d223fff47c235f35ff1b2f6f6b381a
@@ -536,3 +384,146 @@ index b1142d095816a4a216eae156532f02a4c962a2f2..f14689ca72987aef2d5366e909d9cd69
      ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
      ('dialogs/agent-assignment', ('GET','POST')),
      ('dialogs/agent-assignment-bulk', ('GET','POST')),
+diff --git a/beintaskbot-main/ui/src/main.jsx b/beintaskbot-main/ui/src/main.jsx
+index 1203994a2db6be67c062b866938f224b8b669762..7f078934939e9e9d3896cf6286729f4133c6f9c6 100644
+--- a/beintaskbot-main/ui/src/main.jsx
++++ b/beintaskbot-main/ui/src/main.jsx
+@@ -1210,7 +1210,7 @@ function IntegrationMarketplace() {
+         connected: !!me.member?.telegram_id,
+         label: "connected",
+       };
+-      if (["owner", "admin"].includes(me.member?.role)) {
++      if (!(me.integrations || []).some(row => row.management_actions) && ["owner", "admin"].includes(me.member?.role)) {
+         const checks = await Promise.allSettled([
+           api("/api/platform/linear/settings"),
+           api("/api/platform/chat/ai/settings"),
+@@ -1269,8 +1269,8 @@ function IntegrationMarketplace() {
+   useEffect(() => {
+     if (
+       !selected ||
+-      tab !== "settings" ||
+-      (selected.id === "connect" && !owner)
++      (tab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
++      (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
+     )
+       return;
+     const detail = {
+@@ -1642,7 +1642,7 @@ function IntegrationMarketplace() {
+                     </Box>
+                   )}
+                   <Dialog.Body p={{ base: "5", md: "6" }} overflowY="auto">
+-                    {tab === "connection" && (
++                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box><Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                       <Stack gap="4">
+                         {!owner && (
+                           <Box
+@@ -1832,7 +1832,7 @@ function IntegrationMarketplace() {
+                         )}
+                       </Stack>
+                     )}
+-                    {tab === "settings" && (
++                    {tab === "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id) && (
+                       <>
+                         {selected.id === "connect" ? (
+                           owner ? (
+diff --git a/docs/crm-relation-delivery-safety.md b/docs/crm-relation-delivery-safety.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..dda9fb7972287ef547faa445e4dfc4f3675f99d2
+--- /dev/null
++++ b/docs/crm-relation-delivery-safety.md
+@@ -0,0 +1,95 @@
++# Dormant relationship delivery
++
++## What is implemented
++
++The relation store changes a single native FK and inserts its durable intent and
++latest-head marker in the same transaction. It records the authenticated source
++card and actor, not merely the changed FK owner. Delivery rechecks the source
++card's update permission, active tenant/member, ownership/department scope,
++active records, exact local revision/head, current sync policy, verified mapping,
++account domain and connection generation. Tenant and row locks stay held through
++conditional provider I/O. The tenant key lock also fences insertion of a newly
++preferred integration while a manual connection is selected.
++
++Identity rows are separate from legacy unbound IDs. Import/create evidence or an
++explicit owner verification is required; reconnect never adopts old mappings
++just because the same numeric provider ID exists. Token refresh preserves the
++integration generation; a connection or account change invalidates it.
++
++Kommo planning uses only POST /leads/{id}/link and /unlink (or the corresponding
++contact/company endpoints), one target at a time. Replacing a main contact links
++the new main before detaching only the previous main. Secondary contacts remain
++in every planned state. Company replacement is explicitly two steps, not atomic.
++All remote snapshots include the complete relevant ID set and main flags; partial,
++paged, malformed or ambiguous snapshots fail closed. No record PATCH is used.
++
++The driver commits a sending marker before I/O and keeps a session advisory lock
++across commits. A duplicate worker cannot dispatch concurrently. Crash, timeout,
++unknown result, or lost read-back causes no replay and no compensating unlink.
++Even observing the desired state does not prove an earlier in-flight request has
++finished. A later invocation cannot infer permission from a queued event.
++
++## Deliberate activation blocker
++
++There is no production adapter or scheduled caller. Existing scoped relation
++requests continue to return 409 when outbound synchronization is configured.
++The journal API is dormant; the migration only creates additive empty tables.
++No identities are automatically backfilled and no live sync policy is changed.
++
++A valid delivery adapter must compare the full expected remote relation graph and
++apply the one narrow operation under an actual atomic/exclusive provider fence.
++The test mock does this in memory. Kommo's published link/unlink API does not
++supply a documented CAS/version precondition. Read/check/POST/read can detect
++some concurrent changes but cannot prevent overwriting a main-contact edit that
++arrives between the check and POST. Local PostgreSQL locks do not fence Kommo UI
++users or other integrations. This is a missing integration contract, not a new
++permanent restriction on the product or the user's approved relation semantics.
++
++The smallest missing safety contract is provider-supported conditional relation
++writes (or a verified exclusive-write mechanism covering *all* remote writers),
++plus a way to establish that an uncertain prior request has finished before any
++subsequent step. Without those guarantees, activating the current mock contract
++as ordinary Kommo HTTP would be unsafe. Do not replace it with a boolean flag or
++an in-process lock. Unlinking the only main while secondary contacts remain also
++needs verified provider behavior regarding automatic main-contact reassignment.
++
++BEIN has no independently verified narrow link/unlink contract here. It remains
++unsupported; do not invent PUT/PATCH semantics or route relation intents through
++the whole-record exporter. Contact-company activation additionally needs an
++explicit supported sync-policy field, since the current policy UI does not offer
++company_id for contact synchronization.
++
++## Additional hard scoped-rollout blocker
++
++The preexisting whole-record outbox stores no actor/source-card provenance or
++immutable field mask and reconstructs its payload from the current sync policy.
++Even a scalar-only deal edit can therefore export contact_id; a later policy
++change can add this field to an already queued event. This patch does not rewrite
++accepted legacy events or remove their configured fields. The new scoped
++contact-change guard prevents that direct bypass, while unchanged-contact scalar
++edits and gate-off legacy behavior are preserved. The global scoped gate MUST
++remain off until queued field provenance and dispatch authorization can separate
++scoped scalar edits from relationship writes. This is unfinished integration work,
++not a claim that scoped outbound synchronization is ready.
++
++## Verified primary references (2026-11-11)
++
++- https://developers.kommo.com/reference/linking-entities : POST relation endpoint;
++  response metadata main_contact.
++- https://developers.kommo.com/reference/unlinking-entities : POST unlink endpoint.
++- https://developers.kommo.com/reference/linked-entities : full links observation.
++- https://raw.githubusercontent.com/amocrm/amocrm-api-php/master/src/AmoCRM/Models/ContactModel.php :
++  getMetadataForLink serializes the request field is_main (not main_contact).
++
++These references establish endpoint shapes, not a concurrency or idempotency
++contract. No live provider requests were made during development.
++
++## Verification
++
++Pure contract/planner tests and isolated PostgreSQL/WASM tests exercise rollback,
++source-only update authorization, stale/revoked access, reconnect/account changes,
++mapping changes, local edits, secondary preservation, duplicate delivery,
++timeout-after-apply and simulated process loss. A separate localhost PostgreSQL
++suite exercises actual multi-session blocking and concurrent dispatch. It is
++skipped without BEINTASKBOT_TEST_POSTGRES_DSN; WASM is not evidence of real
++multi-session locking. Tests never use production databases or credentials.

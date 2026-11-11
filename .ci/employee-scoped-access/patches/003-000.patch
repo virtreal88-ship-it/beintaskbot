@@ -1,0 +1,285 @@
+diff --git a/beintaskbot-main/docs/tenant-finance.js b/beintaskbot-main/docs/tenant-finance.js
+index 99910a7e5390fc791ae5e1a1afb645b4492f50dc..ab3b61aeae2625e5b5695feb6476c670429c55e8 100644
+--- a/beintaskbot-main/docs/tenant-finance.js
++++ b/beintaskbot-main/docs/tenant-finance.js
+@@ -2,36 +2,54 @@
+ (() => {
+   const $=id=>document.getElementById(id),nav=document.querySelector('[data-view="finance"]');
+   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+-  let profile,capabilities={},scope='',epoch=0,loading=false,busy=false,offset=0,total=0,rows=[],members=[],member=0,active=true,pending=null,action='credit',source=null;
++  let profile,capabilities={},financeCaps=null,scope='',epoch=0,loading=false,memberLoading=false,busy=false,offset=0,total=0,rows=[],members=[],member=0,active=true,pending=null,action='credit',source=null;
+   const modal=document.createElement('div');modal.id='financeModal';modal.className='modal';
+   modal.innerHTML='<form class="modal-card" id="financeForm"><div class="modal-head"><h2 id="financeTitle"></h2><button class="close" type="button" id="financeClose">×</button></div><p id="financeTarget"></p><label id="financeAmountLabel">Məbləğ (AZN)<input id="financeAmount" inputmode="decimal" placeholder="100.00" maxlength="32"></label><label>Səbəb<textarea id="financeNote" maxlength="2000" required></textarea></label><p class="sub">Yalnız proqramdakı balans dəyişir. Bank köçürməsi edilmir.</p><div id="financeFormNotice" class="notice" role="status"></div><div class="finance-footer"><button type="submit" class="primary" id="financeSubmit">Təsdiq et</button><button type="button" class="outline" id="financeCancel">Bağla</button></div></form>';
+   document.body.append(modal);
+   const style=document.createElement('style');style.textContent='#view-finance .top{flex-wrap:wrap}#financeMember{max-width:240px;padding:9px;border:1px solid var(--line);border-radius:9px}#financeModal{z-index:50}#financeModal .modal-card{max-height:calc(100dvh - 24px);overflow:auto;padding-bottom:max(24px,env(safe-area-inset-bottom))}#financeModal label{display:grid;gap:8px;margin:14px 0}#financeModal input,#financeModal textarea{font:inherit;width:100%;padding:12px;border:1px solid var(--line);border-radius:10px}#financeModal textarea{resize:none;min-height:90px}#financeModal .finance-footer{position:sticky;bottom:-24px;padding:16px 0;background:white;display:flex;gap:10px}#financeModal .spinner{display:inline-block}';document.head.append(style);
+   const key=()=>`crm-finance:${profile.tenant_id}:${profile.telegram_id}`;
+-  const privileged=()=>['owner','admin'].includes(profile?.role)&&!!capabilities.modules?.finance;
++  const readable=()=>typeof capabilities.pages?.finance==='boolean'?capabilities.pages.finance:!!capabilities.modules?.finance;
++  const privileged=()=>['owner','admin'].includes(profile?.role)&&(typeof financeCaps?.can_write==='boolean'?financeCaps.can_write:!!capabilities.modules?.finance);
++  const selectable=()=>typeof financeCaps?.can_select_members==='boolean'?financeCaps.can_select_members:privileged();
++  function acceptCaps(body){const next={...financeCaps};for(const key of ['can_write','can_select_members','can_view_all'])if(typeof body[key]==='boolean')next[key]=body[key];if(body.read_scope)next.read_scope=body.read_scope;financeCaps=next;}
+   const notice=(id,text)=>{$(id).textContent=text||'';$(id).classList.toggle('show',!!text);};
+   async function api(url,data){const response=await fetch(url,{credentials:'same-origin',cache:'no-store',...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});const body=await response.json();if(!response.ok||!body.success){const error=Error(body.error||'Sorğu alınmadı.');error.status=response.status;throw error;}return body;}
+   function buttons(){
+-    for(const id of ['financeCredit','financeDebit'])$(id).hidden=!privileged()||!active;
++    for(const id of ['financeCredit','financeDebit']){$(id).hidden=!privileged()||!active;$(id).disabled=loading||busy||memberLoading;}
+     $('financePrev').disabled=loading||busy||offset===0;$('financeNext').disabled=loading||busy||offset+50>=total;
+-    $('financeMember').disabled=loading||busy;$('financeRefresh').disabled=loading||busy;
++    $('financeMember').disabled=loading||busy||memberLoading;$('financeMember').hidden=!selectable();$('financeRefresh').disabled=loading||busy;
+   }
+   function render(){
+     const labels={credit:'Mədaxil',debit:'Məxaric',reverse:'Əks əməliyyat'};
+     $('financeEntries').innerHTML=rows.map(row=>`<article class="hot-card"><header><h2>${esc(row.amount)} AZN</h2><span class="badge">${esc(labels[row.kind])}</span></header><p class="hot-text">${esc(row.note)}</p><div class="sub">${esc(row.created_at?.replace('T',' ').slice(0,19))} UTC · ${esc(row.actor_name||'Administrator')}</div>${row.reverses_id?`<div class="sub">Əvvəlki əməliyyat: ${esc(row.reverses_id)}</div>`:''}${privileged()&&row.kind!=='reverse'?`<button class="outline" data-finance-reverse="${esc(row.id)}" style="margin-top:10px">Geri al</button>`:''}</article>`).join('')||'<div class="empty">Əməliyyat yoxdur.</div>';
+     $('financePage').textContent=total?`${offset+1}–${Math.min(offset+rows.length,total)} / ${total}`:'0';buttons();
+   }
++  function memberOptions(hasMore=false){
++    $('financeMember').innerHTML=members.map(row=>`<option value="${esc(row.telegram_id)}">${esc(row.display_name)}${row.active?'':' (deaktiv)'}</option>`).join('')+(hasMore?'<option value="__more__">Daha çox əməkdaş…</option>':'');
++    $('financeMember').value=String(member);
++  }
++  async function loadMembers(append=false){
++    if(!readable()||!selectable()||memberLoading)return;const version=epoch;memberLoading=true;buttons();
++    try{const body=await api(`/api/platform/finance?members=1&limit=100${append?'&offset='+members.length:''}`);if(version!==epoch)return;
++      acceptCaps(body);members=append?[...members,...(body.members||[])]:body.members||[];
++      if(!members.some(row=>String(row.telegram_id)===String(member)))member=Number(members[0]?.telegram_id||0);
++      memberOptions(body.has_more===true);
++    }catch(error){if(version===epoch){members=[];memberOptions();notice('financeNotice',error.message);}}
++    finally{if(version===epoch){memberLoading=false;buttons();}}
++  }
+   async function load(target=0){
+-    if(!capabilities.modules?.finance||loading||busy)return;const version=epoch;loading=true;buttons();notice('financeNotice','');
+-    try{const body=await api(`/api/platform/finance?member_id=${encodeURIComponent(member)}&limit=50&offset=${target}`);if(version!==epoch)return;
+-      rows=body.entries||[];total=body.total||0;offset=target;active=body.active;$('financeBalance').textContent=`${body.display_name}: ${body.balance} ${body.currency}`;render();
+-    }catch(error){if(version===epoch)notice('financeNotice',error.message);}
++    if(!readable()||!member||loading||busy)return;const version=epoch,selected=member;loading=true;buttons();notice('financeNotice','');
++    rows=[];total=0;$('financeEntries').innerHTML='';$('financeBalance').textContent='Balans: —';
++    try{const body=await api(`/api/platform/finance?member_id=${encodeURIComponent(selected)}&limit=50&offset=${target}`);if(version!==epoch||selected!==member)return;
++      acceptCaps(body);rows=body.entries||[];total=body.total||0;offset=target;active=body.active;$('financeBalance').textContent=`${body.display_name}: ${body.balance} ${body.currency}`;render();
++      if(selectable()&&!members.length)await loadMembers();
++    }catch(error){if(version===epoch){financeCaps={...financeCaps,can_write:false};rows=[];total=0;if(error.status===403||error.status===404){members=[];memberOptions();if(error.status===403)financeCaps.can_select_members=false;else await loadMembers();}render();notice('financeNotice',error.message);}}
+     finally{if(version===epoch){loading=false;buttons();}}
+   }
+   function lock(on){$('financeAmount').disabled=on;$('financeNote').disabled=on;$('financeSubmit').disabled=busy;}
+   function resize(){const field=$('financeNote');field.style.height='auto';field.style.height=field.scrollHeight+'px';}
+   function open(nextAction='credit',entry=null){
+-    if(!privileged()||busy)return;pending=null;try{pending=JSON.parse(sessionStorage.getItem(key())||'null');}catch{}
++    if(!privileged()||busy||loading||memberLoading)return;pending=null;try{pending=JSON.parse(sessionStorage.getItem(key())||'null');}catch{}
+     if(pending){action=pending.action;source=pending.entry_id||null;}else{action=nextAction;source=entry?.id||null;}
+     $('financeTitle').textContent={credit:'Mədaxil',debit:'Məxaric',reverse:'Əməliyyatı geri al'}[action];
+     $('financeTarget').textContent=members.find(row=>String(row.telegram_id)===String(pending?.member_id||member))?.display_name||profile.display_name||'Əməkdaş';
+@@ -48,21 +66,20 @@
+     busy=true;lock(true);$('financeSubmit').innerHTML='<i class="spinner"></i>Gözləyin…';buttons();
+     try{await api('/api/platform/finance',data);sessionStorage.removeItem(savedKey);if(version!==epoch)return;
+       pending=null;busy=false;close();await load();
+-    }catch(error){if(version!==epoch)return;notice('financeFormNotice',error.message);if(error.status&&error.status<500){sessionStorage.removeItem(savedKey);pending=null;lock(false);}}
++    }catch(error){if(version!==epoch)return;if(error.status===403)financeCaps={...financeCaps,can_write:false};notice('financeFormNotice',error.message);if(error.status&&error.status<500){sessionStorage.removeItem(savedKey);pending=null;lock(false);}}
+     finally{if(version===epoch){busy=false;lock(!!pending);$('financeSubmit').textContent=pending?'Eyni sorğunu yoxla':'Təsdiq et';buttons();}}
+   };
+   async function apply(data){const next=JSON.stringify([data.member,data.capabilities]);if(next===scope)return;scope=next;epoch++;const version=epoch;
+-    profile=data.member;capabilities=data.capabilities||{};busy=loading=false;rows=[];members=[];member=profile.telegram_id;total=offset=0;pending=null;active=true;modal.classList.remove('show');
++    profile=data.member;capabilities=data.capabilities||{};financeCaps=capabilities.finance||null;busy=loading=memberLoading=false;rows=[];members=[];member=profile.telegram_id;total=offset=0;pending=null;active=true;modal.classList.remove('show');
+     $('financeEntries').innerHTML='';$('financeMember').innerHTML='';$('financeBalance').textContent='Balans: —';$('financeNote').value='';$('financeAmount').value='';$('financeTarget').textContent='';notice('financeNotice','');notice('financeFormNotice','');buttons();
+-    $('financeMember').hidden=!privileged();if(!capabilities.modules?.finance)return;
+-    if(privileged()){try{const body=await api('/api/platform/finance?members=1&limit=100');if(version!==epoch)return;members=body.members||[];
+-      $('financeMember').innerHTML=members.map(row=>`<option value="${esc(row.telegram_id)}">${esc(row.display_name)}${row.active?'':' (deaktiv)'}</option>`).join('');$('financeMember').value=String(member);
+-      const saved=JSON.parse(sessionStorage.getItem(key())||'null');if(saved&&String(saved.expected_tenant_id)===String(profile.tenant_id)&&String(saved.expected_user_id)===String(profile.telegram_id)&&['credit','debit','reverse'].includes(saved.action))open();
+-    }catch(error){if(version===epoch)notice('financeNotice',error.message);}}
++    $('financeMember').hidden=!selectable();if(!readable())return;
++    if(selectable()){await loadMembers();if(version!==epoch)return;
++      if(privileged()){try{const saved=JSON.parse(sessionStorage.getItem(key())||'null');if(saved&&String(saved.expected_tenant_id)===String(profile.tenant_id)&&String(saved.expected_user_id)===String(profile.telegram_id)&&['credit','debit','reverse'].includes(saved.action))open();}catch{}}
++    }
+     if(version===epoch&&$('view-finance').classList.contains('active'))load();
+   }
+   $('financeCredit').onclick=()=>open('credit');$('financeDebit').onclick=()=>open('debit');$('financeRefresh').onclick=()=>load();$('financePrev').onclick=()=>load(Math.max(0,offset-50));$('financeNext').onclick=()=>load(offset+50);
+-  $('financeMember').onchange=()=>{member=Number($('financeMember').value);load();};$('financeEntries').onclick=event=>{const button=event.target.closest('[data-finance-reverse]');if(button)open('reverse',rows.find(row=>row.id===button.dataset.financeReverse));};
++  $('financeMember').onchange=async()=>{if(loading||busy||memberLoading)return;if($('financeMember').value==='__more__'){await loadMembers(true);return;}member=Number($('financeMember').value);await load();};$('financeEntries').onclick=event=>{const button=event.target.closest('[data-finance-reverse]');if(button)open('reverse',rows.find(row=>row.id===button.dataset.financeReverse));};
+   $('financeClose').onclick=close;$('financeCancel').onclick=close;$('financeNote').oninput=resize;nav.addEventListener('click',()=>load());
+   document.addEventListener('tenant-profile',event=>apply(event.detail));const initial=epoch;api('/api/platform/me').then(data=>{if(initial===epoch)apply(data);}).catch(()=>{});
+ })();
+diff --git a/beintaskbot-main/docs/tenant-kommo-settings.js b/beintaskbot-main/docs/tenant-kommo-settings.js
+index e5dba538d4ad32e0d4b541e24d78238008ea39a9..a3cdee3baa75697322e9ee76694de580e52b4e3c 100644
+--- a/beintaskbot-main/docs/tenant-kommo-settings.js
++++ b/beintaskbot-main/docs/tenant-kommo-settings.js
+@@ -1,9 +1,10 @@
+ /* Owner-only manual Kommo connection. Long-lived tokens are never retained in the page. */
+ (() => {
+   const $ = id => document.getElementById(id);
+-  let profile, generation = 0, busy = false;
++  let accessData, profile, generation = 0, busy = false;
+ 
+   async function api(url, data) {
++    if(data)data=window.tenantSharedIntegrations.command(accessData,'kommo',data,url.endsWith('/disconnect')?'delete':window.tenantSharedIntegrations.connected(accessData,'kommo')?'update':'create');
+     const response = await fetch(url, {
+       credentials: "same-origin",
+       cache: "no-store",
+@@ -11,12 +12,18 @@
+     });
+     const result = await response.json();
+     if (!response.ok || !result.success) throw new Error(result.error || "Kommo ayarları yüklənmədi.");
++    if(data)window.tenantSharedIntegrations.record(accessData,'kommo',{status:url.endsWith('/disconnect')?'not_connected':'connected'});
+     return result;
+   }
+ 
+   function disable(on) {
+     busy = on;
+-    $("tenantKommoPanel")?.querySelectorAll("button,input").forEach(element => { element.disabled = on; });
++    $("tenantKommoPanel")?.querySelectorAll("button,input").forEach(element => { element.disabled = on;
++      const shared=window.tenantSharedIntegrations;
++      if(shared.scoped(accessData,'kommo')){
++        const action=element.id==='tkDisconnect'?'delete':element.id==='tkLoad'?'view':shared.connected(accessData,'kommo')?'update':'create';
++        element.disabled=on||!shared.can(accessData,'kommo',action);
++      } });
+   }
+ 
+   async function perform(work) {
+@@ -39,6 +46,7 @@
+     $("tkToken").value = "";
+     $("tkConfirm").checked = false;
+     try {
++      if(window.tenantSharedIntegrations.scoped(accessData,'kommo')&&!window.tenantSharedIntegrations.can(accessData,'kommo','view')) { $('tkStatus').textContent=window.tenantSharedIntegrations.row(accessData,'kommo').status; $('tkDisconnect').hidden=!window.tenantSharedIntegrations.can(accessData,'kommo','delete');disable(false);return; }
+       const result = await api("/api/platform/integrations/kommo/test");
+       if (current !== generation) return;
+       if (result.auth_mode === "oauth") {
+@@ -59,6 +67,7 @@
+   }
+ 
+   function install(data) {
++    accessData = data;
+     const next = data.member;
+     const identity = next.tenant_id + ":" + next.telegram_id + ":" + next.role;
+     if (profile?.identity === identity) return;
+@@ -66,7 +75,7 @@
+     profile = { ...next, identity };
+     window.tenantViewDemand.clean("#tenantKommoPanel");
+     $("tenantKommoPanel")?.remove();
+-    if (next.role !== "owner") return;
++    if (window.tenantSharedIntegrations.scoped(data,"kommo") ? !Object.values(window.tenantSharedIntegrations.row(data,"kommo").management_actions).some(Boolean) : next.role !== "owner") return;
+     const settings = $("integrationSettingsHost");
+     if (!settings) return;
+ 
+@@ -118,7 +127,7 @@
+         if (current === generation) await load(current);
+       });
+     };
+-    void load(generation);
++    void load(generation).finally(()=>disable(false));
+   }
+ 
+   window.tenantViewDemand.watch({
+diff --git a/beintaskbot-main/docs/tenant-linear-settings.js b/beintaskbot-main/docs/tenant-linear-settings.js
+index e923198847bfbb149aff9cd7d2057bdc86d7fded..0df68be5df722b002f3b9f16f2d3da0cb575b1a5 100644
+--- a/beintaskbot-main/docs/tenant-linear-settings.js
++++ b/beintaskbot-main/docs/tenant-linear-settings.js
+@@ -2,15 +2,17 @@
+ (() => {
+   const $=id=>document.getElementById(id);
+   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+-  let profile, snapshot, generation=0, busy=false, catalogComplete=true, employeeRows=[];
++  let accessData, profile, snapshot, generation=0, busy=false, catalogComplete=true, employeeRows=[];
++  const protectedSettings = () => window.tenantSharedIntegrations.scoped(accessData,'linear') && profile?.role!=='owner';
+   async function api(params='',data) {
+     const response=await fetch('/api/platform/linear/settings'+params,{credentials:'same-origin',cache:'no-store',
+       ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});
+     const result=await response.json();
+     if(!response.ok||!result.success)throw new Error(result.error||'Ayarlar yüklənmədi.');
++    if(data)window.tenantSharedIntegrations.record(accessData,'linear',result);
+     return result;
+   }
+-  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on||input.dataset.tlReadonly==='true'||!!input.closest('[data-tl-blocked="true"]'));if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;}
++  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on||input.dataset.tlReadonly==='true'||!!input.closest('[data-tl-blocked="true"]'));if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;const shared=window.tenantSharedIntegrations;if(shared.scoped(accessData,'linear'))$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>{const action=input.id==='tlLoad'||input.id==='tlMore'?'view':input.id==='tlDisconnect'?'delete':input.id==='tlConnect'||input.id==='tlKey'?(shared.connected(accessData,'linear')?'update':'create'):'update';input.disabled=input.disabled||!shared.can(accessData,'linear',action)||(protectedSettings()&&!!input.closest('[data-tl-owner-settings]'));});}
+   async function perform(work){if(busy)return;const current=generation;disable(true);$('tlMessage').textContent='Yüklənir…';
+     try{await work(current);if(current===generation)$('tlMessage').textContent='Hazırdır.';}
+     catch(error){if(current===generation)$('tlMessage').textContent=error.message;}
+@@ -91,38 +93,42 @@
+     }catch(error){if(valid()){root.dataset.tlBlocked='true';message.textContent=(committed?'Saxlanıldı, amma yeni ayarlar yüklənmədi. ':error.message+' ')+'Davam etmək üçün ayarları yenidən yükləyin.';}}
+     finally{if(current===generation&&profile?.identity===identity)disable(false);}
+   }
+-  function install(data){const next=data.member;
++  function install(data){accessData=data;const next=data.member;
+     const identity=next.tenant_id+':'+next.telegram_id+':'+next.role;
+     if(profile?.identity===identity)return;
+     generation++;profile={...next,identity};snapshot=null;busy=false;catalogComplete=true;$('tenantLinearPanel')?.remove();
+-    if(next.role!=='owner')return;
++    if(window.tenantSharedIntegrations.scoped(data,'linear')?!Object.values(window.tenantSharedIntegrations.row(data,'linear').management_actions).some(Boolean):next.role!=='owner')return;
+     $('view-settings').insertAdjacentHTML('beforeend',`<article class="panel" id="tenantLinearPanel" style="margin-top:16px">
+       <h2>Linear və xəbərlər</h2><p>Şirkətə məxsus bağlantı, görünüş və iş qaydaları. Xəbərlər ayrıca yoxlanılır və təsdiqlənir. Köhnə kabinet dəyişmir.</p>
+       <button class="outline" id="tlLoad">Ayarları yüklə</button><div id="tlBody" hidden>
+       <p id="tlStatus"></p><label>Linear API açarı<input id="tlKey" type="password" autocomplete="new-password" placeholder="Yeni açar (saxlanmış açar göstərilmir)"></label>
+       <button class="outline" id="tlConnect">Yoxla və qoş</button> <button class="outline danger" id="tlDisconnect">Bağlantını ayır</button>
+       <label>Komanda<select id="tlTeam"><option value="">Seçin</option></select></label><button class="outline" id="tlMore" hidden>Daha çox komanda</button>
+-      <div id="tlStates"></div><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
++      <div id="tlStates"></div><div data-tl-owner-settings><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
+       <label style="display:flex"><input id="tlNewsEnabled" type="checkbox" style="width:auto">Tamamlanmış əsas tapşırıqlardan xəbər qaralamaları hazırla</label>
+       <p>Fon sinxronizasiyasını da aktiv edin və layihələri / tamamlanmış statusları seçin. «Xəbərlər» səhifəsində yoxlayıb dərc edin. AI emalı ayrıca «Xəbərlər üçün AI» ayarlarında aktiv edilir; onsuz mənbə fraqmenti saxlanılır.</p>
+       <label>Əvvəlki kanal qeydi (göndəriş üçün ayrıca «Telegram xəbər kanalı» bölməsində yoxlayın)<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
+       <p>Yalnız əsas tapşırıqlar, 90 günlük saxlama və dərcdən əvvəl əl ilə təsdiq. Kanalın yazılması mesaj göndərmir. Account/Operator mövcud Linear dəyərləridir; yeni parametr yaradılmır.</p>
+-      <button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
++      </div><p data-tl-owner-notice hidden>Əməkdaş, xəbər və iş qaydalarını yalnız şirkət sahibi dəyişə bilər. Saxlanmış qaydalar qorunur; komanda dəyişikliyi onlarla uyğun olmalıdır.</p><button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
++    $('tenantLinearPanel').querySelector('[data-tl-owner-settings]').hidden=protectedSettings();
++    $('tenantLinearPanel').querySelector('[data-tl-owner-notice]').hidden=!protectedSettings();
+     $('tlLoad').onclick=()=>perform(load);
+     $('tlConnect').onclick=()=>perform(async current=>{requireSavedEmployeeControls();const key=$('tlKey').value;$('tlKey').value='';await write('connect',{api_key:key});if(current===generation)await load(current);});
+     $('tlDisconnect').onclick=()=>{if(confirm('Linear bağlantısı ayrılsın?'))perform(async current=>{await write('disconnect');if(current===generation)await load(current);});};
+     $('tlTeam').onchange=()=>perform(teamChoices);
+     $('tlMore').onclick=()=>perform(current=>teams(current,$('tlMore').dataset.cursor));
++    disable(false);
+     $('tlSave').onclick=()=>perform(async current=>{const config={team_id:$('tlTeam').value,
+       done_state_ids:[...$('tlStates').querySelectorAll('input:checked')].map(i=>i.value),
+-      workflow:window.TenantLinearRules.read(),
+-      members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
++      workflow:protectedSettings()?snapshot.settings?.workflow:window.TenantLinearRules.read(),
++      members:protectedSettings()?snapshot.settings?.members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
+         Object.fromEntries([...row.querySelectorAll('[data-field]')].map(i=>[i.dataset.field,i.multiple?[...i.selectedOptions].map(o=>o.value):i.type==='checkbox'?i.checked:i.value]))])),
+-      news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
++      news:protectedSettings()?snapshot.settings?.news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
+       await write('settings',{settings:config});if(current===generation)await load(current);});
++    if(window.tenantSharedIntegrations.scoped(data,'linear'))void perform(load);
+   }
+   async function write(action,extra={}){requireSavedEmployeeControls();if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
+-    return api('',{action,...extra,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id,expected_updated_at:snapshot.updated_at});}
++    return api('',window.tenantSharedIntegrations.command(accessData,'linear',{action,...extra,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id,expected_updated_at:snapshot.updated_at},action==='disconnect'?'delete':action==='connect'?(window.tenantSharedIntegrations.connected(accessData,'linear')?'update':'create'):'update'));}
+   async function teams(current,after){const result=await api('?catalog=1'+(after?'&after='+encodeURIComponent(after):''));if(current!==generation)return;
+     result.teams.nodes.forEach(team=>{if(![...$('tlTeam').options].some(option=>option.value===team.id))$('tlTeam').insertAdjacentHTML('beforeend',`<option value="${esc(team.id)}">${esc(team.name)}</option>`);});
+     $('tlMore').hidden=!result.teams.pageInfo.hasNextPage;$('tlMore').dataset.cursor=result.teams.pageInfo.endCursor||'';}
+@@ -137,7 +143,7 @@
+     catalogComplete=!(result.team.states.pageInfo.hasNextPage||result.team.projects.pageInfo.hasNextPage||result.team.members.pageInfo.hasNextPage);
+     if(!catalogComplete)$('tlProjects').insertAdjacentHTML('beforeend','<p>İlk 50 seçim göstərilir. Ayarları itirməmək üçün saxlama dayandırılıb: böyük kataloq üçün genişləndirilmiş səhifələmə tələb olunur.</p>');
+   }
+-  async function load(current){const [result, employees]=await Promise.all([api(),memberApi()]);if(current!==generation)return;employeeRows=employees.members||[];snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
++  async function load(current){if(window.tenantSharedIntegrations.scoped(accessData,'linear')&&!window.tenantSharedIntegrations.can(accessData,'linear','view')){snapshot={updated_at:window.tenantSharedIntegrations.row(accessData,'linear').updated_at||''};$('tlBody').hidden=false;for(const node of $('tlBody').children)node.hidden=!['tlStatus','tlConnect','tlDisconnect'].includes(node.id)&&!node.querySelector?.('#tlKey');disable(false);return;}const [result, employees]=await Promise.all([api(),profile.role==='owner'?memberApi():Promise.resolve({members:[]})]);if(current!==generation)return;employeeRows=employees.members||[];snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
+     $('tlStatus').textContent=result.status==='connected'?(result.runtime_enabled?'Linear tapşırıqları aktivdir':'Linear qoşulub · iş qaydalarını aktiv edin'):'Linear qoşulmayıb';
+     const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';$('tlNewsEnabled').checked=config.news?.enabled===true;
+     $('tlMembers').innerHTML='<h3>Əməkdaşların Linear qaydaları</h3>'+result.members.map(member=>{
+diff --git a/beintaskbot-main/docs/tenant-members-ui.css b/beintaskbot-main/docs/tenant-members-ui.css
+index 37dd29f946751bb7e1acea5c995b7e11e7463207..0dadcddea5a7d1c9a744a1409687b936ab46e3f4 100644
+--- a/beintaskbot-main/docs/tenant-members-ui.css
++++ b/beintaskbot-main/docs/tenant-members-ui.css
+@@ -61,3 +61,29 @@
+ 
+ /* Secondary actions must remain readable in both color schemes. */
+ #staffMemberModal .outline{background:var(--card);color:var(--ink);border:1px solid var(--line)}
++
++/* Real server-backed CRUD scopes. On phones each section is a labeled 2×2 card. */
++#staffMemberModal .staff-scope-matrix{border:1px solid var(--line);border-radius:10px;overflow:hidden;min-width:0}
++#staffMemberModal .staff-scope-heading,#staffMemberModal .staff-scope-row{display:grid;grid-template-columns:minmax(110px,1.2fr) repeat(4,minmax(0,1fr));gap:10px;padding:12px}
++#staffMemberModal .staff-scope-heading{font-size:12px;font-weight:650;background:var(--paper)}
++#staffMemberModal .staff-scope-row{align-items:start;border-top:1px solid var(--line)}
++#staffMemberModal .staff-scope-row>strong{font-size:13px;overflow-wrap:anywhere;align-self:center}
++#staffMemberModal .staff-scope-row>div{min-width:0}
++#staffMemberModal .staff-scope-row select{padding:7px 5px;font-size:12px;min-height:38px}
++#staffMemberModal .staff-scope-caption{display:none}
++#staffMemberModal .staff-scope-legacy{display:block;color:var(--muted);font-size:10px;margin-top:4px}
++#staffMemberModal .staff-scope-unavailable{text-align:center;color:var(--muted);padding:8px 0}
++#staffMemberModal [data-department-create][hidden]{display:none}
++#staffMemberModal [data-department-create]{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
++#staffMemberModal [data-department-status]{grid-column:1/-1;font-size:12px;font-weight:400}
++#staffMemberModal [data-department-add]{justify-self:start;width:fit-content}
++#staffMemberModal .staff-department>button{align-self:flex-start}
++@media(max-width:600px){
++ #staffMemberModal .staff-scope-heading{display:none}
++ #staffMemberModal .staff-scope-row{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
++ #staffMemberModal .staff-scope-row:first-of-type{border-top:0}
++ #staffMemberModal .staff-scope-row>strong{grid-column:1/-1;padding-bottom:2px}
++ #staffMemberModal .staff-scope-caption{display:block;font-size:12px;font-weight:550}
++ #staffMemberModal .staff-scope-row select{font-size:13px;min-height:42px}
++ #staffMemberModal .staff-scope-unavailable{text-align:left;padding:0;display:flex;flex-direction:column;gap:8px}
++}

@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..8191dc442e586ffb0a4a759a7e0a7607ea2a55ab
+index 0000000000000000000000000000000000000000..7635cbd9bbfae83b4b9e780d9a6147709ca51ec2
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,128 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -61,6 +61,8 @@ index 0000000000000000000000000000000000000000..8191dc442e586ffb0a4a759a7e0a7607
 +          tests/test_scoped_access_foundation.py
 +          tests/test_scoped_access_foundation_postgres.py
 +          tests/test_employee_scope_settings_postgres.py
++          tests/test_employee_card_scopes.py
++          tests/test_employee_card_scopes_postgres.py
 +          tests/test_employee_task_scopes.py
 +          tests/test_task_b4_scope_regression.py
 +          tests/test_crm_scoped_access_postgres.py
@@ -76,8 +78,33 @@ index 0000000000000000000000000000000000000000..8191dc442e586ffb0a4a759a7e0a7607
 +          tests/test_tenant_ai_business_analyst.py
 +          tests/test_tenant_ai_business_analytics.py
 +          tests/test_tenant_news_member_read_postgres.py
++          tests/test_support_access_ownership_postgres.py
++          tests/test_support_inbox_scopes.py
++          tests/test_support_inbox_scopes_postgres.py
++          tests/test_instruction_member_access_postgres.py
++          tests/test_ai_scoped_documents.py
++          tests/test_ai_scoped_documents_postgres.py
++          tests/test_shared_integration_scopes.py
++          tests/test_shared_integration_scopes_postgres.py
++          tests/test_tenant_crm_relation_contract.py
++          tests/test_tenant_crm_relation_kommo.py
++          tests/test_tenant_crm_relation_delivery_postgres.py
++          tests/test_crm_relation_fences_postgres.py
++          tests/test_tenant_integration_store.py
++          tests/test_tenant_bein_integration.py
++          tests/test_tenant_linear.py
++          tests/test_tenant_chat_ai.py
++          tests/test_tenant_chat_ai_api.py
++          tests/test_tenant_kommo.py
++          tests/test_tenant_connect_api.py
++          tests/test_connect_webhook_deactivation.py
++          tests/test_tenant_connect_channel_management.py
++          tests/test_tenant_connect_configure.py
++          tests/test_tenant_connect_diagnostics.py
++          tests/test_tenant_connect_access_api.py
 +      - name: Interface regressions
 +        run: |
++          node tests/test_employee_card_scopes_ui.cjs
 +          node tests/test_employee_scope_settings_ui.cjs
 +          node tests/test_task_read_save_flow_ui.cjs
 +          node tests/test_contacts_directory_ui.cjs
@@ -87,6 +114,12 @@ index 0000000000000000000000000000000000000000..8191dc442e586ffb0a4a759a7e0a7607
 +          node tests/test_dialog_source_members_ui.cjs
 +          node tests/test_tenant_ai_business_analyst_ui.cjs
 +          node tests/test_tenant_news_member_ui.cjs
++          node tests/test_support_inbox_scopes_ui.cjs
++          node tests/test_shared_integration_settings.cjs
++          node tests/test_tenant_kommo_settings.cjs
++          node tests/test_tenant_linear_settings.cjs
++          node tests/test_tenant_linear_employee_settings.cjs
++          node tests/test_tenant_chat_ai_ui.cjs
 +      - name: Chromium employee matrix, tasks and CRM
 +        run: |
 +          node tests/employee_scope_matrix_browser.cjs
@@ -307,10 +340,10 @@ index 0000000000000000000000000000000000000000..735c9ffd69d0fd8e1bd87731f77fcaed
 +No real provider or paid model was called. The test cluster was stopped.
 diff --git a/beintaskbot-main/docs/employee-ai-integration-scope-audit.md b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..62ddb068abedd45d2ee8ac0b8e6b92bc5e405aa6
+index 0000000000000000000000000000000000000000..f7106d3e8da7ed9f9c2cffef32073c464d944f72
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,80 @@
 +# AI and integration scope audit
 +
 +This is a code audit and an implementation boundary for the employee-rights specification, version 2. It is not a report of production configuration or a release approval. No real rights, credentials, connections, customer messages, or imports were changed during this work.
@@ -321,21 +354,21 @@ index 0000000000000000000000000000000000000000..62ddb068abedd45d2ee8ac0b8e6b92bc
 +2. AI schema readiness checks include the ownership column, tenant-composite FK, index, and durable migration receipt. A cold schema repair does not reinterpret new NULL-owned system rows as historical documents.
 +3. The AI configuration-options GET checks current database management authority before its optional Kommo catalog request. A logged-in session without AI-management authority does not trigger a provider request. Remote failure can still use the already authorized local catalog; a successful refresh reauthorizes in its store transaction.
 +4. Tenant-wide handoff diagnostics, Connect diagnostics, and the unified AI-state snapshot are blocked for a member with an explicit narrow/denied dialog read scope until those aggregate projections are partitioned by source. Their existing legacy and tenant-wide paths are unchanged. This closes an indirect metadata bypass; it does not grant AI management through dialog rights.
-+5. No AI or integrations row is published in `SCOPE_ACTION_CATALOG`. The global employee-scopes rollout gate remains off by default.
++5. Shared integrations now publish independent CRUD scopes using the approved company-owner responsibility model. See [shared integration scopes](shared-integration-scopes.md) for current behavior and retained provider restrictions. The global employee-scopes rollout gate remains off by default.
 +
-+## Integration management: why generic CRUD is not ready
++## Shared integration management
 +
-+| Surface | Current authority and storage | Unresolved scope boundary |
-+| --- | --- | --- |
-+| Kommo OAuth/manual connection and disconnect | Owner-only route/store checks; one credential row per tenant/provider, encrypted secret; callback uses a one-use state. | The connection serves multiple pipelines/employees. A responsible employee for a shared credential is not defined. An employee-level delete/update could disconnect or replace everybody's connection. OAuth consent and token lifetime remain separate from data access. |
-+| BeinSystems ERP connection / primary provider | Owner management; tenant/provider credential row and shared primary-provider selection. | A personal/department scope cannot safely control shared credentials or change the company's primary CRM without a defined domain rule. Do not connect the ERP as part of this task. |
-+| Linear settings and binding | Owner-only management; team/account/member bindings govern distinct task/news operations. | Integration configuration is not the same as a member's Linear-task permissions or published-news read access. Existing binding constraints must not be converted to generic CRUD grants. |
-+| Connect account setup, webhooks, disconnect, channel retirement/reconciliation | Existing owner/admin and stronger operation-specific protections; account-level API key and webhook may cover several channels. | Dialog source-to-employee mappings authorize dialog data, not replacement of the shared key/webhook. Account disconnect, one-channel disconnect, retirement, and identity reconciliation have different effects and cannot all be an inferred generic delete. |
-+| Chat AI provider configuration | Existing owner/admin checks and stricter owner-only fields; encrypted provider credential and company-wide model/consent/spend settings. | Employee access to an AI agent does not define authority over company credentials, provider consent, limits, or every agent's runtime. |
++The earlier undefined-ownership blocker is resolved: the current active company
++owner is responsible for each company-wide connection. Current-database
++self/department/all scopes apply separately to management reads, creation,
++updates, and deletion. Safe connection state remains visible to active members;
++credentials and arbitrary metadata are never part of that projection.
 +
-+Read-only integration status is already a separate behavior: the base tenant list and Connect status can expose safe connection metadata to an active member, whereas some provider-specific management pages require the owner. Silently mapping all such reads to one owner-based matrix could remove existing access. The migration must compare these current behaviors rather than assume they are identical.
-+
-+Primary sources: `tenant_integration_store.py`, `tenant_kommo_api.py`, `tenant_bein_integration.py`, `tenant_bein_api.py`, `tenant_linear_policy.py`, `tenant_linear_api.py`, `tenant_connect_transport.py`, `tenant_connect_api.py`, `tenant_connect_retirement.py`, `tenant_connect_direct_reconcile.py`, `tenant_chat_ai_settings.py`, and route registration in `bot.py`.
++Disconnect and key replacement require a company-impact confirmation. Provider
++constraints and stronger owner-only operations remain in force, including OAuth,
++Linear employee/publication/runtime rules, and protected Chat AI model settings.
++This is local implementation, not rollout permission or evidence of deployment.
++See `shared-integration-scopes.md` and its isolated tests for exact coverage.
 +
 +## AI agents: real operations and their indirect paths
 +
@@ -356,12 +389,66 @@ index 0000000000000000000000000000000000000000..62ddb068abedd45d2ee8ac0b8e6b92bc
 +
 +## Required decisions and remaining implementation
 +
-+- Define integration-management ownership for shared credentials and distinguish per-source data access from account-wide connection effects.
++- Shared integration ownership and company-impact behavior are implemented separately; keep source/dialog data rights independent from connection management.
 +- Specify the treatment of shared AI/knowledge/runtime resources and cross-agent operations, including the retained owner-only safety actions.
 +- Decide which related-dialog/AI aggregate information should remain available inside an authorized AI document versus its general section. Narrow-dialog users currently receive a deliberate blocked response for unconverted tenant-wide diagnostics.
 +- Enumerate every interactive and background route for each registered action, apply the same effective scope, and compare rights before/after on a synthetic copy before activating the matrix.
 +
-+The current work supplies safe ownership metadata and closes concrete authorization gaps. It does **not** claim that AI/integration CRUD scopes are fully implemented.
++The current work supplies safe ownership metadata and closes concrete authorization gaps. Shared integration CRUD is implemented separately; AI CRUD is not complete.
++
++## Dormant AI document implementation (2026-11-11)
++
++This is an intermediate safety implementation, **not completed AI CRUD coverage or release approval**. `ai_agents` remains absent from `SCOPE_ACTION_CATALOG`, so the normal employee editor and validated settings writer cannot publish it. The global gate remains off by default. The internal `tenant_ai_scoped_access` evaluator accepts synthetic database AI matrices for tests/future integration only. It intentionally does not change the shared catalog.
++
++Implemented in the core store:
++
++- Independent create, view, and update scopes evaluate current database membership, policy, responsible employee and department in the same transaction. Policy/member/agent/department read locks fence those decisions. Cached browser role and settings do not authorize access. Missing action overrides retain existing legacy semantics; explicit denial never falls back.
++- New agents belong to the authenticated employee; create scope is evaluated against that employee. Wizard retry and legacy wizard recovery check the existing row's current responsible employee before returning or modifying it, not just historical `created_by`.
++- List filters agent documents and hides responsibility metadata. Scoped lists omit unpartitioned expert bindings and assigned-dialog totals. Trigger reads require parent-agent view access and omit referenced helper IDs.
++- Enable/disable is an update. Shared runtime consent, credentials and company flags are not granted by any agent scope. Explicit narrow dialog read blocks scoped configuration writes until source-aware runtime configuration is implemented.
++- Cross-agent bindings, expert diagnostic tools and shared dispatch configurations are deliberately blocked for scoped writers, including preservation of existing such configuration during a patch. This is a temporary safety block, not a product decision to remove those features.
++- Generic `_authorize` entrypoints do not infer shared management from any AI CRUD grant, even all four `all` grants. Explicit AI matrices close the unconverted settings/options, knowledge, dashboard, diagnostics, test/learning/instructor and similar common-gate workflows. Existing owner authority and gate-off behavior remain unchanged.
++
++### Not implemented / must remain gated
++
++1. Employee delete has no defined safe operation. Current archive requires a replacement and transfers dialogs, modifies other teams/triggers, and cancels work. Both archive and permanent deletion remain owner-only. Smallest product decision: should employee D permit archive only for an unused/unbound agent, with no transfers or cross-agent rewrites? No such operation was invented here.
++2. Cross-agent team/binding writes, trigger writes, shared and agent-bound knowledge mutations, provider configuration options, diagnostic projections, virtual tests, simulations, historical replay, learning/instructor and administrator workflows still need individually scoped contracts. Their generic management gates fail closed for synthetic scoped actors. This is not evidence that every separate legacy permission entrypoint has been converted.
++3. No scoped actor is newly admitted into those test/learning workflows. Already-admitted background execution is **not fully converted**: testing rechecks `_authorize` at completion, but simulation/runtime worker paths use admitted execution policy and do not uniformly carry/recheck the requesting employee's matrix. Product semantics must distinguish revoking interactive management from withdrawing an already approved company runtime or paid job. No automatic cancellation of existing company runtime was added.
++4. Real PostgreSQL concurrent revocation/ownership races must run in isolated CI. PGlite validates SQL and transaction-path behavior but cannot establish multi-connection race coverage.
++5. No UI eligibility was enabled. Publication must wait for complete route/worker inventory, defined D semantics, scoped shared-workflow contracts, integration tests, and synthetic before/after comparison.
++
++Local regression coverage: `tests/test_ai_scoped_documents.py` uses disposable PGlite and blocked provider/DB fallbacks. It covers scopes and NULL owners, foreign tenants, independent actions, forged cached role, membership/rights/department revocation, ownership-bound create/retry, enable/disable, helper/diagnostic safety blocks, and owner/gate-off behavior.
++
++### Follow-up transaction ordering
++
++Scoped updates acquire the existing tenant configuration advisory mutex before taking the agent row `FOR UPDATE`; they do not take `FOR SHARE` and later upgrade. This also preserves ordering against wizard recovery, which takes the mutex before touching agent rows. Existing setup-key retries are read-only (`FOR SHARE`); legacy recovery selects candidate rows `FOR UPDATE` before changing a setup key, so its ownership recheck does not introduce a shared-lock upgrade.
++
++`tests/test_ai_scoped_documents_postgres.py` adds real multi-connection tests for competing versioned updates, mutex-before-row ordering against recovery, revocation committed before admission, and an admitted update fencing revocation until commit. They require a disposable localhost `BEINTASKBOT_TEST_POSTGRES_DSN` and use actual `pg_blocking_pids` observations rather than timing alone. Local result: 24 PGlite tests passed; these 4 PostgreSQL tests skipped because no DSN was available. CI must run them before relying on race coverage.
+diff --git a/beintaskbot-main/docs/employee-card-scopes.md b/beintaskbot-main/docs/employee-card-scopes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7a0585fb99ee66a65acc7d5badf337c59fd8f464
+--- /dev/null
++++ b/beintaskbot-main/docs/employee-card-scopes.md
+@@ -0,0 +1,19 @@
++# Employee card scopes
++
++The global `TENANT_SCOPED_ACCESS_ENABLED` flag remains off by default. Employee matrix cells expose only implemented `view` and `update`. Self means the employee's own tenant membership; department compares current database department IDs within the same company. Null departments grant no department scope. An absent cell preserves the former `employees:manage` admission; explicit none denies that action.
++
++GET `/api/platform/members` and `/api/platform/me` member previews use the same filtered list. There is no employee pagination/count/options API in this version; all returned identity, role, contact, WhatsApp and editability fields belong only to rows selected by the scoped SQL. The list reads current membership/workflow while holding the shared tenant/policy/membership fences. Department moves use the existing exclusive tenant fence. Writes lock tenant, policies and actor/target memberships and re-evaluate independent update scope. Legacy upsert, deactivation and number mutation entry points use those same fences.
++
++The UI uses separate read/update flags and row-level `editable_fields`. Read-only users can open cards without receiving editable controls; creation, invitations and access-request tabs remain behind the coarse management flag. Access revocation clears cards and closes the editor. Existing owner/admin target protections and owner-only account-credential/profile assignment paths remain authoritative.
++
++Non-owner self update retains only the previously permitted WhatsApp recognition-number edits. Own role, status, display alias, permissions, department and access settings are not newly editable. The existing password-change route remains separate from employee administration.
++
++## Deliberately unresolved operations
++
++There is no employee deletion operation. Deactivation/reactivation is a membership update, not a fabricated delete grant. Creation/provisioning/invitations do exist but have no department-target input and a new employee is not the acting employee's own card. Therefore create is not yet advertised in the scoped catalog. A non-owner with an explicit employee scope cannot enter unconverted coarse creation/invitation flows; owner and wholly legacy flows are unchanged. To extend creation, specify how a new member's department is selected and whether scoped creators may assign it; do not infer `self` creation or change account credential rules. No further self-field decision is required to preserve today's safe update behavior.
++
++## Verification
++
++- `tests/test_employee_card_scopes.py`: four levels, independent read/update, two departments/tenants, sparse and gate-off behavior, protected self fields, SQL parameters and capabilities.
++- `tests/test_employee_card_scopes_postgres.py`: real filtered identity lists, department moves, revocation, write fences, denied self privilege edits and independent update with no read. Requires disposable localhost PostgreSQL.
++- `tests/test_employee_card_scopes_ui.cjs`: actual app read-only card, hidden management controls, revocation cleanup and zero writes.
 diff --git a/beintaskbot-main/docs/employee-scoped-access-foundation.md b/beintaskbot-main/docs/employee-scoped-access-foundation.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..7b20778ff2ae8e23a4cf887422904abec36c1697
@@ -467,8 +554,126 @@ index 0000000000000000000000000000000000000000..665d19a1b4be43dfdab0678c3ad9cc2b
 +`tests/test_crm_scoped_access_postgres.py` uses disposable localhost PostgreSQL and rejects provider traffic through the shared isolated fixture. It covers independent CRUD for all four scopes in three sections, two tenants/departments, list/search/count/pagination authorization, linked client context, creator ownership, unchanged operational assignment, stale HTTP profiles, revoked membership, suspended tenant, concurrent permission revocation, idempotent replay, fail-closed unapproved relationships, contact-card company linking with company R/U/D denied, exact conditional unlink, foreign/archived targets, narrow HTTP payloads and receipts, current U revocation, unchanged company data, company-card contact U-only operations, both gate-off bypasses, row-specific relation capabilities, permission/department revocation, opposite-direction lock ordering, and active outbound blocks with unchanged synthetic outbox state.
 +
 +The existing native CRUD, source-qualified directory, AI native action, WhatsApp identity and browser directory suites remain regression targets. Never use a production DSN or send test messages to real contacts.
+diff --git a/beintaskbot-main/docs/shared-integration-scopes.md b/beintaskbot-main/docs/shared-integration-scopes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..076f8eb8055baebb349f41eb13ef7d761ebf8379
+--- /dev/null
++++ b/beintaskbot-main/docs/shared-integration-scopes.md
+@@ -0,0 +1,42 @@
++# Shared integration scopes
++
++The existing `TENANT_SCOPED_ACCESS_ENABLED` rollout switch remains off by default.
++When enabled, `integrations` exposes independent view/create/update/delete scopes.
++The responsible person is the current active company owner; department access
++compares current actor/owner departments. Cached session role and client resource
++identities never grant access.
++
++All active members can see an allowlisted connection-state projection in the
++profile response. Management settings use provider-specific guarded endpoints.
++Bootstrap never includes arbitrary metadata, account domains, keys or tokens.
++`management_actions` describes available controls, not authority for a later call.
++Mutations re-read current DB policies/membership, serialize provider changes and
++hold authorization fences across provider I/O and storage. Nested admission is
++bound to the same tenant, actor, provider and action; schema startup runs before
++row fences to avoid nested DDL lock upgrades.
++
++Writes require expected tenant/user identity. Disconnects and replacement keys
++require explicit company-impact confirmation. Chat AI key-only writes preserve
++unknown settings and key deletion cannot carry an unrelated settings update.
++OAuth setup, pipeline/workflow authority, Linear publication/member/runtime rules,
++Chat AI photo/video controls and Connect's stronger administrative recovery
++operations retain their stricter existing restrictions. Scoped Kommo connection
++management uses the existing manual-token flow; official OAuth remains owner-only.
++Provider constraints (including official Kommo precedence and per-channel Connect
++disconnection) remain unchanged.
++
++Validation: isolated unit/API tests in `test_shared_integration_scopes.py` and
++existing provider suites. `test_shared_integration_scopes_postgres.py` requires a
++disposable localhost `BEINTASKBOT_TEST_POSTGRES_DSN` and tests real storage and
++concurrent policy revocation. No production rights, provider writes or rollout
++settings are changed by these tests.
++
++Follow-up authorization checks: BEIN creation with primary selection also needs
++update scope, because it rewrites the other CRM's primary selection. Connect
++setup with retained channel rows needs update even if its connection row is
++missing. Nested reconnect classifies the action on the existing fenced cursor,
++then validates the same principal, provider, context and company-impact consent.
++Mutation-only callers receive an allowlisted receipt, never prior settings,
++models, employee bindings or other channel metadata. The legacy Connect status
++read remains available to current active members when the view cell is absent;
++explicit scopes still apply, and this exception grants no management access.
+diff --git a/beintaskbot-main/docs/support-inbox-scoped-access.md b/beintaskbot-main/docs/support-inbox-scoped-access.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ff06696b1819552f04cb94ee4901ccdcf064e17
+--- /dev/null
++++ b/beintaskbot-main/docs/support-inbox-scoped-access.md
+@@ -0,0 +1,64 @@
++# Support inbox employee scopes
++
++This change covers **Обращения / support inbox**, not the AI knowledge-case catalog.
++The opt-in `TENANT_SCOPED_ACCESS_ENABLED` gate remains unchanged. No tenant/member
++configuration or provider settings are changed by this implementation.
++
++## Enforced operations
++
++- Catalog: independent `support.view`, `support.create`, `support.update` with
++  `none`, `self`, `department`, `all`. There is no support-ticket delete route,
++  so the editor has no Delete scope.
++- View: list, search, pagination, unresolved count, channel options, detail,
++  pinned messages/attachments, summary versions and existing in-document context.
++  Assignee options are returned only when the displayed page contains a currently
++  update-authorized ticket, never solely because the employee may read tickets.
++- Update: text, status, executor/developer assignment, completion, summary reserve
++  and apply, attaching materials and case-bound consultations. Existing owner-only
++  sharing/group dispatch and source/dialog requirements remain additional checks.
++- Create: creator is responsible, regardless of executor. Creation on an already
++  open case is an update and requires that case's independent update scope. Exact
++  idempotent replay of the creator's event needs no new update grant. Actor-driven
++  AI handoffs use the same writer and cannot bypass explicit support scopes.
++- Create/update without View returns a minimal receipt, not document contents.
++  Existing dialog manual-create UI accepts that receipt. Ticket controls use a
++  row-specific update capability. Current DB membership and workflow policy are
++  reloaded; mutation responsibility/department is checked under transaction locks.
++- Notification list/count/direct lookup and dialog ticket/handoff projections do
++  not expose support records outside an explicit support View scope. Case-bound
++  knowledge extraction also rechecks the case. No general dialog permission is
++  implied by support access.
++
++Sparse cells retain their exact old support-module authorization, including old
++AI-management inheritance for **absent** cells only. Explicit cells are not
++bypassed by AI-management permission. Owners retain existing company authority.
++Existing ownership migration is unchanged: historical responsibility requires a
++unique active matching company owner. Later actorless service tickets are not
++silently assigned or repaired.
++
++## Deliberately conservative aggregate boundary
++
++AI diagnostics already using `require_unrestricted_dialog_read` now also reject
++an explicit support View scope narrower than `all`. The tenant-wide night report
++likewise rejects narrow support View. These are temporary fail-closed boundaries,
++not row-filtered aggregate implementations. Absent scopes and gate-off behavior
++are unchanged. These restrictions do not grant AI or night-report permission.
++
++## Background/service boundary and remaining verification
++
++Inbound webhook handoffs, autonomous pilot/group follow-ups, system summaries,
++pre-existing public snapshots and service-only receipt recording do not have an
++employee request principal. They retain their existing service/owner/source,
++consent and dispatch fences; this matrix does not convert those service grants
++into employee rights or revoke previously shared public snapshots. The internal
++Telegram consultation notifier sends only a generic review notice, not case text;
++opening the linked inbox rechecks current scoped access. A future requirement to
++change autonomous service ownership or retract delivered/public material needs a
++separate design, not an inferred employee grant.
++
++Local tests use synthetic in-memory PGlite and mocked providers. The equivalent
++`test_support_inbox_scopes_postgres.py` suite requires the existing disposable
++localhost-only `BEINTASKBOT_TEST_POSTGRES_DSN` fixture. No local DSN is available,
++so real PostgreSQL locking/races remain CI verification, not a claimed local pass.
++No production configuration, customer message, upload, provider call, push,
++merge or deployment is part of this change.
 diff --git a/beintaskbot-main/docs/tenant-app.html b/beintaskbot-main/docs/tenant-app.html
-index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..745e976e3be2e61e58ecd56cdbfb722fb73dbc1e 100644
+index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..630bf8f69b2aa0eb230e7cbc460894fc1c654e2d 100644
 --- a/beintaskbot-main/docs/tenant-app.html
 +++ b/beintaskbot-main/docs/tenant-app.html
 @@ -338,8 +338,8 @@
@@ -482,6 +687,15 @@ index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..745e976e3be2e61e58ecd56cdbfb722f
    const navigationRoute=node=>node.dataset.view||node.dataset.reportLink||node.dataset.appOpen||(node.hasAttribute('data-app-instructions')?'instructions':'');
    // Page capabilities govern navigation; API authorization enforces data access.
    function restrictPageNavigation(){
+@@ -364,7 +364,7 @@
+   function applyCapabilities(data){
+     window.tenantProfileSnapshot=data;
+     state.me=data.member;state.capabilities=data.capabilities||{};state.rolePermissions=data.role_permissions||{};
+-    const modules={...(state.capabilities.modules||{})};modules.employees=state.me?.active===true&&state.capabilities.can_manage_employees===true;modules.news=window.tenantViewDemand.newsAvailable(data);modules.knowledge_center=!!modules.ai_agents;modules.ai_teams=!!modules.ai_agents;const nativeCrmAdmin=['owner','admin','manager'].includes(state.me.role);modules.companies=nativeCrmAdmin&&!!(modules.deals||modules.customers);document.querySelectorAll('[data-native-crm-admin]').forEach(el=>{el.hidden=!nativeCrmAdmin});document.querySelectorAll('[data-native-operation]').forEach(el=>{el.hidden=!nativeAction('deals',el.dataset.nativeOperation)});$('nativeCompanyCreate').hidden=!nativeCompanyAction('create');
++    const modules={...(state.capabilities.modules||{})};modules.employees=state.me?.active===true&&(state.capabilities.can_view_employees??state.capabilities.can_manage_employees)===true;modules.news=window.tenantViewDemand.newsAvailable(data);modules.knowledge_center=!!modules.ai_agents;modules.ai_teams=!!modules.ai_agents;const nativeCrmAdmin=['owner','admin','manager'].includes(state.me.role);modules.companies=nativeCrmAdmin&&!!(modules.deals||modules.customers);document.querySelectorAll('[data-native-crm-admin]').forEach(el=>{el.hidden=!nativeCrmAdmin});document.querySelectorAll('[data-native-operation]').forEach(el=>{el.hidden=!nativeAction('deals',el.dataset.nativeOperation)});$('nativeCompanyCreate').hidden=!nativeCompanyAction('create');
+     modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders||modules.deals);modules.ai_administrator=!!modules.ai_agents&&state.me.role==='owner';modules.ai_testing=!!modules.ai_agents;modules.ai_dashboard=!!modules.ai_agents&&['owner','admin'].includes(state.me.role);modules.support_cases=!!modules.ai_agents&&['owner','admin'].includes(state.me.role);
+     const pages=state.capabilities.pages?{...state.capabilities.pages,news:state.capabilities.pages.news===true&&modules.news}:modules;
+     document.querySelectorAll('.nav [data-view]').forEach(button=>{
 @@ -425,7 +425,7 @@
      try{let x,title='';if(type==='company'){x=(await api('/api/platform/crm/native/companies/'+id)).company;title=x.name;nativeCardCompanyId=id;await renderNativeCompanyCard(x)}else if(type==='deal'){x=(await api('/api/platform/crm/native/deals/'+id)).deal;title=x.title;const td=nativeAction('tasks','view')?await api('/api/platform/crm/native/tasks'):{tasks:[]};await renderNativeDealCard(x,(td.tasks||[]).filter(t=>String(t.deal_id)===String(x.id)))}else{x=(await api('/api/platform/crm/native/tasks/'+id)).task;title=x.text;body.innerHTML=`<div class="crm-relation-tabs"><button class="active" data-task-tab="general">Ümumi</button><button data-task-tab="related">Əlaqəli qeydlər</button></div><section data-task-panel="general"><div class="meta"><div><b>Son tarix</b>${esc(x.due_at?date(x.due_at):'Təyin edilməyib')}</div><div><b>Status</b>${esc(x.status==='completed'?'Tamamlandı':'Açıq')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'—')}</div></div></section><section data-task-panel="related" hidden><div class="meta"><div><b>Sövdələşmə</b><span data-native-open="deal:${esc(x.deal_id)}">${esc(x.deal_title||'—')}</span></div><div><b>Müştəri</b>${esc(x.contact_name||'—')}</div><div><b>Mənbə</b>${x.channel_id&&x.conversation_id?'Connect dialoqu tapşırığa bağlıdır.':'Dialoq bağlı deyil.'}</div></div><p class="sub">Tapşırığı başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil.</p></section>`;body.querySelectorAll('[data-task-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-task-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-task-panel]').forEach(panel=>panel.hidden=panel.dataset.taskPanel!==b.dataset.taskTab)})}$('nativeEntityTitle').textContent=title||'Kart';const privileged=['owner','admin','manager'].includes(state.me?.role),canArchive=privileged||(type==='task'&&Number(x.created_by)===Number(state.me?.telegram_id));modal.querySelector('[data-native-card-archive]').hidden=type==='company'?!nativeCompanyAction('delete'):!nativeAction(type==='deal'?'deals':'tasks','delete')||!canArchive;modal.querySelector('[data-native-card-edit]').hidden=type==='company'?!nativeCompanyAction('update'):!nativeAction(type==='deal'?'deals':'tasks','update')}
      catch(e){body.innerHTML=`<div class="notice show">${esc(e.message||'Kartı yükləmək mümkün olmadı.')}</div>`}
@@ -491,7 +705,15 @@ index 71cbaf9801c21f60de73ffa8f357c4bac50da2ee..745e976e3be2e61e58ecd56cdbfb722f
    document.addEventListener('click',e=>{const edit=e.target.closest('[data-native-edit]');if(edit){const [type,id]=edit.dataset.nativeEdit.split(':');if(type==='contact')editNativeContact(id);if(type==='company')editNativeCompany(id);if(type==='deal')editNativeDeal(id);if(type==='task')editNativeTask(id);return}const b=e.target.closest('[data-native-open]');if(b){const [type,id]=b.dataset.nativeOpen.split(':');openNativeEntityCard(type,id)}});
    function loadNativeContacts(query=$('customerSearch').value){return window.tenantContactsDirectory?.refresh(query)}
    let nativeDealOptions={workflows:[],members:[],contacts:[],companies:[]};
-@@ -714,6 +714,7 @@
+@@ -660,6 +660,7 @@
+ <script src="/assets/tenant-hot-order-completion.js"></script>
+ <script src="/assets/tenant-finance.js"></script>
+ <script src="/assets/tenant-linear-rules.js"></script>
++<script src="/assets/tenant-shared-integration-settings.js"></script>
+ <script src="/assets/tenant-linear-settings.js"></script>
+ <script src="/assets/tenant-kommo-settings.js"></script>
+ <script src="/assets/tenant-linear-board.js"></script>
+@@ -714,6 +715,7 @@
  <script src="/assets/tenant-push.js"></script>
  <script src="/assets/tenant-workspace.js"></script>
  <script src="/assets/tenant-members-ui.js"></script>

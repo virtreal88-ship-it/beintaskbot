@@ -1,168 +1,3 @@
-diff --git a/beintaskbot-main/tests/test_dialog_source_locks_postgres.py b/beintaskbot-main/tests/test_dialog_source_locks_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..27e60f5ec36552d82eea8e0f87fb45e9eb234dcf
---- /dev/null
-+++ b/beintaskbot-main/tests/test_dialog_source_locks_postgres.py
-@@ -0,0 +1,139 @@
-+"""Two real localhost connections; simulated callbacks, never a real send."""
-+import json
-+import threading
-+import time
-+import uuid
-+from concurrent.futures import ThreadPoolExecutor
-+from unittest.mock import Mock
-+import pytest
-+import psycopg
-+from psycopg.rows import dict_row
-+from test_connect_channel_multiprocess import database
-+from test_tenant_support_inbox import db,A,CA
-+from test_tenant_operator_workspace import operator_db
-+from test_dialog_source_scopes import scoped,grants,D1,D2
-+from tenant_linear_policy import TenantLinearError
-+import tenant_chat_send_store as sender
-+
-+
-+def factory(db):
-+    return lambda:psycopg.connect(db.dsn,row_factory=dict_row,
-+        options='-c lock_timeout=4000 -c statement_timeout=6000')
-+
-+
-+def policy_write(conn,view='none',update='none'):
-+    # Exact writer order, including first members-policy row insertion.
-+    conn.execute('SELECT id FROM saas_tenants WHERE id=%s FOR UPDATE',(A,))
-+    conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",(A,json.dumps({'33':{'access_scopes':{'dialogs':{'view':view,'update':update}}}})))
-+
-+
-+def waiting(db,pid):
-+    deadline=time.monotonic()+3
-+    with factory(db)() as conn:
-+        while time.monotonic()<deadline:
-+            row=conn.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s',(pid,)).fetchone()
-+            if row and row['wait_event_type']=='Lock':return
-+            time.sleep(.02)
-+    raise AssertionError('Competing transaction did not wait for the grant lock')
-+
-+
-+def reserved(db,person):
-+    item=sender.reserve(person,{'lead_id':41,'request_id':str(uuid.uuid4()),'text':'Synthetic only'})
-+    _,credentials=sender.mark_sending(item,{'origin':'connect'})
-+    return item,credentials
-+
-+
-+def test_first_activation_committed_before_dispatch_blocks_provider(scoped,monkeypatch):
-+    db,person=scoped
-+    item,credentials=reserved(db,person)
-+    connect=factory(db);pids=[]
-+    def send_connect():
-+        conn=connect();pids.append(conn.info.backend_pid);return conn
-+    monkeypatch.setattr(sender,'_connect',send_connect)
-+    callback=Mock()
-+    with connect() as writer:
-+        writer.execute('SELECT id FROM saas_tenants WHERE id=%s FOR UPDATE',(A,))
-+        with ThreadPoolExecutor(1) as pool:
-+            future=pool.submit(sender.dispatch_guarded,item,credentials,callback)
-+            deadline=time.monotonic()+2
-+            while not pids and time.monotonic()<deadline:time.sleep(.01)
-+            waiting(db,pids[0]);callback.assert_not_called()
-+            policy_write(writer);writer.commit()
-+            with pytest.raises(TenantLinearError):future.result(timeout=4)
-+    callback.assert_not_called()
-+
-+
-+@pytest.mark.parametrize('mutation',['scope','department','binding','inactive'])
-+def test_provider_boundary_serializes_revocation_and_releases_on_timeout(scoped,monkeypatch,mutation):
-+    db,person=scoped;grants(db,33,'department','department')
-+    item,credentials=reserved(db,person);connect=factory(db)
-+    monkeypatch.setattr(sender,'_connect',connect)
-+    entered=threading.Event();release=threading.Event();calls=[];pids=[]
-+    def callback(*_):
-+        calls.append(1);entered.set()
-+        assert release.wait(3)
-+        raise TimeoutError('Synthetic bounded provider timeout')
-+    def revoke():
-+        with connect() as conn:
-+            pids.append(conn.info.backend_pid)
-+            if mutation=='scope':policy_write(conn)
-+            elif mutation=='department':conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=34',(D2,A))
-+            elif mutation=='binding':conn.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s AND source_id=%s',(A,CA))
-+            else:conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=33',(A,))
-+    with ThreadPoolExecutor(2) as pool:
-+        send=pool.submit(sender.dispatch_guarded,item,credentials,callback)
-+        assert entered.wait(3)
-+        write=pool.submit(revoke)
-+        deadline=time.monotonic()+2
-+        while not pids and time.monotonic()<deadline:time.sleep(.01)
-+        try:
-+            waiting(db,pids[0]);assert not write.done()
-+        finally:release.set()
-+        with pytest.raises(TimeoutError):send.result(timeout=4)
-+        write.result(timeout=4)
-+    assert calls==[1]
-+    after=Mock()
-+    with pytest.raises(TenantLinearError):sender.dispatch_guarded(item,credentials,after)
-+    after.assert_not_called()
-+
-+
-+def notice_item(db,monkeypatch):
-+    import tenant_crm_notice_outbox as outbox
-+    import tenant_crm_notice_store as notices
-+    from tenant_crm_notice_schema import ensure_schema
-+    ensure_schema(db)
-+    raw={'channelId':CA,'conversationId':'client'}
-+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",(json.dumps(raw),A))
-+    event=str(uuid.uuid4())
-+    db.execute("INSERT INTO saas_crm_notice_events(id,tenant_id,event,kind,source_key,version,payload) VALUES(%s,%s,'incoming_message','message','m1','synthetic','{\"connection\":\"\"}')",(event,A))
-+    db.execute("INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel,status) VALUES(%s,%s,33,'telegram','sending')",(A,event));db.commit()
-+    with db.cursor() as cur:row=notices.resource(cur,A,'message','m1')
-+    db.commit()
-+    monkeypatch.setattr(notices,'eligible',lambda *a,**k:True)
-+    monkeypatch.setattr(outbox,'_connect',factory(db))
-+    return outbox,dict(tenant_id=A,event_id=event,recipient_id=33,channel='telegram',endpoint_hash='',
-+      event='incoming_message',kind='message',source_key='m1',payload={'connection':''},resource=row,send=True)
-+
-+
-+def test_notice_claim_then_first_activation_never_sends(scoped,monkeypatch):
-+    db,person=scoped;outbox,item=notice_item(db,monkeypatch)
-+    with factory(db)() as conn:policy_write(conn)
-+    callback=Mock();assert outbox.dispatch_guarded(item,callback) is None
-+    callback.assert_not_called()
-+    assert db.execute('SELECT status FROM saas_crm_notice_deliveries WHERE event_id=%s',(item['event_id'],))[0]['status']=='skipped'
-+
-+
-+def test_notice_send_holds_first_activation_until_provider_returns(scoped,monkeypatch):
-+    db,person=scoped;outbox,item=notice_item(db,monkeypatch)
-+    entered=threading.Event();release=threading.Event();pids=[]
-+    def callback():entered.set();assert release.wait(3);return 'synthetic acceptance'
-+    def revoke():
-+        with factory(db)() as conn:pids.append(conn.info.backend_pid);policy_write(conn)
-+    with ThreadPoolExecutor(2) as pool:
-+        send=pool.submit(outbox.dispatch_guarded,item,callback);assert entered.wait(3)
-+        writer=pool.submit(revoke)
-+        deadline=time.monotonic()+2
-+        while not pids and time.monotonic()<deadline:time.sleep(.01)
-+        try:waiting(db,pids[0]);assert not writer.done()
-+        finally:release.set()
-+        assert send.result(timeout=4)=='synthetic acceptance';writer.result(timeout=4)
-diff --git a/beintaskbot-main/tests/test_dialog_source_members_ui.cjs b/beintaskbot-main/tests/test_dialog_source_members_ui.cjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..7604c6a77181c4c25e0d7cab13d13eeada48b2a3
---- /dev/null
-+++ b/beintaskbot-main/tests/test_dialog_source_members_ui.cjs
-@@ -0,0 +1,14 @@
-+const assert=require('node:assert/strict');const fs=require('node:fs');const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
-+const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant-dialog-source-members.js'),'utf8');
-+const source={source_id:'00000000-0000-0000-0000-000000000201',name:'Support',active:true,employee_ids:[34],revision:0};
-+const tick=()=>new Promise(r=>setTimeout(r,0));
-+function env(){const dom=new JSDOM('<section id="mount"></section>',{url:'https://app.test',runScripts:'outside-only'});const w=dom.window;w.tenantI18n={language:'en'};w.eval(script);return {dom,w,host:w.document.querySelector('section')}}
-+function open(e,isCurrent=()=>true){e.w.document.dispatchEvent(new e.w.CustomEvent('tenant-member-card-open',{detail:{member:{telegram_id:33},profile:{role:'owner',tenant_id:'a',telegram_id:11},container:e.host,isCurrent}}))}
-+(async()=>{
-+ const e=env();let result={sources:[source],preflight:{ready:true}},posts=[],resolvePost;
-+ e.w.fetch=async(url,opt)=>{if(opt.method==='POST'){posts.push(JSON.parse(opt.body));await new Promise(r=>resolvePost=r);result={sources:[{...source,employee_ids:[33,34],revision:1}],preflight:{ready:true}};}return {ok:true,json:async()=>({success:true,result})}};
-+ open(e);await tick();e.host.querySelector('input').checked=true;e.host.querySelector('button').click();e.host.querySelector('button').click();await tick();assert.equal(posts.length,1,'repeated click is single flight');assert.deepEqual(posts[0].employee_ids,[34,33]);assert.equal(posts[0].expected_revision,0);assert.equal(posts[0].expected_tenant_id,'a');assert.equal(posts[0].expected_user_id,'11');resolvePost();await tick();await tick();assert.match(e.host.textContent,/assignments saved/);e.dom.window.close();
-+ const stale=env();let finish,current=true;stale.w.fetch=()=>new Promise(r=>finish=r);open(stale,()=>current);current=false;stale.host.textContent='new company';finish({ok:true,json:async()=>({success:true,result})});await tick();assert.equal(stale.host.textContent,'new company','late response cannot populate a changed card');stale.dom.window.close();
-+ const denied=env();denied.w.fetch=async()=>({ok:false,json:async()=>({success:false,error:'Source assignments changed. Refresh.'})});open(denied);await tick();assert.match(denied.host.textContent,/Refresh/);assert.equal(denied.host.querySelector('button').disabled,true);denied.dom.window.close();
-+ console.log('PASS: source assignments retain other employees, bind identity/version, prevent repeat sends and discard stale card responses.');
-+})().catch(e=>{console.error(e);process.exitCode=1});
 diff --git a/beintaskbot-main/tests/test_dialog_source_scopes.py b/beintaskbot-main/tests/test_dialog_source_scopes.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f3823ee0edde2294d446b39b2a99b5eda4cbc445
@@ -541,6 +376,282 @@ index 81a8c6e7e7d76a36282c617b6b0ad3afa971e9bd..1f82598bd8cdbaefa86093434376ee68
  GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
  ALLOWED_ACTIONS = {'update_member_card', 'provision_member_account', 'upsert', 'deactivate',
                     'whatsapp_numbers', 'add_whatsapp_number', 'provision_account',
+diff --git a/beintaskbot-main/tests/test_employee_card_scopes.py b/beintaskbot-main/tests/test_employee_card_scopes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..d0b91baa10c332ff168e65db186812feecd6dfc3
+--- /dev/null
++++ b/beintaskbot-main/tests/test_employee_card_scopes.py
+@@ -0,0 +1,123 @@
++import pytest
++from tenant_employee_policy import employee_action_allowed, employee_target_allowed
++from tenant_member_store import _card_access, _employee_read_sql
++from tenant_policy import TenantPolicy
++
++
++def actor(view='department', update='self'):
++    return {'tenant_id': 'a', 'telegram_id': 2, 'role': 'manager', 'active': True,
++            'department_id': 'd1', 'permissions': ['employees'], 'workflow': {'policies': [
++                {'policy_key': 'members', 'value': {'2': {'access_scopes': {
++                    'employees': {'view': view, 'update': update}}}}}]}}
++
++
++def target(who=3, department='d1', tenant='a', role='worker'):
++    return {'tenant_id': tenant, 'telegram_id': who, 'department_id': department,
++            'role': role, 'active': True, 'permissions': []}
++
++
++@pytest.mark.parametrize('action', ['view', 'update'])
++@pytest.mark.parametrize('scope,expected', [('none', [False]*4), ('self', [True,False,False,False]),
++    ('department', [True,True,False,False]), ('all', [True,True,True,False])])
++def test_independent_matrix(monkeypatch, action, scope, expected):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    profile = actor(scope, scope)
++    assert [employee_target_allowed(profile, row, action) for row in [
++        target(2), target(), target(4,'d2'), target(2,'d1','b')]] == expected
++
++
++def test_read_does_not_grant_update_and_self_fields_remain_protected(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    profile = actor('all', 'self')
++    assert _card_access(profile, target())[0] == []
++    assert _card_access(profile, target(2, role='manager'))[0] == ['whatsapp_numbers']
++    assert _card_access(profile, target(role='admin'))[0] == []
++    profile['active'] = False
++    assert not employee_action_allowed(profile, 'view')
++
++
++def test_gate_sparse_cells_and_coarse_invitation_guard(monkeypatch):
++    profile = actor('none', 'none')
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED', raising=False)
++    assert employee_target_allowed(profile, target(), 'view')
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    assert not TenantPolicy(profile).allows_action('employees', 'manage')
++    del profile['workflow']['policies'][0]['value']['2']['access_scopes']['employees']['update']
++    assert employee_target_allowed(profile, target(), 'update')
++    assert not employee_target_allowed(profile, target(), 'view')
++
++
++def test_sql_is_parameterized_and_null_department_fails_closed(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    profile = actor()
++    assert _employee_read_sql(profile) == ('m.department_id=%s::uuid', ['d1'])
++    profile['department_id'] = None
++    assert _employee_read_sql(profile) == ('FALSE', [])
++    profile['tenant_status'] = 'suspended'
++    assert not employee_target_allowed(profile, target(), 'update')
++
++
++def test_catalog_capabilities_no_fake_create_delete(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    from tenant_scoped_access import SCOPE_ACTION_CATALOG
++    assert SCOPE_ACTION_CATALOG['employees'] == ('view', 'update')
++    caps = TenantPolicy(actor('self','none')).public_capabilities()
++    assert caps['can_view_employees'] and not caps['can_update_employees']
++    assert caps['pages']['employees']
++
++
++@pytest.mark.parametrize('name,role,permissions', [
++    ('Changed alias', 'manager', ['employees']),
++    ('Original', 'operator', ['employees']),
++    ('Original', 'manager', []),
++])
++def test_scoped_unversioned_upsert_denies_before_any_write(monkeypatch, name, role, permissions):
++    from test_tenant_member_store import Connection
++    import tenant_member_store as store
++    profile = actor('self', 'self')
++    connection = Connection(profile)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    monkeypatch.setattr(store, '_connect', lambda: connection)
++    monkeypatch.setattr(store, '_locked_members', lambda *args: (profile, profile))
++    with pytest.raises(store.MemberCardError) as error:
++        store.upsert_member(tenant_id='a', owner_id=2, telegram_id=2,
++                            display_name=name, role=role, permissions=permissions)
++    assert error.value.code == 'member_field_read_only'
++    assert error.value.status == 403
++    assert not connection.committed
++    assert all('UPDATE ' not in sql and 'INSERT ' not in sql for sql, _ in connection.cursor_value.queries)
++
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('changes', [
++    {'display_name': 'Changed alias'}, {'role': 'operator'}, {'permissions': []},
++])
++async def test_http_legacy_self_upsert_uses_real_store_guard(monkeypatch, changes):
++    from unittest.mock import Mock
++    from aiohttp import web
++    from aiohttp.test_utils import TestClient, TestServer
++    from tenant_members_api import MemberApiContext, handlers
++    from test_tenant_member_store import Connection
++    import tenant_member_store as store
++    profile = actor('self', 'self')
++    connection = Connection(profile)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    monkeypatch.setattr(store, '_connect', lambda: connection)
++    monkeypatch.setattr(store, '_locked_members', lambda *args: (profile, profile))
++    unused = Mock(side_effect=AssertionError('Unrelated operation'))
++    context = MemberApiContext(lambda request: profile, unused, unused, unused,
++        'https://app.test', unused, store.upsert_member, unused, unused, unused,
++        unused, unused, store.MemberCardError)
++    app = web.Application()
++    app.router.add_post('/api/platform/members', handlers(context)['members'])
++    async with TestClient(TestServer(app)) as client:
++        response = await client.post('/api/platform/members', json={
++            'action': 'upsert', 'telegram_id': 2, 'display_name': 'Original',
++            'role': 'manager', 'permissions': ['employees'], **changes})
++        assert response.status == 403
++        result = await response.json()
++        assert result['code'] == 'member_field_read_only'
++        assert 'members' not in result
++    assert not connection.committed
++    assert all('UPDATE ' not in sql and 'INSERT ' not in sql for sql, _ in connection.cursor_value.queries)
+diff --git a/beintaskbot-main/tests/test_employee_card_scopes_postgres.py b/beintaskbot-main/tests/test_employee_card_scopes_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..d225959e766b419bf2485dc3d894d7634b0a0f19
+--- /dev/null
++++ b/beintaskbot-main/tests/test_employee_card_scopes_postgres.py
+@@ -0,0 +1,106 @@
++"""Employee list and mutation scopes, synthetic localhost PostgreSQL only."""
++import json
++import pytest
++from test_member_email_assign_postgres import fixture, query, A, B
++import tenant_member_store as store
++
++D1 = '00000000-0000-0000-0000-000000009301'
++D2 = '00000000-0000-0000-0000-000000009302'
++
++
++@pytest.fixture
++def employees(fixture, monkeypatch):
++    monkeypatch.setattr(store, '_connect', fixture)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    with fixture() as conn:
++        for dep in [D1, D2]:
++            conn.execute('INSERT INTO saas_tenant_departments(tenant_id,id,name) VALUES(%s,%s,%s)', (A, dep, dep))
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=41', (D1,A))
++        for person, dep in [(51,D1),(52,D2),(53,None)]:
++            conn.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,department_id) VALUES(%s,%s,'Synthetic','worker',%s)", (A,person,dep))
++    return fixture
++
++
++def scopes(f, view='department', update='self'):
++    query(f, "INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value", (A, json.dumps({'41': {'access_scopes': {'employees': {'view':view,'update':update}}}})))
++
++
++@pytest.mark.parametrize('scope,ids', [('self',[41]),('department',[41,51]),('all',[11,41,51,52,53])])
++def test_list_has_no_foreign_or_out_of_scope_identity(employees,scope,ids):
++    scopes(employees, scope, 'none')
++    rows = store.list_members(tenant_id=A,owner_id=41)
++    assert sorted(row['telegram_id'] for row in rows) == ids
++    assert all(row['editable_fields'] == [] for row in rows)
++    assert all(not row['password_assign_available'] for row in rows)
++    assert all('department_catalog' not in row and 'workflow' not in row for row in rows)
++
++
++def test_recheck_department_revocation_and_independent_mutation(employees):
++    scopes(employees, 'all', 'department')
++    rows = store.list_members(tenant_id=A,owner_id=41)
++    version = next(row['card_version'] for row in rows if row['telegram_id']==51)
++    query(employees, 'UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=51', (D2,A))
++    with pytest.raises(store.MemberCardError):
++        store.upsert_member(tenant_id=A,owner_id=41,telegram_id=51,expected_version=version,changes={'display_name':'Denied'})
++    with pytest.raises(store.MemberCardError):
++        store.deactivate_member(tenant_id=A,owner_id=41,telegram_id=52)
++    query(employees, 'UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=41',(A,))
++    with pytest.raises(store.MemberCardError):
++        store.list_members(tenant_id=A,owner_id=41)
++
++
++def test_self_safe_fields_only_and_tenant_boundary(employees):
++    scopes(employees, 'self', 'self')
++    row = store.list_members(tenant_id=A,owner_id=41)[0]
++    assert row['editable_fields'] == ['whatsapp_numbers']
++    for field,value in [('role','admin'),('active',False),('department_id',D2),('permissions',['employees'])]:
++        with pytest.raises(store.MemberCardError):
++            store.upsert_member(tenant_id=A,owner_id=41,telegram_id=41,expected_version=row['card_version'],changes={field:value})
++    result = store.upsert_member(tenant_id=A,owner_id=41,telegram_id=41,expected_version=row['card_version'],changes={'whatsapp_numbers':[]})
++    assert result['card_version'] != row['card_version']
++    with pytest.raises(store.MemberCardError):
++        store.set_member_whatsapp_numbers(tenant_id=B,owner_id=41,telegram_id=42,numbers=[])
++
++
++def test_scope_none_denies_read_even_with_legacy_grant(employees):
++    query(employees, "UPDATE saas_tenant_members SET permissions='[\"employees\"]'::jsonb WHERE tenant_id=%s AND telegram_id=41", (A,))
++    scopes(employees, 'none', 'all')
++    with pytest.raises(store.MemberCardError):
++        store.list_members(tenant_id=A,owner_id=41)
++    # Update remains independent of read; no real messages/accounts are created.
++    store.set_member_whatsapp_numbers(tenant_id=A,owner_id=41,telegram_id=51,numbers=[])
++
++
++@pytest.mark.asyncio
++async def test_actual_http_unversioned_self_upsert_denied_and_strict_safe_updates_work(employees):
++    from unittest.mock import Mock
++    from aiohttp import web
++    from aiohttp.test_utils import TestClient, TestServer
++    from tenant_members_api import MemberApiContext, handlers
++    query(employees, "UPDATE saas_tenant_members SET role='manager',permissions='[\"employees\"]'::jsonb WHERE tenant_id=%s AND telegram_id=41", (A,))
++    scopes(employees, 'all', 'all')
++    unused = Mock(side_effect=AssertionError('Unrelated operation'))
++    context = MemberApiContext(lambda request: store.member(A,41), unused, unused, unused,
++        'https://app.test', store.list_members, store.upsert_member, unused, unused,
++        unused, unused, unused, store.MemberCardError)
++    app = web.Application()
++    app.router.add_post('/api/platform/members', handlers(context)['members'])
++    before = query(employees, 'SELECT * FROM saas_tenant_members ORDER BY tenant_id,telegram_id')
++    async with TestClient(TestServer(app)) as client:
++        for change in [{'display_name':'Forbidden alias'}, {'role':'operator'}, {'permissions':[]}]:
++            response = await client.post('/api/platform/members', json={
++                'action':'upsert','telegram_id':41,'display_name':'Synthetic',
++                'role':'manager','permissions':['employees'],**change})
++            assert response.status == 403
++            assert (await response.json())['code'] == 'member_field_read_only'
++            assert query(employees, 'SELECT * FROM saas_tenant_members ORDER BY tenant_id,telegram_id') == before
++        rows = store.list_members(tenant_id=A,owner_id=41)
++        for target_id, change in [(41,{'whatsapp_numbers':[]}), (51,{'display_name':'Permitted alias'})]:
++            version = next(row['card_version'] for row in rows if row['telegram_id']==target_id)
++            response = await client.post('/api/platform/members', headers={'Origin':'https://app.test'}, json={
++                'action':'update_member_card','telegram_id':target_id,'expected_version':version,
++                'expected_tenant_id':A,'expected_user_id':41,'changes':change})
++            assert response.status == 200
++            result = await response.json()
++            assert set(result['applied']) == {'telegram_id','card_version'}
++        assert query(employees, 'SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s AND telegram_id=51',(A,)) == [{'display_name':'Permitted alias'}]
+diff --git a/beintaskbot-main/tests/test_employee_card_scopes_ui.cjs b/beintaskbot-main/tests/test_employee_card_scopes_ui.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ec45df892afc7238ef8eb214f0f13edcee8ef5c3
+--- /dev/null
++++ b/beintaskbot-main/tests/test_employee_card_scopes_ui.cjs
+@@ -0,0 +1,29 @@
++const assert=require('node:assert/strict');
++const {mount,settle,edit,writes}=require('./employee_card_fixture.cjs');
++(async()=>{
++ const b=await mount();
++ try {
++  b.f.profile.capabilities.can_manage_employees=false;
++  b.f.profile.capabilities.can_view_employees=true;
++  b.f.profile.capabilities.can_update_employees=false;
++  b.f.members[0].editable_fields=[];
++  b.w.document.dispatchEvent(new b.w.CustomEvent('tenant-profile',{detail:b.f.profile}));
++  await settle();
++  assert.equal(b.d.getElementById('staffManagement').hidden,false,'read-only employee page remains visible');
++  assert.equal(b.d.getElementById('staffAdd').hidden,true);
++  assert.equal(b.d.querySelector('[data-staff-tab=requests]').hidden,true);
++  assert.equal(b.d.querySelector('[data-staff-tab=invites]').hidden,true);
++  b.d.querySelector('[data-staff-tab=members]').click();await settle();
++  const form=edit(b);
++  assert.equal(form.elements.namedItem('display_name').readOnly,true);
++  assert.equal(form.elements.namedItem('role').disabled,true);
++  assert.equal(form.elements.namedItem('active').disabled,true);
++  b.d.querySelector('[data-staff-close]').click();
++  b.f.profile.capabilities.can_view_employees=false;
++  b.w.document.dispatchEvent(new b.w.CustomEvent('tenant-profile',{detail:b.f.profile}));await settle();
++  assert.equal(b.d.getElementById('staffManagement').hidden,true);
++  assert.equal(b.d.getElementById('staffMemberModal').classList.contains('show'),false);
++  assert.equal(writes(b).length,0);
++ } finally {b.close()}
++ console.log('PASS: scoped read-only cards, hidden creation/requests and revocation cleanup.');
++})().catch(e=>{console.error(e);process.exitCode=1});
 diff --git a/beintaskbot-main/tests/test_employee_finance_scopes.py b/beintaskbot-main/tests/test_employee_finance_scopes.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..df423f176e2288466f5898c9550e1e3ee250038a

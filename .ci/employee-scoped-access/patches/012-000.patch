@@ -1,0 +1,469 @@
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..11a622a762750ad0fe6934629bc869339b5fa55f
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
+@@ -0,0 +1,136 @@
++"""Actual concurrent AI scope fences; disposable localhost PostgreSQL only.
++
++PGlite cannot run this suite. Final CI must supply BEINTASKBOT_TEST_POSTGRES_DSN.
++"""
++from concurrent.futures import ThreadPoolExecutor
++import threading
++import time
++
++import psycopg
++from psycopg.rows import dict_row
++import pytest
++
++from test_connect_channel_multiprocess import database
++from test_tenant_support_inbox import db, A
++from test_ai_scoped_documents import scoped, grants, ACTOR
++import tenant_ai_agents_store as store
++from tenant_linear_policy import TenantLinearError
++
++
++@pytest.fixture
++def concurrent(scoped, monkeypatch):
++    database, ids = scoped
++    grants(database, {'view': 'self', 'update': 'self'})
++    def factory():
++        connection = psycopg.connect(database.dsn, row_factory=dict_row)
++        connection.execute("SET statement_timeout='8s'")
++        connection.execute("SET lock_timeout='6s'")
++        return connection
++    monkeypatch.setattr(store, '_connect', factory)
++    return factory, ids
++
++
++def save(factory, ident, name, ready=None):
++    with factory() as conn:
++        if ready:
++            ready(conn.info.backend_pid)
++        try:
++            return store.save_agent(ACTOR, {'name': name, 'expected_version': 1}, agent_id=ident, connection=conn)
++        except TenantLinearError as error:
++            return error.status
++
++
++def wait_blocked(factory, pid, blocker):
++    deadline = time.monotonic() + 4
++    with factory() as observer:
++        while time.monotonic() < deadline:
++            row = observer.execute('SELECT %s=ANY(pg_blocking_pids(%s)) AS waiting', (blocker, pid)).fetchone()
++            if row['waiting']:
++                return
++            time.sleep(.01)
++    pytest.fail('Expected PostgreSQL lock wait was not observed')
++
++
++def worker_pid():
++    event = threading.Event()
++    ids = []
++    def ready(pid):
++        ids.append(pid)
++        event.set()
++    return event, ids, ready
++
++
++def test_concurrent_updates_serialize_without_share_upgrade(concurrent):
++    factory, ids = concurrent
++    barrier = threading.Barrier(2)
++    def update(name):
++        return save(factory, ids['self'], name, lambda _: barrier.wait(timeout=4))
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        futures = [pool.submit(update, name) for name in ('first', 'second')]
++        outcomes = [future.result(timeout=12) for future in futures]
++    assert sum(isinstance(value, dict) for value in outcomes) == 1
++    assert outcomes.count(409) == 1
++    with factory() as conn:
++        assert conn.execute('SELECT version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone()['version'] == 2
++
++
++def test_configuration_mutex_precedes_agent_row_even_for_scoped_update(concurrent):
++    factory, ids = concurrent
++    event, pids, ready = worker_pid()
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        with factory() as creator:
++            creator.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('ai-agent-config:' + A,))
++            future = pool.submit(save, factory, ids['self'], 'updated', ready)
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], creator.info.backend_pid)
++            # Models setup recovery after acquiring the configuration mutex.
++            # The updater must not already hold SHARE/UPDATE on this agent.
++            creator.execute('SELECT id FROM saas_ai_agents WHERE id=%s FOR UPDATE NOWAIT', (ids['self'],))
++        assert future.result(timeout=12)['name'] == 'updated'
++
++
++def test_revocation_committed_before_admission_denies_update(concurrent):
++    factory, ids = concurrent
++    event, pids, ready = worker_pid()
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        with factory() as revoke:
++            revoke.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
++            future = pool.submit(save, factory, ids['self'], 'must not write', ready)
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], revoke.info.backend_pid)
++        assert future.result(timeout=12) in (403, 404)
++    with factory() as conn:
++        assert conn.execute('SELECT name,version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone() == {'name':'self','version':1}
++
++
++def test_admitted_update_fences_revocation_until_commit(concurrent, monkeypatch):
++    factory, ids = concurrent
++    admitted, release = threading.Event(), threading.Event()
++    original = store._authorize
++    update_pid = []
++    def pause(cur, profile, **kwargs):
++        value = original(cur, profile, **kwargs)
++        update_pid.append(cur.connection.info.backend_pid)
++        admitted.set()
++        if not release.wait(4):
++            raise AssertionError('Timed out waiting for revocation observer')
++        return value
++    monkeypatch.setattr(store, '_authorize', pause)
++    event, pids, ready = worker_pid()
++    def revoke():
++        with factory() as conn:
++            ready(conn.info.backend_pid)
++            conn.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(save, factory, ids['self'], 'admitted')
++        assert admitted.wait(4)
++        second = pool.submit(revoke)
++        try:
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], update_pid[0])
++        finally:
++            release.set()
++        assert first.result(timeout=12)['name'] == 'admitted'
++        second.result(timeout=12)
++    monkeypatch.setattr(store, '_authorize', original)
++    assert save(factory, ids['self'], 'revoked') in (403, 404)
+diff --git a/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py b/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..26ee7c6963f7967ceb256884b6903062bcaf3d1b
+--- /dev/null
++++ b/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py
+@@ -0,0 +1,29 @@
++"""New upstream analyst tools stay owner-only despite independent AI grants."""
++import pytest
++from test_tenant_support_inbox import database,db,A
++from test_tenant_operator_workspace import operator_db
++from test_dialog_source_scopes import scoped,grants
++from tenant_linear_policy import TenantLinearError
++import tenant_ai_business_analytics as analytics
++
++NEW_TOOLS=[
++    ('search_support_cases',{'query':'synthetic'}),
++    ('get_support_case_detail',{'candidate_id':'00000000-0000-0000-0000-000000000999'}),
++    ('search_tasks',{'query':'synthetic','source':'all'}),
++    ('get_task_timeline',{'task_id':'00000000-0000-0000-0000-000000000999','source':'native'}),
++    ('search_knowledge',{'query':'synthetic'}),
++]
++
++
++@pytest.mark.parametrize('view',['none','department','all'])
++@pytest.mark.parametrize('tool,args',NEW_TOOLS)
++def test_new_analyst_tools_deny_scoped_admin_even_with_ai_management(scoped,tool,args,view):
++    connection,person=scoped;grants(connection,33,view,'all')
++    connection.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s AND telegram_id=33",(A,))
++    connection.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{33,ai_agents_manage}','true') WHERE tenant_id=%s AND policy_key='members'",(A,));connection.commit()
++    # The authenticated identity is current-DB checked; cached/client role or
++    # source scope must not turn an employee into the company owner.
++    with pytest.raises(TenantLinearError) as denied:
++        analytics.execute({**person,'role':'owner','permissions':['dialogs','ai_agents_manage']},tool,args)
++    assert denied.value.status==403
++    assert not connection.execute("SELECT 1 FROM saas_tenant_audit_events WHERE tenant_id=%s AND action='ai_business_analytics_tool_read'",(A,))
+diff --git a/beintaskbot-main/tests/test_business_analyst_scoped_boundary.py b/beintaskbot-main/tests/test_business_analyst_scoped_boundary.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b18c4fa88a2c90e3a1519b0f31e4b6067e3bcae0
+--- /dev/null
++++ b/beintaskbot-main/tests/test_business_analyst_scoped_boundary.py
+@@ -0,0 +1,95 @@
++"""Upstream owner analyst keeps current-DB authority with scoped employees.
++
++All records are synthetic in PGlite. No external provider or production DB.
++"""
++import json
++import uuid
++from unittest.mock import Mock
++
++from cryptography.fernet import Fernet
++import pytest
++
++from test_tenant_support_inbox import database, db, A, PROFILE
++from test_tenant_operator_workspace import operator_db
++from test_dialog_source_scopes import scoped, grants
++from tenant_linear_policy import TenantLinearError
++import tenant_ai_business_analyst as analyst
++
++
++@pytest.fixture
++def analyst_db(scoped, monkeypatch):
++    connection, person = scoped
++    monkeypatch.setattr(analyst, '_connect', lambda: connection)
++    provider = Mock(side_effect=AssertionError('External provider must not run'))
++    monkeypatch.setattr(analyst, 'generate_with_tools', provider)
++    return connection, person, provider
++
++
++@pytest.mark.parametrize('view', ['none', 'self', 'department', 'all'])
++@pytest.mark.parametrize('role', ['manager', 'admin'])
++def test_scoped_employee_cannot_enter_owner_analyst_with_forged_profile(analyst_db, role, view):
++    connection, person, provider = analyst_db
++    grants(connection, 33, view, 'all')
++    connection.execute("UPDATE saas_tenant_members SET role=%s WHERE tenant_id=%s AND telegram_id=33", (role, A))
++    connection.execute("""UPDATE saas_tenant_workflow_policies
++      SET value=jsonb_set(value,'{33,ai_agents_manage}','true')
++      WHERE tenant_id=%s AND policy_key='members'""", (A,))
++    connection.commit()
++    with pytest.raises(TenantLinearError) as denied:
++        analyst.run({**person, 'role': 'owner', 'permissions': ['dialogs', 'ai_agents_manage']},
++                    prompt='Synthetic question', request_id=str(uuid.uuid4()))
++    assert denied.value.status == 403
++    provider.assert_not_called()
++    assert not connection.execute('SELECT 1 FROM saas_chat_ai_runs WHERE tenant_id=%s', (A,))
++    assert not connection.execute("SELECT 1 FROM saas_tenant_audit_events WHERE tenant_id=%s AND action='ai_business_analyst_query'", (A,))
++
++
++def configure_owner(connection, monkeypatch):
++    cipher = Fernet(Fernet.generate_key())
++    monkeypatch.setattr(analyst, '_fernet', lambda: cipher)
++    secret = cipher.encrypt(json.dumps({'tenant_id': A, 'provider': 'chat_ai', 'api_key': 'synthetic-never-dispatched'}).encode())
++    metadata = {'enabled': True, 'consent': True, 'copilot_enabled': True,
++                'copilot_model': 'synthetic-model', 'daily_limit': 5, 'copilot_daily_limit': 2}
++    connection.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata)
++      VALUES(%s,'chat_ai','connected',%s,%s::jsonb)""", (A, secret, json.dumps(metadata)))
++    connection.commit()
++    return analyst._load({**PROFILE, 'role': 'owner'})
++
++
++@pytest.mark.parametrize('change', ['demote', 'deactivate', 'revoke_consent'])
++def test_owner_admission_rechecks_current_authority_after_preflight(analyst_db, monkeypatch, change):
++    connection, _, provider = analyst_db
++    current = configure_owner(connection, monkeypatch)
++    if change == 'demote':
++        connection.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s AND telegram_id=11", (A,))
++    elif change == 'deactivate':
++        connection.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=11', (A,))
++    else:
++        connection.execute("UPDATE saas_tenant_integrations SET metadata=jsonb_set(metadata,'{consent}','false') WHERE tenant_id=%s AND provider='chat_ai'", (A,))
++    connection.commit()
++    with pytest.raises(TenantLinearError) as denied:
++        analyst._reserve({**PROFILE, 'role': 'owner'}, str(uuid.uuid4()), current['version'])
++    assert denied.value.status == (409 if change == 'revoke_consent' else 403)
++    provider.assert_not_called()
++    assert not connection.execute('SELECT 1 FROM saas_chat_ai_runs WHERE tenant_id=%s', (A,))
++
++
++def test_analyst_admission_counts_existing_connect_usage_in_shared_cap(analyst_db, monkeypatch):
++    connection, _, provider = analyst_db
++    current = configure_owner(connection, monkeypatch)
++    connection.execute("""INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,
++      config_version,status,reserved_calls,provider,channel_id,conversation_id)
++      VALUES(%s,%s,11,41,'synthetic','synthetic','completed',1,'connect','synthetic','synthetic')""",
++      (A, str(uuid.uuid4())))
++    connection.commit()
++    request_id = str(uuid.uuid4())
++    analyst._reserve(PROFILE, request_id, current['version'])
++    with pytest.raises(TenantLinearError) as duplicate:
++        analyst._reserve(PROFILE, request_id, current['version'])
++    assert duplicate.value.status == 409
++    with pytest.raises(TenantLinearError) as capped:
++        analyst._reserve(PROFILE, str(uuid.uuid4()), current['version'])
++    assert capped.value.status == 429
++    rows = connection.execute('SELECT provider,reserved_calls FROM saas_chat_ai_runs WHERE tenant_id=%s ORDER BY provider', (A,))
++    assert rows == [{'provider': 'business_analyst', 'reserved_calls': 1}, {'provider': 'connect', 'reserved_calls': 1}]
++    provider.assert_not_called()
+diff --git a/beintaskbot-main/tests/test_contacts_directory_postgres.py b/beintaskbot-main/tests/test_contacts_directory_postgres.py
+index 74c9a7e5ed8d452e9aef0bbe4ae02dd9d27a9c1f..13cc6e6ad12fd1e35533532edca5b851cb90b6b9 100644
+--- a/beintaskbot-main/tests/test_contacts_directory_postgres.py
++++ b/beintaskbot-main/tests/test_contacts_directory_postgres.py
+@@ -738,7 +738,7 @@ def test_repeated_real_snapshot_conflicts_fail_unavailable_without_returning_par
+     cookie = f['session'].issue(A, 82)
+     conflicts = []
+     def before(query, _cursor):
+-        if 'SELECT * FROM saas_tenant_members WHERE' in query and 'FOR SHARE' in query:
++        if 'SELECT * FROM saas_tenant_members WHERE' in ' '.join(query.split()) and 'FOR SHARE' in query:
+             # An actual committed row revision after each RR snapshot causes
+             # PostgreSQL 40001 at the production SHARE fence; no exception or
+             # authority function is manufactured by this timing observer.
+@@ -976,10 +976,11 @@ def test_actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_h
+             previous_deal[0].pop('updated_at')
+             current_deal[0].pop('updated_at')
+             assert current_deal == previous_deal, 'Attach/detach preserves every other deal field'
+-            relation_posts = [post for post in f['posts'] if post['path'].endswith(RELATION_DEAL)]
++            relation_posts = [post for post in f['posts'] if post['path'].endswith('/deals/' + RELATION_DEAL)]
+             assert len(relation_posts) == 2
+             created_id = next(post['data']['id'] for post in f['posts'] if post['path'].endswith('/contacts'))
+             assert [post['data']['contact_id'] for post in relation_posts] == [created_id, None]
++            assert all(post['data']['title'] == 'Synthetic contact relation deal' for post in relation_posts)
+         else:
+             assert changed == set(), changed
+             if mode in ('native403_view', 'native403_update'):
+diff --git a/beintaskbot-main/tests/test_contacts_directory_ui.cjs b/beintaskbot-main/tests/test_contacts_directory_ui.cjs
+index d8091b1a169dced14ddb93a540b4882e572ba04e..a31572fca622ff292c15a1136558462f7fd2a98f 100644
+--- a/beintaskbot-main/tests/test_contacts_directory_ui.cjs
++++ b/beintaskbot-main/tests/test_contacts_directory_ui.cjs
+@@ -48,10 +48,28 @@ const submit=b=>b.d.getElementById('nativeContactForm').dispatchEvent(new b.w.Ev
+  }
+  console.log('PASS CRM01 ambiguous creation readback uses existing trim-only normalization and stable UUID; confirmation never creates a duplicate');
+  {
+-  const other='10000000-0000-4000-8000-000000000602',b=await mount({nativeRows:[{...native(),company_id:company,company_name:'Current company'}],companyRows:[{id:company,name:'Current company'},{id:other,name:'Other company'}]});try{b.f.actions.assign=false;b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=b.d.getElementById('nativeContactCompany');assert.deepEqual([...select.options].map(item=>item.value),['',company],'delete without assign permits retaining/unlinking only');assert.equal(select.value,company);assert.match(b.d.getElementById('contactsCompanyPermission').textContent,/do not allow linking/);formInput(b,'nativeContactName','Allowed local update');select.insertAdjacentHTML('beforeend','<option value="'+other+'">Not offered by the UI</option>');select.value=other;submit(b);await settle();assert.equal(writes(b).length,0,'an unavailable link is rejected before the primary save, even if DOM is manipulated');assert.equal(b.d.getElementById('nativeContactName').value,'Allowed local update');}finally{b.close()}
+-  const deal='10000000-0000-4000-8000-000000000801',c=await mount({dealRows:[{id:deal,title:'Existing deal',pipeline_id:'pipeline-existing',stage_id:'stage-existing',contact_id:null,description:'Preserved description'}]});try{c.d.querySelector('[data-contact-open]').click();await until(()=>modal(c)?.querySelector('[data-contact-link-deal]'));modal(c).querySelector('[data-contact-deal-select]').value=deal;modal(c).querySelector('[data-contact-link-deal]').click();await until(()=>c.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(c).length,1);assert.equal(writes(c)[0].body.contact_id,contactA);assert.equal(writes(c)[0].body.pipeline_id,'pipeline-existing');assert.equal(writes(c)[0].body.description,'Preserved description');assert.equal(new URL(writes(c)[0].url,'https://fixture.test').searchParams.get('expected_tenant_id'),tenant);await until(()=>modal(c)?.querySelector('[data-contact-unlink-deal]'));modal(c).querySelector('[data-contact-unlink-deal]').click();await until(()=>c.f.dealRows[0].contact_id===null);assert.equal(writes(c).length,2);assert.equal(writes(c).every(call=>call.path==='/api/platform/crm/native/deals/'+deal),true,'relations reuse the existing scoped deal endpoint and never create a contact');}finally{c.close()}
++  const other='10000000-0000-4000-8000-000000000602',b=await mount({nativeRows:[{...native(),company_id:company,company_name:'Current company'}],companyRows:[{id:company,name:'Current company'},{id:other,name:'Other company'}],recordActions:{update:true,archive:false,assign:false}});try{b.f.actions.assign=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=b.d.getElementById('nativeContactCompany');assert.deepEqual([...select.options].map(item=>item.value),['',company,other],'contact U permits either relation without assign or D');assert.equal(select.value,company);formInput(b,'nativeContactName','Allowed local update');select.value=other;submit(b);await until(()=>b.f.nativeRows[0].company_id===other);await settle();assert.equal(writes(b).length,2);assert.deepEqual(writes(b)[1].body,{action:'link_company',company_id:other});assert.equal(writes(b)[1].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.nativeRows[0].display_name,'Allowed local update');}finally{b.close()}
++  const deal='10000000-0000-4000-8000-000000000801',c=await mount({dealRows:[{id:deal,title:'Existing deal',pipeline_id:'pipeline-existing',stage_id:'stage-existing',contact_id:null,description:'Preserved description'}]});try{c.d.querySelector('[data-contact-open]').click();await until(()=>modal(c)?.querySelector('[data-contact-link-deal]'));modal(c).querySelector('[data-contact-deal-select]').value=deal;modal(c).querySelector('[data-contact-link-deal]').click();await until(()=>c.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(c).length,1);assert.deepEqual(writes(c)[0].body,{action:'link_deal',deal_id:deal});assert.equal(c.f.dealRows[0].pipeline_id,'pipeline-existing');assert.equal(c.f.dealRows[0].description,'Preserved description');assert.equal(new URL(writes(c)[0].url,'https://fixture.test').searchParams.get('expected_tenant_id'),tenant);await until(()=>modal(c)?.querySelector('[data-contact-unlink-deal]'));modal(c).querySelector('[data-contact-unlink-deal]').click();await until(()=>c.f.dealRows[0].contact_id===null);await settle();assert.equal(writes(c).length,2);assert.equal(writes(c).every(call=>call.path==='/api/platform/crm/native/contacts/'+contactA),true,'relations update this contact card only and never create a contact');}finally{c.close()}
+  }
+- console.log('PASS CRM01 company choices honor assign/delete before saving; existing authorized deal attach/detach preserves fields and exact scoped endpoints');
++ {
++  const deal='10000000-0000-4000-8000-000000000809', b=await mount({dealRows:[{id:deal,title:'Visible read-only deal',contact_id:null}],recordActions:{update:true,archive:false}});try{b.f.actions.update_deals=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-open]').click();await until(()=>modal(b)?.querySelector('[data-contact-link-deal]'));modal(b).querySelector('[data-contact-deal-select]').value=deal;modal(b).querySelector('[data-contact-link-deal]').click();await until(()=>b.f.dealRows[0].contact_id===contactA);assert.equal(writes(b)[0].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/deals/'+deal),false,'relation does not read target deal contents');await until(()=>modal(b)?.querySelector('[data-contact-unlink-deal]'));modal(b).querySelector('[data-contact-unlink-deal]').click();await until(()=>b.f.dealRows[0].contact_id===null);await settle();}finally{b.close()}
++  const denied=await mount({recordActions:{update:false},dealRows:[{id:deal,title:'Visible deal',contact_id:null}]});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=deals]'));await settle();assert.equal(modal(denied).querySelector('[data-contact-link-deal]'),null,'global U does not override denied record U');assert.equal(writes(denied).length,0);}finally{denied.close()}
++ }
++ console.log('PASS CRM01 company choices honor contact U without assign/delete; existing authorized deal attach/detach preserves fields and exact scoped endpoints');
++ {
++  const b=await mount({recordActions:{update:true,archive:false,assign:false}});try{b.f.actions.assign=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-open]').click();await until(()=>modal(b)?.querySelector('[data-contact-link-company]'));modal(b).querySelector('[data-contact-company-select]').value=company;modal(b).querySelector('[data-contact-link-company]').click();await until(()=>b.f.nativeRows[0].company_id===company);await settle();assert.deepEqual(writes(b)[0].body,{action:'link_company',company_id:company});assert.equal(writes(b)[0].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/companies/'+company),false);await until(()=>modal(b)?.querySelector('[data-contact-unlink-company]'));modal(b).querySelector('[data-contact-unlink-company]').click();await until(()=>b.f.nativeRows[0].company_id===null);await settle();assert.deepEqual(writes(b)[1].body,{action:'unlink_company',company_id:company});assert(writes(b).every(call=>call.path==='/api/platform/crm/native/contacts/'+contactA));}finally{b.close()}
++  for(const mode of ['card','form']){const hidden=await mount({nativeRows:[{...native(),company_id:company}],recordActions:{update:true,archive:false,assign:false}});try{hidden.f.companyFailure=403;hidden.f.actions.archive=false;hidden.f.actions.assign=false;if(mode==='card'){hidden.d.querySelector('[data-contact-open]').click();await until(()=>modal(hidden)?.querySelector('[data-contact-unlink-company]'));assert.equal(modal(hidden).querySelector('[data-contact-link-company]'),null,'company R denial does not expose new targets');modal(hidden).querySelector('[data-contact-unlink-company]').click()}else{hidden.d.querySelector('[data-contact-edit]').click();await until(()=>!hidden.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=hidden.d.getElementById('nativeContactCompany');assert.equal(select.disabled,false);assert.deepEqual([...select.options].map(item=>item.value),['',company]);select.value='';submit(hidden)}await until(()=>hidden.f.nativeRows[0].company_id===null);await settle();const receipt=writes(hidden).at(-1);assert.equal(receipt.path,'/api/platform/crm/native/contacts/'+contactA);assert.deepEqual(receipt.body,{action:'unlink_company',company_id:company});assert.deepEqual(hidden.errors,[])}finally{hidden.close()}}
++  const denied=await mount({nativeRows:[{...native(),company_id:company}],recordActions:{update:false,archive:true,assign:true}});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=companies]'));await settle();assert.equal(modal(denied).querySelector('[data-contact-link-company]'),null);assert.equal(modal(denied).querySelector('[data-contact-unlink-company]'),null);assert.equal(writes(denied).length,0)}finally{denied.close()}
++ }
++ console.log('PASS CRM01 contact company link/unlink uses only record U; denied company R keeps exact existing unlink without exposing targets; D cannot override denied U');
++ {
++  const deal='10000000-0000-4000-8000-000000000891';
++  const denied=await mount({scopedRelations:false,nativeRows:[{...native(),company_id:company}],recordActions:{update:true,archive:false,assign:false,update_deals:false},dealRows:[{id:deal,title:'Legacy deal',contact_id:contactA}]});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=companies]'));await settle();for(const selector of ['[data-contact-link-company]','[data-contact-unlink-company]','[data-contact-link-deal]','[data-contact-unlink-deal]'])assert.equal(modal(denied).querySelector(selector),null,'gate off contact U cannot bypass legacy authority '+selector);assert.equal(writes(denied).length,0)}finally{denied.close()}
++  const legacy=await mount({scopedRelations:false,dealRows:[{id:deal,title:'Legacy deal',pipeline_id:'p',stage_id:'s',description:'Keep',contact_id:null}]});try{legacy.d.querySelector('[data-contact-open]').click();await until(()=>modal(legacy)?.querySelector('[data-contact-link-deal]'));modal(legacy).querySelector('[data-contact-deal-select]').value=deal;modal(legacy).querySelector('[data-contact-link-deal]').click();await until(()=>legacy.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(legacy)[0].path,'/api/platform/crm/native/deals/'+deal);assert.equal(writes(legacy)[0].body.description,'Keep');assert(legacy.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/deals/'+deal));await until(()=>modal(legacy)?.querySelector('[data-contact-link-company]'));modal(legacy).querySelector('[data-contact-company-select]').value=company;modal(legacy).querySelector('[data-contact-link-company]').click();await until(()=>writes(legacy).length===2);await settle();assert.equal(writes(legacy)[1].path,'/api/platform/crm/native/companies/'+company);assert.deepEqual(writes(legacy)[1].body,{action:'link_contact',entity_id:contactA});assert(writes(legacy).every(call=>!call.path.includes('/contacts/')))}finally{legacy.close()}
++  const unlink=await mount({scopedRelations:false,nativeRows:[{...native(),company_id:company}],recordActions:{update:false,archive:true,assign:false}});try{unlink.d.querySelector('[data-contact-open]').click();await until(()=>modal(unlink)?.querySelector('[data-contact-unlink-company]'));modal(unlink).querySelector('[data-contact-unlink-company]').click();await until(()=>writes(unlink).length===1);await settle();assert.equal(writes(unlink)[0].path,'/api/platform/crm/native/companies/'+company);assert.deepEqual(writes(unlink)[0].body,{action:'unlink_contact',entity_id:contactA})}finally{unlink.close()}
++  const blocked=await mount({dealRows:[{id:deal,title:'Cannot sync relation',contact_id:null}]});try{blocked.f.writeFailure={status:409,code:'scoped_relation_sync_not_configured',target:'contacts'};blocked.d.querySelector('[data-contact-open]').click();await until(()=>modal(blocked)?.querySelector('[data-contact-link-deal]'));modal(blocked).querySelector('[data-contact-deal-select]').value=deal;modal(blocked).querySelector('[data-contact-link-deal]').click();await until(()=>modal(blocked).textContent.includes('Link not changed: safe synchronization'));assert.equal(blocked.f.dealRows[0].contact_id,null);assert.equal(writes(blocked).length,1)}finally{blocked.close()}
++ }
++ console.log('PASS CRM01 gate off retains legacy company/deal routes and guards; contact U cannot bypass old permissions; active outbound blocks scoped links without claiming saved/synced');
+  for(const outcome of ['revoked','update-only','unavailable']){
+   const b=await mount({role:'admin',permissions:['customers','deals','employees:manage']});try{
+    b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);formInput(b,'nativeContactName','Preserved rejected-write draft');const before=b.f.calls.filter(call=>call.path==='/api/platform/me').length;
+diff --git a/beintaskbot-main/tests/test_crm_native_api.py b/beintaskbot-main/tests/test_crm_native_api.py
+index ddbafc3ecc66bcca9ace572c9891ac8a6235d26f..343110fd747f931af8a75e06772a89e2e184a1a9 100644
+--- a/beintaskbot-main/tests/test_crm_native_api.py
++++ b/beintaskbot-main/tests/test_crm_native_api.py
+@@ -18,13 +18,13 @@ class ContactApiTests(unittest.TestCase):
+         self.assertEqual(response.status, 403)
+ 
+     def test_tenant_scoped_list(self):
+-        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'admin', 'active': True,
++        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'telegram_id': 20, 'role': 'admin', 'active': True,
+                                   'permissions': ['customers'], 'modules': {'customers': True}},
+                         'https://crm.example', mock.MagicMock())
+         with mock.patch.object(api, 'list_contacts', return_value=[{'display_name': 'A'}]) as listing:
+             response = asyncio.run(h(self.request(query={'search': 'A'})))
+         self.assertEqual(response.status, 200)
+-        listing.assert_called_once_with('tenant-a', 'A', 50)
++        listing.assert_called_once_with('tenant-a', 'A', 50, actor_id=20)
+ 
+     def test_invalid_contact_id_does_not_reach_database(self):
+         h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'owner'},
+diff --git a/beintaskbot-main/tests/test_crm_native_companies.py b/beintaskbot-main/tests/test_crm_native_companies.py
+index 23bd5ea869bc6cfaead7fbce065f32aa4d13808f..6e474b96c06e89fc2369b7c72d127173ed6e685f 100644
+--- a/beintaskbot-main/tests/test_crm_native_companies.py
++++ b/beintaskbot-main/tests/test_crm_native_companies.py
+@@ -65,9 +65,9 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
+     handler=company_api.handler(lambda _request:None,'https://crm.test',mock.MagicMock())
+     denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
+     assert denied.status==403
+-    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','role':'manager','active':True,
++    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
+         'permissions':['customers:view'],'modules':{'customers':True}},'https://crm.test',mock.MagicMock())
+     with mock.patch.object(company_api,'list_companies',return_value=[]) as listing:
+         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
+     assert response.status==200
+-    listing.assert_called_once_with('tenant-1','Acme',50)
++    listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)
+diff --git a/beintaskbot-main/tests/test_crm_native_deal_api.py b/beintaskbot-main/tests/test_crm_native_deal_api.py
+index 4c9fcb7d15297ccdf48024f22dc0928090da3bd3..4c99be446759aff3619b5d594fd242631b935398 100644
+--- a/beintaskbot-main/tests/test_crm_native_deal_api.py
++++ b/beintaskbot-main/tests/test_crm_native_deal_api.py
+@@ -10,11 +10,11 @@ class ApiTests(unittest.TestCase):
+         handler=api.handler(lambda _:None,'https://crm.test',mock.MagicMock())
+         denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
+         self.assertEqual(denied.status,403)
+-        handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'manager','active':True,
++        handler=api.handler(lambda _:{'tenant_id':'tenant-a','telegram_id':20,'role':'manager','active':True,
+             'permissions':['deals:view'],'modules':{'deals':True}},'https://crm.test',mock.MagicMock())
+         with mock.patch.object(api,'list_deals',return_value=[]) as listing:
+             response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'abc'})))
+-        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50)
++        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50,actor_id=20)
+ 
+     def test_invalid_id_never_reaches_store(self):
+         handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'owner'},'https://crm.test',mock.MagicMock())
+diff --git a/beintaskbot-main/tests/test_crm_relation_fences_postgres.py b/beintaskbot-main/tests/test_crm_relation_fences_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..98093b43ce2cc240e29e59f343b81ae7483b27d2
+--- /dev/null
++++ b/beintaskbot-main/tests/test_crm_relation_fences_postgres.py
+@@ -0,0 +1,69 @@
++"""Real localhost PostgreSQL sessions; optional when a disposable DSN exists."""
++import threading
++from concurrent.futures import ThreadPoolExecutor
++import pytest
++import psycopg
++from psycopg.rows import dict_row
++from test_connect_channel_multiprocess import database
++from test_tenant_support_inbox import db
++from test_tenant_crm_relation_delivery_postgres import graph, enqueue, ConditionalMock
++from tenant_crm_relation_delivery import drive
++
++
++@pytest.mark.parametrize('mutation', [
++    "UPDATE saas_tenant_members SET active=false WHERE telegram_id=81",
++    "UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'",
++    "UPDATE saas_crm_provider_settings SET sync_direction='off'",
++    "UPDATE saas_crm_native_deals SET contact_id=NULL,updated_at=clock_timestamp()",
++    "UPDATE saas_tenant_workflow_policies SET value='{}' WHERE policy_key='members'",
++])
++def test_dispatch_holds_revocation_and_local_change_fences_until_io_finishes(graph, mutation):
++    intent = enqueue(graph); graph['db'].commit()
++    factory = lambda: psycopg.connect(graph['db'].dsn, row_factory=dict_row)
++    entered, release, write_started, write_finished = [threading.Event() for _ in range(4)]
++    class BlockingMock(ConditionalMock):
++        def compare_and_apply(self, *args):
++            entered.set()
++            assert release.wait(10)
++            return super().compare_and_apply(*args)
++    adapter = BlockingMock(graph['binding'])
++    def revoke():
++        with factory() as conn:
++            conn.execute("SET lock_timeout='8s'")
++            write_started.set()
++            conn.execute(mutation)
++        write_finished.set()
++    with ThreadPoolExecutor(2) as pool:
++        delivery = pool.submit(drive, factory, intent.event_id, adapter=adapter)
++        try:
++            assert entered.wait(10)
++            writer = pool.submit(revoke)
++            assert write_started.wait(3)
++            assert not write_finished.wait(.2)
++        finally:
++            release.set()
++        assert delivery.result(10) == 'pending'
++        writer.result(10)
++    assert write_finished.is_set()
++    assert len(adapter.calls) == 1
++
++
++def test_second_session_cannot_replay_inflight_attempt(graph):
++    intent = enqueue(graph); graph['db'].commit()
++    factory = lambda: psycopg.connect(graph['db'].dsn, row_factory=dict_row)
++    entered, release = threading.Event(), threading.Event()
++    class BlockingMock(ConditionalMock):
++        def compare_and_apply(self, *args):
++            entered.set()
++            assert release.wait(10)
++            return super().compare_and_apply(*args)
++    adapter = BlockingMock(graph['binding'])
++    with ThreadPoolExecutor(1) as pool:
++        future = pool.submit(drive, factory, intent.event_id, adapter=adapter)
++        try:
++            assert entered.wait(10)
++            assert drive(factory, intent.event_id, adapter=adapter) == 'busy'
++        finally:
++            release.set()
++        assert future.result(10) == 'pending'
++    assert len(adapter.calls) == 1
