@@ -927,6 +927,43 @@ index 0000000000000000000000000000000000000000..45023ae59dfa7ad303911dd954b70ac2
 +        with pytest.raises(TenantLinearError) as denied:
 +            read()
 +        assert denied.value.status == 403
+diff --git a/beintaskbot-main/tests/test_integrated_connect_release.py b/beintaskbot-main/tests/test_integrated_connect_release.py
+index 512b1213834a028aca2da0bca826ac944b81e2c2..e3fe54322fb3b44ab33d7fcc7f25e21b3fdd5f70 100644
+--- a/beintaskbot-main/tests/test_integrated_connect_release.py
++++ b/beintaskbot-main/tests/test_integrated_connect_release.py
+@@ -157,11 +157,18 @@ def test_startup_prepares_pilot_case_schema_repeatably_before_signed_ingress(flo
+ 
+ def test_missing_optional_pilot_schema_keeps_signed_crm_receipt_and_fails_ai_closed(flow,monkeypatch):
+     f=flow;db=f['db']
+-    db.execute('DROP TABLE IF EXISTS saas_ai_pilot_followups');db.commit()
+-    assert not db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
+-    def unavailable_schema(_conn):
+-        raise RuntimeError('simulated additive pilot schema failure')
+-    monkeypatch.setattr('tenant_ai_agent_startup.ensure_pilot_case_schema',unavailable_schema)
++    # Consultation tables are mandatory at startup now. Simulate their loss
++    # only after the real preflight, inside optional AI admission, so this still
++    # exercises the receipt-preserving savepoint rather than startup rejection.
++    from tenant_consultation_schema import require_schema
++    import tenant_consultation_group as group
++    require_schema(db);db.commit()
++    original=group.attach_pilot_customer_reply
++    def unavailable_schema(cur,*args,**kwargs):
++        cur.execute('DROP TABLE saas_ai_pilot_followups')
++        return original(cur,*args,**kwargs)  # Real UndefinedTable aborts the txn.
++    failure=Mock(side_effect=unavailable_schema)
++    monkeypatch.setattr(group,'attach_pilot_customer_reply',failure)
+     monkeypatch.setattr(transport,'_verify_signature',lambda *_:True)
+     secret=transport._fernet().encrypt(json.dumps({'webhook_secret':'test-secret'}).encode())
+     db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
+@@ -175,6 +182,8 @@ def test_missing_optional_pilot_schema_keeps_signed_crm_receipt_and_fails_ai_clo
+     monkeypatch.setattr(pilot,'is_pilot_customer_target',lambda *_:True)
+     message_id,payload=_signed_inbound_event()
+     assert transport.ingest(json.dumps(payload).encode(),'signed-test',payload)
++    failure.assert_called_once()
++    require_schema(db)  # Savepoint rollback restores the injected table loss.
+     assert db.execute("SELECT direction FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s",
+         (A,'connect:'+message_id))[0]['direction']=='incoming'
+     fingerprint=__import__('hashlib').sha256(('connect:'+message_id).encode()).hexdigest()
 diff --git a/beintaskbot-main/tests/test_native_company_deal_source_browser.cjs b/beintaskbot-main/tests/test_native_company_deal_source_browser.cjs
 new file mode 100644
 index 0000000000000000000000000000000000000000..6c00f781faa468004a9fd76f2b509fbe74646721

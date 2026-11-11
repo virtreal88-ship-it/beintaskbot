@@ -1,8 +1,8 @@
 {
   "base_commit": "5e02c6c12c48b37a9d67346b84f65b05bc0fd2d7",
   "base_tree": "2b139e7f096b9695c8990dc7cfc5049f9466015f",
-  "target_local_commit": "3d1b88f7fc68c1a7f89d2ee391955b1cf914562d",
-  "target_tree": "df54a17c27284007453f4cd0745b14294ed881c6",
+  "target_local_commit": "d5b042d7f70c0f663ef74cd569bf8f9b542c40aa",
+  "target_tree": "93fa21ea2eb4d58fdef575aa33e15e45329536b5",
   "patches": [
     {
       "paths": [
@@ -18,13 +18,13 @@
         "beintaskbot-main/docs/employee-card-scopes.md",
         "beintaskbot-main/docs/employee-scoped-access-foundation.md"
       ],
-      "sha256": "9e39fae548e1fe4fe9db21882d9f7c1a43fa68ff69e566b0f92f1e1f29eb04a9",
-      "bytes": 69423,
+      "sha256": "1f90f958064613b0b7c8ef8232fefd862c40a92b4687cf50c070daf534eb2ce7",
+      "bytes": 69541,
       "parts": [
         {
           "file": "patches/000-000.patch",
-          "sha256": "9e39fae548e1fe4fe9db21882d9f7c1a43fa68ff69e566b0f92f1e1f29eb04a9",
-          "bytes": 69423
+          "sha256": "1f90f958064613b0b7c8ef8232fefd862c40a92b4687cf50c070daf534eb2ce7",
+          "bytes": 69541
         }
       ]
     },
@@ -249,13 +249,13 @@
         "beintaskbot-main/tenant_ai_single_message_extraction.py",
         "beintaskbot-main/tenant_ai_state.py"
       ],
-      "sha256": "0e400b972fce93958d36f46b126cd5552abd6f72ccc315946808f73812d1776f",
-      "bytes": 72738,
+      "sha256": "288507155ab7ef71dfa3bec62efa172dc54118a9c3e95f8c03eb5f57723b83b0",
+      "bytes": 77785,
       "parts": [
         {
           "file": "patches/008-000.patch",
-          "sha256": "0e400b972fce93958d36f46b126cd5552abd6f72ccc315946808f73812d1776f",
-          "bytes": 72738
+          "sha256": "288507155ab7ef71dfa3bec62efa172dc54118a9c3e95f8c03eb5f57723b83b0",
+          "bytes": 77785
         }
       ]
     },

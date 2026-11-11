@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..80ff749ce24f48b0d4f03e3acaaa6013b0b72ecf
+index 0000000000000000000000000000000000000000..237bd7609313641a8ef04f46c233da82bf8350c0
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,199 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -134,6 +134,7 @@ index 0000000000000000000000000000000000000000..80ff749ce24f48b0d4f03e3acaaa6013
 +          tests/test_tenant_chat_ai_api.py
 +          tests/test_tenant_kommo.py
 +          tests/test_tenant_connect_api.py
++          tests/test_integrated_connect_release.py
 +          tests/test_connect_webhook_deactivation.py
 +          tests/test_tenant_connect_channel_management.py
 +          tests/test_tenant_connect_configure.py
@@ -156,6 +157,7 @@ index 0000000000000000000000000000000000000000..80ff749ce24f48b0d4f03e3acaaa6013
 +          tests/test_request_schema_deadlocks.py
 +          tests/test_consultation_startup_upgrade_postgres.py
 +      - name: Interface regressions
++        if: ${{ !cancelled() }}
 +        run: |
 +          node tests/test_employee_creation_scopes_ui.cjs
 +          node tests/test_employee_card_scopes_ui.cjs
@@ -184,6 +186,7 @@ index 0000000000000000000000000000000000000000..80ff749ce24f48b0d4f03e3acaaa6013
 +          node tests/test_ai_scoped_documents_ui.cjs
 +          node tests/test_tenant_ai_agent_connect_scope_ui.cjs
 +      - name: Chromium employee matrix, tasks and CRM
++        if: ${{ !cancelled() }}
 +        run: |
 +          status=0
 +          node tests/employee_scope_matrix_browser.cjs || status=1
