@@ -1,0 +1,48 @@
+name: Connect webhook executor isolation
+
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/tenant_connect_api.py'
+      - 'beintaskbot-main/tests/test_connect_webhook_executor.py'
+      - '.github/workflows/connect-webhook-isolation.yml'
+  push:
+    branches: ['fix/customer-loading-webhook-isolation']
+
+permissions:
+  contents: read
+
+jobs:
+  webhook-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest
+          npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+      - name: Test UI fairness, ACK, cancellation, authentication and ingestion
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_connect_webhook_executor.py
+          tests/test_tenant_connect_api.py
+          tests/test_tenant_connect_access_api.py
+          tests/test_tenant_connect_diagnostics.py
+          tests/test_tenant_connect_configure.py
+          tests/test_connect_webhook_deactivation.py
+          tests/test_read_timing.py
+          tests/test_tenant_app_pwa_assets.py
+          tests/test_tenant_web_routes.py
+          tests/test_tenant_ai_agents_api_diagnostics.py
+          tests/test_connect_channel_isolation.py::test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread
+          tests/test_connect_group_history.py::test_read_snapshot_selects_the_captured_copy_on_the_open_channel
