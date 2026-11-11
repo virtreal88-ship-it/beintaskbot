@@ -71,6 +71,10 @@ jobs:
           tests/test_native_crud_dispatch.py
           tests/test_employee_finance_scopes.py
           tests/test_dialog_source_scopes.py
+          tests/test_connect_dialog_equivalence.py
+          tests/test_connect_owner_identity.py
+          tests/test_direct_reconcile_mcp.py
+          tests/test_tenant_operator_workspace.py
           tests/test_dialog_mutation_source_scopes.py
           tests/test_dialog_source_locks_postgres.py
           tests/test_ai_access_ownership_postgres.py

@@ -256,7 +256,10 @@ def activate(cur, tenant, channel, pair_id, ids, leads, before, *, owner_asserti
 
 
 def verification(cur, tenant, channel, pair_id):
-    """Live owner metadata for post-merge verification; no content or identities."""
+    """Structural post-merge metadata for an already-authorized current owner.
+
+    The caller holds owner membership locks; no content or identities escape.
+    """
     cur.execute('''SELECT * FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
       AND channel_id=%s::uuid AND pair_id=%s AND active''',(tenant,channel,pair_id))
     row=cur.fetchone()
@@ -267,8 +270,8 @@ def verification(cur, tenant, channel, pair_id):
     saved=row['snapshot']
     sources={r['id']:r['kommo_lead_id'] for r in current['messages']}
     expected=saved.get('message_sources') or {}
-    from tenant_operator_access import assert_route
-    redirected=assert_route(cur,tenant,None,'connect',row['source_id'],channel,row['source_lead'],allow_merged=True)
+    from tenant_operator_access import _resolve_connect_route
+    redirected=_resolve_connect_route(cur,tenant,row['source_id'],channel,row['source_lead'],allow_merged=True)
     return {'canonical_lead_id':leads[0],'source_lead_id':leads[1],
             'source_rows_retained':len(current['routes'])==2,
             'combined_messages':len(current['messages']),

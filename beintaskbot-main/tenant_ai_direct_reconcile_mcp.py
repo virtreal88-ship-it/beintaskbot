@@ -77,9 +77,10 @@ def preview(cur, cfg, args):
                 s=backup['snapshot']
                 current=reconcile.dependencies.capture(cur,tenant,ch,s['ids'],s['leads'])
                 view['verification']=_summary(current)
-                from tenant_operator_access import assert_route
+                # _owner above authorizes this structural redirect verification.
+                from tenant_operator_access import _resolve_connect_route
                 try:
-                    redirected=assert_route(cur,tenant,None,'connect',s['ids'][1],ch,s['leads'][1],allow_merged=True)
+                    redirected=_resolve_connect_route(cur,tenant,s['ids'][1],ch,s['leads'][1],allow_merged=True)
                     view['old_link_redirect_preserved']=int(redirected['lead_id'])==int(s['leads'][0])
                 except TenantLinearError:
                     view['old_link_redirect_preserved']=False

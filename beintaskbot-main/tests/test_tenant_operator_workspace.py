@@ -238,7 +238,8 @@ def test_operator_modules_are_explicit_permissions_not_ai_editor_access():
     assert not TenantPolicy({'role':'master','permissions':['dialogs','support']}).allows('support')
 
 
-def test_kommo_dialogs_keep_pipeline_scope_and_deny_unassigned_operator(operator_db):
+def test_kommo_dialogs_keep_pipeline_scope_and_deny_unassigned_operator(operator_db,monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','false')
     db=operator_db
     person=employee(db,['dialogs','deals'])
     db.execute("UPDATE saas_tenants SET modules=%s::jsonb WHERE id=%s::uuid",(json.dumps({'deals':True}),A))

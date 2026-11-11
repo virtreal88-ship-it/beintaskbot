@@ -357,3 +357,66 @@ def test_update_none_hides_management_controls_without_disabling_ai_view(scoped,
     assert projected['can_use_copilot'] is True
     assert projected['controls_allowed'] is False and projected['resume_allowed'] is False
     assert projected['available_actions']==[] and 'agent_assignment' not in projected
+
+
+@pytest.mark.parametrize('gate', ['false','true'])
+@pytest.mark.parametrize('provider', ['connect','kommo'])
+def test_route_authorization_requires_policy_even_with_scoped_gate_off(monkeypatch,gate,provider):
+    from tenant_operator_access import assert_route
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED',gate)
+    cur=Mock()
+    with pytest.raises(TenantLinearError) as denied:
+        assert_route(cur,A,None,provider,'client',CA,41,allow_merged=True)
+    assert denied.value.status==403
+    cur.execute.assert_not_called()
+
+
+def retained_source(db):
+    from tenant_connect_dialog_equivalence import schema
+    with db.cursor() as cur:schema(cur)
+    db.execute('''INSERT INTO saas_connect_conversations
+      (tenant_id,connect_channel_id,conversation_id,lead_id)
+      VALUES(%s::uuid,%s::uuid,'retained-source',44)''',(A,CA))
+    db.execute('''INSERT INTO saas_connect_dialog_links
+      (tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot)
+      VALUES(%s::uuid,%s::uuid,'retained-source','client',44,41,'synthetic-pair','{}'::jsonb)''',(A,CA))
+    db.commit()
+
+
+@pytest.mark.parametrize('action', ['view','update'])
+@pytest.mark.parametrize('selected,own_binding,allowed', [
+    ('none',False,False),('self',False,False),('self',True,True),('department',False,True)])
+def test_merged_route_keeps_independent_current_source_scopes(scoped,action,selected,own_binding,allowed):
+    from tenant_operator_access import access as authorize,assert_route
+    db,person=scoped
+    retained_source(db)
+    grants(db,33,selected if action=='view' else 'department',selected if action=='update' else 'department')
+    if own_binding:
+        db.execute('''INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by)
+          VALUES(%s::uuid,%s::uuid,33,11)''',(A,CA));db.commit()
+    with db.cursor() as cur:
+        _,_,policy=authorize(cur,person,action='update' if action=='view' else 'view')
+        if allowed:
+            assert assert_route(cur,A,policy,'connect','retained-source',CA,44,
+                                allow_merged=True,action=action)['lead_id']==41
+            # A cached actor policy cannot preserve a revoked source grant.
+            db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(A,CA))
+        with pytest.raises(TenantLinearError) as denied:
+            assert_route(cur,A,policy,'connect','retained-source',CA,44,allow_merged=True,action=action)
+        assert denied.value.status==403
+
+
+def test_structural_redirect_proof_keeps_exact_tenant_source_and_route(scoped):
+    from tenant_operator_access import _resolve_connect_route
+    db,_=scoped
+    retained_source(db)
+    with db.cursor() as cur:
+        assert _resolve_connect_route(cur,A,'retained-source',CA,44)['lead_id']==44
+        assert _resolve_connect_route(cur,A,'retained-source',CA,44,allow_merged=True)['lead_id']==41
+        for tenant,conversation,channel,lead in (
+            (B,'retained-source',CA,44),(A,'retained-source',CB,44),
+            (A,'retained-source',CA,9999),(A,'unknown-source',CA,44),
+            (A,'retained-source',CA,41),(A,'client','',None)):
+            with pytest.raises(TenantLinearError) as denied:
+                _resolve_connect_route(cur,tenant,conversation,channel,lead,allow_merged=True)
+            assert denied.value.status==404

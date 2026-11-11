@@ -115,7 +115,7 @@ def test_retained_merge_keeps_every_history_crm_dependency_and_source_row(db, mo
 def test_operator_reader_full_journey_retains_cases_media_reads_and_later_message(db, monkeypatch):
     import tenant_operator_dialogs as dialogs
     import tenant_support_inbox_store as support
-    from tenant_operator_access import assert_route
+    from tenant_operator_access import access,assert_route
     prepare(db, monkeypatch)
     native_dependencies(db)
     monkeypatch.setattr(dialogs, '_connect', lambda: db)
@@ -155,8 +155,9 @@ def test_operator_reader_full_journey_retains_cases_media_reads_and_later_messag
     assert {row['id'] for row in case_view['messages']} == {
         key for key in expected_ids if original[key]['kommo_lead_id'] == 8102}
     with db.cursor() as cur:
-        assert assert_route(cur, A, None, 'connect', LID, CA, 8102)['lead_id'] == 8102
-        assert assert_route(cur, A, None, 'connect', LID, CA, 8102, allow_merged=True)['lead_id'] == 8101
+        _,_,policy=access(cur,PROFILE)
+        assert assert_route(cur, A, policy, 'connect', LID, CA, 8102)['lead_id'] == 8102
+        assert assert_route(cur, A, policy, 'connect', LID, CA, 8102, allow_merged=True)['lead_id'] == 8101
     db.commit()
 
     latest = db.execute('''SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid

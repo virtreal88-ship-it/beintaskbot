@@ -482,7 +482,9 @@ def test_owner_mcp_knowledge_duplicate_preview_archive_rollback_is_scoped_and_id
             mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'knowledge_duplicate_preview',{'canonical_id':canonical,'duplicate_ids':[duplicate]})
 
 
-def test_mcp_dialogue_merge_is_provider_proven_private_and_reversible(db, monkeypatch):
+@pytest.mark.parametrize('scoped_gate', ['false', 'true'])
+def test_mcp_dialogue_merge_is_provider_proven_private_and_reversible(db, monkeypatch, scoped_gate):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED',scoped_gate)
     _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.DIALOGUE_MERGE_SCOPE)
     dialogue_merge.ensure_schema(db)
     jid,lid='994501234567@s.whatsapp.net','80427641475293@lid'
@@ -515,6 +517,11 @@ def test_mcp_dialogue_merge_is_provider_proven_private_and_reversible(db, monkey
         assert replay['idempotent_replay'] is True
         assert db.execute('SELECT id,kommo_lead_id,external_id FROM saas_crm_messages WHERE kommo_lead_id=ANY(%s::bigint[]) ORDER BY id',([jid_lead,lid_lead],))==before
         current=mcp._tools(cur,cfg,'whatsapp_dialogue_duplicate_candidates',{'pair_id':candidate['pair_id']})['items'][0]
+        assert current['verification']['old_link_redirect_preserved']
+        assert current['verification']['source_rows_retained']
+        assert current['verification']['original_messages_preserved']
+        assert current['verification']['combined_messages']==2
+        assert all(secret not in json.dumps(current) for secret in (jid,lid,'private message'))
         rolled=mcp._tools(cur,cfg,'whatsapp_dialogue_merge',{'operation':'rollback','pair_id':candidate['pair_id'],
           'precondition':current['precondition'],'request_id':str(uuid.uuid4())})
         assert rolled['state']=='rolled_back'
@@ -725,3 +732,88 @@ def test_code_exchange_still_rejects_wrong_verifier_and_replay(db,monkeypatch):
             good=await client.post('/oauth/token',data=payload);assert good.status==200
             replay=await client.post('/oauth/token',data=payload);assert replay.status==400
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('scoped_gate', ['false','true'])
+@pytest.mark.parametrize('kind', ['physical','owner_assertion'])
+def test_mcp_merged_verification_preserves_physical_and_owner_contracts(db,monkeypatch,scoped_gate,kind):
+    from test_connect_dependent_reconcile import seed,snapshot,JID,LID
+    from tenant_ai_direct_reconcile_mcp import WRITE_SCOPE,PREFIX
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED',scoped_gate)
+    seed(db,monkeypatch)
+    _setup(monkeypatch,db)
+    dialogue_merge.ensure_schema(db)
+    if kind=='owner_assertion':
+        db.execute("UPDATE saas_crm_messages SET raw=raw-'directIdentity' WHERE tenant_id=%s::uuid",(A,))
+    db.commit()
+    before=snapshot(db)
+    cfg={**mcp._require_cfg(),'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.DIALOGUE_MERGE_SCOPE,WRITE_SCOPE]}
+    with db.cursor() as cur:
+        if kind=='physical':
+            item=next(item for item in mcp._tools(cur,cfg,PREFIX+'preview',{})['items'] if item['kind']=='pair')
+            payload={key:item[key] for key in ('pair_id','precondition')}|{'request_id':str(uuid.uuid4()),'confirm':True}
+            merged=mcp._tools(cur,cfg,PREFIX+'apply',payload)
+            assert mcp._tools(cur,cfg,PREFIX+'apply',payload)['idempotent_replay']
+            current=mcp._tools(cur,cfg,PREFIX+'preview',{'pair_id':item['pair_id']})['items'][0]
+            assert current['old_link_redirect_preserved']
+            assert current['verification']['routes']==1 and current['verification']['messages']==85
+            rollback={key:current[key] for key in ('pair_id','precondition')}|{'request_id':str(uuid.uuid4()),'confirm':True}
+            rolled=mcp._tools(cur,cfg,PREFIX+'rollback',rollback)
+        else:
+            arguments={'canonical_lead_id':8101,'source_lead_id':8102,'phone':'+'+JID.split('@')[0],
+                       'evidence_ref':'test:exact-owner-verification'}
+            item=mcp._tools(cur,cfg,'whatsapp_dialogue_owner_merge_preview',arguments)
+            payload={**arguments,'precondition':item['precondition'],'request_id':str(uuid.uuid4()),'confirm':True}
+            merged=mcp._tools(cur,cfg,'whatsapp_dialogue_owner_merge',payload)
+            assert mcp._tools(cur,cfg,'whatsapp_dialogue_owner_merge',payload)['idempotent_replay']
+            assert merged['verification']['old_link_redirect_preserved']
+            assert merged['verification']['original_messages_preserved']
+            assert merged['verification']['source_rows_retained']
+            current=mcp._tools(cur,cfg,'whatsapp_dialogue_duplicate_candidates',{'pair_id':item['pair_id']})['items'][0]
+            assert current['verification']['combined_messages']==85
+            rolled=mcp._tools(cur,cfg,'whatsapp_dialogue_merge',{
+                'operation':'rollback','pair_id':item['pair_id'],'precondition':current['precondition'],'request_id':str(uuid.uuid4())})
+        assert merged['state']=='merged' and rolled['state']=='rolled_back'
+        assert all(secret not in json.dumps([merged,current,rolled]) for secret in (JID,LID,'Synthetic 0','private-media'))
+    after=snapshot(db)
+    if kind=='owner_assertion':
+        # Merge and rollback each record one canonical control-state revision.
+        # Source state and all other fields still require exact preservation.
+        previous={state['conversation_id']:state for state in before['states']}
+        for state in after['states']:
+            if state['conversation_id']==JID:
+                old=previous[JID]
+                assert state['revision']==old['revision']+2
+                assert state['updated_at']>=old['updated_at']
+                state.update(revision=old['revision'],updated_at=old['updated_at'])
+    assert after==before
+
+
+@pytest.mark.parametrize('method', [
+    'whatsapp_dialogue_duplicate_candidates','whatsapp_dialogue_merge',
+    'whatsapp_dialogue_owner_merge_preview','whatsapp_dialogue_owner_merge',
+    'whatsapp_direct_reconcile_preview'])
+@pytest.mark.parametrize('denial', ['scope','inactive_owner','demoted_owner','inactive_tenant'])
+def test_mcp_verification_never_bypasses_owner_or_oauth_authority(db,monkeypatch,method,denial):
+    from tenant_linear_policy import TenantLinearError
+    from tenant_ai_direct_reconcile_mcp import WRITE_SCOPE
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
+    _setup(monkeypatch,db)
+    cfg={**mcp._require_cfg(),'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.DIALOGUE_MERGE_SCOPE,WRITE_SCOPE]}
+    arguments={}
+    if method=='whatsapp_dialogue_merge':
+        arguments={'operation':'merge','pair_id':'0'*64,'precondition':'0'*64,'request_id':str(uuid.uuid4())}
+    if method.startswith('whatsapp_dialogue_owner_merge'):
+        arguments={'canonical_lead_id':8101,'source_lead_id':8102,'phone':'+994700000008',
+                   'evidence_ref':'test:exact-owner-verification'}
+        if method.endswith('_merge'):
+            arguments.update(precondition='0'*64,request_id=str(uuid.uuid4()),confirm=True)
+    if denial=='scope':cfg['granted_scopes']=[]
+    if denial=='inactive_owner':db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,))
+    if denial=='demoted_owner':db.execute("UPDATE saas_tenant_members SET role='manager' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+    if denial=='inactive_tenant':db.execute("UPDATE saas_tenants SET status='suspended' WHERE id=%s::uuid",(A,))
+    db.commit()
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError) as denied:mcp._tools(cur,cfg,method,arguments)
+        assert denied.value.status==403
+    assert not db.execute('SELECT 1 FROM saas_ai_dialogue_merges')
