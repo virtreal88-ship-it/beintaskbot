@@ -301,6 +301,10 @@ def external_options(profile):
             executors.append(dict(id=str(person['telegram_id']), name=person.get('display_name') or 'Employee',
                 role=person['role'], pipelines=[{**item, 'name': names.get(str(item['pipeline_id']), '')}
                   for item in personal] if person['role'] in {'manager', 'owner', 'admin'} else []))
+        if policy.legacy_crm_view_restricted():
+            # Arbitrary deal selection is not assigned-task context. Keep task
+            # executors/operations, but never expose unfiltered deal snapshots.
+            return dict(executors=public(executors), deals=[])
         parts, args = [], [current['tenant_id']]
         for item in policy.pipeline_scope():
             part = 'pipeline_id=%s'; args.append(item['pipeline_id'])

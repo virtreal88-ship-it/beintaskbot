@@ -95,7 +95,7 @@ def _domain_expansions_allowed(actor, previous, proposed):
     # assignments or treat two different personal markers as equivalent.
     def crm_scope(policy):
         return {'kind': 'pipelines', 'pipelines': policy.pipeline_scope()
-            if policy.allows('deals') or policy.allows('customers') else []}
+            if policy.can_read_legacy_crm() else []}
     old_crm, new_crm = crm_scope(previous), crm_scope(proposed)
     if not _task_scope_contains(old_crm, new_crm) and not _task_scope_contains(crm_scope(source_actor), new_crm):
         return False

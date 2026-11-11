@@ -23,7 +23,7 @@ def _can_read(context: ChatApiContext, profile: dict | None) -> bool:
     policy = context.policy(profile)
     if policy.action_scope("dialogs","view") is not None:
         return policy.action_scope("dialogs","view")!="none"
-    return policy.allows("deals") or policy.allows("customers")
+    return policy.can_read_legacy_crm()
 
 
 def handlers(context: ChatApiContext) -> dict[str, Callable]:

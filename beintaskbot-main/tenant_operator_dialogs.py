@@ -388,7 +388,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
 def projection(policy):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
-        for item in (policy.pipeline_scope() if policy.allows('deals') or policy.allows('customers') else []):
+        for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
             part='d.pipeline_id=%s';params.append(item['pipeline_id'])
             if item['status_ids']:
                 part+=' AND d.status_id=ANY(%s::bigint[])';params.append(item['status_ids'])

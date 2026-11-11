@@ -22,7 +22,7 @@ def _deal_access(context: DealApiContext, profile: dict | None) -> bool:
     if not profile:
         return False
     policy = context.policy(profile)
-    return policy.allows("deals") or policy.allows("customers")
+    return policy.can_read_legacy_crm()
 
 
 def handlers(context: DealApiContext) -> dict[str, Callable]:
@@ -30,7 +30,7 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
         profile = context.member(request)
         policy = context.policy(profile or {})
         resources = []
-        if policy.allows("deals") or policy.allows("customers") or policy.task_scope().get("kind") == "pipelines":
+        if policy.can_read_legacy_crm() or policy.task_scope().get("kind") == "pipelines":
             resources.append("leads")
         if policy.allows("tasks"):
             resources.append("tasks")

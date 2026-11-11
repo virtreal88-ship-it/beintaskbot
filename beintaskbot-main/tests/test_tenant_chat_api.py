@@ -20,6 +20,9 @@ class Policy:
     def allows(self, permission):
         return permission in self.profile.get("permissions", [])
 
+    def can_read_legacy_crm(self):
+        return self.allows('deals') or self.allows('customers')
+
     def can_access_deal(self, deal):
         return bool(deal and deal.get("tenant_id") == self.profile.get("tenant_id")
                     and deal.get("allowed", True))

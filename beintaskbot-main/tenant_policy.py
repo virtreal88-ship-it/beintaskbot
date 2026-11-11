@@ -178,10 +178,38 @@ class TenantPolicy:
                     result.append({'pipeline_id': pid, 'status_ids': [positive_id(s) for s in pipeline.get('stage_ids', []) if positive_id(s)]})
         return result
 
+    def legacy_crm_view_restricted(self, module='deals') -> bool:
+        """An explicit employee read scope needs resource-aware rows.
+
+        This is a restriction, not a grant: task pickers retain their separate
+        task/pipeline entitlement when native view is absent or unbounded.
+        """
+        return (self.profile.get('role') != 'owner'
+                and self.action_scope(module, 'view') not in (None, 'all'))
+
+    def can_read_legacy_crm(self, module='deals') -> bool:
+        """Do not satisfy an explicit read scope through another legacy grant.
+
+        Provider snapshots lack employee ownership. Restricted reads use native
+        resource-aware routes; all retains the existing pipeline/stage boundary.
+        Unset view scopes retain legacy reads even when another action is scoped.
+        Contact projections include deal context, so both read boundaries apply.
+        """
+        if module not in ('deals', 'customers'):
+            return False
+        if self.profile.get('active') is False:
+            return False
+        if self.profile.get('role') == 'owner':
+            return True
+        modules = ('deals', 'customers') if module == 'customers' else ('deals',)
+        if any(self.legacy_crm_view_restricted(resource) for resource in modules):
+            return False
+        return self.legacy_allows('deals') or self.legacy_allows('customers')
+
     def can_access_deal(self, deal: dict | None) -> bool:
         if not deal or str(deal.get('tenant_id')) != str(self.profile.get('tenant_id')):
             return False
-        if not (self.allows('deals') or self.allows('customers')):
+        if not self.can_read_legacy_crm():
             return False
         return any(positive_id(deal.get('pipeline_id')) == item['pipeline_id']
                    and (not item['status_ids'] or positive_id(deal.get('status_id')) in item['status_ids'])
@@ -282,7 +310,7 @@ class TenantPolicy:
 
     def deal_board(self) -> list[dict]:
         """Display metadata only for pipelines/stages this membership may read."""
-        if not (self.allows('deals') or self.allows('customers')):
+        if not self.can_read_legacy_crm():
             return []
         pipelines = {positive_id(p.get('pipeline_id')): p for p in self.config.get('pipelines', [])}
         result = []
@@ -298,7 +326,7 @@ class TenantPolicy:
         return result
 
     def can_use_chat_ai(self) -> bool:
-        return (self.profile.get('active') is not False and (self.allows('deals') or self.allows('customers'))
+        return (self.profile.get('active') is not False and self.can_read_legacy_crm()
                 and (self.profile.get('role') == 'owner' or self.member_settings.get('ai_enabled') is True))
 
 

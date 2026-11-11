@@ -102,7 +102,7 @@ def _directory_snapshot(profile, *, source=None, search='', limit=50, offset=0, 
             policy = _current_policy(cur, tenant, actor)
             native_allowed = policy.allows_action('customers', 'view')
             scope = policy.pipeline_scope()
-            external_allowed = bool((policy.allows('deals') or policy.allows('customers')) and scope)
+            external_allowed = bool(policy.can_read_legacy_crm('customers') and scope)
             selected = source or ('kommo' if lookup else 'native' if native_allowed else 'kommo')
             if not (native_allowed if selected == 'native' else external_allowed):
                 raise ContactsDirectoryError('contacts_forbidden', 403)

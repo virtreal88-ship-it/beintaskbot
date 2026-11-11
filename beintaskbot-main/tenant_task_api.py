@@ -7,6 +7,7 @@ from aiohttp import web
 from tenant_task_flow import (TaskFlowError, query as flow_query, read as read_flow,
     current_profile, external_options, execution_profiles, authority_key)
 from tenant_task_commands import TaskCommandUnavailable
+from tenant_policy import TenantPolicy
 
 
 @dataclass(frozen=True)
@@ -145,10 +146,12 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                     "role": person["role"],
                     "pipelines": personal if person["role"] in {"manager", "owner", "admin"} else [],
                 })
-            rows, _ = await asyncio.to_thread(
-                context.list_deals, tenant_id=profile["tenant_id"],
-                scope=context.policy(profile).pipeline_scope(), limit=200,
-            )
+            rows = []
+            if not TenantPolicy(profile).legacy_crm_view_restricted():
+                rows, _ = await asyncio.to_thread(
+                    context.list_deals, tenant_id=profile["tenant_id"],
+                    scope=context.policy(profile).pipeline_scope(), limit=200,
+                )
             deals = [{"id": row["kommo_lead_id"], "name": row["name"], "pipeline_id": row["pipeline_id"]}
                      for row in rows]
             return web.json_response({"success": True, "executors": executors, "deals": deals})
