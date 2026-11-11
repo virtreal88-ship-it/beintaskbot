@@ -15,6 +15,7 @@ from tenant_operator_realtime_wire import (SyntheticHybridRealtimeWire,AiohttpRe
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_voice_session import Session
 from tenant_operator_voice_pilot import PilotAdmission
+from tenant_operator_voice_analytics import realtime_definitions
 
 
 class Guard:
@@ -388,6 +389,40 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
                              tools=[],create_response=False,interrupt_response=True,transcription=None,reconnect=False,duplex=True)
 
     async def asyncTearDown(self):await self.wire.close()
+
+    async def test_read_only_function_call_bypasses_tts_until_spoken_followup(self):
+        await self.wire.close()
+        self.openai=OpenAISocket()
+        def stream_factory(*args):return ElevenTTDStream(*args,connector=self.connector)
+        self.wire=SyntheticHybridRealtimeWire(self.openai,self.policy,object(),stream_factory)
+        await self.wire.open({'existing_copilot_instructions':'Never send messages','lines':[],'extra_context':{}},
+            tools=realtime_definitions(),create_response=False,interrupt_response=True,transcription=None,
+            reconnect=False,duplex=True)
+        await self.arm()
+        await self.openai.incoming.put({'type':'response.created','response':{'id':'response1'}})
+        self.assertEqual((await self.wire.receive())['type'],'response.created')
+        call={'id':'function1','type':'function_call','call_id':'call1','name':'search_tasks','arguments':''}
+        await self.openai.incoming.put({'type':'response.output_item.added','response_id':'response1',
+                                        'output_index':0,'item':call})
+        self.assertEqual((await self.wire.receive())['type'],'response.output_item.added')
+        await self.openai.incoming.put({'type':'response.function_call_arguments.delta','response_id':'response1',
+            'item_id':'function1','call_id':'call1','delta':'{"query":"invoice"}'})
+        self.assertEqual((await self.wire.receive())['type'],'response.function_call_arguments.delta')
+        arguments='{"query":"invoice"}'
+        await self.openai.incoming.put({'type':'response.function_call_arguments.done','response_id':'response1',
+            'item_id':'function1','call_id':'call1','arguments':arguments})
+        self.assertEqual((await self.wire.receive())['type'],'response.function_call_arguments.done')
+        call={**call,'arguments':arguments}
+        await self.openai.incoming.put({'type':'response.output_item.done','response_id':'response1',
+                                        'output_index':0,'item':call})
+        self.assertEqual((await self.wire.receive())['type'],'response.output_item.done')
+        await self.openai.incoming.put({'type':'response.done','response':{'id':'response1','status':'completed',
+                                                                            'output':[call]}})
+        event=await asyncio.wait_for(self.wire.receive(),2)
+        self.assertEqual(event['type'],'response.done')
+        self.assertIsNone(self.wire._hybrid_active)
+        self.assertEqual(self.ttd_sockets,[])
+        await self.wire.send_function_call_output('call1','{"read_only":true}')
 
     async def arm(self):
         request_id=str(uuid.uuid4());scope={'request_id':request_id,'tenant_id':'tenant','actor_id':7,

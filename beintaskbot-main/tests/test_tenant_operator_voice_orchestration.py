@@ -110,7 +110,7 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot['extra_context'],{})
         self.assertIn('assigned instructions',snapshot['existing_copilot_instructions'])
         self.assertIn('company rules',snapshot['existing_copilot_instructions'])
-        self.assertIn('No CRM tools',snapshot['existing_copilot_instructions'])
+        self.assertIn('owner-only, read-only analytics functions',snapshot['existing_copilot_instructions'])
         self.assertIn('natural, continuous spoken conversation',snapshot['existing_copilot_instructions'])
         self.assertIn('Listen and answer each turn',snapshot['existing_copilot_instructions'])
         self.assertIn('For each clearly understood utterance, answer in that utterance’s language',snapshot['existing_copilot_instructions'])
@@ -134,16 +134,18 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         authority.recheck.assert_called_once()
 
     async def test_http_pilot_composes_only_after_exact_user_authority(self):
-        authority=SimpleNamespace(session_scope=('t',7,'c','d'))
+        authority=SimpleNamespace(session_scope=('t',7,'c','d'),profile={'tenant_id':'t','telegram_id':7})
         request=SimpleNamespace(query={'lead_id':'1','channel_id':'c','conversation_id':'d'})
         lease=object();gateway=AsyncMock(return_value='opened')
         with patch.object(service.ScopedAuthority,'create',new=AsyncMock(return_value=authority)) as create, \
              patch.object(service,'_create_server_lease',return_value=lease) as lease_factory, \
+             patch('tenant_ai_business_analytics._authorized_owner') as owner_check, \
              patch('tenant_operator_voice_gateway.make_handler',return_value=gateway) as make_handler, \
              patch.dict('os.environ',{'COPILOT_VOICE_PILOT_TENANT_ID':'t','COPILOT_VOICE_PILOT_ACTOR_ID':'7'}):
             result=await service.open_server_session(request,{'tenant_id':'t','telegram_id':7},'https://app.example',member_from_request=lambda _:{'tenant_id':'t','telegram_id':7})
         self.assertEqual(result,'opened');gateway.assert_awaited_once_with(request)
         create.assert_awaited_once();lease_factory.assert_called_once()
+        owner_check.assert_called_once_with(authority.profile)
         make_handler.assert_called_once()
 
     async def test_db_work_does_not_block_loop_and_cancel_never_opens_provider(self):

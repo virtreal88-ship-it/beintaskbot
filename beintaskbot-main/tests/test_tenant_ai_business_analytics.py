@@ -63,7 +63,7 @@ def test_sources_tool_is_schema_only_and_uses_static_relations(monkeypatch):
 
     assert result['read_only'] is True
     assert result['assistant_connected'] is False
-    assert result['assistant_connections']=={'text_business_analyst':True,'voice_business_analyst':False,'selected_dialog_copilot':False}
+    assert result['assistant_connections']=={'text_business_analyst':True,'voice_business_analyst':True,'selected_dialog_copilot':False}
     assert result['checked_at'] is None
     assert all(source['schema_status'] == 'present' for source in result['sources'])
     assert all(source['freshness'] == 'not_checked' for source in result['sources'])
@@ -102,7 +102,7 @@ def test_missing_relation_is_not_reported_as_current_or_complete(monkeypatch):
     assert connect['freshness'] == 'not_checked'
     assert connect['record_coverage'] == 'not_checked'
     assert result['assistant_connected'] is False
-    assert result['assistant_connections']['voice_business_analyst'] is False
+    assert result['assistant_connections']['voice_business_analyst'] is True
 
 
 @pytest.mark.parametrize('tool,args', [

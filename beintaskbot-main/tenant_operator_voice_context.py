@@ -1,8 +1,8 @@
 """Private Copilot voice admission: same tenant/route/agent boundaries.
 
 Voice orchestration builds instructions without reading persistent text
-history. This module never opens a provider; session admission stays closed
-until budget and lease protections are verified.
+history. The owner-only Realtime pilot may call bounded read-only company
+analytics functions; writes and customer messaging remain unavailable.
 """
 from dataclasses import dataclass
 from tenant_linear_policy import TenantLinearError, identifier

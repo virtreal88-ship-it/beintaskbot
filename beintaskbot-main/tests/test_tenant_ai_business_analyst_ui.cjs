@@ -6,11 +6,13 @@ const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(roo
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=ai_dashboard',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  w.tenantI18n={language:'ru'};w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'admin'},capabilities:{}};
  Object.defineProperty(w.crypto,'randomUUID',{value:()=> '22222222-2222-4222-8222-222222222222'});
- w.fetch=async(url,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({url,options,body});const payload=url.endsWith('/tools')?{success:true,result:{read_only:true,checked_at:'2026-11-11T08:00:00Z',partial:true,tasks:[
+ w.fetch=async(url,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({url,options,body});const payload=url.endsWith('/voice/preflight')?{success:true,result:{available:true}}:url.endsWith('/tools')?{success:true,result:{read_only:true,checked_at:'2026-11-11T08:00:00Z',partial:true,tasks:[
   {source:'linear',task_id:'BS-1364',title:'<img src=x onerror=alert(1)>',description:'<script>not markup</script>',status:'Todo',source_ref:{kind:'linear_issue',url:'https://linear.app/bein-systems/issue/BS-1364/task'}},
   {source:'native',task_id:'native-7',title:'Beintaskbot task',status:'open',source_ref:{kind:'crm_task',inbox_url:'/app'}},
   {source:'kommo',task_id:'kommo-9',title:'Untrusted URL task',source_ref:{kind:'crm_task',url:'https://evil.example/task'}}
  ],sources:{linear:{available:true,scope:'configured team and current member visibility',freshness:'record_timestamp_only; sync completeness unknown'},native:{available:true,scope:'company task records',has_more:true},kommo:{available:false,reason:'source_unavailable'}}}}:{success:true,result:{text:'<img src=x onerror=alert(1)>',read_only:true,source_refs:[{kind:'linear_task',task_id:'ABC-1',inbox_url:'/app?view=linear'},{kind:'case',candidate_id:'id',inbox_url:'https://evil.example'}]}};return{ok:true,status:200,json:async()=>payload}};
+ const voiceInstances=[];let voiceStarts=0,voiceDisposals=0;
+ w.mountTenantCopilotVoice=(parent,options)=>{voiceInstances.push({parent,options});return{startVoice:async()=>{const result=await options.preflight();if(result.available!==true)return false;voiceStarts++;return true;},disposeVoice:async()=>{voiceDisposals++;}}};
  w.eval(read('docs/tenant-ai-business-analyst.js'));
  assert.equal(d.querySelector('#aiBusinessAnalystHost form'),null,'non-owner never sees the analyst form');
  assert.equal(d.querySelector('.analyst-task-search-form'),null,'non-owner never sees direct task search');
@@ -40,9 +42,19 @@ const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(roo
  assert.equal(taskLinks[0].href,'https://linear.app/bein-systems/issue/BS-1364/task');
  assert.equal(taskLinks[1].getAttribute('href'),'/app?view=tasks');
  assert.match(d.querySelector('.analyst-task-status').textContent,/неполным/i,'partial source coverage is shown');
+ const voiceButton=d.querySelector('.analyst-voice-button');assert.ok(voiceButton,'owner gets a separate Business Analyst voice control');
+ voiceButton.click();
+ for(let i=0;i<20&&voiceStarts===0;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(voiceStarts,1,'voice control starts one isolated Realtime session');
+ assert.equal(calls[2].url,'/api/platform/ai/analytics/voice/preflight');
+ assert.deepEqual(calls[2].body,{expected_tenant_id:'tenant-a',expected_user_id:'7'});
+ assert.equal(calls[2].options.credentials,'same-origin');assert.equal(calls[2].options.cache,'no-store');
+ assert.equal(voiceInstances[0].options.socketPath,'/api/platform/ai/analytics/voice/ws?expected_tenant_id=tenant-a&expected_user_id=7');
+ assert.equal(voiceInstances[0].options.isCurrent(),true,'voice remains bound to the current owner profile');
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'tenant-a',telegram_id:7,role:'admin'},capabilities:{}}}));
  assert.equal(d.querySelector('#aiBusinessAnalystHost').children.length,0,'role change clears the owner-only result');
+ assert.equal(voiceDisposals,1,'role change ends the isolated voice session');
  assert.equal(calls.filter(call=>call.url==='/api/platform/ai/analytics/ask').length,1,'direct task search does not send another AI request');
- assert.equal(calls.length,2,'no customer-message, CRM-write, or automatic retry request was made');
- dom.window.close();console.log('Business Analyst UI: owner-only, direct read-only task search, safe links/rendering, and role-change clearing passed');
+ assert.equal(calls.length,3,'no customer-message, CRM-write, or automatic retry request was made');
+ dom.window.close();console.log('Business Analyst UI: owner-only analytics, read-only task search, separate voice preflight, and role-change cleanup passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

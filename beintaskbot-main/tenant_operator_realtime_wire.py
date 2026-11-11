@@ -200,7 +200,9 @@ def create_production_provider(*args,**kwargs):
 def create_pilot_provider(policy,credential_loader):
     from tenant_operator_voice_pilot import PilotAdmission
     from tenant_operator_voice_orchestration import ServerCredentialLoader
-    if type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader:
+    from tenant_ai_business_analytics_voice import AnalyticsVoiceCredentialLoader
+    if (type(policy) is not PilotAdmission or
+        type(credential_loader) not in (ServerCredentialLoader,AnalyticsVoiceCredentialLoader)):
         raise ValueError('trusted_provider_dependencies_required')
     if policy.authority is not credential_loader.authority:
         raise ValueError('pilot_authority_mismatch')
@@ -215,6 +217,7 @@ class _RealtimeWire:
         self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
         self.output_modality=output_modality
         self.duplex=False;self.context_id=None;self._prepared_response=None;self._cancel_events={};self._completed_responses=set();self._pending_cancel_races={}
+        self.tool_names=frozenset();self._tool_calls={};self._pending_tool_output=None;self._confirmed_tool_outputs={}
 
     def _note_conversation(self,event,session_id=None):
         conversation=event.get('conversation')
@@ -226,7 +229,12 @@ class _RealtimeWire:
         self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect,duplex=False):
-        if (type(duplex) is not bool or tools!=[] or create_response is not False or interrupt_response is not duplex or transcription is not None
+        analytics_tools=False
+        if tools:
+            from tenant_operator_voice_analytics import realtime_definitions
+            analytics_tools=(tools==realtime_definitions())
+        if (type(duplex) is not bool or (tools!=[] and not analytics_tools) or
+            (analytics_tools and not duplex) or create_response is not False or interrupt_response is not duplex or transcription is not None
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -242,7 +250,7 @@ class _RealtimeWire:
         session_id=session.get('id') if isinstance(session,dict) else None
         if not isinstance(session_id,str) or not session_id or len(session_id)>128:raise ValueError('session_id_missing')
         config={'type':'realtime','model':MODEL,'instructions':instructions,
-          'output_modalities':[self.output_modality],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
+          'output_modalities':[self.output_modality],'tools':tools,'tool_choice':'auto' if analytics_tools else 'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},
                             'noise_reduction':{'type':'near_field','strength':1},
                             # Provider VAD may interrupt ongoing speech but
@@ -281,7 +289,9 @@ class _RealtimeWire:
             ('status' in item and item['status']!='completed') or
             item.get('content')!=[{'type':'input_text','text':context_text}]):
             raise ValueError('provider_context_unconfirmed')
-        self.config=config;self.session_id=session_id;self.context_id=context_id;self.duplex=duplex;self.ready=True
+        self.config=config;self.session_id=session_id;self.context_id=context_id;self.duplex=duplex
+        self.tool_names=frozenset(item['name'] for item in tools) if analytics_tools else frozenset()
+        self.ready=True
 
     @staticmethod
     def _turn_detection_matches(actual,expected):
@@ -303,8 +313,8 @@ class _RealtimeWire:
             noise=incoming.get('noise_reduction')
             checks={
               'id':s.get('id')==session_id,'type':s.get('type')=='realtime','model':s.get('model')==MODEL,
-              'output_modalities':s.get('output_modalities')==expected['output_modalities'],'tools':s.get('tools')==[],
-              'tool_choice':s.get('tool_choice')=='none','max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
+              'output_modalities':s.get('output_modalities')==expected['output_modalities'],'tools':s.get('tools')==expected['tools'],
+              'tool_choice':s.get('tool_choice')==expected['tool_choice'],'max_output_tokens':s.get('max_output_tokens')==OUTPUT_LIMIT,
               'instructions':s.get('instructions')==expected['instructions'],
               'audio.input.format':incoming.get('format')=={'type':'audio/pcm','rate':24000},
               'audio.input.noise_reduction.type':isinstance(noise,dict) and noise.get('type')=='near_field',
@@ -353,6 +363,23 @@ class _RealtimeWire:
     async def send(self,event):
         return await self._send(event)
 
+    async def send_function_call_output(self,call_id,output):
+        """Return one result for an exact provider-issued analytics call."""
+        offer=self._tool_calls.get(call_id) if isinstance(call_id,str) else None
+        if (not self.ready or not self.tool_names or offer is None or offer.get('used') is True or
+            self._pending_tool_output is not None or not isinstance(output,str) or
+            len(output.encode('utf-8'))>24576):
+            raise ValueError('analytics_tool_output_unavailable')
+        offer['used']=True
+        self._pending_tool_output={'call_id':call_id,'output':output}
+        try:
+            await self.socket.send_json({'type':'conversation.item.create','item':{
+                'type':'function_call_output','call_id':call_id,'output':output}})
+        except BaseException:
+            self._pending_tool_output=None
+            raise
+        return True
+
     async def send_guarded_response(self,event,dispatch_guard):
         if not callable(dispatch_guard):raise ValueError('response_guard_required')
         return await self._send(event,dispatch_guard=dispatch_guard)
@@ -370,7 +397,10 @@ class _RealtimeWire:
         if self.duplex and (dispatch_guard is not None or type(self.guard) is PilotAdmission):
             response=event.get('response')
             refs=response.get('input') if isinstance(response,dict) else None
-            if (set(event)!={'type','response'} or not isinstance(response,dict) or set(response)!={'input'} or
+            allowed_response_fields={'input'}
+            if isinstance(response,dict) and response.get('tool_choice')=='none':
+                allowed_response_fields.add('tool_choice')
+            if (set(event)!={'type','response'} or not isinstance(response,dict) or set(response)!=allowed_response_fields or
                 not isinstance(refs,list) or not 2<=len(refs)<=1024 or
                 any(not isinstance(item,dict) or set(item)!={'type','id'} or
                     item.get('type')!='item_reference' or not isinstance(item.get('id'),str) or
@@ -473,6 +503,19 @@ class _RealtimeWire:
                 for event_id,(pending_response,_) in list(self._pending_cancel_races.items()):
                     if pending_response==response_id:
                         self._pending_cancel_races.pop(event_id,None);self._cancel_events.pop(event_id,None)
+            output=response.get('output') if isinstance(response,dict) else None
+            function_items=[item for item in output if isinstance(item,dict) and item.get('type')=='function_call'] if isinstance(output,list) else []
+            if function_items:
+                item=function_items[0]
+                item_id=item.get('id');call_id=item.get('call_id');name=item.get('name');arguments=item.get('arguments')
+                if (not self.tool_names or len(output)!=1 or len(function_items)!=1 or
+                    not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id) or
+                    not isinstance(call_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',call_id) or
+                    name not in self.tool_names or not isinstance(arguments,str) or len(arguments.encode('utf-8'))>8192 or
+                    call_id in self._tool_calls or len(self._tool_calls)>=6):
+                    self.ready=False
+                    raise ValueError('provider_function_call_invalid')
+                self._tool_calls[call_id]={'item_id':item_id,'name':name,'arguments':arguments,'used':False}
         if event.get('type') in {'session.created','session.updated'}:
             # No settings changes after the attested startup are permitted.
             self.ready=False
@@ -480,10 +523,27 @@ class _RealtimeWire:
         if event.get('type')=='conversation.created':
             try:self._note_conversation(event)
             except ValueError:self.ready=False;raise
+        if event.get('type') in ('conversation.item.added','conversation.item.created','conversation.item.done'):
+            item=event.get('item')
+            if isinstance(item,dict) and item.get('type')=='function_call_output':
+                expected=self._pending_tool_output
+                item_id=item.get('id')
+                valid_id=isinstance(item_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id)
+                confirmed=self._confirmed_tool_outputs.get(item_id) if valid_id else None
+                if confirmed is not None and item.get('call_id')==confirmed['call_id'] and item.get('output')==confirmed['output']:
+                    pass
+                elif (expected is None or item.get('call_id')!=expected['call_id'] or
+                    item.get('output')!=expected['output'] or not valid_id):
+                    self.ready=False
+                    raise ValueError('provider_function_output_ack_invalid')
+                else:
+                    self._confirmed_tool_outputs[item_id]={'call_id':expected['call_id'],'output':expected['output']}
+                    self._pending_tool_output=None
         return event
 
     async def close(self):
         self.ready=False;self.bound=None;self.context_id=None;self._prepared_response=None;self._cancel_events.clear();self._completed_responses.clear();self._pending_cancel_races.clear()
+        self._tool_calls.clear();self._pending_tool_output=None;self._confirmed_tool_outputs.clear();self.tool_names=frozenset()
         await self.socket.close()
 
 
@@ -658,6 +718,17 @@ class _HybridRealtimeMixin:
             return {'type':'conversation.item.truncated','item_id':item,'content_index':0,'audio_end_ms':0}
         if kind in ('response.output_item.added','response.output_item.done'):
             active=self._hybrid_active;item=event.get('item')
+            if (active is not None and event.get('response_id')==active['response_id'] and
+                type(event.get('output_index')) is int and event['output_index']==0 and
+                isinstance(item,dict) and item.get('type')=='function_call'):
+                item_id=item.get('id');call_id=item.get('call_id');name=item.get('name')
+                arguments=item.get('arguments','')
+                if (not self.tool_names or active['stream'] is not None or active['text_done'] or active['audio_seen'] or
+                    not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id) or
+                    not isinstance(call_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',call_id) or
+                    name not in self.tool_names or not isinstance(arguments,str) or len(arguments.encode('utf-8'))>8192):
+                    raise ValueError('hybrid_function_call_invalid')
+                return event
             if (active is None or event.get('response_id')!=active['response_id'] or
                 type(event.get('output_index')) is not int or event['output_index']!=0 or not isinstance(item,dict) or
                 item.get('type')!='message' or item.get('role')!='assistant'):
@@ -711,12 +782,30 @@ class _HybridRealtimeMixin:
                 active['text_done']=True
                 if active['stream'] is not None and not active['cancelled']:active['stream'].finish_input()
             return None
+        if kind in ('response.function_call_arguments.delta','response.function_call_arguments.done'):
+            active=self._hybrid_active
+            if (not self.tool_names or active is None or event.get('response_id')!=active['response_id'] or
+                not isinstance(event.get('item_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',event['item_id']) or
+                not isinstance(event.get('call_id'),str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',event['call_id'])):
+                raise ValueError('hybrid_function_call_invalid')
+            value=event.get('delta') if kind.endswith('.delta') else event.get('arguments')
+            if not isinstance(value,str) or len(value.encode('utf-8'))>8192:
+                raise ValueError('hybrid_function_call_invalid')
+            return event
         if kind=='response.done':
             active=self._hybrid_active;response=event.get('response')
             if active is None or not isinstance(response,dict) or response.get('id')!=active['response_id']:
                 raise ValueError('hybrid_response_mismatch')
             if active['response_done'] is not None:raise ValueError('hybrid_response_mismatch')
             output=response.get('output',[])
+            if (isinstance(output,list) and len(output)==1 and isinstance(output[0],dict) and
+                output[0].get('type')=='function_call'):
+                if (not self.tool_names or active['stream'] is not None or active['text_done'] or active['audio_seen'] or
+                    output[0].get('name') not in self.tool_names or
+                    not isinstance(output[0].get('arguments'),str) or len(output[0]['arguments'].encode('utf-8'))>8192):
+                    raise ValueError('hybrid_function_call_invalid')
+                self._hybrid_active=None
+                return event
             if (not isinstance(output,list) or len(output)>1 or
                 any(not isinstance(item,dict) or item.get('type')!='message' or
                     item.get('role')!='assistant' or item.get('id')!=active['item_id'] for item in output)):
@@ -844,8 +933,12 @@ def create_hybrid_pilot_provider(policy,credential_loader,ttd_loader):
     from tenant_operator_voice_pilot import PilotAdmission
     from tenant_operator_voice_orchestration import ServerCredentialLoader
     from tenant_operator_elevenlabs_voice import ElevenServerCredentialLoader
-    if (type(policy) is not PilotAdmission or type(credential_loader) is not ServerCredentialLoader or
-        type(ttd_loader) is not ElevenServerCredentialLoader or policy.authority is not credential_loader.authority or
+    from tenant_ai_business_analytics_voice import (AnalyticsVoiceCredentialLoader,
+                                                      AnalyticsVoiceElevenCredentialLoader)
+    if (type(policy) is not PilotAdmission or
+        type(credential_loader) not in (ServerCredentialLoader,AnalyticsVoiceCredentialLoader) or
+        type(ttd_loader) not in (ElevenServerCredentialLoader,AnalyticsVoiceElevenCredentialLoader) or
+        policy.authority is not credential_loader.authority or
         policy.authority is not ttd_loader.authority or
         getattr(policy.lease,'provider_kind',None)!='openai_elevenlabs_tts'):
         raise ValueError('trusted_provider_dependencies_required')
