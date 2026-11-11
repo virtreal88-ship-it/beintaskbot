@@ -9,6 +9,7 @@ from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
 from tenant_ai_business_analytics import _TOOLS, definitions, execute
 from tenant_chat_ai_schema import ensure_schema
+from tenant_ai_business_analyst_preferences import apply_to_instructions
 from tenant_platform import _connect, _fernet
 
 _MODEL_ID=re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
@@ -77,14 +78,20 @@ def _current(cur,profile):
         raise TenantLinearError('Company Chat AI limits are invalid.',503) from None
     if not 1<=daily_limit<=10000 or not 1<=copilot_limit<=10000:
         raise TenantLinearError('Company Chat AI limits are invalid.',503)
+    from tenant_ai_business_analyst_preferences import load as load_preferences,version as preferences_version
+    preferences=load_preferences(cur,tenant)
+    config_version=hashlib.sha256((str(row.get('updated_at') or '')+'\0'+
+                                   preferences_version(preferences)).encode('utf-8')).hexdigest()
     return {'tenant':tenant,'actor':actor,'model':model,'key':key,
-            'version':str(row.get('updated_at') or ''),'daily_limit':daily_limit,
-            'copilot_limit':copilot_limit}
+            'version':config_version,'daily_limit':daily_limit,
+            'copilot_limit':copilot_limit,'preferences':preferences}
 
 
 def _load(profile):
     with _connect() as conn:
+        from tenant_ai_business_analyst_preferences import ensure_schema as ensure_preferences_schema
         ensure_schema(conn)
+        ensure_preferences_schema(conn)
         with conn.cursor() as cur:
             return _current(cur,profile)
 
@@ -207,7 +214,8 @@ def run(profile,*,prompt,request_id):
         # Recheck current role, consent and configuration immediately before
         # each provider call; usage is reserved before the network request.
         final,usage,tool_results,used_tools=generate_with_tools(
-            current['key'],current['model'],input_data,instructions=INSTRUCTIONS,
+            current['key'],current['model'],input_data,
+            instructions=apply_to_instructions(INSTRUCTIONS,current.get('preferences')),
             tools=definitions(),execute_tool=call_tool,before_dispatch=before_dispatch,
             after_dispatch=after_dispatch,max_output_tokens=1200,request_timeout=45,
             max_provider_calls=_MAX_PROVIDER_CALLS,max_tool_calls=_MAX_TOOL_CALLS-1)

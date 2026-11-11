@@ -1,5 +1,6 @@
 """Authenticated read-only HTTP surface for Business Analyst tools."""
 import asyncio
+import json
 import logging
 from aiohttp import web
 
@@ -72,6 +73,77 @@ def analyst_handler(member_from_request, canonical_origin, logger=None):
             from tenant_chat_ai_provider import safe_failure_code
             log.error('Business analyst request failed code=%s',safe_failure_code(error))
             return web.json_response({'success':False,'error':'Business analyst is temporarily unavailable.'},
+                                     status=503,headers=headers)
+
+    return handle
+
+
+def preferences_handler(member_from_request, canonical_origin, logger=None):
+    """Owner-only read/update endpoint for the analyst's bounded presentation fields."""
+    log=logger or logging.getLogger(__name__)
+
+    def persist(profile, settings=None):
+        from tenant_platform import _connect
+        from tenant_ai_business_analytics import _owner
+        from tenant_ai_business_analyst_preferences import ensure_schema,load,save,validate_settings
+        if not isinstance(profile,dict) or profile.get('role')!='owner':
+            raise TenantLinearError('Company owner access required.',403)
+        with _connect() as conn:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                tenant,actor=_owner(cur,profile)
+                if settings is None:
+                    current=load(cur,tenant)
+                else:
+                    current=save(cur,tenant,actor,validate_settings(settings))
+            if settings is not None:conn.commit()
+        return {key:current[key] for key in ('assistant_name','greeting_ru','greeting_az',
+                                               'communication_style','language_style')}
+
+    async def handle(request):
+        headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}
+        try:
+            origin=request.headers.get('Origin','').rstrip('/')
+            if origin and origin!=canonical_origin.rstrip('/'):
+                raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.',403)
+            profile=member_from_request(request)
+            if not profile:
+                raise TenantLinearError('İcazə yoxdur.',403)
+            from tenant_ai_agents_api import _expected
+            if request.method=='GET':
+                if set(request.query)!={'expected_tenant_id','expected_user_id'}:
+                    raise TenantLinearError('Invalid analyst settings request.',400)
+                _expected(request.query,profile)
+                result=await asyncio.to_thread(persist,profile)
+                return web.json_response({'success':True,'result':{'settings':result}},headers=headers)
+            if request.method!='PATCH':
+                raise TenantLinearError('Invalid analyst settings request.',405)
+            if origin!=canonical_origin.rstrip('/'):
+                raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.',403)
+            if request.content_type!='application/json':
+                raise TenantLinearError('Invalid analyst settings request.',400)
+            if request.content_length is not None and request.content_length>8192:
+                raise TenantLinearError('Invalid analyst settings request.',413)
+            if request.headers.getall('Content-Length',[]) and request.headers.getall('Transfer-Encoding',[]):
+                raise TenantLinearError('Invalid analyst settings request.',400)
+            body=bytearray()
+            async for chunk in request.content.iter_chunked(1024):
+                body.extend(chunk)
+                if len(body)>8192:
+                    raise TenantLinearError('Invalid analyst settings request.',413)
+            data=json.loads(bytes(body))
+            if not isinstance(data,dict) or set(data)!={'expected_tenant_id','expected_user_id','settings'}:
+                raise TenantLinearError('Invalid analyst settings request.',400)
+            _expected(data,profile)
+            result=await asyncio.to_thread(persist,profile,data['settings'])
+            return web.json_response({'success':True,'result':{'settings':result}},headers=headers)
+        except TenantLinearError as error:
+            return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
+        except (ValueError,TypeError,KeyError):
+            return web.json_response({'success':False,'error':'Invalid analyst settings request.'},status=400,headers=headers)
+        except Exception:
+            log.error('Business analyst settings operation failed')
+            return web.json_response({'success':False,'error':'Business analyst settings are temporarily unavailable.'},
                                      status=503,headers=headers)
 
     return handle

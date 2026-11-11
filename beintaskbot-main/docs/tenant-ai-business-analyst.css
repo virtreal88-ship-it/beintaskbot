@@ -1,26 +1,25 @@
 #aiBusinessAnalystHost{max-width:980px}
 .ai-business-analyst textarea{display:block;width:100%;min-height:88px;resize:vertical;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink);font:inherit}
+.analyst-card-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.analyst-card-heading h2{margin:0}
+.analyst-settings-button{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;padding:0;border:1px solid var(--line);border-radius:50%;background:transparent;color:var(--ink);font:inherit;font-size:17px;line-height:1;cursor:pointer}
+.analyst-settings-button:hover:not(:disabled){background:var(--paper)}
+.analyst-settings-button:disabled{opacity:.5;cursor:not-allowed}
 .analyst-actions{display:flex;justify-content:flex-end;margin-top:10px}
 .analyst-answer{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);white-space:pre-wrap;overflow-wrap:anywhere}
 .analyst-sources{display:grid;gap:6px;margin-top:8px;font-size:13px;overflow-wrap:anywhere}
 .analyst-voice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px;padding:12px 0;border-top:1px solid var(--line)}
 .analyst-voice-button{min-height:42px}
 .analyst-voice-status{margin:0!important;min-height:20px}
-.analyst-task-search{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
-.analyst-task-search h3{margin:0 0 5px;font-size:16px}
-.analyst-task-search>p{margin:0 0 12px;color:var(--muted);font-size:13px}
-.analyst-task-search-form{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(150px,.7fr) auto;gap:10px;align-items:end}
-.analyst-task-search-form label{display:grid;gap:5px;min-width:0;margin:0;color:var(--ink);font-size:13px;font-weight:650}
-.analyst-task-search-form input,.analyst-task-search-form select{width:100%;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink)}
-.analyst-task-search-form button{min-height:42px}
-.analyst-task-status{margin:10px 0!important}
-.analyst-task-coverage{display:grid;gap:5px;margin:8px 0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
-.analyst-task-source{display:grid;gap:3px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--paper)}
-.analyst-task-results{display:grid;gap:8px;margin-top:8px}
-.analyst-task-result{min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);overflow-wrap:anywhere}
-.analyst-task-result>strong{display:block;margin-bottom:4px}
-.analyst-task-meta{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
-.analyst-task-description{margin:8px 0 0!important;color:var(--ink)!important;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
-.analyst-task-link{display:inline-block;margin-top:8px;color:var(--brand-deep);font-size:13px;font-weight:650}
-.analyst-task-readonly{margin-top:10px!important;font-size:12px}
-@media(max-width:640px){.analyst-task-search-form{grid-template-columns:minmax(0,1fr)}.analyst-task-search-form button{width:100%}}
+.analyst-settings-dialog{width:min(620px,calc(100vw - 28px));max-height:88dvh;padding:0;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);box-shadow:0 22px 70px #0008}
+.analyst-settings-dialog::backdrop{background:#0009;backdrop-filter:blur(2px)}
+.analyst-settings-form{display:grid;gap:12px;padding:20px;overflow:auto}
+.analyst-settings-form h3{margin:0 0 2px;font-size:20px}
+.analyst-settings-field{display:grid;gap:6px;margin:0;color:var(--ink);font-size:13px;font-weight:650}
+.analyst-settings-field input,.analyst-settings-field textarea{width:100%;min-height:42px;margin:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--paper);color:var(--ink);font:inherit;font-weight:400;resize:vertical}
+.analyst-settings-field textarea{min-height:74px}
+.analyst-settings-protected,.analyst-settings-status{margin:0!important}
+.analyst-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+.analyst-settings-actions button{min-height:40px}
+.analyst-settings-cancel{border:1px solid var(--line);border-radius:9px;padding:8px 13px;background:transparent;color:var(--ink);font:inherit;cursor:pointer}
+@media(max-width:640px){.analyst-settings-form{padding:16px}.analyst-settings-actions{position:sticky;bottom:0;padding-top:8px;background:var(--card)}}
