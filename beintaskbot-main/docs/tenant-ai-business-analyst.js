@@ -3,21 +3,23 @@
   const host=document.getElementById('aiBusinessAnalystHost');if(!host)return;
   const copy={
     ru:{
-      title:'AI Business Analyst',intro:'Один вопрос — один анализ по разрешённым источникам. Режим только чтения: ассистент не меняет CRM, задачи или настройки. Полнота и актуальность данных могут быть ограничены.',placeholder:'Например: Какие подтверждённые риски сейчас требуют внимания?',ask:'Спросить',working:'Проверяю доступные источники и готовлю ответ…',ready:'Ответ готов. Источники и ограничения указаны ниже.',unknown:'Запрос мог дойти до AI, поэтому автоматического повтора не будет. Проверьте результат перед новым запросом.',owner:'Инструмент доступен только владельцу компании.',empty:'Введите вопрос.',sources:'Источники',noSources:'В этом ответе нет ссылок на записи источников.',open:'Открыть раздел приложения',footer:'Голосовое подключение к аналитике пока не включено. История вопросов не сохраняется в этом интерфейсе.',
+      title:'AI Business Analyst',intro:'Один вопрос — один анализ по разрешённым источникам. Режим только чтения: ассистент не меняет CRM, задачи или настройки. Полнота и актуальность данных могут быть ограничены.',placeholder:'Например: Какие подтверждённые риски сейчас требуют внимания?',ask:'Спросить',working:'Проверяю доступные источники и готовлю ответ…',ready:'Ответ готов. Источники и ограничения указаны ниже.',unknown:'Запрос мог дойти до AI, поэтому автоматического повтора не будет. Проверьте результат перед новым запросом.',owner:'Инструмент доступен только владельцу компании.',empty:'Введите вопрос.',sources:'Источники',noSources:'В этом ответе нет ссылок на записи источников.',open:'Открыть раздел приложения',footer:'Голосовой анализ использует отдельную сессию без истории диалога. Результаты и аудио не сохраняются.',voiceButton:'Начать голосовой анализ',voiceConnecting:'Подключаю голосовой анализ…',voiceActive:'Голосовой разговор подключён. Говорите, AI ответит после паузы.',voiceEnded:'Голосовой разговор завершён.',voiceFailed:'Не удалось подключить голосовой анализ. Проверьте доступ и микрофон.',
       taskSearchTitle:'Прямой поиск задач',taskSearchIntro:'Ищет задачи в подключённых источниках без вызова AI. Поиск только для чтения; задачи и статусы не меняются.',taskSearchLabel:'Название, ID или текст задачи',taskSearchPlaceholder:'Например: печать чека или BS-1364',taskSourceLabel:'Источник',taskSourceAll:'Все источники',taskSourceNative:'Beintaskbot',taskSourceKommo:'Kommo',taskSourceLinear:'Linear',taskSearchButton:'Найти задачи',taskSearchWorking:'Ищу задачи в выбранных источниках…',taskSearchComplete:'Поиск завершён',taskSearchEmpty:'Введите не менее 2 символов.',taskSearchNoResults:'В доступных источниках задачи по этому запросу не найдены.',taskSearchNoSources:'Ни один выбранный источник сейчас недоступен.',taskSearchFailed:'Не удалось выполнить поиск задач.',taskSearchPartial:'Результат может быть неполным: источник недоступен или есть дополнительные страницы.',taskSourceAvailable:'доступен',taskSourceUnavailable:'недоступен',taskSearchMore:'Есть дополнительные результаты.',taskSearchStatus:'Статус',taskSearchAssignee:'Ответственный',taskSearchDue:'Срок',taskSearchUpdated:'Обновлено',taskSearchOpen:'Открыть задачу',taskSearchOpenApp:'Открыть список задач',taskSearchReadOnly:'Результаты отражают текущий снимок источника. Статус задачи сам по себе не подтверждает решение клиентской проблемы.'
     },
     az:{
-      title:'AI Business Analyst',intro:'Bir sual — icazəli mənbələr üzrə bir təhlil. Yalnız oxuma rejimidir: köməkçi CRM-i, tapşırıqları və ya ayarları dəyişmir. Məlumatların tamlığı və yeniliyi məhdud ola bilər.',placeholder:'Məsələn: Hazırda hansı təsdiqlənmiş risklərə diqqət yetirmək lazımdır?',ask:'Soruş',working:'Əlçatan mənbələr yoxlanılır və cavab hazırlanır…',ready:'Cavab hazırdır. Mənbələr və məhdudiyyətlər aşağıdadır.',unknown:'Sorğu AI-yə çatmış ola bilər, ona görə avtomatik təkrar göndərilməyəcək. Yeni sorğudan əvvəl nəticəni yoxlayın.',owner:'Bu alət yalnız şirkət sahibinə açıqdır.',empty:'Sualı daxil edin.',sources:'Mənbələr',noSources:'Bu cavabda mənbə qeydlərinə istinad yoxdur.',open:'Tətbiq bölməsini aç',footer:'Analitikaya səs bağlantısı hələ aktiv deyil. Bu interfeysdə sual tarixçəsi saxlanmır.',
+      title:'AI Business Analyst',intro:'Bir sual — icazəli mənbələr üzrə bir təhlil. Yalnız oxuma rejimidir: köməkçi CRM-i, tapşırıqları və ya ayarları dəyişmir. Məlumatların tamlığı və yeniliyi məhdud ola bilər.',placeholder:'Məsələn: Hazırda hansı təsdiqlənmiş risklərə diqqət yetirmək lazımdır?',ask:'Soruş',working:'Əlçatan mənbələr yoxlanılır və cavab hazırlanır…',ready:'Cavab hazırdır. Mənbələr və məhdudiyyətlər aşağıdadır.',unknown:'Sorğu AI-yə çatmış ola bilər, ona görə avtomatik təkrar göndərilməyəcək. Yeni sorğudan əvvəl nəticəni yoxlayın.',owner:'Bu alət yalnız şirkət sahibinə açıqdır.',empty:'Sualı daxil edin.',sources:'Mənbələr',noSources:'Bu cavabda mənbə qeydlərinə istinad yoxdur.',open:'Tətbiq bölməsini aç',footer:'Səsli təhlil dialoq tarixçəsindən ayrı sessiyadan istifadə edir. Nəticələr və audio saxlanılmır.',voiceButton:'Səsli təhlilə başla',voiceConnecting:'Səsli təhlilə qoşulur…',voiceActive:'Səsli söhbət qoşuldu. Danışın, AI fasilədən sonra cavab verəcək.',voiceEnded:'Səsli söhbət bitdi.',voiceFailed:'Səsli təhlilə qoşulmaq olmadı. Girişi və mikrofonu yoxlayın.',
       taskSearchTitle:'Tapşırıqlarda birbaşa axtarış',taskSearchIntro:'AI çağırışı olmadan qoşulmuş mənbələrdə tapşırıqları axtarır. Yalnız oxuma rejimidir; tapşırıq və statuslar dəyişdirilmir.',taskSearchLabel:'Tapşırığın adı, ID-si və ya mətni',taskSearchPlaceholder:'Məsələn: çekin çapı və ya BS-1364',taskSourceLabel:'Mənbə',taskSourceAll:'Bütün mənbələr',taskSourceNative:'Beintaskbot',taskSourceKommo:'Kommo',taskSourceLinear:'Linear',taskSearchButton:'Tapşırıqları axtar',taskSearchWorking:'Seçilmiş mənbələrdə axtarılır…',taskSearchComplete:'Axtarış tamamlandı',taskSearchEmpty:'Ən azı 2 simvol daxil edin.',taskSearchNoResults:'Əlçatan mənbələrdə bu sorğu ilə tapşırıq tapılmadı.',taskSearchNoSources:'Seçilmiş mənbələr hazırda əlçatan deyil.',taskSearchFailed:'Tapşırıqları axtarmaq mümkün olmadı.',taskSearchPartial:'Nəticə natamam ola bilər: mənbə əlçatan deyil və ya əlavə səhifələr var.',taskSourceAvailable:'əlçatandır',taskSourceUnavailable:'əlçatan deyil',taskSearchMore:'Əlavə nəticələr var.',taskSearchStatus:'Status',taskSearchAssignee:'Məsul şəxs',taskSearchDue:'Son tarix',taskSearchUpdated:'Yenilənib',taskSearchOpen:'Tapşırığı aç',taskSearchOpenApp:'Tapşırıq siyahısını aç',taskSearchReadOnly:'Nəticələr mənbənin cari vəziyyətini göstərir. Tapşırığın statusu müştəri probleminin həllini öz-özlüyündə təsdiqləmir.'
     },
     en:{
-      title:'AI Business Analyst',intro:'One question per read-only analysis using permitted sources. The assistant cannot change CRM, tasks, or settings. Source coverage and freshness may be limited.',placeholder:'For example: Which confirmed risks need attention now?',ask:'Ask',working:'Checking available sources and preparing an answer…',ready:'Answer ready. Sources and limitations are listed below.',unknown:'The request may have reached AI, so it will not be retried automatically. Check before starting a new request.',owner:'This tool is available only to the company owner.',empty:'Enter a question.',sources:'Sources',noSources:'This answer has no record references.',open:'Open app section',footer:'Voice access to analytics is not enabled yet. This interface does not save question history.',
+      title:'AI Business Analyst',intro:'One question per read-only analysis using permitted sources. The assistant cannot change CRM, tasks, or settings. Source coverage and freshness may be limited.',placeholder:'For example: Which confirmed risks need attention now?',ask:'Ask',working:'Checking available sources and preparing an answer…',ready:'Answer ready. Sources and limitations are listed below.',unknown:'The request may have reached AI, so it will not be retried automatically. Check before starting a new request.',owner:'This tool is available only to the company owner.',empty:'Enter a question.',sources:'Sources',noSources:'This answer has no record references.',open:'Open app section',footer:'Voice analysis uses a separate session without dialog history. Audio and results are not saved.',voiceButton:'Start voice analysis',voiceConnecting:'Connecting voice analysis…',voiceActive:'Voice connected. Speak naturally; AI will answer after a pause.',voiceEnded:'Voice conversation ended.',voiceFailed:'Could not connect voice analysis. Check access and microphone.',
       taskSearchTitle:'Direct task search',taskSearchIntro:'Searches connected sources without calling AI. Read-only: tasks and statuses are not changed.',taskSearchLabel:'Task title, ID, or text',taskSearchPlaceholder:'For example: receipt printing or BS-1364',taskSourceLabel:'Source',taskSourceAll:'All sources',taskSourceNative:'Beintaskbot',taskSourceKommo:'Kommo',taskSourceLinear:'Linear',taskSearchButton:'Search tasks',taskSearchWorking:'Searching selected sources…',taskSearchComplete:'Search complete',taskSearchEmpty:'Enter at least 2 characters.',taskSearchNoResults:'No tasks matched in available sources.',taskSearchNoSources:'None of the selected sources is currently available.',taskSearchFailed:'Task search failed.',taskSearchPartial:'Results may be incomplete: a source is unavailable or has more pages.',taskSourceAvailable:'available',taskSourceUnavailable:'unavailable',taskSearchMore:'More results are available.',taskSearchStatus:'Status',taskSearchAssignee:'Assignee',taskSearchDue:'Due',taskSearchUpdated:'Updated',taskSearchOpen:'Open task',taskSearchOpenApp:'Open task list',taskSearchReadOnly:'Results reflect a current source snapshot. A task status alone does not confirm that a customer issue was resolved.'
     }
   };
   let member=null,epoch=0,busy=false,controller=null,taskBusy=false,taskController=null,lastLang='';
+  let voiceSection=null,voiceStarting=false,voiceState='idle',voiceWasStarted=false;
   const lang=()=>copy[window.tenantI18n?.language]||copy.az;
-  function clear(){epoch++;controller?.abort();taskController?.abort();controller=null;taskController=null;busy=false;taskBusy=false;host.replaceChildren();}
+  function clear(){epoch++;controller?.abort();taskController?.abort();controller=null;taskController=null;busy=false;taskBusy=false;
+    if(voiceSection){void voiceSection.disposeVoice?.();voiceSection=null;}voiceStarting=false;voiceState='idle';voiceWasStarted=false;host.replaceChildren();}
   function node(tag,text,className){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
   function displayDate(value){const timestamp=Date.parse(String(value||''));return Number.isFinite(timestamp)?new Date(timestamp).toLocaleString():String(value||'');}
   function renderTask(task,container,w){
@@ -48,6 +50,13 @@
     const footer=node('p',w.footer,'sub');footer.style.marginTop='12px';
     actions.append(ask);form.append(input,actions);card.append(form,status,answer,sourceHeading,sources);
 
+    const voiceActions=node('div',undefined,'analyst-voice-actions');
+    const voiceButton=node('button',w.voiceButton,'primary analyst-voice-button');voiceButton.type='button';
+    voiceButton.disabled=voiceStarting||voiceState==='active';
+    const voiceStatus=node('p',voiceStarting?w.voiceConnecting:voiceState==='active'?w.voiceActive:voiceState==='ended'?w.voiceEnded:'','sub analyst-voice-status');
+    voiceStatus.setAttribute('role','status');voiceStatus.setAttribute('aria-live','polite');
+    voiceActions.append(voiceButton,voiceStatus);card.append(voiceActions);
+
     const taskPanel=node('section',undefined,'analyst-task-search');
     taskPanel.append(node('h3',w.taskSearchTitle),node('p',w.taskSearchIntro));
     const taskForm=node('form',undefined,'analyst-task-search-form');
@@ -60,6 +69,44 @@
     const results=node('div',undefined,'analyst-task-results');results.setAttribute('aria-live','polite');
     const readOnly=node('p',w.taskSearchReadOnly,'sub analyst-task-readonly');
     taskForm.append(queryLabel,sourceLabel,taskButton);taskPanel.append(taskForm,taskStatus,coverage,results,readOnly);card.append(taskPanel,footer);host.append(card);
+
+    voiceButton.addEventListener('click',async()=>{
+      if(voiceStarting||member?.role!=='owner'||!host.isConnected)return;
+      const expected={tenant_id:String(member.tenant_id||''),user_id:String(member.telegram_id||'')};
+      if(!expected.tenant_id||!expected.user_id)return;
+      const isCurrent=()=>member?.role==='owner'&&String(member.tenant_id||'')===expected.tenant_id&&
+        String(member.telegram_id||'')===expected.user_id&&host.isConnected;
+      voiceStarting=true;voiceState='connecting';voiceButton.disabled=true;voiceStatus.textContent=w.voiceConnecting;
+      try{
+        if(voiceSection){await voiceSection.disposeVoice?.();voiceSection=null;}
+        const language=window.tenantI18n?.language||'ru';
+        const query=new URLSearchParams({expected_tenant_id:expected.tenant_id,expected_user_id:expected.user_id});
+        voiceSection=window.mountTenantCopilotVoice?.(document.body,{
+          language,isCurrent,socketPath:'/api/platform/ai/analytics/voice/ws?'+query.toString(),
+          preflight:async()=>{
+            const response=await fetch('/api/platform/ai/analytics/voice/preflight',{method:'POST',credentials:'same-origin',cache:'no-store',
+              headers:{'Content-Type':'application/json','Accept':'application/json'},
+              body:JSON.stringify({expected_tenant_id:expected.tenant_id,expected_user_id:expected.user_id})});
+            const data=await response.json().catch(()=>({success:false}));
+            if(!response.ok||data.success!==true||data.result?.available!==true)throw Error('voice_unavailable');
+            return data.result;
+          },
+          onState:state=>{
+            voiceState=state==='listening'||state==='responding'||state==='muted'?'active':
+              state==='idle'&&voiceWasStarted?'ended':state;
+            if(voiceStatus.isConnected)voiceStatus.textContent=voiceState==='active'?w.voiceActive:
+              voiceState==='ended'?w.voiceEnded:state==='connecting'?w.voiceConnecting:'';
+            if(voiceButton.isConnected)voiceButton.disabled=voiceStarting||voiceState==='active';
+          },
+          onIdle:()=>{voiceWasStarted=true;voiceState='ended';if(voiceStatus.isConnected)voiceStatus.textContent=w.voiceEnded;
+            if(voiceButton.isConnected)voiceButton.disabled=false;}
+        });
+        if(!voiceSection||await voiceSection.startVoice?.()!==true)throw Error('voice_unavailable');
+        voiceWasStarted=true;
+      }catch(_error){voiceState='idle';voiceStatus.textContent=w.voiceFailed;
+        if(voiceSection){void voiceSection.disposeVoice?.();voiceSection=null;}}
+      finally{voiceStarting=false;if(voiceButton.isConnected)voiceButton.disabled=voiceState==='active';}
+    });
 
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(busy||member?.role!=='owner')return;

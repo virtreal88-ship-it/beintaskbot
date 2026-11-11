@@ -1,14 +1,18 @@
 name: Realtime voice lease and lifecycle
 
 on:
+  push:
+    branches: [codex/employee-scoped-gate-off-release-20261111]
   pull_request:
     paths:
       - 'beintaskbot-main/tenant_operator_voice_*.py'
       - 'beintaskbot-main/tenant_operator_realtime_*.py'
       - 'beintaskbot-main/tenant_operator_elevenlabs_*.py'
+      - 'beintaskbot-main/tenant_ai_business_analytics_voice.py'
       - 'beintaskbot-main/tests/test_tenant_operator_voice_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_realtime_*.py'
       - 'beintaskbot-main/tests/test_tenant_operator_elevenlabs_*.py'
+      - 'beintaskbot-main/tests/test_tenant_ai_business_analytics_voice.py'
       - 'beintaskbot-main/docs/tenant-copilot-voice-audio.js'
       - 'beintaskbot-main/docs/tenant-copilot-voice-controller.js'
       - 'beintaskbot-main/docs/tenant-operator-copilot-voice.js'
@@ -68,6 +72,9 @@ jobs:
           tests/test_tenant_operator_voice_queue_load.py
           tests/test_tenant_operator_voice_terminal_socket.py
           tests/test_tenant_operator_voice_orchestration.py
+          tests/test_tenant_ai_business_analytics_voice.py
+          tests/test_tenant_operator_voice_analytics.py
+          tests/test_tenant_operator_voice_analytics_session.py
           tests/test_tenant_operator_voice.py
           tests/test_tenant_operator_voice_api.py
           tests/test_tenant_auth_api.py

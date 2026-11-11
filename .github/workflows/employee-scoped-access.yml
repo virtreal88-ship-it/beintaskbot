@@ -81,8 +81,14 @@ jobs:
           tests/test_ai_integration_access_preparation.py
           tests/test_analytics_scoped_dialog_guard.py
           tests/test_business_analyst_scoped_boundary.py
+          tests/test_business_analyst_voice_scoped_boundary.py
           tests/test_tenant_ai_business_analyst.py
           tests/test_tenant_ai_business_analytics.py
+          tests/test_tenant_ai_business_analytics_voice.py
+          tests/test_tenant_operator_voice*.py
+          tests/test_tenant_operator_realtime_wire.py
+          tests/test_tenant_operator_realtime_aiohttp.py
+          tests/test_tenant_operator_elevenlabs_voice.py
           tests/test_tenant_news_member_read_postgres.py
           tests/test_support_access_ownership_postgres.py
           tests/test_support_inbox_scopes.py

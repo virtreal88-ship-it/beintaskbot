@@ -77,6 +77,7 @@ class LatencyDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         s=object.__new__(Session);s.queued_input_item_ids=[];s.pending_input_item_id='private input'
         s.response_pending=True;s.interrupt_pending=False;s.truncate_pending=None;s.response_inflight=False
         s.current_reservation=None;s.item=None;s.closed=False;s.response_number=0;s.pilot_policy=None
+        s._pending_analytics_call=None;s._pending_analytics_output=None;s._pending_response_kind='user'
         s.scope=('tenant',7,'channel','conversation');s.session_id='private session';s.executor='test'
         s.context=type('C',(),{'revalidate':AsyncMock()})();s.authority=type('A',(),{'check':AsyncMock()})()
         s.lease=type('L',(),{'assert_current':AsyncMock()})();s.fence=1

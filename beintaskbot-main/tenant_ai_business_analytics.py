@@ -328,7 +328,7 @@ def list_analytics_sources(profile):
             'relations': [{'name': relation, 'present': present.get(relation, False)} for relation in required],
         })
     return {'read_only': True, 'assistant_connected': False, 'checked_at': None, 'sources': sources,
-            'assistant_connections': {'text_business_analyst': True, 'voice_business_analyst': False,
+            'assistant_connections': {'text_business_analyst': True, 'voice_business_analyst': True,
                                       'selected_dialog_copilot': False},
             'warning': 'Schema presence does not prove current data, provider connectivity, or complete history.'}
 

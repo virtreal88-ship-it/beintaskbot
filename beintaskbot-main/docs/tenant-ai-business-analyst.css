@@ -3,6 +3,9 @@
 .analyst-actions{display:flex;justify-content:flex-end;margin-top:10px}
 .analyst-answer{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);white-space:pre-wrap;overflow-wrap:anywhere}
 .analyst-sources{display:grid;gap:6px;margin-top:8px;font-size:13px;overflow-wrap:anywhere}
+.analyst-voice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px;padding:12px 0;border-top:1px solid var(--line)}
+.analyst-voice-button{min-height:42px}
+.analyst-voice-status{margin:0!important;min-height:20px}
 .analyst-task-search{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
 .analyst-task-search h3{margin:0 0 5px;font-size:16px}
 .analyst-task-search>p{margin:0 0 12px;color:var(--muted);font-size:13px}

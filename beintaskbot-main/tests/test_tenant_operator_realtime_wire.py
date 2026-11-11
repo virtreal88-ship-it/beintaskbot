@@ -7,6 +7,7 @@ from tenant_linear_policy import TenantLinearError
 from tenant_operator_realtime_wire import SyntheticRealtimeWire,create_production_provider,MODEL,QUOTE,MINIMUM_HOLD
 from tenant_operator_voice_pilot import PilotAdmission
 from tenant_operator_voice_session import Session
+from tenant_operator_voice_analytics import realtime_definitions
 
 
 class Socket:
@@ -21,6 +22,13 @@ class Socket:
         if self.mutate:self.mutate(config)
         return {'type':'session.updated','session':{**config,'id':'synthetic-session'}}
     async def close(self):self.closed=True
+
+
+class QueueSocket(Socket):
+    def __init__(self):super().__init__();self.events=asyncio.Queue()
+    async def receive_json(self):
+        if not self.events.empty():return await self.events.get()
+        return await super().receive_json()
 
 
 class Guard:
@@ -66,6 +74,48 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
             wire=SyntheticRealtimeWire(Socket(lambda s:s['audio']['input']['turn_detection'].__setitem__(field,bad)),Guard())
             with self.assertRaisesRegex(ValueError,'unsafe_session_readback'):
                 await wire.open(self.snapshot,**self.duplex_options,duplex=True)
+
+    async def test_owner_analytics_functions_are_the_only_optional_realtime_tools(self):
+        tools=realtime_definitions();wire=SyntheticRealtimeWire(Socket(),Guard())
+        await wire.open(self.snapshot,**{**self.duplex_options,'tools':tools},duplex=True)
+        sent=wire.socket.sent[0]['session']
+        self.assertEqual(sent['tools'],tools);self.assertEqual(sent['tool_choice'],'auto')
+        self.assertEqual(wire.tool_names,{tool['name'] for tool in tools})
+        forged=SyntheticRealtimeWire(Socket(),Guard())
+        bad=[{'type':'function','name':'send_message','description':'write','parameters':{'type':'object'}}]
+        with self.assertRaisesRegex(ValueError,'unsafe_realtime_configuration'):
+            await forged.open(self.snapshot,**{**self.duplex_options,'tools':bad},duplex=True)
+
+    async def test_function_output_requires_exact_provider_offer_and_ack(self):
+        socket=QueueSocket();wire=SyntheticRealtimeWire(socket,Guard());wire.ready=True
+        wire.tool_names=frozenset({'search_tasks'})
+        wire._tool_calls['call_1']={'item_id':'item_call_1','name':'search_tasks','arguments':'{}','used':False}
+        with self.assertRaisesRegex(ValueError,'analytics_tool_output_unavailable'):
+            await wire.send_function_call_output('forged','{}')
+        await wire.send_function_call_output('call_1','{"read_only":true}')
+        self.assertEqual(socket.sent[-1],{'type':'conversation.item.create','item':{
+            'type':'function_call_output','call_id':'call_1','output':'{"read_only":true}'}})
+        await socket.events.put({'type':'conversation.item.created','item':{
+            'type':'function_call_output','id':'item_tool_1','call_id':'call_1','output':'{"read_only":true}'}})
+        self.assertEqual((await wire.receive())['type'],'conversation.item.created')
+        with self.assertRaisesRegex(ValueError,'analytics_tool_output_unavailable'):
+            await wire.send_function_call_output('call_1','{}')
+
+    async def test_only_completed_allowlisted_realtime_call_can_receive_output(self):
+        socket=QueueSocket();wire=SyntheticRealtimeWire(socket,Guard())
+        tools=realtime_definitions()
+        await wire.open(self.snapshot,**{**self.duplex_options,'tools':tools},duplex=True)
+        await socket.events.put({'type':'response.done','response':{'id':'response_1','status':'completed',
+            'output':[{'id':'function_1','type':'function_call','call_id':'call_1',
+                       'name':'search_tasks','arguments':'{"query":"invoice"}'}]}})
+        self.assertEqual((await wire.receive())['type'],'response.done')
+        await wire.send_function_call_output('call_1','{"read_only":true}')
+        bad_socket=QueueSocket();bad=SyntheticRealtimeWire(bad_socket,Guard())
+        await bad.open(self.snapshot,**{**self.duplex_options,'tools':tools},duplex=True)
+        await bad_socket.events.put({'type':'response.done','response':{'id':'response_2','status':'completed',
+            'output':[{'id':'function_2','type':'function_call','call_id':'call_2',
+                       'name':'send_message','arguments':'{}'}]}})
+        with self.assertRaisesRegex(ValueError,'provider_function_call_invalid'):await bad.receive()
 
     async def test_cancel_race_is_ignored_only_after_exact_completed_response(self):
         class QueueSocket(Socket):
