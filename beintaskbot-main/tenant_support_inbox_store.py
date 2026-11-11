@@ -421,6 +421,9 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             fields = ('id','external_id','direction','author_name','body','message_type','happened_at','created_at')
             rows = [{key: row.get(key) for key in fields} for row in rows]
             restricted_ai = _scoped_ai_documents(policy)
+            from tenant_scoped_access_store import owned_resource_metadata
+            can_update=(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
+                policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,ticket,lock=True)))
             if not restricted_ai:
                 try:
                     from tenant_dialog_ai_context import resolve, binding
@@ -443,24 +446,28 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
                     ticket['summary_available'] = False
                     ticket['summary_current'] = False
             else:
-                # Scoped support staff may run an explicitly confirmed case
-                # analysis without receiving the agent identity or settings.
-                try:
-                    from tenant_dialog_ai_context import resolve, binding
-                    from tenant_support_case_context import fingerprint
-                    current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
-                    cur.execute('''SELECT a.enabled,s.enabled AS settings_enabled,s.emergency_stop
-                      FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
-                      WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,current['agent_id']))
-                    flags=cur.fetchone() or {}
-                    ticket['summary_available']=bool(flags.get('enabled') and flags.get('settings_enabled')
-                        and not flags.get('emergency_stop') and str(current.get('model') or '').strip())
-                    ticket['summary_current']=bool(ticket.get('summary_agent_binding')) and (
-                        ticket.get('summary_agent_binding')==binding(current)
-                        and ticket.get('summary_scope_hash')==fingerprint(cur,material_scope))
-                except TenantLinearError:
-                    ticket['summary_available']=False
-                    ticket['summary_current']=False
+                ticket['summary_available']=False
+                ticket['summary_current']=False
+                if can_update:
+                    # Support updaters may explicitly run case analysis without
+                    # receiving the agent identity or settings. Read no hidden
+                    # assignment for users who cannot edit this case.
+                    try:
+                        from tenant_dialog_ai_context import resolve, binding
+                        from tenant_support_case_context import fingerprint
+                        current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
+                        cur.execute('''SELECT a.enabled,s.enabled AS settings_enabled,s.emergency_stop
+                          FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+                          WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,current['agent_id']))
+                        flags=cur.fetchone() or {}
+                        ticket['summary_available']=bool(flags.get('enabled') and flags.get('settings_enabled')
+                            and not flags.get('emergency_stop') and str(current.get('model') or '').strip())
+                        ticket['summary_current']=bool(ticket.get('summary_agent_binding')) and (
+                            ticket.get('summary_agent_binding')==binding(current)
+                            and ticket.get('summary_scope_hash')==fingerprint(cur,material_scope))
+                    except TenantLinearError:
+                        ticket['summary_available']=False
+                        ticket['summary_current']=False
             cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at
               FROM saas_support_ticket_messages cm JOIN saas_crm_messages m
                 ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
@@ -501,11 +508,6 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             else:
                 summary_history=[{key:value for key,value in item.items()
                     if key not in {'run_id','agent_binding'}} for item in summary_history]
-            from tenant_scoped_access_store import owned_resource_metadata
-            can_update=(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
-                policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,ticket,lock=True)))
-            if restricted_ai:
-                ticket['summary_available']=bool(ticket.get('summary_available') and can_update)
     result={'expert_results':expert_results,'ticket':_ticket_public(ticket,policy),'summary_history':summary_history,
             'summary_pending_request':summary_pending_request,'messages':[public(row) for row in reversed(rows[:50])],
             'attached_media':attached_media,'scope':scope_metadata,
