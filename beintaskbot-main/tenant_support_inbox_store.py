@@ -39,12 +39,16 @@ def _ticket_public(row, policy):
     # shared metadata has its own separately authorized projection.
     result = public(row)
     if _scoped_ai_documents(policy):
+        result['has_assigned_agent'] = bool(result.get('agent_id'))
+        # Keep the support API shape stable while hiding shared agent data.
+        # Detail may set these explicitly for authorized support updaters.
+        result.setdefault('summary_available', False)
+        result.setdefault('summary_current', False)
         for key in list(result):
             if key.startswith(('agent_', 'company_', 'latest_job_')) or key in {
                     'ai_reason', 'summary_agent_binding', 'summary_run_id'}:
                 result.pop(key, None)
-        result.update(summary_available=False, summary_current=False,
-                      controls_allowed=False, resume_allowed=False)
+        result.update(controls_allowed=False, resume_allowed=False)
     return result
 
 
@@ -384,7 +388,11 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
                 cur.execute('SELECT ch.connect_channel_id::text AS id,ch.name FROM saas_connect_channels ch WHERE ch.tenant_id=%s::uuid AND EXISTS(SELECT 1 FROM saas_support_tickets t WHERE t.tenant_id=ch.tenant_id AND t.channel_id=ch.connect_channel_id AND '+scope_sql+') ORDER BY ch.name',(tenant,*scope_args))
             channels=[dict(row) for row in cur.fetchall()]
             safe_rows=[_attach_verified_contact_identity(cur,tenant,row) for row in rows[:50]]
-    return {'tickets': [_ticket_public(row,policy) for row in safe_rows], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
+    ticket_rows=[_ticket_public(row,policy) for row in safe_rows]
+    for row in ticket_rows:
+        row.pop('reply_draft',None)
+        row.pop('risk_assessment',None)
+    return {'tickets': ticket_rows, 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
             'next_offset': offset+50 if len(rows)>50 else None}
 
 
@@ -417,6 +425,9 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             fields = ('id','external_id','direction','author_name','body','message_type','happened_at','created_at')
             rows = [{key: row.get(key) for key in fields} for row in rows]
             restricted_ai = _scoped_ai_documents(policy)
+            from tenant_scoped_access_store import owned_resource_metadata
+            can_update=(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
+                policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,ticket,lock=True)))
             if not restricted_ai:
                 try:
                     from tenant_dialog_ai_context import resolve, binding
@@ -438,6 +449,29 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
                     ticket['agent_name'] = ''
                     ticket['summary_available'] = False
                     ticket['summary_current'] = False
+            else:
+                ticket['summary_available']=False
+                ticket['summary_current']=False
+                if can_update:
+                    # Support updaters may explicitly run case analysis without
+                    # receiving the agent identity or settings. Read no hidden
+                    # assignment for users who cannot edit this case.
+                    try:
+                        from tenant_dialog_ai_context import resolve, binding
+                        from tenant_support_case_context import fingerprint
+                        current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
+                        cur.execute('''SELECT a.enabled,s.enabled AS settings_enabled,s.emergency_stop
+                          FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+                          WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,current['agent_id']))
+                        flags=cur.fetchone() or {}
+                        ticket['summary_available']=bool(flags.get('enabled') and flags.get('settings_enabled')
+                            and not flags.get('emergency_stop') and str(current.get('model') or '').strip())
+                        ticket['summary_current']=bool(ticket.get('summary_agent_binding')) and (
+                            ticket.get('summary_agent_binding')==binding(current)
+                            and ticket.get('summary_scope_hash')==fingerprint(cur,material_scope))
+                    except TenantLinearError:
+                        ticket['summary_available']=False
+                        ticket['summary_current']=False
             cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at
               FROM saas_support_ticket_messages cm JOIN saas_crm_messages m
                 ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
@@ -478,9 +512,6 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             else:
                 summary_history=[{key:value for key,value in item.items()
                     if key not in {'run_id','agent_binding'}} for item in summary_history]
-            from tenant_scoped_access_store import owned_resource_metadata
-            can_update=(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
-                policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,ticket,lock=True)))
     result={'expert_results':expert_results,'ticket':_ticket_public(ticket,policy),'summary_history':summary_history,
             'summary_pending_request':summary_pending_request,'messages':[public(row) for row in reversed(rows[:50])],
             'attached_media':attached_media,'scope':scope_metadata,
@@ -641,7 +672,7 @@ def create(profile, data):
 
 
 def update(profile, ticket_id, data):
-    if set(data)-{'status','assigned_to','description','next_steps','suggestions','assigned_developer_channel_id','assigned_developer_conversation_id'}:
+    if set(data)-{'status','assigned_to','description','next_steps','suggestions','risk_assessment','assigned_developer_channel_id','assigned_developer_conversation_id'}:
         raise TenantLinearError('Некорректные поля обращения.')
     if 'status' in data and data['status'] not in STATUSES:
         raise TenantLinearError('Некорректный статус.')

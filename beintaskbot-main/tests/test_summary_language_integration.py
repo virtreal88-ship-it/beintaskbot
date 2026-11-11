@@ -370,7 +370,7 @@ def test_regeneration_explicit_language_wins_and_preserves_previous_manual_versi
     ticket_id = result['ticket']['id']
     cases.update(PROFILE, ticket_id, {'description': 'Exact employee edit SKU-42 / 49.00'})
     before = cases.detail(PROFILE, ticket_id)
-    previous = {key: before['ticket'][key] for key in ('description', 'summary', 'suggestions', 'next_steps')}
+    previous = {key: before['ticket'][key] for key in ('description', 'summary', 'suggestions', 'next_steps', 'risk_assessment', 'reply_draft')}
     f['output_language'] = 'en'
     request = _regenerate(before, language='en')
     regenerated = summaries.regenerate({**PROFILE, 'locale': 'az'}, ticket_id, request)

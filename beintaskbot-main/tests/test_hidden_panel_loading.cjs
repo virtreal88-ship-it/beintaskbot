@@ -18,7 +18,7 @@ function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,ho
  const result=url=>url==='/api/platform/me'?current:url.includes('/news?')?{tenant_id:current.member.tenant_id,user_id:current.member.telegram_id,news:[{id:'synthetic-news',title:'Synthetic '+current.member.tenant_id,status:'pending',summary:'Fixture',project_name:'Fixture'}]}:url.includes('beinsystems')?{integration:{}}:url.includes('linear/settings')?{members:[],settings:{},status:'not_connected'}:url.includes('/companies')?{companies:[]}:url.includes('/news/telegram')?{chat_id:'@synthetic',timezone:'Asia/Baku',start:'09:00',end:'18:00',interval_minutes:30}:{};
  w.fetch=(url,options={})=>new Promise(resolve=>{const request={url:String(url),options,reply:(data=result(String(url)),status=200)=>resolve(new Response(JSON.stringify({success:status<400,...data}),{status,headers:{'Content-Type':'application/json'}}))};requests.push(request);if(!hold(request))request.reply();});
  const run=name=>w.eval(read('docs/'+name,ref));run('tenant-request-coordinator.js');if(!ref)run('tenant-view-demand.js');
- for(const name of ['tenant-linear-rules.js','tenant-linear-settings.js','tenant-news.js','tenant-news-ai-settings.js','tenant-news-telegram-settings.js','tenant-chat-ai-settings.js'])run(name);
+ for(const name of ['tenant-linear-rules.js','tenant-shared-integration-settings.js','tenant-linear-settings.js','tenant-news.js','tenant-news-ai-settings.js','tenant-news-telegram-settings.js','tenant-chat-ai-settings.js'])run(name);
  if(workspace)run('tenant-workspace.js');
  if(core)w.eval([...w.document.scripts].find(s=>s.textContent.includes('const savedView=sessionStorage')).textContent);
  if(reactDelay){const nativeTimeout=w.setTimeout.bind(w);w.setTimeout=(callback,delay,...args)=>nativeTimeout(callback,delay===0?reactDelay:delay,...args);}
@@ -106,7 +106,7 @@ async function marketplaceModal(){
 }
 async function dirtyReauthorization(){
  let holdAuth=false;
- const b=fixture({view:'integrations',core:true,workspace:true,hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
+ const b=fixture({view:'integrations',core:true,workspace:true,profile:{...owner,integrations:[{provider:'connect',updated_at:'old-status'}]},hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
   await tick();await tick();
   let card=[...b.w.document.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
   while(card&&!card.querySelector('button'))card=card.parentElement;

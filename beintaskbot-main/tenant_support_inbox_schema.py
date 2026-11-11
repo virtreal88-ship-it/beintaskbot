@@ -10,6 +10,7 @@ def create_schema(conn):
           source TEXT NOT NULL CHECK(source IN ('manual','ai_handoff')),
           reason TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',
           summary TEXT NOT NULL DEFAULT '',suggestions TEXT NOT NULL DEFAULT '',next_steps TEXT NOT NULL DEFAULT '',
+          risk_assessment TEXT NOT NULL DEFAULT '',reply_draft TEXT NOT NULL DEFAULT '',
           summary_state TEXT NOT NULL DEFAULT 'pending' CHECK(summary_state IN ('pending','generating','completed','unavailable')),
           status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','waiting','in_progress','resolved')),
           assigned_to BIGINT NULL,created_by BIGINT NULL,
@@ -34,6 +35,8 @@ def create_schema(conn):
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_scope TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_agent_binding TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_scope_hash TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS risk_assessment TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS reply_draft TEXT NOT NULL DEFAULT ''")
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_channel_id UUID NULL')
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_conversation_id TEXT NULL')
         cur.execute('''DO $$ BEGIN

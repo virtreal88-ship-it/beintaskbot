@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 
-FIELDS = ('description', 'summary', 'suggestions', 'next_steps')
+FIELDS = ('description', 'summary', 'suggestions', 'next_steps', 'risk_assessment', 'reply_draft')
 
 
 def content(row):
