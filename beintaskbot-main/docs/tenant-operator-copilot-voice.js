@@ -3,7 +3,9 @@
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.mountTenantCopilotVoice = factory;
 })(typeof window === 'object' ? window : globalThis, function mountTenantCopilotVoice(parent, options={}) {
-  if (!parent || parent.querySelector('[data-copilot-voice]')) return null;
+  // Each host owns its own screen. A screen nested in another host (for
+  // example the dialog workspace) must not prevent the analyst from mounting.
+  if (!parent || [...parent.children].some(child => child.hasAttribute('data-copilot-voice'))) return null;
   const document=parent.ownerDocument, section=document.createElement('section');
   section.dataset.copilotVoice='';section.dataset.voiceState='idle';section.hidden=true;
   section.className='tenant-copilot-voice-screen';
