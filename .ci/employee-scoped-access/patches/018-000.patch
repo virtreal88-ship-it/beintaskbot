@@ -1,3 +1,567 @@
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b957747cc0e5cbbe85de1ce7cfcdce59ece55d97
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
+@@ -0,0 +1,165 @@
++"""Chromium acceptance for the unmodified production AI controller.
++
++Synthetic HTTP boundary runs locally without a provider/database. This is not cookie/PostgreSQL authorization evidence. It uses the production
++HTML DOM/controller and browser assertions. Other
++app controllers are omitted; this is not a full application-bootstrap test.
++"""
++import asyncio
++import json
++import os
++from pathlib import Path
++import re
++import shutil
++import socket
++import subprocess
++import threading
++import uuid
++
++from aiohttp import web
++import pytest
++
++ROOT=Path(__file__).resolve().parents[1]
++A='00000000-0000-0000-0000-000000000065'
++B='00000000-0000-0000-0000-000000000066'
++OWN='00000000-0000-0000-0000-000000000301'
++PEER='00000000-0000-0000-0000-000000000302'
++SOURCE='00000000-0000-0000-0000-000000000201'
++OTHER='00000000-0000-0000-0000-000000000299'
++MODES={'read':{'view':'all','create':'none','update':'none'},
++       'create':{'view':'none','create':'self','update':'none'},
++       'mixed':{'view':'all','create':'none','update':'self'},
++       'revoked':{'view':'none','create':'none','update':'none'},
++       'foreign':{'view':'none','create':'none','update':'none'}}
++
++
++def chromium():
++    path=os.environ.get('CHROMIUM_EXECUTABLE_PATH') or shutil.which('chromium')
++    if not path:pytest.skip('Local Chromium executable required')
++    return path
++
++
++class SyntheticBoundary:
++    backend='synthetic HTTP boundary (not backend authorization proof)'
++    own,other_source,tenant,actor=OWN,OTHER,A,31
++    def __init__(self):
++        self.mode='read';self.current_tenant=A
++        self.rows=[{'id':OWN,'tenant_id':A,'name':'Own agent','instructions':'Own private instructions','version':1,'enabled':False,'scopes':[]},
++                   {'id':PEER,'tenant_id':A,'name':'Peer agent','instructions':'Peer instructions','version':1,'enabled':False,'scopes':[]}]
++    def set_mode(self,name):self.mode=name;self.current_tenant=B if name=='foreign' else A
++    def profile(self,request):
++        return {'member':{'tenant_id':self.current_tenant,'telegram_id':31,'role':'admin','active':True},
++                'capabilities':{'modules':{'ai_agents':False},'pages':{'ai_agents':True},'ai_documents':{'scoped':True,**{key:value!='none' for key,value in MODES[self.mode].items()}}}}
++    def cookie(self,response):pass
++    def facts(self):return {'created':sum(row['name']=='Created through Chromium' for row in self.rows),'own_name':self.rows[0]['name']}
++    async def api(self,request):
++        rights=MODES[self.mode]
++        def response(value,status=200):return web.json_response({'success':status==200,**({'result':value} if status==200 else {'error':value})},status=status)
++        if request.method=='GET':
++            if request.path.endswith('/options'):
++                return response({'scoped':True,'connect_channels':[{'id':SOURCE,'name':'Assigned source'}],'pipelines':[],'stages':[],'channels':[],'models':[]})
++            if rights['view']=='none':return response('read denied',403)
++            return response([{**row,'capabilities':{'update':rights['update']!='none' and row['id']!=PEER}} for row in self.rows])
++        body=await request.json()
++        if body.get('expected_tenant_id')!=self.current_tenant:return response('identity changed',409)
++        action='create' if request.method=='POST' else 'update'
++        if rights[action]=='none':return response('write denied',404 if action=='update' else 403)
++        if any(source.get('channel_id')!=SOURCE for source in body.get('scopes',[])):return response('source denied',403)
++        if action=='create':
++            row={'id':str(uuid.uuid4()),'tenant_id':A,'name':body['name'],'instructions':body['instructions'],'scopes':body.get('scopes',[]),'enabled':False,'version':1}
++            self.rows.append(row)
++        else:
++            row=next(row for row in self.rows if row['id']==request.match_info['agent_id'])
++            if row['id']==PEER:return response('not owned',404)
++            row.update({key:body[key] for key in ('name','instructions','scopes') if key in body});row['version']+=1
++        return response({'id':row['id'],'version':row['version']})
++
++
++def run_browser(boundary,width,*,runner='ai_scoped_documents_http_browser.cjs'):
++    executable=chromium() if runner=='ai_scoped_documents_http_browser.cjs' else ''
++    sock=socket.socket();sock.bind(('127.0.0.1',0))
++    origin='http://127.0.0.1:'+str(sock.getsockname()[1])
++    loop=asyncio.new_event_loop();ready=threading.Event()
++    state={'list_reads':0,'receipts':[],'shared':[],'pending':0,'released':0,'hold':False}
++    errors=[]
++    async def start():
++        state['release']=asyncio.Event()
++        @web.middleware
++        async def observe(request,handler):
++            response=await handler(request)
++            if request.path=='/api/platform/ai/agents' and request.method=='GET':
++                state['list_reads']+=1
++                if state['hold']:
++                    state['hold']=False;state['pending']=1
++                    await state['release'].wait();state['released']=1
++            if request.path.startswith('/api/platform/ai/agents') and request.method in {'POST','PATCH'} and response.status==200:
++                state['receipts'].append(sorted(json.loads(response.body)['result']))
++            return response
++        app=web.Application(middlewares=[observe])
++        config={'backend':boundary.backend,'own':boundary.own,'otherSource':boundary.other_source,'tenant':boundary.tenant,'actor':boundary.actor}
++        async def page(request):
++            html=(ROOT/'docs/tenant-app.html').read_text()
++            html=re.sub(r'<script\b[^>]*>[\s\S]*?</script>','',html,flags=re.I)
++            # Preserve real HTML/styles but block every external resource.
++            html=re.sub(r'<link\b[^>]*>','',html,flags=re.I)
++            # Shared app bootstrap is deliberately omitted; provide its full
++            # translation interface, without loading other app controllers.
++            bootstrap="window.AI_ACCEPTANCE_ERRORS=[];window.addEventListener('error',e=>AI_ACCEPTANCE_ERRORS.push(e.message));window.tenantI18n={language:'en',t:key=>key,source:value=>value,date:value=>String(value),capture:()=>{}};document.querySelectorAll('.view').forEach(n=>n.classList.remove('active'));document.getElementById('view-ai_agents').classList.add('active');window.AI_ACCEPTANCE_CONFIG="+json.dumps(config)+';'
++            html=html.replace('</body>','<script>'+bootstrap+'</script><script src="/assets/tenant-ai-agents.js"></script><script src="/test/acceptance.js"></script></body>')
++            response=web.Response(text=html,content_type='text/html',headers={'Content-Security-Policy':"default-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"})
++            boundary.cookie(response)
++            return response
++        async def me(request):
++            value=boundary.profile(request)
++            return web.json_response(value,dumps=lambda value:json.dumps(value,default=str))
++        async def control(request):
++            command=request.match_info['command']
++            if command=='mode':boundary.set_mode(request.query['name'])
++            elif command=='revoke':boundary.set_mode('revoked')
++            elif command=='hold':state['hold']=True;state['release'].clear();state['pending']=0;state['released']=0
++            elif command=='release':state['release'].set()
++            elif command!='state':raise web.HTTPNotFound()
++            response=web.json_response({key:value for key,value in state.items() if key not in {'release','runner'} }|boundary.facts())
++            boundary.cookie(response)
++            return response
++        async def asset(request):return web.Response(text=(ROOT/'docs/tenant-ai-agents.js').read_text(),content_type='application/javascript')
++        async def acceptance(request):return web.Response(text=(ROOT/'tests/ai_scoped_documents_browser_acceptance.js').read_text(),content_type='application/javascript')
++        app.router.add_get('/app',page);app.router.add_get('/api/platform/me',me)
++        app.router.add_get('/assets/tenant-ai-agents.js',asset);app.router.add_get('/test/acceptance.js',acceptance)
++        app.router.add_get('/test/{command}',control)
++        if hasattr(boundary,'register'):boundary.register(app,origin)
++        else:
++            app.router.add_get('/api/platform/ai/agents/options',boundary.api)
++            app.router.add_get('/api/platform/ai/agents',boundary.api)
++            app.router.add_post('/api/platform/ai/agents',boundary.api)
++            app.router.add_patch('/api/platform/ai/agents/{agent_id}',boundary.api)
++        async def forbidden(request):
++            if request.path.startswith('/api/'):
++                state['shared'].append(request.path)
++                return web.json_response({'success':False,'error':'Unexpected shared API'},status=501)
++            raise web.HTTPNotFound()
++        app.router.add_route('*','/{tail:.*}',forbidden)
++        state['runner']=web.AppRunner(app);await state['runner'].setup();await web.SockSite(state['runner'],sock).start();ready.set()
++    def serve():
++        asyncio.set_event_loop(loop)
++        try:loop.run_until_complete(start());loop.run_forever()
++        except BaseException as error:errors.append(error);ready.set()
++    thread=threading.Thread(target=serve,daemon=True);thread.start();assert ready.wait(10)
++    try:
++        assert not errors,errors
++        process=subprocess.run(['node',str(ROOT/'tests'/runner)],cwd=ROOT,
++            env={**os.environ,'AI_RUNTIME_ORIGIN':origin,'AI_RUNTIME_WIDTH':str(width),'CHROMIUM_EXECUTABLE_PATH':executable},capture_output=True,text=True,timeout=70)
++        assert process.returncode==0,process.stdout+'\n'+process.stderr
++        assert state['shared']==[]
++        return process.stdout
++    finally:
++        if 'runner' in state:
++            loop.call_soon_threadsafe(state['release'].set)
++            asyncio.run_coroutine_threadsafe(state['runner'].cleanup(),loop).result(10)
++        loop.call_soon_threadsafe(loop.stop);thread.join(10);loop.close();sock.close()
++        assert not thread.is_alive()
++
++
++@pytest.mark.parametrize('width',[390,1100])
++def test_production_ai_controller_in_chromium_synthetic_http(width):
++    """Browser/DOM/transport evidence only: this API boundary is synthetic."""
++    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),width)
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..de663b0d9a278577b27d3c5f8d6a0357eaeb7056
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
+@@ -0,0 +1,6 @@
++"""Full-controller bootstrap/HTTP contract; JSDOM is not browser layout proof."""
++from test_ai_scoped_documents_browser import run_browser,SyntheticBoundary
++
++
++def test_full_controller_bootstrap_and_acceptance_over_http():
++    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),1100,runner='ai_scoped_documents_http_dom.cjs')
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb2ace307cc2d03b1782cc5dde5aa42991d0f1bf
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
+@@ -0,0 +1,136 @@
++"""Actual concurrent AI scope fences; disposable localhost PostgreSQL only.
++
++PGlite cannot run this suite. Final CI must supply BEINTASKBOT_TEST_POSTGRES_DSN.
++"""
++from concurrent.futures import ThreadPoolExecutor
++import threading
++import time
++
++import psycopg
++from psycopg.rows import dict_row
++import pytest
++
++from test_connect_channel_multiprocess import database
++from test_tenant_support_inbox import db, A
++from test_ai_scoped_documents import scoped, grants, ACTOR
++import tenant_ai_agents_store as store
++from tenant_linear_policy import TenantLinearError
++
++
++@pytest.fixture
++def concurrent(scoped, monkeypatch):
++    database, ids = scoped
++    grants(database, {'view': 'self', 'update': 'self'})
++    def factory():
++        connection = psycopg.connect(database.dsn, row_factory=dict_row)
++        connection.execute("SET statement_timeout='8s'")
++        connection.execute("SET lock_timeout='6s'")
++        return connection
++    monkeypatch.setattr(store, '_connect', factory)
++    return factory, ids
++
++
++def save(factory, ident, name, ready=None):
++    with factory() as conn:
++        if ready:
++            ready(conn.info.backend_pid)
++        try:
++            return store.save_agent(ACTOR, {'name': name, 'expected_version': 1}, agent_id=ident, connection=conn)
++        except TenantLinearError as error:
++            return error.status
++
++
++def wait_blocked(factory, pid, blocker):
++    deadline = time.monotonic() + 4
++    with factory() as observer:
++        while time.monotonic() < deadline:
++            row = observer.execute('SELECT %s=ANY(pg_blocking_pids(%s)) AS waiting', (blocker, pid)).fetchone()
++            if row['waiting']:
++                return
++            time.sleep(.01)
++    pytest.fail('Expected PostgreSQL lock wait was not observed')
++
++
++def worker_pid():
++    event = threading.Event()
++    ids = []
++    def ready(pid):
++        ids.append(pid)
++        event.set()
++    return event, ids, ready
++
++
++def test_concurrent_updates_serialize_without_share_upgrade(concurrent):
++    factory, ids = concurrent
++    barrier = threading.Barrier(2)
++    def update(name):
++        return save(factory, ids['self'], name, lambda _: barrier.wait(timeout=4))
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        futures = [pool.submit(update, name) for name in ('first', 'second')]
++        outcomes = [future.result(timeout=12) for future in futures]
++    assert sum(isinstance(value, dict) for value in outcomes) == 1
++    assert outcomes.count(409) == 1
++    with factory() as conn:
++        assert conn.execute('SELECT version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone()['version'] == 2
++
++
++def test_configuration_mutex_precedes_agent_row_even_for_scoped_update(concurrent):
++    factory, ids = concurrent
++    event, pids, ready = worker_pid()
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        with factory() as creator:
++            creator.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('ai-agent-config:' + A,))
++            future = pool.submit(save, factory, ids['self'], 'updated', ready)
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], creator.info.backend_pid)
++            # Models setup recovery after acquiring the configuration mutex.
++            # The updater must not already hold SHARE/UPDATE on this agent.
++            creator.execute('SELECT id FROM saas_ai_agents WHERE id=%s FOR UPDATE NOWAIT', (ids['self'],))
++        assert future.result(timeout=12)=={'id':ids['self'],'version':2}
++
++
++def test_revocation_committed_before_admission_denies_update(concurrent):
++    factory, ids = concurrent
++    event, pids, ready = worker_pid()
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        with factory() as revoke:
++            revoke.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
++            future = pool.submit(save, factory, ids['self'], 'must not write', ready)
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], revoke.info.backend_pid)
++        assert future.result(timeout=12) in (403, 404)
++    with factory() as conn:
++        assert conn.execute('SELECT name,version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone() == {'name':'self','version':1}
++
++
++def test_admitted_update_fences_revocation_until_commit(concurrent, monkeypatch):
++    factory, ids = concurrent
++    admitted, release = threading.Event(), threading.Event()
++    original = store._authorize
++    update_pid = []
++    def pause(cur, profile, **kwargs):
++        value = original(cur, profile, **kwargs)
++        update_pid.append(cur.connection.info.backend_pid)
++        admitted.set()
++        if not release.wait(4):
++            raise AssertionError('Timed out waiting for revocation observer')
++        return value
++    monkeypatch.setattr(store, '_authorize', pause)
++    event, pids, ready = worker_pid()
++    def revoke():
++        with factory() as conn:
++            ready(conn.info.backend_pid)
++            conn.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(save, factory, ids['self'], 'admitted')
++        assert admitted.wait(4)
++        second = pool.submit(revoke)
++        try:
++            assert event.wait(4)
++            wait_blocked(factory, pids[0], update_pid[0])
++        finally:
++            release.set()
++        assert first.result(timeout=12)=={'id':ids['self'],'version':2}
++        second.result(timeout=12)
++    monkeypatch.setattr(store, '_authorize', original)
++    assert save(factory, ids['self'], 'revoked') in (403, 404)
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef17250325ae8bd54313e2173e3dc5f77ee3ac4e
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
+@@ -0,0 +1,30 @@
++/* Strict scoped document UI: actual DOM, synthetic data, no shared requests. */
++const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
++const {JSDOM}=require('jsdom');
++const source=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant-ai-agents.js'),'utf8');
++const code=source.slice(source.indexOf(' function createScopedAgentConsole(){'),source.indexOf(' const scopedAgentConsole=createScopedAgentConsole();'));
++assert(code.length>100);
++const dom=new JSDOM('<section id="view-ai_agents"><article id="legacy">Shared administration</article></section>',{url:'https://synthetic.invalid/app'});
++const {window}=dom,document=window.document;window.tenantI18n={language:'en'};
++let requests=[],pending=null,deny=false;
++const profile=(view,create,update,tenant='tenant-a',remove=false)=>({member:{tenant_id:tenant,telegram_id:31,active:true},capabilities:{modules:{ai_agents:false},pages:{ai_agents:view||create||update||remove},ai_documents:{scoped:true,view,create,update,delete:remove}}});
++const rows=[{id:'own',name:'Owned agent',instructions:'Saved instruction',enabled:false,version:1,scopes:[],capabilities:{update:true,delete:true}},{id:'peer',name:'Read-only peer',instructions:'Peer instruction',version:1,scopes:[],capabilities:{update:false,delete:false}}];
++const options={scoped:true,connect_channels:[{id:'source-a',name:'Assigned source'}],stages:[],pipelines:[],models:[{id:'configured',label:'Configured model'}]};
++async function fetch(url,request={}){requests.push({url,...request});assert(/^\/api\/platform\/ai\/agents(?:\/options\?cached=1|\/own(?:\/archive-unused)?)?$/.test(url),'Unexpected broad dependency '+url);if(pending){const promise=pending;pending=null;return promise;}if(deny)return {ok:false,status:typeof deny==='number'?deny:403,json:async()=>({success:false,error:'revoked'})};return {ok:true,status:200,json:async()=>({success:true,result:request.method==='POST'||request.method==='PATCH'?{id:'own',version:2}:url.includes('options')?options:rows})};}
++const context={window,document,fetch,endpoint:'/api/platform/ai/',agentsVisible:()=>true,$:id=>document.getElementById(id),esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))};
++vm.createContext(context);vm.runInContext(code+'; consoleUI=createScopedAgentConsole();',context);const ui=context.consoleUI;
++const flush=()=>new Promise(resolve=>setTimeout(resolve,0));const settle=async()=>{await flush();await flush();};
++const host=()=>document.getElementById('aiScopedDocuments');
++(async()=>{
++ ui.profile(profile(true,false,false));await settle();assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/platform/ai/agents');assert(document.getElementById('legacy').hidden);assert(!host().querySelector('[data-scoped-create]'));assert(![...host().querySelectorAll('button')].some(b=>b.textContent==='Edit'));
++ let releaseOptions;pending=new Promise(resolve=>releaseOptions=resolve);ui.profile(profile(false,true,false));await flush();assert(host().querySelector('[data-scoped-create]').disabled);host().querySelector('[data-scoped-create]').click();assert(!host().querySelector('form'));releaseOptions({ok:true,status:200,json:async()=>({success:true,result:options})});await settle();assert(!host().querySelector('[data-scoped-create]').disabled);
++ requests=[];ui.profile(profile(false,true,false));await settle();assert.equal(requests.length,1);assert(requests[0].url.includes('options'));assert(host().textContent.includes('viewing is not allowed'));host().querySelector('[data-scoped-create]').click();let form=host().querySelector('form');assert(form.elements.enabled.disabled);form.elements.name.value='New';form.elements.instructions.value='Known text';form.dispatchEvent(new window.Event('submit',{cancelable:true}));form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='POST').length,1);assert(!requests.some(r=>r.url.endsWith('/agents')&&r.method==='GET'));const created=JSON.parse(requests.find(r=>r.method==='POST').body);assert.equal(created.enabled,false);assert.equal(created.expected_tenant_id,'tenant-a');
++ requests=[];ui.profile(profile(true,false,true));await settle();let edits=[...host().querySelectorAll('button')].filter(b=>b.textContent==='Edit');assert.equal(edits.length,1);edits[0].click();host().querySelector('[data-scoped-cancel]').click();assert(!host().querySelector('form'));edits[0].click();form=host().querySelector('form');form.elements.name.value='Changed';form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='PATCH').length,1);assert.equal(JSON.parse(requests.find(r=>r.method==='PATCH').body).expected_version,1);
++ let release;pending=new Promise(resolve=>release=resolve);const old=ui.load();await flush();ui.profile(profile(false,false,false,'tenant-b'));release({ok:true,status:200,json:async()=>({success:true,result:[{id:'old',name:'PRIVATE OLD',instructions:'stale'}]})});await old;await settle();assert(!host().textContent.includes('PRIVATE OLD'));assert(!host().querySelector('[data-scoped-create]'));
++ ui.profile(profile(true,false,false));await settle();deny=true;await ui.load();assert(!host().textContent.includes('Owned agent'));assert(host().textContent.includes('revoked'));deny=false;
++ ui.profile(profile(true,false,true));await settle();host().querySelector('[data-scoped-list] article button').click();deny=404;host().querySelector('form').dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert(!host().querySelector('form'));assert(!host().textContent.includes('Saved instruction'));assert(!host().textContent.includes('Owned agent'));deny=false;
++ requests=[];ui.profile(profile(false,false,false,'tenant-a',true));await settle();assert.equal(requests.length,0);assert(!host().querySelector('[data-scoped-archive]'));
++ ui.profile(profile(true,false,false,'tenant-a',true));await settle();const archive=host().querySelectorAll('[data-scoped-archive]');assert.equal(archive.length,1);requests=[];archive[0].click();await settle();const deleted=requests.find(r=>r.url.endsWith('/archive-unused'));assert(deleted);assert.equal(deleted.method,'POST');assert.equal(JSON.parse(deleted.body).expected_version,1);
++ ui.profile(null);assert(host().hidden);assert(!document.getElementById('legacy').hidden);assert(!host().textContent.includes('Saved instruction'));
++ console.log('PASS scoped AI DOM: independent C/R/U and unused D, D-only no list, no shared requests, bounded submit, cancel, stale tenancy, revocation.');
++})().catch(error=>{console.error(error);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_ai_unused_archive.py b/beintaskbot-main/tests/test_ai_unused_archive.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..4e83f767bf1cdd5c4f68fbf84a72467dcc672504
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_unused_archive.py
+@@ -0,0 +1,197 @@
++"""Unused scoped D: isolated database and fail-fast provider fixtures."""
++import json
++import uuid
++import pytest
++from test_ai_scoped_documents import scoped, grants, ACTOR, db, database, A
++from tenant_ai_unused_archive import archive_unused_agent, install_schema_references
++from tenant_linear_policy import TenantLinearError
++import tenant_ai_agents_store as store
++
++
++@pytest.mark.parametrize('scope,permitted',[('self',{'self'}),('department',{'self','peer'}),('all',{'self','peer','other','system'}),('none',set())])
++def test_independent_delete_scope(scoped,scope,permitted):
++    db,ids=scoped;grants(db,dict(view='none',create='none',update='none',delete=scope),manage=False)
++    for name in ('self','peer','other','system','foreign'):
++        if name in permitted:
++            assert archive_unused_agent(ACTOR,ids[name],expected_version=1)=={'id':ids[name],'version':2,'archived':True}
++            assert db.execute('SELECT id FROM saas_ai_agent_history_identities WHERE tenant_id=%s AND id=%s',(A,ids[name]))
++        else:
++            with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids[name],expected_version=1)
++            assert error.value.status==404
++    with pytest.raises(TenantLinearError):store.list_agents(ACTOR)
++    with pytest.raises(TenantLinearError):store.configuration_options(ACTOR)
++
++
++def test_exact_version_revocation_and_legacy_boundary(scoped,monkeypatch):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    for version in (None,True,'1',0):
++        with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=version)
++        assert error.value.status==400
++    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=2)
++    assert error.value.status==409
++    grants(db,{'delete':'none'})
++    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    grants(db,{'delete':'self'})
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    assert archive_unused_agent({'tenant_id':A,'telegram_id':11},ids['self'],expected_version=1)['archived']
++
++
++@pytest.mark.parametrize('field,value',[('enabled',True),('scopes',[{'provider':'connect'}]),('expert_policy',{'allowed_primary_ids':['peer']})])
++def test_outgoing_binding_blocks_without_changes(scoped,field,value):
++    db,ids=scoped;grants(db,{'delete':'all'})
++    if field=='expert_policy':value={'allowed_primary_ids':[ids['peer']]}
++    db.execute(f'UPDATE saas_ai_agents SET {field}=%s WHERE id=%s',(value if field=='enabled' else json.dumps(value),ids['self']));db.commit()
++    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    assert error.value.status==409
++    assert db.execute('SELECT archived_at,version FROM saas_ai_agents WHERE id=%s',(ids['self'],))[0]=={'archived_at':None,'version':1}
++
++
++def test_trigger_and_reverse_team_block(scoped):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    db.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']));db.commit()
++    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    assert str(error.value)=='ai_agent_archive_requires_unused_agent'
++    db.execute("UPDATE saas_ai_agents SET expert_policy='{}' WHERE id=%s",(ids['peer'],))
++    db.execute("INSERT INTO saas_ai_agent_triggers(tenant_id,id,agent_id,name,trigger_type,actions) VALUES(%s,%s,%s,'trigger','phrase','[]')",(A,str(uuid.uuid4()),ids['self']));db.commit()
++    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++
++
++def test_new_structural_references_rejected_but_prose_not_a_reference(scoped):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    with pytest.raises(Exception,match='ai_agent_archived_reference'):
++        db.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']))
++    db.rollback()
++    db.execute('UPDATE saas_ai_agents SET instructions=%s,expert_policy=%s::jsonb WHERE id=%s',(ids['self'],json.dumps({'notes':ids['self']}),ids['peer']));db.commit()
++    assert db.execute('SELECT instructions FROM saas_ai_agents WHERE id=%s',(ids['peer'],))[0]['instructions']==ids['self']
++
++
++def test_optional_table_installed_after_archive_is_fenced(scoped,monkeypatch):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    import tenant_ai_simulation_schema as simulation_schema
++    # This test has a fresh module-scoped DB, but a prior module may have set
++    # the simulation bootstrap's process-local cache for a different DB.
++    # Explicitly run its real bootstrap here, restoring the prior flag afterward.
++    monkeypatch.setattr(simulation_schema,'_ready',False)
++    with store._connect() as conn:simulation_schema.ensure_schema(conn);conn.commit()
++    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present']
++    assert db.execute("SELECT 1 FROM pg_trigger WHERE tgrelid='saas_ai_simulation_configs'::regclass AND tgname='saas_ai_unused_archive_reference_v1' AND tgenabled IN ('O','A')")
++    with pytest.raises(Exception,match='ai_agent_archived_reference'):
++        db.execute('INSERT INTO saas_ai_simulation_configs(tenant_id,agent_id) VALUES(%s,%s)',(A,ids['self']))
++    db.rollback()
++
++
++def test_current_projection_has_independent_delete(scoped):
++    db,ids=scoped;grants(db,{'view':'all','update':'none','delete':'self'})
++    rows=store.list_agents(ACTOR)
++    assert {row['name'] for row in rows if row['capabilities']['delete']}=={'self'}
++    assert not any(row['capabilities']['update'] for row in rows)
++
++
++def test_reference_extractor_uses_relationship_keys_not_prose(scoped):
++    db,ids=scoped
++    data={'notes':ids['self'],'agent_assignment_id':ids['self'],'nested':{'allowed_primary_ids':[ids['peer']]},'developer_reply_bindings':[{'developer_expected_agent_id':ids['other']}]}
++    result=db.execute('SELECT saas_ai_reference_ids(%s::jsonb) AS ids',(json.dumps(data),))[0]['ids']
++    assert set(map(str,result))=={ids['peer'],ids['other']}
++
++
++def test_installed_reference_manifest_has_no_missing_columns_or_fences(scoped):
++    db,_=scoped
++    from tenant_ai_unused_archive import REFERENCES
++    for table,columns in REFERENCES.items():
++        if not db.execute('SELECT to_regclass(%s) AS present',(table,))[0]['present']:continue
++        found={r['attname'] for r in db.execute('SELECT attname FROM pg_attribute WHERE attrelid=%s::regclass AND attnum>0 AND NOT attisdropped',(table,))}
++        assert set(columns)<=found,(table,set(columns)-found)
++        assert db.execute("SELECT 1 FROM pg_trigger WHERE tgrelid=%s::regclass AND tgname='saas_ai_unused_archive_reference_v1' AND tgenabled<>'D'",(table,))
++
++
++def test_optional_schema_creators_install_their_actual_reference_fences(scoped,monkeypatch):
++    import importlib
++    db,_=scoped
++    creators=[('tenant_ai_instructor_store','schema'),('tenant_ai_simulation_schema','ensure_schema'),
++              ('tenant_dialog_consultations','schema'),('tenant_dialog_audio_store','schema'),
++              ('tenant_owner_asr_comparison','schema'),('tenant_instruction_library','schema'),('tenant_instruction_videos','schema'),
++              ('tenant_ai_learning_mcp','ensure_mcp_schema')]
++    for module,name in creators:
++        implementation=importlib.import_module(module)
++        if module=='tenant_ai_simulation_schema':monkeypatch.setattr(implementation,'_ready',False)
++        with store._connect() as conn:
++            getattr(implementation,name)(conn);conn.commit()
++    test_installed_reference_manifest_has_no_missing_columns_or_fences(scoped)
++
++
++def test_archive_api_checks_identity_origin_and_returns_only_receipt(scoped):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import Mock,AsyncMock
++    from tenant_ai_agents_api import handler
++    db,ids=scoped;grants(db,{'view':'none','delete':'self'},manage=False)
++    remote=AsyncMock(side_effect=AssertionError('provider forbidden'))
++    call=handler(lambda request:ACTOR,'https://synthetic.invalid',Mock(),'agent_archive_unused',request_provider=remote)
++    def request(origin='https://synthetic.invalid',actor=31):
++        return SimpleNamespace(method='POST',content_length=200,headers={'Origin':origin},content_type='application/json',match_info={'agent_id':ids['self']},json=AsyncMock(return_value={'expected_tenant_id':A,'expected_user_id':actor,'expected_version':1}))
++    assert asyncio.run(call(request(origin='https://other.invalid'))).status==403
++    assert asyncio.run(call(request(actor=32))).status==409
++    response=asyncio.run(call(request()))
++    assert response.status==200,response.text
++    assert json.loads(response.text)['result']=={'id':ids['self'],'version':2,'archived':True}
++    remote.assert_not_called()
++
++
++def test_missing_disabled_or_stale_fence_is_not_schema_ready(scoped):
++    db,ids=scoped
++    from tenant_ai_unused_archive import fences_ready,install_existing
++    for change in ('ALTER TABLE saas_ai_agents DISABLE TRIGGER saas_ai_unused_archive_reference_v1',
++                   'DROP TRIGGER saas_ai_unused_archive_reference_v1 ON saas_ai_agents'):
++        db.execute(change);db.commit()
++        with db.cursor() as cur:
++            assert not fences_ready(cur)
++            install_existing(cur)
++            assert fences_ready(cur)
++        db.commit()
++    db.execute('DROP TRIGGER saas_ai_unused_archive_reference_v1 ON saas_ai_agents')
++    db.execute("CREATE TRIGGER saas_ai_unused_archive_reference_v1 BEFORE INSERT OR UPDATE ON saas_ai_agents FOR EACH ROW EXECUTE FUNCTION saas_ai_unused_archive_reference_fn('name')")
++    db.commit()
++    with db.cursor() as cur:
++        assert not fences_ready(cur)
++        install_existing(cur)
++        assert fences_ready(cur)
++    db.commit()
++
++
++@pytest.mark.parametrize('state',['queued','processing','drafted','skipped'])
++def test_any_job_including_active_or_historical_blocks_archive(scoped,state):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s,'unused-job-test','connect')",(A,))
++    db.execute("""INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,event_fingerprint,state,due_at)
++      VALUES(%s,%s,'connect','synthetic',1,'','','unused-job-test',%s,now())""",(A,ids['self'],state));db.commit()
++    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    assert error.value.status==409
++    assert db.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s AND agent_id=%s',(A,ids['self']))[0]['state']==state
++
++
++def test_pending_webhook_nested_binding_blocks_archive(scoped):
++    db,ids=scoped;grants(db,{'delete':'self'})
++    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,payload) VALUES(%s,'unused-event-test','connect',%s::jsonb)",(A,json.dumps({'developer_reply_bindings':[{'developer_expected_agent_id':ids['self']}]})));db.commit()
++    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
++    assert error.value.status==409
++
++
++def test_gate_off_owner_archive_and_deleted_tombstone_keep_legacy_history(scoped,monkeypatch):
++    db,ids=scoped;monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++    owner={'tenant_id':A,'telegram_id':11}
++    result=store.delete_agent(owner,ids['self'],replacement_agent_id=ids['peer'],expected_version=1)
++    assert result['archived']
++    assert not db.execute('SELECT id FROM saas_ai_scoped_archives WHERE id=%s',(ids['self'],))
++    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s,'legacy-history-test','connect')",(A,))
++    def insert_run(revision):
++        db.execute("""INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state)
++          VALUES(%s,%s,%s,'legacy-history-test',%s,'fixture','completed')""",(A,str(uuid.uuid4()),ids['self'],revision));db.commit()
++    insert_run(1)
++    result=store.permanently_delete_agent(owner,ids['self'],expected_version=2,confirm_agent_id=ids['self'])
++    assert result['deleted']
++    insert_run(2)
++    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s AND agent_id=%s',(A,ids['self']))[0]['n']==2
++    assert db.execute('SELECT deleted_at FROM saas_ai_agent_history_identities WHERE id=%s',(ids['self'],))[0]['deleted_at']
 diff --git a/beintaskbot-main/tests/test_ai_unused_archive_postgres.py b/beintaskbot-main/tests/test_ai_unused_archive_postgres.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..4857bf838f7ce8425120385152c848a9a511eb09
@@ -264,659 +828,221 @@ index d8091b1a169dced14ddb93a540b4882e572ba04e..a31572fca622ff292c15a1136558462f
   for(const outcome of ['revoked','update-only','unavailable']){
    const b=await mount({role:'admin',permissions:['customers','deals','employees:manage']});try{
     b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);formInput(b,'nativeContactName','Preserved rejected-write draft');const before=b.f.calls.filter(call=>call.path==='/api/platform/me').length;
-diff --git a/beintaskbot-main/tests/test_crm_legacy_transition.py b/beintaskbot-main/tests/test_crm_legacy_transition.py
+diff --git a/beintaskbot-main/tests/test_crm_create_only_page_contract.py b/beintaskbot-main/tests/test_crm_create_only_page_contract.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6350efa31b3a58267a2439fed09a8c8c94c0b25f
+index 0000000000000000000000000000000000000000..1dad90b5bd5499cb77bdd5a839b01376333112aa
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_crm_legacy_transition.py
-@@ -0,0 +1,272 @@
-+"""Isolated writer-transition journals; all provider I/O is mocked."""
-+import asyncio
-+import uuid
-+from unittest.mock import AsyncMock, Mock
++++ b/beintaskbot-main/tests/test_crm_create_only_page_contract.py
+@@ -0,0 +1,16 @@
++"""Native create entry is a page capability, never a read/provider grant."""
 +import pytest
-+from test_tenant_support_inbox import database, db, A
-+from test_tenant_crm_relation_delivery_postgres import graph
-+from test_crm_scoped_scalar_postgres import scalar, Remote
-+import tenant_crm_native_contacts as contacts
-+import tenant_crm_sync_outbox as legacy
-+from tenant_crm_scalar_delivery import dispatch
-+from tenant_crm_writer_fence import legacy_uncertain
++from test_scoped_access_foundation import person
++from tenant_policy import TenantPolicy
 +
 +
-+def legacy_event(scalar, state='processing', attempts=1):
-+    ident = scalar['contacts'][0].internal_id
-+    row = scalar['db'].execute('''INSERT INTO saas_crm_sync_outbox
-+      (id,tenant_id,provider,entity_type,internal_id,source_updated_at,event_key,state,attempts)
-+      SELECT %s::uuid,tenant_id,'kommo','contact',id,updated_at,%s,%s,%s
-+      FROM saas_crm_native_contacts WHERE id=%s::uuid RETURNING *''',
-+      (str(uuid.uuid4()),str(uuid.uuid4()),state,attempts,ident))[0]
-+    scalar['db'].commit()
-+    return row
-+
-+
-+def test_legacy_timeout_blocks_scalar_and_duplicate_even_after_rollback(scalar,monkeypatch):
-+    row=legacy_event(scalar)
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    monkeypatch.setattr(legacy,'_linked',lambda *_:{'external_id':'1'})
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    request=AsyncMock(side_effect=TimeoutError('after apply'))
-+    with pytest.raises(TimeoutError): asyncio.run(legacy._send(row,None,request,Mock()))
-+    # Existing retry scheduling cannot remove durable uncertain-send evidence.
-+    legacy.finish(row,'pending','provider_unavailable')
-+    ident=scalar['contacts'][0].internal_id
-+    saved=contacts.update_contact(A,ident,'First scoped name','',actor_id=81)
-+    assert saved['sync']['state']=='needs_verification'
-+    assert saved['sync']['error_code']=='scalar_legacy_outcome_unknown'
-+    remote=Remote(scalar['binding'],id='1')
-+    assert dispatch(lambda:scalar['db'],saved['sync']['event_id'],remote)=='needs_verification'
-+    assert not remote.calls
-+    scalar['db'].execute("UPDATE saas_crm_sync_outbox SET state='processing',attempts=attempts+1 WHERE id=%s::uuid",(row['id'],))
-+    scalar['db'].commit()
-+    row={**row,'attempts':row['attempts']+1}
-+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','false')
-+    assert asyncio.run(legacy._send(row,None,request,Mock()))==('unknown','legacy_outcome_unknown')
-+    assert request.await_count==1
-+
-+
-+@pytest.mark.parametrize('state,attempts',[('processing',1),('unknown',1),('pending',2)])
-+def test_historical_legacy_uncertainty_blocks_first_scoped_dispatch(scalar,state,attempts):
-+    legacy_event(scalar,state,attempts)
-+    saved=contacts.update_contact(A,scalar['contacts'][0].internal_id,'Scoped','',actor_id=81)
-+    assert saved['sync']['state']=='needs_verification'
-+    assert saved['sync']['error_code']=='scalar_legacy_outcome_unknown'
-+
-+
-+def test_stale_worker_cannot_send_with_old_claim(scalar,monkeypatch):
-+    row=legacy_event(scalar)
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    scalar['db'].execute('UPDATE saas_crm_sync_outbox SET attempts=attempts+1 WHERE id=%s::uuid',(row['id'],));scalar['db'].commit()
-+    request=AsyncMock()
-+    assert asyncio.run(legacy._send(row,None,request,Mock()))==('stale','legacy_claim_changed')
-+    request.assert_not_called()
-+
-+
-+def test_historical_retry_without_send_evidence_is_not_replayed(scalar,monkeypatch):
-+    row=legacy_event(scalar,attempts=2)
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    request=AsyncMock()
-+    assert asyncio.run(legacy._send(row,None,request,Mock()))==('unknown','legacy_historical_attempt_unverified')
-+    request.assert_not_called()
-+
-+
-+def test_gate_off_unmarked_legacy_success_retains_payload(scalar,monkeypatch):
-+    row=legacy_event(scalar,attempts=2)
-+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','false')
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    monkeypatch.setattr(legacy,'_linked',lambda *_:{'external_id':'1'})
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    request=AsyncMock(return_value={})
-+    assert asyncio.run(legacy._send(row,None,request,Mock()))==('synced','')
-+    assert request.await_args.args==(A,'PATCH','contacts/1')
-+    assert request.await_args.kwargs=={'json_body':[{'name':'Synthetic'}]}
-+    assert not scalar['db'].execute('SELECT * FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(row['id'],))
-+
-+
-+def test_dispatch_rechecks_legacy_uncertainty_after_local_save(scalar):
-+    saved=contacts.update_contact(A,scalar['contacts'][0].internal_id,'Scoped','',actor_id=81)
-+    assert saved['sync']['state']=='pending'
-+    legacy_event(scalar,'unknown',1)
-+    remote=Remote(scalar['binding'],id='1')
-+    assert dispatch(lambda:scalar['db'],saved['sync']['event_id'],remote)=='needs_verification'
-+    assert not remote.calls
-+
-+
-+def test_disabled_policy_does_not_erase_historical_uncertainty(scalar,monkeypatch):
-+    row=legacy_event(scalar,'pending',1)
-+    scalar['db'].execute("UPDATE saas_crm_provider_settings SET sync_direction='off' WHERE entity_type='contact'")
-+    scalar['db'].commit()
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    request=AsyncMock()
-+    asyncio.run(legacy.run_batch(request,Mock(),Mock()))
-+    stored=scalar['db'].execute('SELECT state FROM saas_crm_sync_outbox WHERE id=%s::uuid',(row['id'],))[0]
-+    assert stored['state']=='unknown'
-+    request.assert_not_called()
-+
-+
-+def link_event(scalar,row):
-+    with scalar['db'].cursor() as cur:
-+        legacy.record_link(cur,tenant_id=A,provider='kommo',entity_type='contact',
-+            internal_id=row['internal_id'],external_id='1',sync_state='synced')
-+    scalar['db'].commit()
-+
-+
-+def attempt(scalar,row):
-+    return scalar['db'].execute('''SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts
-+      WHERE event_id=%s::uuid''',(row['id'],))[0]
-+
-+
-+def first_busy_claim(scalar,monkeypatch,*,linked=True):
-+    row=legacy_event(scalar,'pending',0)
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    if linked:link_event(scalar,row)
-+    claimed=legacy.claim()
-+    # PGlite is one session. Mock only lock admission; every journal/claim/state
-+    # transition below uses actual SQL, not a mocked delivery implementation.
-+    query=scalar['db'].query
-+    def busy(sql,params=()):
-+        if 'pg_try_advisory_lock' in sql:return [{'locked':False}]
-+        return query(sql,params)
-+    request=AsyncMock()
-+    with monkeypatch.context() as patch:
-+        patch.setattr(scalar['db'],'query',busy)
-+        assert asyncio.run(legacy._send(claimed,None,request,Mock()))==('busy','legacy_card_busy')
-+    request.assert_not_called()
-+    assert attempt(scalar,row)=={'outcome':'not_started','claim_attempt':1}
-+    return claimed
-+
-+
-+def expire_claim(scalar,row):
-+    scalar['db'].execute("UPDATE saas_crm_sync_outbox SET lease_until=now()-interval '1 hour' WHERE id=%s::uuid",(row['id'],))
-+    scalar['db'].commit()
-+
-+
-+@pytest.mark.parametrize('linked',[False,True])
-+def test_first_busy_claim_retries_without_inventing_possible_send(scalar,monkeypatch,linked):
-+    first=first_busy_claim(scalar,monkeypatch,linked=linked)
-+    expire_claim(scalar,first)
-+    second=legacy.claim()
-+    assert second['attempts']==2
-+    assert attempt(scalar,second)=={'outcome':'not_started','claim_attempt':2}
-+    request=AsyncMock(return_value={'_embedded':{'contacts':[{'id':1}]}})
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    assert asyncio.run(legacy._send(first,None,request,Mock()))==('stale','legacy_claim_changed')
-+    assert asyncio.run(legacy._send(second,None,request,Mock()))==('synced','')
-+    assert request.await_count==1
-+    assert request.await_args.args[1]==('PATCH' if linked else 'POST')
-+    assert attempt(scalar,second)=={'outcome':'completed','claim_attempt':2}
-+
-+
-+@pytest.mark.parametrize('state',['processing','pending'])
-+def test_proven_unsent_busy_claim_does_not_block_scalar_save_or_dispatch(scalar,monkeypatch,state):
-+    row=first_busy_claim(scalar,monkeypatch)
-+    if state=='pending':legacy.finish(row,'pending','legacy_card_busy')
-+    saved=contacts.update_contact(A,row['internal_id'],'Scoped','',actor_id=81)
-+    assert saved['sync']['state']=='pending'
-+    remote=Remote(scalar['binding'],id='1')
-+    assert dispatch(lambda:scalar['db'],saved['sync']['event_id'],remote)=='synced'
-+    assert len(remote.writes)==1
-+    # The old actorless event still encounters the persistent scoped barrier.
-+    scalar['db'].execute("UPDATE saas_crm_sync_outbox SET lease_until=now()-interval '1 hour',next_attempt_at=now() WHERE id=%s::uuid",(row['id'],))
-+    scalar['db'].commit()
-+    retry=legacy.claim();request=AsyncMock()
-+    assert retry['attempts']==2
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('conflict','legacy_scoped_revision_conflict')
-+    request.assert_not_called()
-+
-+
-+@pytest.mark.parametrize('outcome',['sending','unknown'])
-+def test_reclaim_never_relabels_possible_send_as_not_started(scalar,monkeypatch,outcome):
-+    row=legacy_event(scalar,'processing',1);link_event(scalar,row)
-+    scalar['db'].execute('''INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome,claim_attempt)
-+      VALUES(%s::uuid,%s,1)''',(row['id'],outcome));scalar['db'].commit()
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    expire_claim(scalar,row);retry=legacy.claim()
-+    assert retry['attempts']==2
-+    assert attempt(scalar,retry)=={'outcome':outcome,'claim_attempt':1}
-+    request=AsyncMock()
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('unknown','legacy_outcome_unknown')
-+    saved=contacts.update_contact(A,row['internal_id'],'Scoped','',actor_id=81)
-+    assert saved['sync']['error_code']=='scalar_legacy_outcome_unknown'
-+    request.assert_not_called()
-+
-+
-+def test_mismatched_unsent_claim_is_not_evidence_for_a_newer_attempt(scalar,monkeypatch):
-+    row=first_busy_claim(scalar,monkeypatch)
-+    scalar['db'].execute('UPDATE saas_crm_sync_outbox SET attempts=2 WHERE id=%s::uuid',(row['id'],))
-+    scalar['db'].commit()
-+    with scalar['db'].cursor() as cur:assert legacy_uncertain(cur,A,'contact',row['internal_id'])
-+    expire_claim(scalar,row);retry=legacy.claim()
-+    assert retry['attempts']==3 and attempt(scalar,row)['claim_attempt']==1
-+    request=AsyncMock()
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('unknown','legacy_historical_attempt_unverified')
-+    request.assert_not_called()
-+
-+
-+def test_reclaim_preserves_unknown_recorded_after_its_initial_journal_read(scalar,monkeypatch):
-+    row=first_busy_claim(scalar,monkeypatch)
-+    expire_claim(scalar,row)
-+    query=scalar['db'].query
-+    def late_unknown(sql,params=()):
-+        if "VALUES(%s::uuid,'not_started',%s) ON CONFLICT" in sql:
-+            # A sender's exception handler can mark unknown after rolling back
-+            # its admission transaction. The claim upsert must not overwrite it.
-+            query("UPDATE saas_crm_legacy_delivery_attempts SET outcome='unknown' WHERE event_id=%s::uuid",(row['id'],))
-+        return query(sql,params)
-+    with monkeypatch.context() as patch:
-+        patch.setattr(scalar['db'],'query',late_unknown)
-+        retry=legacy.claim()
-+    assert retry['attempts']==2
-+    assert attempt(scalar,row)=={'outcome':'unknown','claim_attempt':1}
-+    request=AsyncMock()
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('unknown','legacy_outcome_unknown')
-+    request.assert_not_called()
-+
-+
-+def test_unknown_state_is_not_cleared_by_unsent_claim_evidence(scalar,monkeypatch):
-+    row=first_busy_claim(scalar,monkeypatch)
-+    scalar['db'].execute("UPDATE saas_crm_sync_outbox SET state='unknown' WHERE id=%s::uuid",(row['id'],))
-+    scalar['db'].commit()
-+    with scalar['db'].cursor() as cur:assert legacy_uncertain(cur,A,'contact',row['internal_id'])
-+    saved=contacts.update_contact(A,row['internal_id'],'Scoped','',actor_id=81)
-+    assert saved['sync']['error_code']=='scalar_legacy_outcome_unknown'
-+
-+
-+def test_gate_off_unmarked_claim_does_not_change_legacy_journal_behavior(scalar,monkeypatch):
-+    row=legacy_event(scalar,'pending',0);link_event(scalar,row)
-+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','false')
-+    monkeypatch.setattr(legacy,'_connect',lambda:scalar['db'])
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    claimed=legacy.claim();request=AsyncMock(return_value={})
-+    assert asyncio.run(legacy._send(claimed,None,request,Mock()))==('synced','')
-+    assert not scalar['db'].execute('SELECT * FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(row['id'],))
-+
-+
-+def test_known_unsent_claim_survives_gate_off_without_becoming_historical(scalar,monkeypatch):
-+    row=first_busy_claim(scalar,monkeypatch)
-+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','false')
-+    expire_claim(scalar,row);retry=legacy.claim()
-+    assert attempt(scalar,row)=={'outcome':'not_started','claim_attempt':2}
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    request=AsyncMock(return_value={})
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('synced','')
-+    assert request.await_count==1
-+
-+
-+def test_claim_schema_upgrade_preserves_historical_evidence(scalar):
-+    from tenant_crm_scalar_schema import migrate_scalar_schema
-+    db=scalar['db']
-+    db.execute('''CREATE TEMP TABLE saas_crm_legacy_delivery_attempts (
-+      event_id UUID PRIMARY KEY,outcome TEXT NOT NULL CHECK(outcome IN ('sending','unknown','completed')),
-+      updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())''')
-+    try:
-+        for outcome in ('sending','unknown','completed'):
-+            db.execute('INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome) VALUES(%s::uuid,%s)',(str(uuid.uuid4()),outcome))
-+        with db.cursor() as cur:migrate_scalar_schema(cur);migrate_scalar_schema(cur)
-+        rows=db.execute('SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts ORDER BY outcome')
-+        assert rows==[{'outcome':value,'claim_attempt':None} for value in ('completed','sending','unknown')]
-+        db.execute("INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome,claim_attempt) VALUES(%s::uuid,'not_started',1)",(str(uuid.uuid4()),))
-+    finally:
-+        db.execute('DROP TABLE pg_temp.saas_crm_legacy_delivery_attempts');db.commit()
-diff --git a/beintaskbot-main/tests/test_crm_legacy_transition_postgres.py b/beintaskbot-main/tests/test_crm_legacy_transition_postgres.py
++@pytest.mark.parametrize('contact_view',['none','self'])
++def test_create_only_deal_page_is_available_without_read_modules(monkeypatch,contact_view):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
++    profile=person({'deals':{'create':'self','view':'none','update':'none','delete':'none'},
++                    'customers':{'create':'none','view':contact_view,'update':'none','delete':'none'}},permissions=[])
++    caps=TenantPolicy(profile).public_capabilities()
++    assert caps['pages']['deals'] is True
++    assert caps['actions']['deals']=={'view':False,'create':True,'update':False,'delete':False}
++    assert caps['actions']['customers']['view'] is (contact_view=='self')
++    assert caps['modules']['deals'] is False and caps['modules']['customers'] is False
+diff --git a/beintaskbot-main/tests/test_crm_import_provenance.py b/beintaskbot-main/tests/test_crm_import_provenance.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..50e518e01b19e3824459c78d9072bdef3c40ec36
+index 0000000000000000000000000000000000000000..c262f0014fc5f1975515a42e74d67e418d6a2da7
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_crm_legacy_transition_postgres.py
-@@ -0,0 +1,106 @@
-+"""Real PostgreSQL sessions for legacy/scoped admission races. No provider access."""
++++ b/beintaskbot-main/tests/test_crm_import_provenance.py
+@@ -0,0 +1,115 @@
++"""Synthetic read receipts only: no provider, credentials or network access."""
 +import asyncio
-+import threading
++import json
++from datetime import datetime, timezone
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
++import pytest
++
++from tenant_crm_import_provenance import ObservedKommoPage, observe_page
++from tenant_kommo import TenantKommo
++
++TENANT = '00000000-0000-0000-0000-000000000101'
++STAMP = datetime(2026, 11, 10, tzinfo=timezone.utc)
++
++
++def credentials(**changes):
++    return {'provider': 'kommo', 'auth_mode': 'oauth', 'connected_at': STAMP,
++        'account_domain': 'synthetic.kommo.com', 'access_token': 'synthetic-only',
++        'refresh_token': 'synthetic-only', 'token_expires_at': '2999-01-01T00:00:00+00:00', **changes}
++
++
++def response(code=200, *, history=None, payload=None):
++    return SimpleNamespace(status_code=code, history=[] if history is None else history,
++        content=b'{}', json=lambda: payload or {'_embedded': {'contacts': [{'id': 9}]}})
++
++
++def service(values):
++    context = SimpleNamespace(credentials=Mock(side_effect=values), replace_tokens=Mock(),
++        logger=Mock(), platform_error=ValueError)
++    client = TenantKommo(context)
++    client.settings = lambda: ('synthetic', 'synthetic', 'https://example.invalid/callback')
++    return client
++
++
++@pytest.mark.parametrize('refresh_at', ['expired_before_send', 'unauthorized_response'])
++def test_receipt_uses_actual_post_refresh_credentials_without_extra_request(refresh_at):
++    before = credentials(token_expires_at='2000-01-01T00:00:00Z') if refresh_at == 'expired_before_send' else credentials()
++    after = credentials(account_domain='reconnected.kommo.com', connected_at=STAMP.replace(day=11))
++    client = service([before, after])
++    with patch('tenant_kommo.wait_slot'), \
++         patch('tenant_kommo.requests.request', side_effect=[response()] if refresh_at=='expired_before_send' else [response(401), response()]) as send, \
++         patch('tenant_kommo.requests.post', return_value=response(payload={'access_token':'synthetic'})):
++        result = asyncio.run(client.request(TENANT, 'GET', 'contacts', params={'limit':250}))
++    assert isinstance(result, ObservedKommoPage)
++    assert result.observation.binding.account_id == 'reconnected.kommo.com'
++    assert result.observation.binding.connection_generation.endswith('2026-11-11T00:00:00+00:00')
++    assert send.call_count == (1 if refresh_at=='expired_before_send' else 2)  # No verification GET.
++    assert send.call_args.args[1] == 'https://reconnected.kommo.com/api/v4/contacts'
++    assert send.call_args.kwargs['params'] == {'limit':250}
++    assert json.loads(json.dumps(result)) == {'_embedded': {'contacts': [{'id': 9}]}}
++    assert 'synthetic-only' not in repr(result.observation)
++
++
++@pytest.mark.parametrize('case', ['naked_credentials','redirect','json_metadata','unsupported','non_success'])
++def test_unbound_or_redirected_response_never_carries_evidence(case):
++    values = credentials()
++    if case in ('naked_credentials','json_metadata'): values.pop('connected_at')
++    client = service([values])
++    reply = response(history=[object()] if case == 'redirect' else [],
++        code=302 if case=='non_success' else 200,
++        payload={'_embedded': {'contacts': [{'id': 9}]}, 'observation': {'binding':'forged'}})
++    with patch('tenant_kommo.wait_slot'), patch('tenant_kommo.requests.request', return_value=reply):
++        result = asyncio.run(client.request(TENANT, 'GET', 'account' if case == 'unsupported' else 'contacts'))
++    assert type(result) is dict
++
++
++@pytest.mark.parametrize('rows', [[{'id': 0}], [{'id': True}], [{'id': '01'}], [{'id':9},{'id':9}], [None], [{}]*251])
++def test_invalid_or_ambiguous_response_ids_are_not_evidence(rows):
++    result = observe_page(TENANT, 'contacts', credentials(), {'_embedded': {'contacts':rows}})
++    assert type(result) is dict
++
++
++def test_manual_source_generation_is_separate_and_no_json_evidence_is_accepted():
++    result = observe_page(TENANT, 'contacts', credentials(provider='kommo_manual',auth_mode='manual'),
++        {'_embedded': {'contacts':[{'id':9}]}})
++    assert result.observation.binding.connection_generation.startswith('kommo_manual:')
++    assert result.observation.external_ids == frozenset({'9'})
++
++
++def test_worker_passes_receipt_separately_without_new_provider_reads():
++    from tenant_crm_sync_worker import sync_one_page
++    receipt = observe_page(TENANT, 'contacts', credentials(), {'_embedded': {'contacts':[{'id':9}]}})
++    store = SimpleNamespace(row={'tenant_id':TENANT,'resource':'contacts','next_page':1},
++        connection_is_current=lambda: True, save_page=Mock())
++    async def request(*args, **kwargs): return receipt
++    asyncio.run(sync_one_page(store, request))
++    assert store.save_page.call_args.kwargs['observation'] == receipt.observation
++    assert store.save_page.call_args.args[0] == [{'raw': {'id':9}}]
++
++
++@pytest.mark.parametrize('mode', ['oauth','manual'])
++def test_credential_source_metadata_matches_the_selected_token_snapshot(mode):
++    from unittest.mock import MagicMock
++    import tenant_integration_store as store
++    connection=MagicMock()
++    conn=connection.return_value.__enter__.return_value
++    cur=conn.cursor.return_value.__enter__.return_value
++    oauth={'provider':'kommo','status':'connected' if mode=='oauth' else 'awaiting_oauth',
++        'account_domain':'oauth.kommo.com','connected_at':STAMP,'metadata':{},
++        'secrets':json.dumps({'access_token':'synthetic-oauth','refresh_token':'synthetic-refresh'}).encode()}
++    manual={'provider':'kommo_manual','status':'connected','account_domain':'manual.kommo.com',
++        'connected_at':STAMP.replace(day=9),'metadata':{},
++        'secrets':json.dumps({'tenant_id':TENANT,'provider':'kommo_manual','access_token':'synthetic-manual'}).encode()}
++    cur.fetchall.return_value=[oauth,manual]
++    cipher=Mock();cipher.decrypt.side_effect=lambda value: value
++    with patch.object(store,'_connect',connection), patch.object(store,'_ensure_schema'), \
++         patch.object(store,'_fernet',return_value=cipher):
++        result=store.kommo_credentials(tenant_id=TENANT)
++    selected=oauth if mode=='oauth' else manual
++    assert result['provider'] == selected['provider']
++    assert result['connected_at'] == selected['connected_at']
++    assert result['account_domain'] == selected['account_domain']
++    assert result['access_token'] == 'synthetic-'+mode
++    assert cur.execute.call_count == 1 and 'connected_at' in cur.execute.call_args.args[0]
++    assert cur.execute.call_args.args[0].strip().startswith('SELECT')
+diff --git a/beintaskbot-main/tests/test_crm_import_provenance_fences_postgres.py b/beintaskbot-main/tests/test_crm_import_provenance_fences_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0617d00a3c4aaf079d2083de5cd66d33db4e50eb
+--- /dev/null
++++ b/beintaskbot-main/tests/test_crm_import_provenance_fences_postgres.py
+@@ -0,0 +1,69 @@
++"""Real localhost PostgreSQL sessions, never production or provider requests."""
 +from concurrent.futures import ThreadPoolExecutor
-+from unittest.mock import AsyncMock, Mock
++from dataclasses import replace
++from threading import Event, Barrier
 +import psycopg
 +from psycopg.rows import dict_row
 +import pytest
++
 +from test_connect_channel_multiprocess import database
 +from test_tenant_support_inbox import db, A
-+from test_tenant_crm_relation_delivery_postgres import graph
-+from test_crm_scoped_scalar_postgres import scalar
-+from test_crm_legacy_transition import legacy_event
-+import tenant_crm_native_contacts as contacts
-+import tenant_crm_sync_outbox as legacy
++from test_crm_import_provenance_postgres import source, observed, count
++from tenant_crm_import_provenance import validate_observation
++from tenant_crm_sync_import import import_contacts
++from tenant_crm_relation_identity import current_binding
 +
 +
-+@pytest.mark.parametrize('timeout',[False,True])
-+def test_legacy_inflight_fences_first_scoped_mutation_and_duplicate(scalar,monkeypatch,timeout):
-+    row=legacy_event(scalar)
-+    factory=lambda:psycopg.connect(scalar['db'].dsn,row_factory=dict_row)
-+    monkeypatch.setattr(legacy,'_connect',factory)
-+    monkeypatch.setattr(contacts,'_connect',factory)
-+    monkeypatch.setattr(legacy,'_linked',lambda *_:{'external_id':'1'})
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    with factory() as conn:
-+        with conn.cursor() as cur:
-+            legacy.record_link(cur,tenant_id=A,provider='kommo',entity_type='contact',
-+                internal_id=row['internal_id'],external_id='1',sync_state='synced')
-+    entered,release,started,finished=[threading.Event() for _ in range(4)]
-+    calls=[]
-+    async def request(*args,**kwargs):
-+        calls.append(args);entered.set();assert release.wait(10)
-+        if timeout:raise TimeoutError('may have applied')
-+        return {}
-+    def send():
-+        try:return asyncio.run(legacy._send(row,None,request,Mock()))
-+        except TimeoutError:return 'timeout'
-+    def edit():
-+        started.set()
-+        result=contacts.update_contact(A,scalar['contacts'][0].internal_id,'Scoped name','',actor_id=81)
-+        finished.set();return result
-+    with ThreadPoolExecutor(3) as pool:
-+        sending=pool.submit(send)
-+        try:
-+            assert entered.wait(10)
-+            editing=pool.submit(edit)
-+            assert started.wait(3) and not finished.wait(.2)
-+            # A duplicate worker/expired lease never passes the active session fence.
-+            with factory() as conn:
-+                conn.execute("UPDATE saas_crm_sync_outbox SET lease_until=now()-interval '1 hour' WHERE id=%s::uuid",(row['id'],))
-+            retry=legacy.claim()
-+            assert retry['attempts']==row['attempts']+1
-+            assert asyncio.run(legacy._send(retry,None,request,Mock()))==('busy','legacy_card_busy')
-+            with factory() as conn:
-+                attempt=conn.execute('SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(row['id'],)).fetchone()
-+            assert attempt=={'outcome':'sending','claim_attempt':row['attempts']}
-+            # Different cards are not serialized behind the provider request.
-+            unrelated=pool.submit(contacts.update_contact,A,scalar['contacts'][1].internal_id,'Other','',actor_id=81)
-+            assert unrelated.result(5)['sync']['local_saved'] is True
-+        finally:release.set()
-+        result=sending.result(10);saved=editing.result(10)
-+    assert len(calls)==1 and calls[0][1]=='PATCH'
-+    if timeout:
-+        assert result=='timeout'
-+        assert saved['sync']['state']=='needs_verification'
-+        assert saved['sync']['error_code']=='scalar_legacy_outcome_unknown'
++@pytest.mark.parametrize('change', ['reconnect','preferred_oauth_insert'])
++def test_import_mapping_transaction_fences_reconnect_and_preferred_insert(source, change):
++    rows,evidence=observed()
++    if change == 'preferred_oauth_insert':
++        source.execute("UPDATE saas_tenant_integrations SET provider='kommo_manual'")
++        with source.cursor() as cur: binding=current_binding(cur,A)
++        evidence=replace(evidence,binding=binding)
++        mutation="""INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain,connected_at)
++          VALUES(%s::uuid,'kommo','connected','other.kommo.com',clock_timestamp())"""
 +    else:
-+        assert result==('synced','')
-+        assert saved['sync']['state']=='pending'
-+
-+
-+def test_different_event_busy_claim_can_send_after_active_sender_finishes(scalar,monkeypatch):
-+    first=legacy_event(scalar,'pending',0)
-+    factory=lambda:psycopg.connect(scalar['db'].dsn,row_factory=dict_row)
-+    monkeypatch.setattr(legacy,'_connect',factory)
-+    monkeypatch.setattr(legacy,'_conflicts',AsyncMock(return_value=False))
-+    with factory() as conn:
-+        with conn.cursor() as cur:
-+            legacy.record_link(cur,tenant_id=A,provider='kommo',entity_type='contact',
-+                internal_id=first['internal_id'],external_id='1',sync_state='synced')
-+    first=legacy.claim()
-+    second=legacy_event(scalar,'pending',0)
-+    entered,release=threading.Event(),threading.Event()
-+    calls=[]
-+    async def request(*args,**kwargs):
-+        calls.append(args)
-+        if len(calls)==1:entered.set();assert release.wait(10)
-+        return {}
-+    with ThreadPoolExecutor(1) as pool:
-+        sending=pool.submit(lambda:asyncio.run(legacy._send(first,None,request,Mock())))
-+        try:
-+            assert entered.wait(10)
-+            busy=legacy.claim()
-+            assert busy['id']==second['id']
-+            assert asyncio.run(legacy._send(busy,None,request,Mock()))==('busy','legacy_card_busy')
-+            with factory() as conn:
-+                attempt=conn.execute('SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(second['id'],)).fetchone()
-+                assert attempt=={'outcome':'not_started','claim_attempt':1}
-+                conn.execute("UPDATE saas_crm_sync_outbox SET lease_until=now()-interval '1 hour' WHERE id=%s::uuid",(second['id'],))
-+        finally:release.set()
-+        assert sending.result(10)==('synced','')
-+    retry=legacy.claim()
-+    assert retry['id']==second['id'] and retry['attempts']==2
-+    assert asyncio.run(legacy._send(retry,None,request,Mock()))==('synced','')
-+    assert len(calls)==2 and all(call[1]=='PATCH' for call in calls)
-diff --git a/beintaskbot-main/tests/test_crm_native_api.py b/beintaskbot-main/tests/test_crm_native_api.py
-index ddbafc3ecc66bcca9ace572c9891ac8a6235d26f..343110fd747f931af8a75e06772a89e2e184a1a9 100644
---- a/beintaskbot-main/tests/test_crm_native_api.py
-+++ b/beintaskbot-main/tests/test_crm_native_api.py
-@@ -18,13 +18,13 @@ class ContactApiTests(unittest.TestCase):
-         self.assertEqual(response.status, 403)
- 
-     def test_tenant_scoped_list(self):
--        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'admin', 'active': True,
-+        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'telegram_id': 20, 'role': 'admin', 'active': True,
-                                   'permissions': ['customers'], 'modules': {'customers': True}},
-                         'https://crm.example', mock.MagicMock())
-         with mock.patch.object(api, 'list_contacts', return_value=[{'display_name': 'A'}]) as listing:
-             response = asyncio.run(h(self.request(query={'search': 'A'})))
-         self.assertEqual(response.status, 200)
--        listing.assert_called_once_with('tenant-a', 'A', 50)
-+        listing.assert_called_once_with('tenant-a', 'A', 50, actor_id=20)
- 
-     def test_invalid_contact_id_does_not_reach_database(self):
-         h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'owner'},
-diff --git a/beintaskbot-main/tests/test_crm_native_companies.py b/beintaskbot-main/tests/test_crm_native_companies.py
-index 23bd5ea869bc6cfaead7fbce065f32aa4d13808f..6e474b96c06e89fc2369b7c72d127173ed6e685f 100644
---- a/beintaskbot-main/tests/test_crm_native_companies.py
-+++ b/beintaskbot-main/tests/test_crm_native_companies.py
-@@ -65,9 +65,9 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
-     handler=company_api.handler(lambda _request:None,'https://crm.test',mock.MagicMock())
-     denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
-     assert denied.status==403
--    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','role':'manager','active':True,
-+    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
-         'permissions':['customers:view'],'modules':{'customers':True}},'https://crm.test',mock.MagicMock())
-     with mock.patch.object(company_api,'list_companies',return_value=[]) as listing:
-         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
-     assert response.status==200
--    listing.assert_called_once_with('tenant-1','Acme',50)
-+    listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)
-diff --git a/beintaskbot-main/tests/test_crm_native_deal_api.py b/beintaskbot-main/tests/test_crm_native_deal_api.py
-index 4c9fcb7d15297ccdf48024f22dc0928090da3bd3..4c99be446759aff3619b5d594fd242631b935398 100644
---- a/beintaskbot-main/tests/test_crm_native_deal_api.py
-+++ b/beintaskbot-main/tests/test_crm_native_deal_api.py
-@@ -10,11 +10,11 @@ class ApiTests(unittest.TestCase):
-         handler=api.handler(lambda _:None,'https://crm.test',mock.MagicMock())
-         denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
-         self.assertEqual(denied.status,403)
--        handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'manager','active':True,
-+        handler=api.handler(lambda _:{'tenant_id':'tenant-a','telegram_id':20,'role':'manager','active':True,
-             'permissions':['deals:view'],'modules':{'deals':True}},'https://crm.test',mock.MagicMock())
-         with mock.patch.object(api,'list_deals',return_value=[]) as listing:
-             response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'abc'})))
--        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50)
-+        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50,actor_id=20)
- 
-     def test_invalid_id_never_reaches_store(self):
-         handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'owner'},'https://crm.test',mock.MagicMock())
-diff --git a/beintaskbot-main/tests/test_crm_relation_fences_postgres.py b/beintaskbot-main/tests/test_crm_relation_fences_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..98093b43ce2cc240e29e59f343b81ae7483b27d2
---- /dev/null
-+++ b/beintaskbot-main/tests/test_crm_relation_fences_postgres.py
-@@ -0,0 +1,69 @@
-+"""Real localhost PostgreSQL sessions; optional when a disposable DSN exists."""
-+import threading
-+from concurrent.futures import ThreadPoolExecutor
-+import pytest
-+import psycopg
-+from psycopg.rows import dict_row
-+from test_connect_channel_multiprocess import database
-+from test_tenant_support_inbox import db
-+from test_tenant_crm_relation_delivery_postgres import graph, enqueue, ConditionalMock
-+from tenant_crm_relation_delivery import drive
-+
-+
-+@pytest.mark.parametrize('mutation', [
-+    "UPDATE saas_tenant_members SET active=false WHERE telegram_id=81",
-+    "UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'",
-+    "UPDATE saas_crm_provider_settings SET sync_direction='off'",
-+    "UPDATE saas_crm_native_deals SET contact_id=NULL,updated_at=clock_timestamp()",
-+    "UPDATE saas_tenant_workflow_policies SET value='{}' WHERE policy_key='members'",
-+])
-+def test_dispatch_holds_revocation_and_local_change_fences_until_io_finishes(graph, mutation):
-+    intent = enqueue(graph); graph['db'].commit()
-+    factory = lambda: psycopg.connect(graph['db'].dsn, row_factory=dict_row)
-+    entered, release, write_started, write_finished = [threading.Event() for _ in range(4)]
-+    class BlockingMock(ConditionalMock):
-+        def compare_and_apply(self, *args):
++        mutation="UPDATE saas_tenant_integrations SET connected_at=clock_timestamp() WHERE tenant_id=%s::uuid"
++    source.commit()
++    entered,release,writer_started,writer_finished = [Event() for _ in range(4)]
++    def factory(): return psycopg.connect(source.dsn,row_factory=dict_row)
++    def importer():
++        with factory() as conn, conn.cursor() as cur:
++            validate_observation(cur,A,'contacts',rows,evidence)
 +            entered.set()
 +            assert release.wait(10)
-+            return super().compare_and_apply(*args)
-+    adapter = BlockingMock(graph['binding'])
-+    def revoke():
++            import_contacts(cur,A,rows,observation=evidence)
++    def reconnect():
 +        with factory() as conn:
 +            conn.execute("SET lock_timeout='8s'")
-+            write_started.set()
-+            conn.execute(mutation)
-+        write_finished.set()
++            writer_started.set()
++            conn.execute(mutation,(A,))
++        writer_finished.set()
 +    with ThreadPoolExecutor(2) as pool:
-+        delivery = pool.submit(drive, factory, intent.event_id, adapter=adapter)
++        importer_future=pool.submit(importer)
 +        try:
 +            assert entered.wait(10)
-+            writer = pool.submit(revoke)
-+            assert write_started.wait(3)
-+            assert not write_finished.wait(.2)
++            writer_future=pool.submit(reconnect)
++            assert writer_started.wait(3)
++            assert not writer_finished.wait(.2)
 +        finally:
 +            release.set()
-+        assert delivery.result(10) == 'pending'
-+        writer.result(10)
-+    assert write_finished.is_set()
-+    assert len(adapter.calls) == 1
++        importer_future.result(10); writer_future.result(10)
++    assert count(source,'saas_crm_relation_identities') == 1
++    with source.cursor() as cur: assert current_binding(cur,A) != evidence.binding
 +
 +
-+def test_second_session_cannot_replay_inflight_attempt(graph):
-+    intent = enqueue(graph); graph['db'].commit()
-+    factory = lambda: psycopg.connect(graph['db'].dsn, row_factory=dict_row)
-+    entered, release = threading.Event(), threading.Event()
-+    class BlockingMock(ConditionalMock):
-+        def compare_and_apply(self, *args):
-+            entered.set()
-+            assert release.wait(10)
-+            return super().compare_and_apply(*args)
-+    adapter = BlockingMock(graph['binding'])
-+    with ThreadPoolExecutor(1) as pool:
-+        future = pool.submit(drive, factory, intent.event_id, adapter=adapter)
-+        try:
-+            assert entered.wait(10)
-+            assert drive(factory, intent.event_id, adapter=adapter) == 'busy'
-+        finally:
-+            release.set()
-+        assert future.result(10) == 'pending'
-+    assert len(adapter.calls) == 1
-diff --git a/beintaskbot-main/tests/test_crm_save_receipt_ui.cjs b/beintaskbot-main/tests/test_crm_save_receipt_ui.cjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..988907cf213e75b0cd3b7a61cf6b07310c77e9ae
---- /dev/null
-+++ b/beintaskbot-main/tests/test_crm_save_receipt_ui.cjs
-@@ -0,0 +1,84 @@
-+const assert=require('node:assert/strict');
-+const fs=require('node:fs');
-+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
-+const {mount,settle,until,writes,formInput,contactA,company}=require('./contacts_directory_fixture.cjs');
-+const receipt=(state,extra={})=>({mode:'scoped_scalar',local_saved:true,state,...extra});
-+const submit=(b,id)=>b.d.getElementById(id).dispatchEvent(new b.w.Event('submit',{bubbles:true,cancelable:true}));
-+(async()=>{
-+ const helper=fs.readFileSync('docs/tenant-crm-save-receipt.js','utf8');
-+ const pure=new JSDOM('<html lang="en"><div id="receipt"></div></html>',{runScripts:'outside-only'});
-+ try{
-+  pure.window.eval(helper);const api=pure.window.tenantCrmSaveReceipt,node=pure.window.document.getElementById('receipt');
-+  for(const [lang,local,review]of [['en','Saved in Beintaskbot','previous value'],['ru','Сохранено в Beintaskbot','Предыдущее значение'],['az','Beintaskbot-da saxlanıldı','Əvvəlki dəyər']]){
-+   for(const state of ['pending','processing','needs_verification','conflict','superseded','unknown','disabled','off','unchanged','synced','<img src=x onerror=alert(1)>']){
-+    const text=api.text(receipt(state,{review_required:true,error_code:'PRIVATE-CODE'}),lang);
-+    assert(text.includes(local)&&text.includes(review));assert(!text.includes('PRIVATE-CODE')&&!text.includes('<img'));
-+    if(state==='synced')assert(!/externally synced|успешно синхрониз|uğurla sinxron/i.test(text));
-+   }
-+  }
-+  api.show('receipt',receipt('conflict',{superseded_unsent_event_ids:['PRIVATE-ID']}));
-+  assert.equal(node.getAttribute('role'),'status');assert.equal(node.getAttribute('aria-live'),'polite');assert(!node.textContent.includes('PRIVATE-ID'));assert.equal(node.querySelectorAll('button,a,input').length,0);
-+  pure.window.document.dispatchEvent(new pure.window.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'A',telegram_id:1}}}));
-+  pure.window.document.dispatchEvent(new pure.window.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'B',telegram_id:1}}}));assert.equal(node.textContent,'');
-+  for(const invalid of [null,{},receipt('pending',{local_saved:false}),{mode:'legacy',local_saved:true,state:'synced'}]){api.show('receipt',invalid);assert.equal(node.textContent,'');assert(!node.classList.contains('show'))}
-+ }finally{pure.window.close()}
-+ console.log('PASS shared RU/AZ/EN receipt presenter is text-only, local-save-specific and never claims current external sync');
-+ {
-+  const b=await mount({syncReceipt:receipt('pending')});
-+  try{
-+   await until(()=>b.d.querySelector('[data-contact-edit]'));
-+   let count=0;
-+   for(const [state,extra,expected]of [['pending',{},/queued.*not confirmed/],['needs_verification',{},/not sent.*needs verification/],['conflict',{},/conflict.*Review/],['pending',{review_required:true,superseded_unsent_event_ids:['hidden-event']},/previous value.*not sent/]]){
-+    b.f.syncReceipt=receipt(state,extra);b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactName').disabled);
-+    formInput(b,'nativeContactName','Saved contact '+(++count));submit(b,'nativeContactForm');
-+    await until(()=>!b.d.getElementById('nativeContactModal').classList.contains('show'));await settle();
-+    const node=b.d.getElementById('contactsSyncReceipt');assert(node.classList.contains('show'));assert.match(node.textContent,/Saved in Beintaskbot/);assert.match(node.textContent,expected);
-+    assert.equal(writes(b).length,count,'receipt display must not issue a retry or recovery write');assert(!node.textContent.includes('hidden-event'));
-+   }
-+   const before=writes(b).length;b.w.tenantI18n.setLanguage('ru');await settle();assert.match(b.d.getElementById('contactsSyncReceipt').textContent,/Предыдущее значение.*не было отправлено/);
-+   b.w.tenantI18n.setLanguage('az');await settle();assert.match(b.d.getElementById('contactsSyncReceipt').textContent,/Əvvəlki dəyər.*göndərilməyib/);assert.equal(writes(b).length,before);
-+   b.d.dispatchEvent(new b.w.CustomEvent('tenant-auth-pending'));assert.equal(b.d.getElementById('contactsSyncReceipt').textContent,'');assert.equal(b.d.getElementById('nativeContactSyncReceipt').textContent,'');
-+   assert.deepEqual(b.errors,[]);
-+  }finally{b.close()}
-+ }
-+ console.log('PASS real contact save shows queued/verification/conflict/older-unsent outcomes and survives language changes without extra writes');
-+ {
-+  const deal='10000000-0000-4000-8000-000000000901';
-+  const b=await mount({view:'deals',language:'ru',syncReceipt:receipt('needs_verification'),dealRows:[{id:deal,title:'Deal',pipeline_id:'p',stage_id:'s',contact_id:null,description:''}],dealOptions:{workflows:[{pipeline_id:'p',pipeline_name:'P',stage_id:'s',stage_name:'S'}],contacts:[],companies:[],members:[]}});
-+  try{
-+   await until(()=>b.d.querySelector('[data-native-edit="deal:'+deal+'"]'));
-+   for(const [state,extra,expected]of [['needs_verification',{},/не отправлены.*требуется проверка/],['pending',{review_required:true},/Предыдущее значение.*не было отправлено/]]){
-+    b.f.syncReceipt=receipt(state,extra);b.d.querySelector('[data-native-edit="deal:'+deal+'"]').click();await until(()=>b.d.getElementById('nativeDealModal').classList.contains('show'));
-+    formInput(b,'nativeDealTitle','Deal '+state);submit(b,'nativeDealForm');await until(()=>!b.d.getElementById('nativeDealModal').classList.contains('show'));await settle();
-+    const node=b.d.getElementById('nativeDealsSyncReceipt');assert.match(node.textContent,/Сохранено в Beintaskbot/);assert.match(node.textContent,expected);assert(node.classList.contains('show'));
-+   }
-+   assert.equal(writes(b).length,2);assert(writes(b).every(row=>row.path==='/api/platform/crm/native/deals/'+deal));
-+   b.w.tenantI18n.setLanguage('en');await settle();assert.match(b.d.getElementById('nativeDealsSyncReceipt').textContent,/previous value.*not sent/);assert.equal(writes(b).length,2);
-+   b.d.dispatchEvent(new b.w.CustomEvent('tenant-auth-pending'));assert.equal(b.d.getElementById('nativeDealsSyncReceipt').textContent,'');assert.deepEqual(b.errors,[]);
-+  }finally{b.close()}
-+ }
-+ console.log('PASS real deal save uses the same receipt helper and never retries or calls verification endpoints');
-+ {
-+  const b=await mount({syncReceipt:receipt('pending',{review_required:true})});
-+  try{
-+   await until(()=>b.d.querySelector('[data-contact-edit]'));b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactName').disabled);
-+   formInput(b,'nativeContactName','Late result');b.f.holdWrite=true;submit(b,'nativeContactForm');await until(()=>b.f.pendingWrites.length===1);
-+   b.d.dispatchEvent(new b.w.CustomEvent('tenant-auth-pending'));b.f.pendingWrites.shift()();await settle();
-+   assert.equal(b.d.getElementById('contactsSyncReceipt').textContent,'');assert.equal(b.d.getElementById('nativeContactSyncReceipt').textContent,'');assert.equal(writes(b).length,1);
-+  }finally{b.close()}
-+ }
-+ console.log('PASS stale contact save receipt cannot reappear after authorization revalidation');
-+ {
-+  const b=await mount({scopedRelations:false,syncReceipt:receipt('needs_verification')});
-+  try{
-+   await until(()=>b.d.querySelector('[data-contact-edit]'));b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactName').disabled);
-+   formInput(b,'nativeContactName','Saved before relation failure');b.d.getElementById('nativeContactCompany').value=company;
-+   b.f.writeFailure={status:403,code:'forbidden',target:'/companies/'};submit(b,'nativeContactForm');
-+   await until(()=>b.d.getElementById('nativeContactModalError').textContent.includes('company link was not'));
-+   assert.match(b.d.getElementById('nativeContactSyncReceipt').textContent,/Saved in Beintaskbot.*not sent.*needs verification/);
-+   assert.match(b.d.getElementById('contactsSyncReceipt').textContent,/not sent/);assert.equal(writes(b).length,2);
-+   assert.equal(b.d.getElementById('nativeContactSyncReceipt').querySelectorAll('button,a').length,0);
-+  }finally{b.close()}
-+ }
-+ console.log('PASS partial company-link failure retains the scalar local-save receipt inside the open contact modal');
-+})().catch(error=>{console.error(error);process.exitCode=1});
-diff --git a/beintaskbot-main/tests/test_crm_scalar_fences_postgres.py b/beintaskbot-main/tests/test_crm_scalar_fences_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..02952ac7e908b00fc35a7381ef9c620222be3bbe
---- /dev/null
-+++ b/beintaskbot-main/tests/test_crm_scalar_fences_postgres.py
-@@ -0,0 +1,41 @@
-+"""Optional real PostgreSQL scalar dispatch fences; never a provider call."""
-+import threading
-+from concurrent.futures import ThreadPoolExecutor
-+import psycopg
-+from psycopg.rows import dict_row
-+import pytest
-+from test_connect_channel_multiprocess import database
-+from test_tenant_support_inbox import db
-+from test_tenant_crm_relation_delivery_postgres import graph
-+from test_crm_scoped_scalar_postgres import scalar,edit,Remote
-+from tenant_crm_scalar_delivery import dispatch
-+
-+
-+@pytest.mark.parametrize('mutation',[
-+    "UPDATE saas_tenant_members SET active=false WHERE telegram_id=81",
-+    "UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'",
-+    "UPDATE saas_crm_provider_settings SET sync_direction='off'",
-+    "UPDATE saas_crm_native_deals SET title='Another actor',updated_at=clock_timestamp()",
-+])
-+def test_scalar_dispatch_holds_grant_connection_policy_and_revision_fences(scalar,mutation):
-+    row=edit(scalar);factory=lambda:psycopg.connect(scalar['db'].dsn,row_factory=dict_row)
-+    entered,release,started,finished=[threading.Event() for _ in range(4)]
-+    class BlockingRemote(Remote):
-+        def __call__(self,binding,method,path,**kwargs):
-+            if method=='PATCH':
-+                entered.set();assert release.wait(10)
-+            return super().__call__(binding,method,path,**kwargs)
-+    remote=BlockingRemote(scalar['binding'])
-+    def change():
-+        with factory() as conn:
-+            conn.execute("SET lock_timeout='8s'");started.set();conn.execute(mutation)
-+        finished.set()
++def test_two_import_transactions_never_duplicate_record_or_identity(source):
++    rows,evidence=observed()
++    barrier=Barrier(2)
++    def importer():
++        with psycopg.connect(source.dsn,row_factory=dict_row) as conn, conn.cursor() as cur:
++            conn.execute("SET lock_timeout='8s'")
++            barrier.wait(5)
++            return import_contacts(cur,A,rows,observation=evidence)
 +    with ThreadPoolExecutor(2) as pool:
-+        delivery=pool.submit(dispatch,factory,row['sync']['event_id'],remote)
-+        try:
-+            assert entered.wait(10)
-+            writer=pool.submit(change)
-+            assert started.wait(3) and not finished.wait(.2)
-+        finally:release.set()
-+        assert delivery.result(10)=='synced';writer.result(10)
-+    assert finished.is_set() and len(remote.writes)==1
++        futures=[pool.submit(importer) for _ in range(2)]
++        results=[future.result(15) for future in futures]
++    assert any(results)
++    assert count(source,'saas_crm_native_contacts') == count(source,'saas_crm_relation_identities') == 1

@@ -1,999 +1,1166 @@
-diff --git a/beintaskbot-main/tests/test_tenant_chat_ai.py b/beintaskbot-main/tests/test_tenant_chat_ai.py
-index c741459d744b10a5d341ad5f7ca12766d929d925..0f9c80e0b57293eb8057a01ce37c8c55b491414d 100644
---- a/beintaskbot-main/tests/test_tenant_chat_ai.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_ai.py
-@@ -170,7 +170,7 @@ class Storage(unittest.TestCase):
-         service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
-             'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
-             {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
--        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
-+        service.save.__wrapped__.__globals__['authorize']=Mock(return_value=(TENANT,20))
-         service.save(SESSION,{**CONFIG,'api_key':'','expected_updated_at':'version-1'})
-         saved=json.loads(cur.execute.call_args.args[1][2])
-         self.assertEqual(saved['model'],'text-model')
-@@ -283,7 +283,7 @@ class AssignedAgentCompanyAccessSettingsTests(unittest.TestCase):
-         service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
-             'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
-             {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
--        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
-+        service.save.__wrapped__.__globals__['authorize']=Mock(return_value=(TENANT,20))
-         fields=('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
-         data={k:v for k,v in CONFIG.items() if k not in fields}
-         service.save(SESSION,{**data,'preserve_models':True,'api_key':'','expected_updated_at':'version-1'})
-diff --git a/beintaskbot-main/tests/test_tenant_chat_ai_api.py b/beintaskbot-main/tests/test_tenant_chat_ai_api.py
-index 4b5080c41dae92057411da8c8632da303ffc7db4..e658fbae48be1d47185c8b78a482d273f30f2352 100644
---- a/beintaskbot-main/tests/test_tenant_chat_ai_api.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_ai_api.py
-@@ -66,7 +66,7 @@ class Settings(unittest.TestCase):
-         self.crypto=Mock();self.crypto.encrypt.return_value=b'encrypted'
-         self.owner=Mock(return_value=(TENANT,20))
-         self.service=loaders.load('tenant_chat_ai_settings',{'_connect':self.connect,'_fernet':lambda:self.crypto,'authorize':self.owner,'ensure_schema':Mock()}, {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
--        self.service.save.__globals__['authorize']=self.owner
-+        self.service.save.__wrapped__.__globals__['authorize']=self.owner
-         self.data={**CONFIG,'api_key':'sk-'+'x'*30,'expected_updated_at':'version-1'}
-         self.cur.fetchone.side_effect=[CONNECTION,CONNECTION]
- 
-@@ -110,8 +110,8 @@ class Settings(unittest.TestCase):
-         self.crypto.decrypt.return_value=json.dumps({'tenant_id':TENANT,'provider':'chat_ai','api_key':'company-key'}).encode()
-         self.cur.fetchone.return_value={'secrets':b'encrypted','metadata':{'enabled':True,'consent':True,'copilot_enabled':True}}
-         models=Mock(return_value=['gpt-4.1-mini']);probe=Mock(return_value=True)
--        self.service.available_models.__globals__['provider_models']=models
--        self.service.test_model.__globals__['provider_probe_model']=probe
-+        self.service.available_models.__wrapped__.__globals__['provider_models']=models
-+        self.service.test_model.__wrapped__.__globals__['provider_probe_model']=probe
-         result=self.service.available_models(SESSION)
-         self.assertEqual(result,{'models':['gpt-4.1-mini']})
-         models.assert_called_once_with('company-key')
-diff --git a/beintaskbot-main/tests/test_tenant_chat_ai_ui.cjs b/beintaskbot-main/tests/test_tenant_chat_ai_ui.cjs
-index b9a8600b13bb9618b2b5db4421a47aac6e2fd5da..69852e6be36b787bc66dac5c4885c455a4291b31 100644
---- a/beintaskbot-main/tests/test_tenant_chat_ai_ui.cjs
-+++ b/beintaskbot-main/tests/test_tenant_chat_ai_ui.cjs
-@@ -4,9 +4,15 @@ const ai=fs.readFileSync(path.join(root,'docs/tenant-chat-ai.js'),'utf8');
- const settings=fs.readFileSync(path.join(root,'docs/tenant-chat-ai-settings.js'),'utf8');
- const app=fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8');
- const workflow=fs.readFileSync(path.join(root,'docs/tenant-workflow.js'),'utf8');
-+const members=fs.readFileSync(path.join(root,'docs/tenant-members-ui.js'),'utf8');
- new vm.Script(ai);new vm.Script(settings);
- assert(app.includes('/assets/tenant-chat-ai.js')&&app.includes('/assets/tenant-chat-ai-settings.js'));
--assert(workflow.includes("check('ai_enabled'")&&workflow.includes("'deal_completion_requires_admin','ai_enabled'"));
-+// Employee AI flags moved to versioned, authorized employee-card work settings.
-+assert(!workflow.includes("check('ai_enabled'"));
-+assert(workflow.includes('Şirkət → Əməkdaşlar'));
-+assert(members.includes("permitted(row,'work_settings')")&&members.includes('row.work_settings?.version'));
-+assert(members.includes("flags=['ai_enabled','ai_agents_manage'"));
-+assert(members.includes("row.role!=='owner'||!['ai_enabled','ai_agents_manage'].includes(key)"), 'Owner AI access cannot be removed through employee flags');
- assert(ai.includes('expected_tenant_id')&&ai.includes('expected_user_id')&&ai.includes('current!==epoch'));
- assert(ai.includes('crypto.randomUUID()')&&ai.includes('execute(pending)')&&ai.includes('sessionStorage'));
- assert(ai.includes('tc-ai-spinner')&&ai.includes('missing_audio')&&ai.includes('text.value=result.text'));
-diff --git a/beintaskbot-main/tests/test_tenant_chat_api.py b/beintaskbot-main/tests/test_tenant_chat_api.py
-index 17e59f8f0868f647046457c85031f07a0fb57fe0..f4d77db1431ba9e8e210aa7de0882bbf7c6214c7 100644
---- a/beintaskbot-main/tests/test_tenant_chat_api.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_api.py
-@@ -14,6 +14,9 @@ class Policy:
-     def __init__(self, profile):
-         self.profile = profile
- 
-+    def action_scope(self, module, action):
-+        return None
-+
-     def allows(self, permission):
-         return permission in self.profile.get("permissions", [])
- 
-diff --git a/beintaskbot-main/tests/test_tenant_chat_attachments.py b/beintaskbot-main/tests/test_tenant_chat_attachments.py
-index 22a6ed16e56dab384b2e091e3b1cf439c265229d..5c3fddbfb366ac6c5384ec215a63306f96adb4d0 100644
---- a/beintaskbot-main/tests/test_tenant_chat_attachments.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_attachments.py
-@@ -83,7 +83,7 @@ class Storage(unittest.TestCase):
-     def setUp(self):
-         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
-         self.cur=self.conn.cursor.return_value.__enter__.return_value
--        self.policy=Mock();self.policy.can_access_deal.return_value=True
-+        self.policy=Mock();self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
-         self.module=loaders.load('tenant_chat_attachment_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(return_value={}),
-             '_fernet':Mock(),'TenantPolicy':lambda _:self.policy},{'tenant_platform','tenant_policy'})
-         self.cur.fetchone.side_effect=[{**SESSION,'active':True,'tenant_status':'active'}, {'tenant_id':TENANT},ROW,ITEM['connection']]
-diff --git a/beintaskbot-main/tests/test_tenant_chat_history.py b/beintaskbot-main/tests/test_tenant_chat_history.py
-index 89bf980cbaa9251e2fd43cbb26839e93bc4617ab..621a942381e8a9206c7614ffdf123350bf4d68d9 100644
---- a/beintaskbot-main/tests/test_tenant_chat_history.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_history.py
-@@ -37,7 +37,7 @@ class Store(unittest.TestCase):
-     def setUp(self):
-         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
-         self.cur=self.conn.cursor.return_value.__enter__.return_value
--        self.policy=Mock();self.policy.can_access_deal.return_value=True
-+        self.policy=Mock();self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
-         self.module=loaders.load('tenant_chat_history_store',{'_connect':self.connect,'ensure_schema':Mock(),
-             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda _:self.policy},
-             {'tenant_platform','tenant_chat_history_schema','tenant_policy'})
-diff --git a/beintaskbot-main/tests/test_tenant_chat_send.py b/beintaskbot-main/tests/test_tenant_chat_send.py
-index cc8b415b5601096eb479a7ef9890ed3297d2d87f..810713307ff5b458e891525130c12b716b00d969 100644
---- a/beintaskbot-main/tests/test_tenant_chat_send.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_send.py
-@@ -89,9 +89,10 @@ class Service(unittest.IsolatedAsyncioTestCase):
-         self.route = AsyncMock(return_value={'talk_id': 3, 'origin': 'instagram'})
-         self.provider = AsyncMock(return_value={'id': 7, 'pipeline_id': 10})
-         self.module = loaders.load('tenant_chat_send_service', {
-+            'dispatch_guarded': lambda item, credentials, callback, *args, **kwargs: callback(credentials, *args, **kwargs),
-             'reserve': self.reserve, 'finish': self.finish, 'mark_sending': self.mark, 'send': self.send,
-             'command': command, 'resolve_route': self.route,
--            'TenantPolicy': lambda person: SimpleNamespace(can_access_deal=lambda lead: lead['pipeline_id'] == 10)},
-+            'TenantPolicy': lambda person: SimpleNamespace(action_scope=lambda *args: None, can_access_deal=lambda lead: lead['pipeline_id'] == 10)},
-             {'tenant_chat_send_policy', 'tenant_chat_send_store', 'tenant_chat_send_provider', 'tenant_policy'})
- 
-     async def run_send(self):
-diff --git a/beintaskbot-main/tests/test_tenant_chat_upload.py b/beintaskbot-main/tests/test_tenant_chat_upload.py
-index f6038e02b844b304c67c038e791360aae0791d5a..cccfd82472fbef7bba1adc7b2eaa889c545b54d8 100644
---- a/beintaskbot-main/tests/test_tenant_chat_upload.py
-+++ b/beintaskbot-main/tests/test_tenant_chat_upload.py
-@@ -87,9 +87,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
-         self.reserve=Mock(return_value=self.item);self.upload=Mock(return_value={'drive_uuid':FILE,'drive_version_uuid':VERSION,'type':'picture'})
-         self.send=Mock(return_value='message');self.finish=Mock();self.route=AsyncMock(return_value={'talk_id':3,'origin':'instagram'})
-         self.mark=Mock(return_value=({},{}))
--        self.mod=load('tenant_chat_upload_service',{'reserve':self.reserve,'upload_credentials':Mock(return_value={'access_token':'key'}),
-+        self.mod=load('tenant_chat_upload_service',{'dispatch_guarded':lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs),'reserve':self.reserve,'upload_credentials':Mock(return_value={'access_token':'key'}),
-             'mark_sending':self.mark,'finish':self.finish,'resolve_route':self.route,'upload':self.upload,'send':self.send,
--            'TenantPolicy':lambda _:SimpleNamespace(can_access_deal=lambda deal:deal['pipeline_id']==10)},
-+            'TenantPolicy':lambda _:SimpleNamespace(action_scope=lambda *args:None,can_access_deal=lambda deal:deal['pipeline_id']==10)},
-             {'tenant_chat_send_store','tenant_chat_send_policy','tenant_chat_upload_provider','tenant_chat_send_provider','tenant_policy'})
-         self.provider=AsyncMock(side_effect=[{'drive_url':'https://drive-g.kommo.com'},{'id':7,'pipeline_id':10}])
- 
-diff --git a/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs b/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
-index a32e37128954bf71b613977e3fc1505874b25ccf..a6ac02471cb11c96a90b2a9910241a30f074d1f9 100644
---- a/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
-+++ b/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
-@@ -46,7 +46,7 @@ assert(app.includes('data-deal-tab=\"contacts\"') && app.includes('data-deal-tab
- assert(app.includes('data-task-tab=\"related\"') && app.includes('başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil'), 'task card shows its real links and reports that reassignment is unsupported');
- assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}'), 'CRM action rows wrap at mobile widths without horizontal overflow');
- assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');
--assert(contacts.includes("action:'link_contact'") && contacts.includes("action:'unlink_contact'") && app.includes("action:'link_deal'") && app.includes("action:'unlink_deal'"), 'contact and deal relations retain their existing tenant-scoped company APIs in the current controllers');
-+assert(contacts.includes("'link_company'") && contacts.includes("'unlink_company'") && app.includes("action:unlink?'unlink_deal':'link_deal'") && app.includes("'/company-link'"), 'source-card company relations retain explicit scoped and legacy commands');
- for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
- assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
- assert(!view('deals').includes('externalCrmSyncPanel'));
-diff --git a/beintaskbot-main/tests/test_tenant_crm_notice.py b/beintaskbot-main/tests/test_tenant_crm_notice.py
-index aa10080ceef7d45b548cd747556fc10fa18a9f96..29ca9507e51e164e4149ec0a8140e8914d89d98e 100644
---- a/beintaskbot-main/tests/test_tenant_crm_notice.py
-+++ b/beintaskbot-main/tests/test_tenant_crm_notice.py
-@@ -159,7 +159,7 @@ class OutboxTests(unittest.TestCase):
-         self.p=member();self.row=task()
-         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
-             'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
--            'connect_dialog_route':connect_dialog_route},
-+            'connect_dialog_route':connect_dialog_route,'source_eligible':lambda cur,*args:eligible(*args)},
-             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
-         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
-                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
-@@ -229,7 +229,7 @@ class OutboxTests(unittest.TestCase):
- class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
-     async def test_complete_text_and_one_delivery_attempt(self):
-         worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
--            'send_push':Mock()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-         row=task();row['deal'].update(contact_name='Client',phone='+994123')
-         item={'resource':row,'event':'task_assigned','send':True,'recipient_id':20,'tenant_name':'Company'}
-         self.assertIn('Call client',worker.message(item));self.assertIn('+994123',worker.message(item))
-@@ -237,3 +237,21 @@ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
-         await worker.deliver(bot,'',{},Mock())
-         bot.send_message.assert_awaited_once()
-         self.assertEqual(worker.finish.call_args.args[1],'unknown')
-+
-+
-+class ScopedNoticeDeadline(unittest.IsolatedAsyncioTestCase):
-+    async def test_scoped_provider_timeout_is_unknown_without_retry(self):
-+        import asyncio
-+        from unittest.mock import patch
-+        worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
-+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()},
-+            {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
-+        worker.deliver.__globals__['DELIVERY_TIMEOUT']=.01
-+        item={'resource':{'body':'synthetic'},'event':'incoming_message','send':True,'recipient_id':20}
-+        worker.claim.side_effect=[item,None]
-+        async def slow(**kwargs):await asyncio.sleep(5)
-+        bot=AsyncMock();bot.send_message.side_effect=slow
-+        with patch.dict('os.environ',{'TENANT_SCOPED_ACCESS_ENABLED':'true'}):
-+            await asyncio.wait_for(worker.deliver(bot,'',{},Mock()),timeout=2)
-+        bot.send_message.assert_awaited_once()
-+        assert worker.finish.call_args.args[1]=='unknown'
-diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_contract.py b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+diff --git a/beintaskbot-main/tests/test_native_company_deal_source_ui.cjs b/beintaskbot-main/tests/test_native_company_deal_source_ui.cjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..b2c974d6a4fbb11022bff23f465906e30edf36af
+index 0000000000000000000000000000000000000000..1166dfd4e8b39b1d05ac8dddd56f0e3866be1417
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
-@@ -0,0 +1,238 @@
-+"""Synthetic, I/O-free checks for the deliberately inactive relation contract."""
-+from dataclasses import FrozenInstanceError, replace
-+from datetime import datetime, timedelta, timezone
-+import hashlib
-+import json
-+
-+import pytest
-+
-+from tenant_crm_relation_contract import (
-+    BoundIdentity, ProviderBinding, ProviderExpectation, RecordRef,
-+    RelationContractError, RelationIntent, classify_observation,
-+)
-+
-+
-+TENANT = '10000000-0000-4000-8000-000000000001'
-+EVENT = '20000000-0000-4000-8000-000000000001'
-+DEAL = RecordRef('deal', '30000000-0000-4000-8000-000000000001')
-+CONTACT_A = RecordRef('contact', '40000000-0000-4000-8000-000000000001')
-+CONTACT_B = RecordRef('contact', '40000000-0000-4000-8000-000000000002')
-+COMPANY = RecordRef('company', '50000000-0000-4000-8000-000000000001')
-+BINDING = ProviderBinding(TENANT, 'kommo', 'synthetic-account', 'synthetic-generation-1')
-+REVISION = datetime(2026, 11, 11, 12, 0, 0, 123456, timezone.utc)
-+EXPECTED, DESIRED, OTHER = 'a' * 64, 'b' * 64, 'c' * 64
-+
-+
-+def identity(record, external_id, binding=BINDING):
-+    return BoundIdentity(record, external_id, binding)
-+
-+
-+def intent(**overrides):
-+    values = dict(event_id=EVENT, actor_id=42, source=CONTACT_B, relation='deal_contact',
-+                  changed=identity(DEAL, '101'), before=identity(CONTACT_A, '201'),
-+                  after=identity(CONTACT_B, '202'), local_revision=REVISION)
-+    values.update(overrides)
-+    return RelationIntent(**values)
-+
-+
-+def planned():
-+    # Synthetic digests test the classifier. No production Kommo/BEIN adapter
-+    # or approved relation semantics are implied by this fixture.
-+    return intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, DESIRED))
-+
-+
-+def classify(event=None, **overrides):
-+    event = event or planned()
-+    values = dict(event_fingerprint=event.fingerprint(), binding=event.changed.binding,
-+                  contract_version='synthetic-v1', observed_digest=EXPECTED,
-+                  attempt_outcome='not_started')
-+    values.update(overrides)
-+    return classify_observation(event, **values)
-+
-+
-+def test_event_round_trip_is_strict_narrow_and_detached_from_mutable_payload():
-+    event = intent()
-+    payload = json.loads(json.dumps(event.to_payload()))
-+    assert RelationIntent.from_payload(payload) == event
-+    assert payload['source_action'] == 'update'
-+    assert payload['provider_expectation'] is None
-+    assert set(payload['changed']) == {'entity_type', 'internal_id', 'external_id'}
-+    assert not {'name', 'title', 'phone', 'email', 'description', 'pipeline_id',
-+                'stage_id', 'responsible_id', 'access_token', 'secrets'} & set(payload)
-+    payload['after']['external_id'] = '999'
-+    assert event.after.external_id == '202'
-+    with pytest.raises(FrozenInstanceError):
-+        event.actor_id = 99
-+    with pytest.raises(FrozenInstanceError):
-+        event.after.external_id = '999'
-+
-+
-+@pytest.mark.parametrize('source', [DEAL, CONTACT_B])
-+def test_deal_card_and_contact_card_share_narrow_change_with_distinct_source(source):
-+    event = intent(source=source)
-+    assert event.source == source
-+    assert event.changed.record == DEAL
-+    assert event.after.record == CONTACT_B
-+
-+
-+@pytest.mark.parametrize('source', [CONTACT_A, COMPANY])
-+@pytest.mark.parametrize('unlink', [False, True])
-+def test_company_contact_directions_preserve_changed_entity_and_exact_unlink(source, unlink):
-+    company = identity(COMPANY, '301')
-+    event = intent(source=source, relation='contact_company', changed=identity(CONTACT_A, '201'),
-+                   before=company if unlink else None, after=None if unlink else company)
-+    assert event.changed.record == CONTACT_A
-+    assert event.source == source
-+    assert RelationIntent.from_payload(event.to_payload()) == event
-+
-+
-+def test_contact_card_unlink_retains_exact_old_contact():
-+    event = intent(source=CONTACT_A, after=None)
-+    assert event.before.record == CONTACT_A and event.after is None
-+    with pytest.raises(RelationContractError, match='source_not_in_relation'):
-+        intent(source=CONTACT_B, after=None)
-+    with pytest.raises(RelationContractError, match='source_action_mismatch'):
-+        intent(source=CONTACT_A)
-+
-+
-+@pytest.mark.parametrize('changes', [
-+    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
-+    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
-+    {'connection_generation': 'synthetic-generation-2'},
-+])
-+@pytest.mark.parametrize('target', ['before', 'after'])
-+def test_mixed_tenant_provider_account_or_connection_identity_is_rejected(changes, target):
-+    event = intent()
-+    changed_identity = replace(getattr(event, target), binding=replace(BINDING, **changes))
-+    with pytest.raises(RelationContractError, match='relation_binding_mismatch'):
-+        replace(event, **{target: changed_identity})
++++ b/beintaskbot-main/tests/test_native_company_deal_source_ui.cjs
+@@ -0,0 +1,47 @@
++const assert=require('node:assert/strict');
++const {JSDOM,VirtualConsole}=require('../.support-test-deps/node_modules/jsdom');
++const {appHtml,installNativeTaskFixture,installNativeCompanyDealFixture}=require('./native_company_deal_fixture.cjs');
++const tick=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve))};
++const until=async predicate=>{for(let i=0;i<120;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert(predicate(),'UI did not settle')};
++const visible=(b,node)=>{if(!node)return false;for(let n=node;n&&n.nodeType===1;n=n.parentElement){const style=b.w.getComputedStyle(n);if(n.hidden||style.display==='none'||style.visibility==='hidden'||n.hasAttribute('inert')||n.tagName==='DETAILS'&&!n.open&&!node.closest('summary'))return false}return true};
++const clickVisible=(b,node)=>{assert(visible(b,node),'UI action must be visible through every ancestor: '+(node?.id||node?.outerHTML));node.click()};
++const writes=b=>JSON.parse(JSON.stringify(b.f.calls.filter(c=>c.method==='POST')));
++async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));const dom=new JSDOM(appHtml(true),{url:'https://fixture.test/app?view=deals',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installNativeTaskFixture.toString()+')({})');w.eval('('+installNativeCompanyDealFixture.toString()+')('+JSON.stringify(config)+')')}});await tick();const b={w:dom.window,d:dom.window.document,f:dom.window.nativeTaskFixture,errors,close:()=>dom.window.close()};b.q=s=>b.d.querySelector(s);b.open=async kind=>{const view=kind==='company'?'companies':'deals';if(!b.q('#view-'+view).classList.contains('active')){if(!b.q('#nativeCrmNav').open)clickVisible(b,b.q('#nativeCrmNav > summary'));clickVisible(b,b.q('.nav [data-view='+view+']'));await until(()=>b.q('#view-'+view).classList.contains('active'))}clickVisible(b,b.q(`[data-native-open="${kind}:${b.f.ids[kind]}"]`));await until(()=>b.q(`[data-${kind}-tab]`));};return b;}
++(async()=>{
++ let b=await mount({companyUpdate:true,dealUpdate:false});try{
++  await b.open('company');const select=b.q('#companyCardDealSelect'),link=b.q('[data-company-link=deal]');assert.equal(link.closest('.crm-relation-add').hidden,false);assert.equal(b.q('[data-company-unlink=deal]').hidden,false);select.value=b.f.ids.otherDeal;link.click();await tick();assert.deepEqual(writes(b).map(c=>({path:c.path,body:c.body})),[{path:'/api/platform/crm/native/companies/'+b.f.ids.company,body:{action:'link_deal',entity_id:b.f.ids.otherDeal}}]);b.q('[data-company-unlink=deal]').click();await tick();assert.equal(writes(b).at(-1).body.action,'unlink_deal');assert.deepEqual(b.errors,[]);
++ }finally{b.close()}
++ b=await mount({companyUpdate:true,dealRead:false});try{await b.open('company');assert(b.q('[data-company-deals-unavailable]'));assert.equal(b.q('#companyCardDealSelect').options.length,1);assert.equal(b.f.calls.some(c=>c.path==='/api/platform/crm/native/deals'&&!c.url.includes('options')),false,'company U does not fetch deal directory');}finally{b.close()}
++ b=await mount({dealUpdate:true});try{
++  await b.open('deal');assert.equal(b.q('[data-deal-link-company]').hidden,false);assert.equal(b.q('[data-deal-unlink-company]').hidden,false);b.q('[data-deal-company-select]').value=b.f.ids.otherCompany;b.q('[data-deal-link-company]').click();await tick();assert.deepEqual(writes(b)[0].body,{company_id:b.f.ids.otherCompany,unlink:false});assert.equal(writes(b)[0].path,'/api/platform/crm/native/deals/'+b.f.ids.deal+'/company-link');b.q('[data-deal-unlink-company]').click();await tick();assert.deepEqual(writes(b)[1].body,{company_id:b.f.ids.otherCompany,unlink:true});assert.equal(writes(b).every(c=>c.path.endsWith('/company-link')),true,'no legacy company write under scoped mode');
++  b.q('[data-native-card-close]').click();b.q(`[data-native-edit="deal:${b.f.ids.deal}"]`).click();await until(()=>b.q('#nativeDealModal').classList.contains('show'));assert.equal(b.q('#nativeDealCompany').disabled,false);b.q('#nativeDealCompany').value=b.f.ids.company;b.q('#nativeDealForm').dispatchEvent(new b.w.Event('submit',{cancelable:true}));await tick();assert.equal(writes(b).at(-1).path,'/api/platform/crm/native/deals/'+b.f.ids.deal+'/company-link');assert.deepEqual(writes(b).at(-1).body,{company_id:b.f.ids.company,unlink:false});assert.deepEqual(b.errors,[]);
++ }finally{b.close()}
++ b=await mount({dealUpdate:true,companyRead:false,contactRead:false});try{
++  await b.open('deal');assert(b.q('[data-deal-companies-unavailable]'));assert.equal(b.q('[data-deal-company-select]').options.length,1);assert.equal(b.f.calls.some(c=>c.path==='/api/platform/crm/native/companies'),false);assert.equal(b.f.calls.some(c=>c.path==='/api/platform/crm/native/contacts'),false);b.q('[data-deal-unlink-company]').click();await tick();assert.deepEqual(writes(b)[0].body,{company_id:b.f.ids.company,unlink:true});
++ }finally{b.close()}
++ b=await mount({dealUpdate:true});try{
++  b.f.deals[0].relation_actions={link_company:false,unlink_company:false};await b.open('deal');assert.equal(b.q('[data-deal-link-company]').hidden,true);assert.equal(b.q('[data-deal-unlink-company]').hidden,true);b.q('[data-deal-company-select]').value=b.f.ids.otherCompany;b.q('[data-deal-link-company]').click();b.q('[data-deal-unlink-company]').click();await tick();assert.equal(writes(b).length,0,'out-of-scope row cannot use global U');
++ }finally{b.close()}
++ b=await mount({dealUpdate:true,scoped:false});try{await b.open('deal');assert.equal(b.q('[data-deal-link-company]').hidden,true);b.q('[data-deal-company-select]').value=b.f.ids.otherCompany;b.q('[data-deal-link-company]').click();await tick();assert.equal(writes(b).length,0,'gate-off retains legacy dual U');}finally{b.close()}
++ b=await mount({dealUpdate:true,companyUpdate:true,scoped:false});try{await b.open('deal');b.q('[data-deal-company-select]').value=b.f.ids.otherCompany;b.q('[data-deal-link-company]').click();await tick();assert.equal(writes(b)[0].path,'/api/platform/crm/native/companies/'+b.f.ids.otherCompany);assert.deepEqual(writes(b)[0].body,{action:'link_deal',entity_id:b.f.ids.deal});}finally{b.close()}
++ b=await mount({dealUpdate:true});try{
++  await b.open('deal');b.f.relationError='scoped_relation_sync_not_configured';b.q('[data-deal-unlink-company]').click();await tick();assert.match(b.q('#nativeEntityBody [role=alert]').textContent,/Əlaqə dəyişdirilmədi/);assert.equal(b.f.deals[0].company_id,b.f.ids.company);assert.equal(writes(b).length,1,'409 never falls back');b.f.relationError=null;b.f.holdRelations=true;const button=b.q('[data-deal-unlink-company]');button.click();button.click();await until(()=>b.f.pendingRelations.length===1);assert.equal(writes(b).length,2,'repeat pending click sends once');b.q('[data-native-card-close]').click();b.f.pendingRelations.shift()();await tick();assert.equal(b.q('#nativeEntityCard').classList.contains('show'),false,'late write never reopens closed card');
++ }finally{b.close()}
++ b=await mount({companyUpdate:true,dealUpdate:false});try{
++  b.f.companies[0].relation_actions={link_deal:false,unlink_deal:false,link_contact:false,unlink_contact:false};await b.open('company');assert.equal(b.q('[data-company-link=deal]').closest('.crm-relation-add').hidden,true);b.q('#companyCardDealSelect').value=b.f.ids.otherDeal;b.q('[data-company-link=deal]').click();b.q('[data-company-unlink=deal]').click();await tick();assert.equal(writes(b).length,0,'company row U denial overrides global company U');
++ }finally{b.close()}
++ b=await mount({companyUpdate:true,dealUpdate:false});try{
++  await b.open('company');b.f.holdRelations=true;const button=b.q('[data-company-unlink=deal]');button.click();button.click();await until(()=>b.f.pendingRelations.length===1);assert.equal(writes(b).length,1);b.q('[data-native-card-close]').click();b.f.pendingRelations.shift()();await tick();assert.equal(b.q('#nativeEntityCard').classList.contains('show'),false);
++ }finally{b.close()}
++ b=await mount({dealUpdate:true});try{
++  await b.open('deal');b.f.holdRelations=true;b.q('[data-deal-unlink-company]').click();await until(()=>b.f.pendingRelations.length===1);b.q('[data-native-card-close]').click();await b.open('deal');b.q('[data-deal-tab=company]').click();const revision=b.q('#nativeEntityCard').dataset.revision;b.f.pendingRelations.shift()();await tick();assert.equal(b.q('#nativeEntityCard').dataset.revision,revision,'late operation never refreshes a newer opening of the same card');assert.equal(b.q('[data-deal-panel=company]').hidden,false);
++ }finally{b.close()}
++ b=await mount({dealUpdate:true,companyRead:false,contactRead:false});try{
++  b.q(`[data-native-edit="deal:${b.f.ids.deal}"]`).click();await until(()=>b.q('#nativeDealModal').classList.contains('show'));assert.equal(b.q('#nativeDealContact').value,b.f.ids.contact,'existing embedded contact survives denied contact directory');b.q('#nativeDealCompany').value='';b.q('#nativeDealForm').dispatchEvent(new b.w.Event('submit',{cancelable:true}));await tick();assert.equal(writes(b)[0].body.contact_id,b.f.ids.contact,'company edit does not silently unlink unreadable contact');assert.deepEqual(writes(b)[1].body,{company_id:b.f.ids.company,unlink:true});
++ }finally{b.close()}
++ b=await mount({dealCreate:true,dealRead:false,dealUpdate:false,companyRead:false,contactRead:true});try{
++  assert.equal(b.f.profile.capabilities.pages.deals,true);assert.equal(b.f.profile.capabilities.actions.deals.view,false);assert(b.q('#view-deals').classList.contains('active'));clickVisible(b,b.q('.nav [data-view=profile]'));assert(!visible(b,b.q('#nativeDealCreate')));if(!b.q('#nativeCrmNav').open)clickVisible(b,b.q('#nativeCrmNav > summary'));clickVisible(b,b.q('.nav [data-view=deals]'));assert(b.q('#view-deals').classList.contains('active'));assert.equal(b.q('#nativeDealsList').closest('[data-native-operation]').hidden,true);clickVisible(b,b.q('#nativeDealCreate'));await until(()=>b.q('#nativeDealContact').options.length===2);assert.equal(b.q('#nativeDealCompany').disabled,true);assert.equal(b.q('#nativeDealContact').disabled,false);b.q('#nativeDealTitle').value='New deal with readable contact';b.q('#nativeDealContact').value=b.f.ids.contact;b.q('#nativeDealForm').dispatchEvent(new b.w.Event('submit',{cancelable:true}));await tick();assert.equal(writes(b).length,1);assert.equal(writes(b)[0].path,'/api/platform/crm/native/deals');assert.equal(writes(b)[0].body.contact_id,b.f.ids.contact);assert.equal(b.f.calls.some(c=>c.path==='/api/platform/crm/native/deals'&&c.method==='GET'&&!c.url.includes('options')),false,'C-only save never expands deal R');assert.deepEqual(b.errors,[]);
++ }finally{b.close()}
++ b=await mount({dealCreate:true,dealRead:false,companyRead:false,contactRead:false});try{assert(b.q('#view-deals').classList.contains('active'));clickVisible(b,b.q('#nativeDealCreate'));await until(()=>b.f.calls.some(c=>c.url.endsWith('options=1')));await tick();assert.equal(b.q('#nativeDealContact').options.length,1,'C does not populate denied contacts');assert.equal(b.f.calls.some(c=>c.path==='/api/platform/crm/native/contacts'),false);}finally{b.close()}
++ console.log('PASS: real app DOM company/deal source U, exact scoped/legacy routes, R separation, row denial, create contact, 409, repeated and closed-card flows');
++})().catch(error=>{console.error(error.stack||error);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_native_company_relation_ui.cjs b/beintaskbot-main/tests/test_native_company_relation_ui.cjs
+index e1adb2ff75e86991adfd9bfe0355f5b4c9e8082d..254e473531cf84b6e5f93cd99ea9a08c945555e9 100644
+--- a/beintaskbot-main/tests/test_native_company_relation_ui.cjs
++++ b/beintaskbot-main/tests/test_native_company_relation_ui.cjs
+@@ -34,4 +34,26 @@ async function scenario(updateCustomers,updateDeals,del){
+  if(!del){q('[data-company-unlink]').click();await tick();assert.equal(w.writes.length,0,'hidden unlink is guarded');}
+  w.close();
+ }
+-(async()=>{for(const args of [[false,false,false],[true,false,false],[false,true,false],[true,true,false],[false,false,true]])await scenario(...args);console.log('PASS native company/deal relationship visibility and click guards');})().catch(e=>{console.error(e);process.exitCode=1});
++async function scopedScenario(allow,{denyRead=false,stale=false}={}){
++ const dom=new JSDOM('<div id="nativeEntityBody"></div><input id="companySearch">',{runScripts:'outside-only'}),w=dom.window;
++ const row={id:'company-1',name:'Company visible',contacts:denyRead?[]:[{id:'contact-1',display_name:'Existing'}],deals:[],actions:{update:allow,archive:false},relation_actions:{link_contact:allow,unlink_contact:allow}};
++ w.eval(`var state={capabilities:{actions:{companies:{view:true,update:true,delete:false},customers:{view:${!denyRead},update:false,delete:false},deals:{view:false,update:false}}},me:{role:'manager'}};
++ var writes=[],reads=[],nativeCardCompanyId='company-1',snapshot=${JSON.stringify(row)};
++ var $=id=>document.getElementById(id),esc=value=>String(value||'');
++ var api=async(path,opts)=>{if(opts){writes.push({path,body:JSON.parse(opts.body)});return {data:{id:'contact-2'}}};reads.push(path);if(path.endsWith('/contacts'))return {data:[{id:'contact-2',display_name:'Available'}]};return {company:snapshot}};
++ var notice=()=>{},confirm=()=>true,loadNativeCompanies=async()=>{};
++ ${helpers}${company}`);
++ await w.eval('renderNativeCompanyCard(snapshot)');
++ const q=s=>w.document.querySelector(s),link=q('[data-company-link="contact"]');
++ assert.equal(link.closest('.crm-relation-add').hidden,!allow,'record relation authority overrides global controls');
++ if(denyRead){assert(q('[data-company-contacts-unavailable]'));assert.equal(q('#companyCardContactSelect').options.length,1);assert.equal(w.reads.some(p=>p.endsWith('/contacts')),false,'company U never broadens contact R');w.close();return}
++ assert.equal(q('[data-company-unlink="contact"]').hidden,!allow);
++ q('#companyCardContactSelect').value='contact-2';
++ if(stale)w.nativeCardCompanyId='company-2';
++ link.click();await tick();
++ assert.equal(w.writes.length,allow&&!stale?1:0);
++ if(allow&&!stale){assert.equal(w.writes[0].path,'/api/platform/crm/native/companies/company-1');assert.deepEqual(JSON.parse(JSON.stringify(w.writes[0].body)),{action:'link_contact',entity_id:'contact-2'});q('[data-company-unlink="contact"]').click();await tick();assert.equal(w.writes.length,2);assert.equal(w.writes[1].body.action,'unlink_contact')}
++ else{q('[data-company-unlink="contact"]').click();await tick();assert.equal(w.writes.length,0)}
++ w.close();
++}
++(async()=>{for(const args of [[false,false,false],[true,false,false],[false,true,false],[true,true,false],[false,false,true]])await scenario(...args);await scopedScenario(true);await scopedScenario(false);await scopedScenario(true,{denyRead:true});await scopedScenario(true,{stale:true});console.log('PASS native company/deal relationship visibility and click guards');})().catch(e=>{console.error(e);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_native_crud_dispatch.py b/beintaskbot-main/tests/test_native_crud_dispatch.py
+index 59a75060a8cb7d61b60346399b3a0b38d74ec6e3..5290ce4367fe7780bf7c8503058744235aef7c2f 100644
+--- a/beintaskbot-main/tests/test_native_crud_dispatch.py
++++ b/beintaskbot-main/tests/test_native_crud_dispatch.py
+@@ -70,7 +70,7 @@ def test_existing_item_archive_keeps_delete_authorization(module, prefix, archiv
+     with patch.object(module, archive_name, return_value=True) as archive:
+         response = invoke(module, prefix + ':delete', {'action': 'archive'}, IDENT)
+     assert response.status == 200
+-    archive.assert_called_once_with('company-a', IDENT)
++    archive.assert_called_once_with('company-a', IDENT, actor_id=20)
+     with patch.object(module, archive_name) as archive:
+         response = invoke(module, prefix + ':update', {'action': 'archive'}, IDENT)
+     assert response.status == 403
+@@ -119,7 +119,7 @@ def test_explicit_update_allows_relations_without_legacy_assign_or_delete(action
+     operation = 'unlink_entity' if action.startswith('unlink') else 'link_entity'
+     with patch.object(companies, operation, return_value=True) as mutate:
+         assert invoke_relation(profile, action).status == 200
+-    mutate.assert_called_once_with('company-a', IDENT, action.split('_')[1], IDENT)
++    mutate.assert_called_once_with('company-a', IDENT, action.split('_')[1], IDENT, actor_id=20)
+ 
+ 
+ @pytest.mark.parametrize('action', ['link_contact', 'link_deal'])
+@@ -177,3 +177,17 @@ def test_company_relation_owner_and_inactive_contract(role, active, status):
+     with patch.object(companies, 'link_entity', return_value=True) as mutate:
+         assert invoke_relation(profile, 'link_deal').status == status
+     assert mutate.call_count == (1 if status == 200 else 0)
 +
 +
-+@pytest.mark.parametrize('actor', [None, 0, -1, True, 42.0, '42'])
-+def test_exact_human_actor_is_required_without_integration_fallback(actor):
-+    with pytest.raises(RelationContractError, match='human_actor_required'):
-+        intent(actor_id=actor)
-+
-+
-+@pytest.mark.parametrize('changes,error', [
-+    ({'relation': 'company_deal'}, 'invalid_local_relation'),
-+    ({'changed': identity(CONTACT_A, '201')}, 'invalid_changed_entity'),
-+    ({'after': identity(COMPANY, '301')}, 'invalid_relation_target'),
-+    ({'source': COMPANY}, 'source_not_in_relation'),
-+    ({'before': None, 'after': None}, 'no_local_relation_change'),
-+    ({'before': identity(CONTACT_B, '999')}, 'no_local_relation_change'),
-+    ({'after': identity(CONTACT_B, '201')}, 'external_identity_collision'),
-+    ({'local_revision': datetime(2026, 11, 11)}, 'timezone_aware_revision_required'),
-+    ({'event_id': 'not-a-uuid'}, 'invalid_record_identity'),
-+])
-+def test_invalid_or_ambiguous_local_intent_is_rejected(changes, error):
-+    with pytest.raises(RelationContractError, match=error):
-+        intent(**changes)
-+
-+
-+@pytest.mark.parametrize('location,key', [
-+    (None, 'title'), ('source', 'phone'), ('changed', 'name'),
-+    ('before', 'email'), ('after', 'description'), ('binding', 'access_token'),
-+    ('provider_expectation', 'json_body'),
-+])
-+def test_payload_cannot_smuggle_record_fields_credentials_or_wire_requests(location, key):
-+    payload = planned().to_payload()
-+    target = payload if location is None else payload[location]
-+    target[key] = 'SYNTHETIC-NOT-A-SECRET'
-+    with pytest.raises(RelationContractError, match='invalid_relation_payload'):
-+        RelationIntent.from_payload(payload)
-+
-+
-+@pytest.mark.parametrize('key,value', [('version', 2), ('version', True),
-+                                      ('source_action', 'delete'), ('source_action', 'view')])
-+def test_unknown_contract_and_non_update_source_actions_are_rejected(key, value):
-+    payload = intent().to_payload()
-+    payload[key] = value
-+    with pytest.raises(RelationContractError, match='unsupported_relation_contract'):
-+        RelationIntent.from_payload(payload)
-+
-+
-+@pytest.mark.parametrize('value', ['', ' ', ' account', 'account ', 'account\nsecret', 101])
-+def test_binding_identifier_must_be_explicit_and_canonical(value):
-+    with pytest.raises(RelationContractError, match='invalid_binding_identifier'):
-+        replace(BINDING, connection_generation=value)
-+
-+
-+def test_fingerprint_is_canonical_and_not_just_event_id():
-+    event = planned()
-+    reverse_order = dict(reversed(list(event.to_payload().items())))
-+    assert RelationIntent.from_payload(reverse_order).fingerprint() == event.fingerprint()
-+    offset_revision = REVISION.astimezone(timezone(timedelta(hours=4)))
-+    assert replace(event, local_revision=offset_revision).fingerprint() == event.fingerprint()
-+    changes = [replace(event, actor_id=43), replace(event, source=DEAL),
-+               replace(event, local_revision=REVISION + timedelta(microseconds=1)),
-+               replace(event, before=None), replace(event, provider_expectation=None),
-+               replace(event, provider_expectation=ProviderExpectation('other-contract', EXPECTED, DESIRED))]
-+    assert all(other.event_id == event.event_id and other.fingerprint() != event.fingerprint()
-+               for other in changes)
-+
-+
-+def test_no_provider_semantics_or_digests_are_inferred_from_local_foreign_key():
-+    event = intent()
-+    assert event.provider_expectation is None
-+    assert classify(event) == 'provider_contract_missing'
-+    # Different possible full remote states remain distinct evidence. The
-+    # contract does not choose which one implements the local change.
-+    def digest(value):
-+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-+    add = digest([{'id': 201, 'is_main': True}, {'id': 202, 'is_main': False}])
-+    replace_primary = digest([{'id': 201, 'is_main': False}, {'id': 202, 'is_main': True}])
-+    replace_all = digest([{'id': 202, 'is_main': True}])
-+    assert len({add, replace_primary, replace_all}) == 3
-+    assert len({replace(event, provider_expectation=ProviderExpectation('synthetic', EXPECTED, desired))
-+                .fingerprint() for desired in (add, replace_primary, replace_all)}) == 3
-+
-+
-+@pytest.mark.parametrize('attempt', ['not_started', 'definitely_not_sent', 'unknown', 'acknowledged'])
-+@pytest.mark.parametrize('observed,expected_result', [
-+    (None, 'observation_unknown'), (OTHER, 'relation_conflict'), (DESIRED, 'desired_observed'),
-+])
-+def test_reconciliation_does_not_replay_missing_conflicting_or_desired_state(attempt, observed, expected_result):
-+    assert classify(attempt_outcome=attempt, observed_digest=observed) == expected_result
-+
-+
-+@pytest.mark.parametrize('attempt,result', [
-+    ('not_started', 'expected_observed'), ('definitely_not_sent', 'expected_observed'),
-+    ('unknown', 'outcome_unknown'), ('acknowledged', 'outcome_unknown'),
-+])
-+def test_unchanged_read_after_timeout_or_acknowledgement_does_not_prove_safe_retry(attempt, result):
-+    assert classify(attempt_outcome=attempt) == result
-+
-+
-+@pytest.mark.parametrize('changes', [
-+    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
-+    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
-+    {'connection_generation': 'synthetic-generation-2'},
-+])
-+def test_read_back_from_another_connection_never_settles_this_event(changes):
-+    assert classify(binding=replace(BINDING, **changes), observed_digest=DESIRED) == 'connection_changed'
-+
-+
-+def test_old_event_or_contract_observation_never_settles_new_intent():
-+    event = planned()
-+    assert classify(event, event_fingerprint=replace(event, actor_id=43).fingerprint(),
-+                    observed_digest=DESIRED) == 'event_changed'
-+    assert classify(contract_version='old-contract', observed_digest=DESIRED) == 'provider_contract_changed'
-+
-+
-+@pytest.mark.parametrize('digest', ['', 'a' * 63, 'G' * 64, {}, None])
-+def test_invalid_state_evidence_cannot_be_interpreted_as_empty_relation(digest):
-+    with pytest.raises(RelationContractError, match='invalid_relation_digest'):
-+        ProviderExpectation('synthetic', digest, DESIRED)
-+
-+
-+def test_expired_lease_is_not_definitely_not_sent_evidence():
-+    with pytest.raises(RelationContractError, match='invalid_attempt_outcome'):
-+        classify(attempt_outcome='lease_expired')
-+
-+
-+def test_empty_remote_operation_is_observed_without_forcing_a_write():
-+    # Some approved adapter might determine that the full remote relation set
-+    # already satisfies a local change. Do not impose a remote cardinality rule.
-+    event = intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, EXPECTED))
-+    assert classify(event) == 'desired_observed'
-diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py b/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..396ee24c44ff15207aecda451515b4b7bd4ea38a
---- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py
-@@ -0,0 +1,230 @@
-+"""Isolated PostgreSQL/WASM journal tests with conditional provider mock only.
-+
-+The mock's atomic compare/apply is deliberately stronger than Kommo HTTP. These
-+checks do NOT prove that production Kommo supports conditional relationship I/O.
-+"""
-+import json
-+from datetime import datetime
-+import uuid
-+import pytest
-+
-+from test_tenant_support_inbox import database, db, A, B
-+from tenant_crm_relation_contract import BoundIdentity, RecordRef, ProviderExpectation
-+from tenant_crm_relation_identity import current_binding, bind_identity
-+from tenant_crm_relation_kommo import CONTRACT_VERSION, digest
-+from tenant_crm_relation_store import change_relation
-+from tenant_crm_relation_delivery import drive
-+from tenant_crm_native_access import CRMAccessError, require_local_relation
-+
-+
-+@pytest.fixture
-+def graph(db, monkeypatch):
++def test_scoped_unlink_contact_denies_delete_only_permission(monkeypatch):
 +    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
-+    # The WASM bridge returns ISO timestamps; mirror psycopg's native values.
-+    original = getattr(db, 'query', None)
-+    def query(sql, params=()):
-+        rows = original(sql, params)
-+        for row in rows:
-+            for key in ('updated_at', 'connected_at'):
-+                if isinstance(row.get(key), str):
-+                    row[key] = datetime.fromisoformat(row[key].replace('Z', '+00:00'))
-+        return rows
-+    if original:
-+        monkeypatch.setattr(db, 'query', query)
-+    db.execute("UPDATE saas_tenants SET modules='{\"customers\":true,\"deals\":true}' WHERE id=%s::uuid", (A,))
-+    db.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,permissions)
-+      VALUES(%s::uuid,81,'admin','["customers","deals"]')''', (A,))
-+    matrix = {kind: {action: ('self' if action == 'update' else 'none')
-+        for action in ('view', 'create', 'update', 'delete')} for kind in ('customers', 'deals')}
-+    db.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
-+      VALUES(%s::uuid,'members',%s::jsonb)''', (A, json.dumps({'81': {'access_scopes': matrix}})))
-+    db.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain,connected_at)
-+      VALUES(%s::uuid,'kommo','connected','synthetic.kommo.com',clock_timestamp())''', (A,))
-+    db.execute('''INSERT INTO saas_crm_provider_settings(tenant_id,entity_type,provider,mode,primary_provider,
-+      sync_direction,allowed_fields) VALUES(%s::uuid,'deal','kommo','beintaskbot','beintaskbot',
-+      'to_external','["contact_id"]')''', (A,))
-+    db.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name) VALUES(%s::uuid,'p','Pipeline')", (A,))
-+    db.execute("INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name) VALUES(%s::uuid,'p','s','Stage')", (A,))
-+    contacts = [RecordRef('contact', str(uuid.uuid4())) for _ in range(3)]
-+    deal = RecordRef('deal', str(uuid.uuid4()))
-+    for contact in contacts:
-+        db.execute('''INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,access_responsible_id)
-+          VALUES(%s::uuid,%s::uuid,'Synthetic',81)''', (contact.internal_id, A))
-+    db.execute('''INSERT INTO saas_crm_native_deals(id,tenant_id,title,pipeline_id,stage_id,contact_id,access_responsible_id)
-+      VALUES(%s::uuid,%s::uuid,'Synthetic','p','s',%s::uuid,81)''', (deal.internal_id, A, contacts[0].internal_id))
-+    with db.cursor() as cur:
-+        binding = current_binding(cur, A)
-+        for record, external in [(deal, '10'), *zip(contacts, ('1','2','3'))]:
-+            bind_identity(cur, BoundIdentity(record, external, binding), provenance='imported', evidence_id='synthetic-import')
-+    db.commit()
-+    return {'db': db, 'binding': binding, 'deal': deal, 'contacts': contacts}
++    with patch.object(companies, 'unlink_entity') as mutate:
++        assert invoke_relation(relation_profile(['customers:delete']), 'unlink_contact').status == 403
++    mutate.assert_not_called()
 +
 +
-+def enqueue(graph, *, source=None, before=None, after=None):
-+    db, deal = graph['db'], graph['deal']
-+    initial, desired = {'1': True, '2': False}, {'2': False, '3': True}
-+    revision = db.execute('SELECT updated_at FROM saas_crm_native_deals WHERE id=%s::uuid', (deal.internal_id,))[0]['updated_at']
-+    with db.cursor() as cur:
-+        return change_relation(cur, tenant=A, actor=81, source=source or deal, changed=deal,
-+            relation='deal_contact', before=before or graph['contacts'][0], after=after or graph['contacts'][2],
-+            expected_revision=revision,
-+            expectation=ProviderExpectation(CONTRACT_VERSION, digest(initial, 'deal_contact'), digest(desired, 'deal_contact')))
-+
-+
-+class ConditionalMock:
-+    def __init__(self, binding):
-+        self.binding, self.state, self.calls = binding, {'1': True, '2': False}, []
-+        self.timeout, self.crash, self.concurrent = False, False, False
-+    def observe(self, binding, relation, changed_id):
-+        assert binding == self.binding and relation == 'deal_contact' and changed_id == '10'
-+        return dict(self.state)
-+    def compare_and_apply(self, binding, relation, expected, request):
-+        assert binding == self.binding
-+        if self.concurrent:
-+            self.state = {'1': False, '2': True}
-+        if self.state != expected:
-+            return 'conflict'
-+        method, path, body = request
-+        assert method == 'POST' and path.startswith('leads/10/') and len(body) == 1
-+        self.calls.append(request)
-+        key = str(body[0]['to_entity_id'])
-+        if path.endswith('/link'):
-+            assert body[0]['metadata'] == {'is_main': True}
-+            self.state = {key: False for key in self.state}
-+            self.state[key] = True
-+        else:
-+            assert path.endswith('/unlink') and 'metadata' not in body[0]
-+            del self.state[key]
-+        if self.crash: raise KeyboardInterrupt('simulated process loss')
-+        if self.timeout: raise TimeoutError('simulated timeout after apply')
-+        return 'applied'
-+
-+
-+def result(graph, event):
-+    return graph['db'].execute('SELECT * FROM saas_crm_relation_outbox WHERE id=%s::uuid', (event,))[0]
-+
-+
-+def test_atomic_change_and_journal_rollback(graph):
-+    intent = enqueue(graph)
-+    assert result(graph, intent.event_id)['intent_hash'] == intent.fingerprint()
-+    graph['db'].rollback()
-+    assert not graph['db'].execute('SELECT id FROM saas_crm_relation_outbox')
-+    row = graph['db'].execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid', (graph['deal'].internal_id,))[0]
-+    assert str(row['contact_id']) == graph['contacts'][0].internal_id
-+
-+
-+def test_dormant_production_path_and_existing_409(graph):
-+    intent = enqueue(graph); graph['db'].commit()
-+    assert drive(lambda: graph['db'], intent.event_id) == 'disabled'
-+    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='scoped_relation_sync_not_configured'):
-+        require_local_relation(cur, A, 'deal')
-+
-+
-+def test_two_steps_preserve_secondary_and_duplicate_delivery_is_noop(graph):
-+    intent = enqueue(graph); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding'])
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'synced'
-+    assert adapter.state == {'2': False, '3': True}
-+    assert len(adapter.calls) == 2
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'synced'
-+    assert len(adapter.calls) == 2
-+
-+
-+@pytest.mark.parametrize('failure', ['timeout', 'crash'])
-+def test_uncertain_after_apply_is_never_replayed_or_followed_by_unlink(graph, failure):
-+    intent = enqueue(graph); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding']); setattr(adapter, failure, True)
-+    if failure == 'crash':
-+        with pytest.raises(KeyboardInterrupt): drive(lambda: graph['db'], intent.event_id, adapter=adapter)
-+    else:
-+        assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'unknown'
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'unknown'
-+    assert len(adapter.calls) == 1
-+    assert adapter.state == {'1': False, '2': False, '3': True}
-+
-+
-+@pytest.mark.parametrize('mutation', [
-+    "UPDATE saas_tenant_members SET active=false WHERE telegram_id=81",
-+    "UPDATE saas_tenants SET status='disabled'",
-+    "UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'",
-+    "UPDATE saas_tenant_integrations SET account_domain='other.kommo.com'",
-+    "UPDATE saas_tenant_integrations SET status='disconnected'",
-+    "UPDATE saas_crm_provider_settings SET sync_direction='off'",
-+    "UPDATE saas_crm_relation_identities SET external_id='99' WHERE entity_type='deal'",
-+    "UPDATE saas_crm_native_deals SET access_responsible_id=11",
-+    "UPDATE saas_crm_native_deals SET updated_at=updated_at+interval '1 second'",
-+    "UPDATE saas_crm_native_contacts SET archived_at=now()",
-+])
-+def test_dispatch_revalidates_every_fence(graph, mutation):
-+    intent = enqueue(graph); graph['db'].commit()
-+    graph['db'].execute(mutation); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding'])
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) in ('disabled', 'superseded')
-+    assert adapter.calls == []
-+
-+
-+def test_remote_concurrent_edit_is_conditional_conflict_without_overwrite(graph):
-+    intent = enqueue(graph); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding']); adapter.concurrent = True
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'conflict'
-+    assert adapter.calls == [] and adapter.state == {'1': False, '2': True}
-+
-+
-+def test_reverse_contact_source_requires_only_its_update_not_deal_update(graph):
-+    graph['db'].execute('UPDATE saas_crm_native_deals SET access_responsible_id=11')
-+    intent = enqueue(graph, source=graph['contacts'][2]); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding'])
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
-+    graph['db'].execute('UPDATE saas_crm_native_contacts SET access_responsible_id=11'); graph['db'].commit()
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'disabled'
-+    assert len(adapter.calls) == 1  # Revocation between steps prevents unlink.
-+
-+
-+def test_mapping_never_adopts_legacy_id_after_reconnect(graph):
-+    graph['db'].execute("UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'")
-+    with pytest.raises(CRMAccessError, match='relation_mapping_unverified'): enqueue(graph)
-+
-+
-+def test_owner_verification_rejects_nonowner_and_cross_tenant_mapping(graph):
-+    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='relation_identity_owner_required'):
-+        bind_identity(cur, BoundIdentity(graph['deal'], '10', graph['binding']),
-+                      provenance='owner_verified', evidence_id='assertion', verified_by=81)
-+    foreign = RecordRef('contact', str(uuid.uuid4()))
-+    graph['db'].execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name) VALUES(%s::uuid,%s::uuid,'Foreign')", (foreign.internal_id, B))
-+    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='relation_resource_unavailable'):
-+        bind_identity(cur, BoundIdentity(foreign, '99', graph['binding']), provenance='imported', evidence_id='foreign')
-+
-+
-+def test_deal_card_cannot_bypass_relation_gate_via_full_record_export(graph, monkeypatch):
-+    import tenant_crm_native_deals as deals
-+    monkeypatch.setattr(deals, '_connect', lambda: graph['db'])
-+    with pytest.raises(CRMAccessError, match='scoped_relation_sync_not_configured'):
-+        deals.update_deal(A, graph['deal'].internal_id, 'Synthetic', 'p', 's',
-+                          contact_id=graph['contacts'][2].internal_id, actor_id=81)
-+    row = graph['db'].execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid',
-+                              (graph['deal'].internal_id,))[0]
-+    assert str(row['contact_id']) == graph['contacts'][0].internal_id
-+    assert not graph['db'].execute('SELECT id FROM saas_crm_sync_outbox')
-+
-+
-+def test_policy_revocation_between_two_successful_steps_prevents_detach(graph):
-+    intent = enqueue(graph); graph['db'].commit()
-+    adapter = ConditionalMock(graph['binding'])
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
-+    graph['db'].execute("""UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,
-+      '{81,access_scopes,deals,update}', '\"none\"'::jsonb) WHERE policy_key='members'""")
-+    graph['db'].commit()
-+    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'disabled'
-+    assert len(adapter.calls) == 1 and '1' in adapter.state
-+
-+
-+@pytest.mark.parametrize('scoped,change_contact', [(False, False), (False, True), (True, False)])
-+def test_unrelated_edit_and_gate_off_legacy_relation_behavior_preserved(graph, monkeypatch, scoped, change_contact):
-+    import tenant_crm_native_deals as deals
-+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true' if scoped else 'false')
-+    monkeypatch.setattr(deals, '_connect', lambda: graph['db'])
-+    contact = graph['contacts'][2 if change_contact else 0].internal_id
-+    row = deals.update_deal(A, graph['deal'].internal_id, 'Changed scalar', 'p', 's',
-+                           contact_id=contact, actor_id=81)
-+    assert row['title'] == 'Changed scalar' and str(row['contact_id']) == contact
-diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
++def test_scoped_company_contact_unlink_allows_update_without_delete(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    with patch.object(companies, 'unlink_entity', return_value=True) as mutate:
++        assert invoke_relation(relation_profile(['customers:update']), 'unlink_contact').status == 200
++    mutate.assert_called_once_with('company-a', IDENT, 'contact', IDENT, actor_id=20)
+diff --git a/beintaskbot-main/tests/test_night_report_scopes.py b/beintaskbot-main/tests/test_night_report_scopes.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b6b21e3c27fa89646defa85fdbf690e9c908bc46
+index 0000000000000000000000000000000000000000..0612b10c55d9ee79a146525386dc33430865399f
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
-@@ -0,0 +1,67 @@
-+"""Pure planning tests: no provider network or credentials."""
-+import pytest
-+from tenant_crm_relation_kommo import plan, snapshot, digest, RelationConflict
-+
-+
-+def test_replace_main_preserves_all_secondaries_and_uses_narrow_payloads():
-+    p = plan('deal_contact', '10', '1', '3', {'1': True, '2': False, '3': False})
-+    assert p.states == ({'1': True, '2': False, '3': False},
-+                        {'1': False, '2': False, '3': True}, {'2': False, '3': True})
-+    assert p.request(0) == ('POST', 'leads/10/link', [
-+        {'to_entity_id': 3, 'to_entity_type': 'contacts', 'metadata': {'is_main': True}}])
-+    assert p.request(1) == ('POST', 'leads/10/unlink', [{'to_entity_id': 1, 'to_entity_type': 'contacts'}])
-+    assert p.read_path() == 'leads/10/links'
-+
-+
-+def test_unlink_never_deletes_secondary_contacts():
-+    p = plan('deal_contact', '10', '1', None, {'1': True, '2': False})
-+    assert p.states[-1] == {'2': False}
-+    assert len(p.steps) == 1 and p.steps[0].target_id == '1'
-+
-+
-+def test_company_replacement_is_two_explicit_steps():
-+    p = plan('contact_company', '7', '1', '2', {'1': False})
-+    assert p.states == ({'1': False}, {}, {'2': False})
-+    assert p.request(0) == ('POST', 'contacts/7/unlink', [{'to_entity_id': 1, 'to_entity_type': 'companies'}])
-+    assert p.request(1) == ('POST', 'contacts/7/link', [{'to_entity_id': 2, 'to_entity_type': 'companies'}])
-+
-+
-+@pytest.mark.parametrize('payload', [{}, {'_embedded': {'links': None}},
-+    {'_embedded': {'links': []}, '_links': {'next': {'href': 'next'}}},
-+    {'_embedded': {'links': []}, '_links': []},
-+    {'_embedded': {'links': []}, '_total_items': 2},
-+    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts'}]}},
-+    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': 1}}]}}])
-+def test_incomplete_or_ambiguous_remote_graph_is_not_empty(payload):
-+    with pytest.raises(RelationConflict): snapshot(payload, 'deal_contact', '10')
-+
-+
-+def test_snapshot_main_metadata_is_part_of_full_digest():
-+    raw = {'_embedded': {'links': [
-+        {'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': True}},
-+        {'to_entity_id': 2, 'to_entity_type': 'contacts', 'metadata': {'main_contact': False}}]}}
-+    assert snapshot(raw, 'deal_contact', '10') == {'1': True, '2': False}
-+    assert digest({'1': True, '2': False}, 'deal_contact') != digest({'1': False, '2': True}, 'deal_contact')
-+    assert digest({'1': True}, 'deal_contact') != digest({'1': True, '2': False}, 'deal_contact')
-+
-+
-+@pytest.mark.parametrize('before,after,initial', [('1', '3', {'2': True}),
-+    (None, '3', {'2': True}), ('1', '3', {'1': True, '2': True})])
-+def test_conflicting_main_never_plans_write(before, after, initial):
-+    with pytest.raises(RelationConflict): plan('deal_contact', '10', before, after, initial)
-+
-+
-+def test_binding_refresh_stable_reconnect_distinct_and_malformed_generation_closed():
-+    from datetime import datetime, timezone, timedelta
-+    from tenant_crm_relation_identity import connection_binding
-+    from uuid import UUID
-+    tenant = str(UUID(int=1)); stamp = datetime.now(timezone.utc)
-+    row = {'provider': 'kommo', 'status': 'connected', 'account_domain': 'synthetic.kommo.com', 'connected_at': stamp}
-+    first = connection_binding(tenant, row)
-+    assert connection_binding(tenant, {**row, 'updated_at': stamp + timedelta(seconds=1)}) == first
-+    assert connection_binding(tenant, {**row, 'connected_at': stamp + timedelta(seconds=1)}) != first
-+    assert connection_binding(tenant, {**row, 'account_domain': 'other.kommo.com'}) != first
-+    assert connection_binding(tenant, {**row, 'provider': 'kommo_manual'}) != first
-+    for changed in ({'connected_at': 'bad'}, {'connected_at': stamp.replace(tzinfo=None)},
-+                    {'status': 'disconnected'}, {'provider': 'beinsystems'}):
-+        assert connection_binding(tenant, {**row, **changed}) is None
-diff --git a/beintaskbot-main/tests/test_tenant_customer_voice_service.py b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
-index 084032d34f2ebe7411bc4dc74e8d0d849587e61b..9a5514b91be11606d95dd6854597f80a948d0b65 100644
---- a/beintaskbot-main/tests/test_tenant_customer_voice_service.py
-+++ b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
-@@ -52,6 +52,7 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
-     def setUp(self):
-         self.item = {'key': (TENANT, 20, REQUEST), 'command': COMMAND, 'connection': ['connect', CHANNEL, JID]}
-         self.receipt = _checked_receipt(RECEIPT, ROUTE, REQUEST)
-+        patch('tenant_customer_voice_service.dispatch_guarded',side_effect=lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs)).start()
-         self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
-         self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
-         self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()
-diff --git a/beintaskbot-main/tests/test_tenant_linear.py b/beintaskbot-main/tests/test_tenant_linear.py
-index 7224a28ab388ea004dab07ec6c5eb1f05932cd54..269692657ae4aa6b8a09aff4fa8947da82f8970e 100644
---- a/beintaskbot-main/tests/test_tenant_linear.py
-+++ b/beintaskbot-main/tests/test_tenant_linear.py
-@@ -53,7 +53,7 @@ class StorageTests(unittest.TestCase):
-         self.conn.commit.assert_called_once()
- 
-     def test_encryption_failure_stops_before_provider(self):
--        self.service.command.__globals__['_fernet'].side_effect = RuntimeError('configuration')
-+        self.service.command.__wrapped__.__globals__['_fernet'].side_effect = RuntimeError('configuration')
-         with self.assertRaises(RuntimeError): self.service.command(PROFILE, {'action': 'connect', 'api_key': 'key'})
-         self.verify.assert_not_called(); self.connect.assert_not_called()
- 
-@@ -87,7 +87,7 @@ class StorageTests(unittest.TestCase):
-         with self.assertRaises(TenantLinearError): self.service.credential(PROFILE)
- 
-     def test_foreign_status_or_project_fails_before_write(self):
--        self.service.command.__globals__['choices'] = Mock(return_value={'team': {
-+        self.service.command.__wrapped__.__globals__['choices'] = Mock(return_value={'team': {
-             'states': {'nodes': []}, 'projects': {'nodes': []}}})
-         with self.assertRaises(TenantLinearError):
-             self.service.command(PROFILE, {'action': 'settings', 'settings': {'team_id': ID, 'done_state_ids': [ID]}})
-diff --git a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
-index 02546487b40ce72c0fc99d942a593867870ceb7d..1a81406d946135b65c02c0f2ab45e447448d3c30 100644
---- a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
-+++ b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
-@@ -29,6 +29,7 @@ async function harness(){
-   if(url==='/api/platform/members'){state.memberReads++;return {ok:true,json:async()=>({success:true,members:state.rows})};}
-   return {ok:true,json:async()=>({success:true,status:'disconnected',updated_at:'v1',settings:{},members:state.rows})};
-  };
-+ w.eval(fs.readFileSync(require("node:path").join(__dirname,"../docs/tenant-shared-integration-settings.js"),"utf8"));
-  w.eval(source);watcher.activate({member:{tenant_id:'A',telegram_id:1,role:'owner'}});
-  w.document.getElementById('tlLoad').click();await flush();
-  return {w,state,watcher,root:id=>w.document.querySelector(`[data-tl-employee="${id}"]`)};
-diff --git a/beintaskbot-main/tests/test_tenant_member_store.py b/beintaskbot-main/tests/test_tenant_member_store.py
-index 4eac8d4dfd15f21dcbc07c72b8d8b569fde0887c..1238a7e55fbbe34414e17cb3f048ca72c288a60e 100644
---- a/beintaskbot-main/tests/test_tenant_member_store.py
-+++ b/beintaskbot-main/tests/test_tenant_member_store.py
-@@ -24,7 +24,7 @@ class Cursor:
-         if 'AS ready' in query: return {'ready': True}
-         if 'SELECT id,modules' in query: return {'id':'tenant-a','modules':{'tasks':True}}
-         if 'INSERT INTO saas_tenant_members' in query:
--            _, person, name, role, permissions, _ = params
-+            _, person, name, role, permissions, _, department = params
-         elif 'UPDATE saas_tenant_members SET display_name' in query:
-             name, role, permissions, _, person = params
-         else: raise AssertionError(query)
-diff --git a/beintaskbot-main/tests/test_tenant_members_api.py b/beintaskbot-main/tests/test_tenant_members_api.py
-index dc362de69483b9840e4b7cd0d4293c14aac4639e..f5ee0a2fb09d392d66be23df7d2b09178bd73b2c 100644
---- a/beintaskbot-main/tests/test_tenant_members_api.py
-+++ b/beintaskbot-main/tests/test_tenant_members_api.py
-@@ -54,6 +54,24 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
-         self.assertEqual((await self.api["invite_requests"](self.request("GET"))).status, 403)
-         self.listing.assert_not_called(); self.create.assert_not_called(); self.requests.assert_not_called()
- 
-+    async def test_scoped_update_without_read_returns_receipt_not_failed_readback(self):
-+        from test_employee_card_scopes import actor
-+        self.member.return_value = actor('none', 'all')
-+        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
-+            response = await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))
-+        self.assertEqual(response.status, 200)
-+        self.assertEqual(self.payload(response), {'success': True, 'applied': True})
-+        self.deactivate.assert_called_once_with(tenant_id='a', owner_id=2, telegram_id=3)
-+        self.listing.assert_not_called()
-+
-+    async def test_scoped_read_does_not_admit_update(self):
-+        from test_employee_card_scopes import actor
-+        self.member.return_value = actor('all', 'none')
-+        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
-+            self.assertEqual((await self.api['members'](self.request('GET'))).status, 200)
-+            self.assertEqual((await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))).status, 403)
-+        self.deactivate.assert_not_called()
-+
-     async def test_member_list_upsert_and_deactivate(self):
-         result = self.payload(await self.api["members"](self.request("GET")))
-         self.assertEqual(result["members"], [{"telegram_id": 22}])
-diff --git a/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..1edc19f4d7d223fff47c235f35ff1b2f6f6b381a
---- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
-@@ -0,0 +1,101 @@
-+"""Published company news is readable without a Linear grant; all writes stay protected."""
++++ b/beintaskbot-main/tests/test_night_report_scopes.py
+@@ -0,0 +1,365 @@
++"""Independent report-read scopes over isolated SQL, never providers or production."""
 +import json
 +import uuid
++from unittest.mock import patch
 +
 +import pytest
-+from aiohttp.test_utils import TestClient, TestServer
-+from aiohttp import web
-+from unittest.mock import Mock
-+
-+import tenant_news as news
-+from tenant_news_api import news_handler
++from test_tenant_support_inbox import database, db, A, B, CA, CB, AGENT, PROFILE, seed_job
++from test_tenant_night_report import night_db, ticket, message, event, route, audit, NOW, CC
 +from tenant_linear_policy import TenantLinearError
-+from tenant_member_access import page_capabilities
-+from test_company_employees_navigation_postgres import A,B,database,db,staff
++from tenant_member_access import access_snapshot
++from tenant_scoped_access_store import read_access_profile
++import tenant_night_report_store as store
++
++D1,D2,C3,C4 = [str(uuid.UUID(int=n)) for n in (1501,1502,1603,1604)]
++PERSON={'tenant_id':A,'telegram_id':31,'role':'owner','department_id':D2,
++        'permissions':['night_report','dialogs','support','ai_agents']}
++
++
++def grants(db,scope='self',*,legacy=False):
++    scopes={'dialogs':{'view':'none','update':'none'},
++            'support':{'view':'none','create':'none','update':'none'},
++            'ai_agents':{'view':'none','create':'none','update':'none'}}
++    if scope is not None:scopes['night_report']={'view':scope}
++    db.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
++      VALUES(%s::uuid,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value''',
++      (A,json.dumps({'31':{'access_scopes':scopes}})))
++    db.execute('UPDATE saas_tenant_members SET permissions=%s::jsonb WHERE tenant_id=%s::uuid AND telegram_id=31',
++      (json.dumps(['night_report'] if legacy else []),A))
++    db.commit()
++
++
++def read(**kwargs):
++    return store.report(PERSON,'2026-10-15','UTC','19:00','09:00',now=NOW,**kwargs)
 +
 +
 +@pytest.fixture
-+def feed(staff,monkeypatch):
-+    monkeypatch.setattr(news,'_connect',staff['factory'])
-+    import tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema
-+    for module in (tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema):
-+        monkeypatch.setattr(module,'_ready',False)
-+    with staff['factory']() as conn:
-+        news.ensure_observer_schema(conn)
-+        for tenant,status,age,title in [(A,'published',1,'A shared'),(B,'published',1,'B private'),
-+                (A,'pending',1,'A pending private'),(A,'rejected',1,'A rejected private'),(A,'published',100,'A expired')]:
-+            key=str(uuid.uuid4())
-+            conn.execute('''INSERT INTO saas_linear_news
-+              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
-+              VALUES(%s,%s,%s,'SRC-1','Project',%s,'Public summary','https://example.test',%s::jsonb,%s,
-+                now()-(%s * interval '1 day'))''',(tenant,key,key,title,json.dumps({'_news_ai':{'private':'SECRET CLASSIFICATION'},'private':'SECRET SOURCE'}),status,age))
-+    return staff
++def scoped_night(night_db,monkeypatch):
++    connection=night_db
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
++    for dept in (D1,D2):
++        connection.execute('INSERT INTO saas_tenant_departments(tenant_id,id,name) VALUES(%s::uuid,%s::uuid,%s)',(A,dept,dept))
++    for actor,department in ((31,D1),(32,D1),(33,D2)):
++        connection.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,department_id,display_name,permissions)
++          VALUES(%s::uuid,%s,'operator',%s::uuid,%s,'[]')''',(A,actor,department,'Employee '+str(actor)))
++    for channel,lead in ((CC,43),(C3,44),(C4,45)):route(connection,channel=channel,lead=lead)
++    for channel,actor in ((CA,31),(CC,32),(C3,33)):
++        connection.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s::uuid,%s::uuid,%s,11)',(A,channel,actor))
++    seed_job(connection)
++    keys=[]
++    # Own ticket is deliberately on somebody else's source; other's ticket on ours.
++    for n,(channel,lead,responsible) in enumerate(((C3,44,31),(CC,43,32),(CA,41,33),(C4,45,None))):
++        message(connection,'report-'+str(n),lead,channel,body='Customer '+str(n))
++        key=ticket(connection,channel=channel)
++        connection.execute('UPDATE saas_support_tickets SET access_responsible_id=%s,assigned_to=11 WHERE tenant_id=%s::uuid AND id=%s::uuid',(responsible,A,key))
++        audit(connection,key,{'status':'in_progress','assigned_to':11})
++        event(connection,'ai-'+str(n),channel,state='failed',error='chat_ai_failed')
++        connection.execute('''INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,created_at,updated_at)
++          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'test','failed','2026-10-15T21:00Z','2026-10-15T21:01Z')''',(A,str(uuid.uuid4()),AGENT,'ai-'+str(n)))
++        event(connection,'send-'+str(n),channel,state='failed',error='connect_send_failed')
++        event(connection,'hand-'+str(n),channel)
++        connection.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',(A,'handoff:hand-'+str(n),key))
++        connection.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
++          SELECT %s::uuid,%s::uuid,id,'case-material' FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s''',(A,key,A,'report-'+str(n)))
++        keys.append(key)
++    message(connection,'foreign-secret',42,CB,tenant=B,body='SECRET other tenant')
++    connection.commit();grants(connection)
++    return connection,keys
 +
 +
-+def reader():return {'tenant_id':A,'telegram_id':32,'role':'operator','active':True,'permissions':[]}
++@pytest.mark.parametrize('scope,count', [('self',1),('department',2),('all',4)])
++def test_scoped_lists_counts_summaries_failures_and_details(scoped_night,scope,count):
++    connection,keys=scoped_night;grants(connection,scope)
++    result=read()
++    assert result['access_scope']==scope
++    assert result['metrics']=={'dialogs':count,'ai_dialogs':count,'handed_off':count,
++      'unresolved':count,'ai_errors':count,'connect_errors':count,'taken_in_work':count,'attention_count':count}
++    assert {r['id'] for r in result['tickets']}==set(keys[:count])
++    expected_sources={CA} if count==1 else {CA,CC} if count==2 else {CA,CC,C3,C4}
++    assert {r['channel_id'] for r in result['failures']}==expected_sources
++    assert len(result['failures'])==2*count
++    assert all('event_key' not in row for row in result['failures'])
++    assert all(row['code'] in {'ai_failed','connect_failed'} for row in result['failures'])
++    assert result['next_offset'] is None
++    assert all('access_responsible_id' not in row and 'summary_agent_binding' not in row for row in result['tickets'])
++    for n,key in enumerate(keys):
++        if n<count:
++            detail=store.detail(PERSON,ticket_id=key)
++            assert detail['ticket']['id']==key
++            assert [m['body'] for m in detail['messages']]==['Customer '+str(n)]
++            assert detail['history_scope']=='ticket_messages'
++            assert 'ai_enabled' not in detail['dialog']
++        else:
++            with pytest.raises(TenantLinearError) as denied:store.detail(PERSON,ticket_id=key)
++            assert denied.value.status==404
++    for channel in (CA,CC,C3,C4):
++        if channel in expected_sources:assert store.detail(PERSON,channel_id=channel,conversation_id='client')['ticket'] is None
++        else:
++            with pytest.raises(TenantLinearError):store.detail(PERSON,channel_id=channel,conversation_id='client')
++    assert 'SECRET' not in json.dumps(result)
++    with pytest.raises(TenantLinearError):store.detail(PERSON,channel_id=CB,conversation_id='client')
++    with pytest.raises(TenantLinearError):store.detail({'tenant_id':B,'telegram_id':31,'role':'owner'},ticket_id=keys[0])
 +
 +
-+def test_active_employee_reads_only_published_same_company_without_linear(feed,monkeypatch):
-+    monkeypatch.setattr(news,'_read_tenant_workflow',Mock(side_effect=AssertionError('Published reading must not require integration rights')))
-+    response=news.member_published(reader())
-+    assert response['tenant_id']==A and response['user_id']==32
-+    assert [row['title'] for row in response['news']]==['A shared']
-+    serialized=json.dumps(response)
-+    for private in ('SECRET','reviewed_by','telegram_status','classification','source','status','updated_at'):
-+        assert private not in serialized
-+    assert page_capabilities({**reader(),'modules':{}})['news'] is True
-+    assert page_capabilities({**reader(),'active':False})['news'] is False
++@pytest.mark.parametrize('scope',['none','garbage',True,{}])
++def test_none_and_malformed_report_cells_override_legacy(scoped_night,scope):
++    connection,keys=scoped_night;grants(connection,scope,legacy=True)
++    for operation in (read,lambda:store.detail(PERSON,ticket_id=keys[0]),
++                      lambda:store.detail(PERSON,channel_id=CA,conversation_id='client')):
++        with pytest.raises(TenantLinearError) as denied:operation()
++        assert denied.value.status==403
 +
 +
-+@pytest.mark.parametrize('change',['inactive_member','inactive_company','not_member'])
-+def test_reader_rechecks_current_membership_and_company(feed,change):
-+    with feed['factory']() as conn:
-+        if change=='inactive_member':conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=32',(A,))
-+        if change=='inactive_company':conn.execute("UPDATE saas_tenants SET status='suspended' WHERE id=%s",(A,))
-+    session={**reader(),'telegram_id':999999} if change=='not_member' else reader()
-+    with pytest.raises(TenantLinearError) as error:news.member_published(session)
-+    assert error.value.status==403
++def test_current_permissions_departments_sources_and_membership(scoped_night):
++    connection,keys=scoped_night;grants(connection,'department')
++    assert read()['metrics']['attention_count']==2
++    connection.execute('UPDATE saas_tenant_members SET department_id=%s::uuid WHERE tenant_id=%s::uuid AND telegram_id=32',(D2,A));connection.commit()
++    assert read()['metrics']['attention_count']==1
++    assert read()['metrics']['dialogs']==1
++    with pytest.raises(TenantLinearError):store.detail(PERSON,ticket_id=keys[1])
++    connection.execute('UPDATE saas_tenant_members SET department_id=NULL WHERE tenant_id=%s::uuid AND telegram_id=31',(A,));connection.commit()
++    assert not any(read()['metrics'].values())
++    grants(connection,'self')
++    assert read()['metrics']['attention_count']==1
++    connection.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=31',(A,));connection.commit()
++    assert read()['metrics']['dialogs']==0
++    assert read()['metrics']['attention_count']==1
++    with pytest.raises(TenantLinearError):store.detail(PERSON,channel_id=CA,conversation_id='client')
++    assert store.detail(PERSON,ticket_id=keys[0])['messages']
++    grants(connection,'none')
++    with pytest.raises(TenantLinearError):read()
++    grants(connection,'all')
++    connection.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=31',(A,));connection.commit()
++    with pytest.raises(TenantLinearError):read()
++    with pytest.raises(TenantLinearError):store.detail(PERSON,ticket_id=keys[0])
 +
 +
-+def test_reader_cannot_read_review_queues_or_publish_reject_or_send(feed):
-+    for status in ('pending','published','rejected'):
-+        with pytest.raises(TenantLinearError) as error:news.listing(reader(),status=status)
-+        assert error.value.status==403
-+    for action in ('publish','reject','create_publish'):
-+        data={'action':action,'confirm_publication':True,'request_id':str(uuid.uuid4()),'id':str(uuid.uuid4()),
-+            'title':'Disallowed','summary':'Disallowed','project_name':'Test','url':''}
-+        with pytest.raises(TenantLinearError) as error:news.command(reader(),data)
-+        assert error.value.status==403
-+    from tenant_news_telegram_settings import read
-+    import tenant_news_telegram_settings
-+    with pytest.MonkeyPatch.context() as monkeypatch:
-+        monkeypatch.setattr(tenant_news_telegram_settings,'_connect',feed['factory'])
-+        with pytest.raises(TenantLinearError):read(reader())
++@pytest.mark.parametrize('status',['suspended','archived','setup'])
++def test_current_tenant_status_denies(scoped_night,status):
++    connection,keys=scoped_night
++    connection.execute('UPDATE saas_tenants SET status=%s WHERE id=%s::uuid',(status,A));connection.commit()
++    with pytest.raises(TenantLinearError):read()
++    with pytest.raises(TenantLinearError):store.detail(PERSON,ticket_id=keys[0])
 +
 +
-+def test_member_feed_keyset_is_tenant_scoped(feed):
-+    with feed['factory']() as conn:
-+        for n in range(33):
-+            key=str(uuid.uuid4())
-+            conn.execute('''INSERT INTO saas_linear_news
-+              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
-+              VALUES(%s,%s,%s,'','Test',%s,'Text','','{}','published',now())''',(A,key,key,'Page '+str(n)))
-+    first=news.member_published(reader());second=news.member_published(reader(),after=first['after'])
-+    assert len(first['news'])==30 and len(second['news'])==4 and second['after'] is None
-+    assert len({r['id'] for r in first['news']+second['news']})==34
-+    assert 'B private' not in json.dumps([first,second])
++def test_ticket_linked_history_never_falls_back_to_entire_source_or_other_cases(scoped_night):
++    connection,keys=scoped_night
++    # Even legacy/full-conversation cases have no implicit full-dialog grant.
++    connection.execute("UPDATE saas_support_tickets SET history_scope='conversation' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,keys[0]))
++    other=ticket(connection,channel=C3,status='resolved')
++    message(connection,'unlinked',44,C3,body='SECRET other case')
++    message(connection,'corrupt-channel',44,CA,body='SECRET wrong channel')
++    for external in ('unlinked','corrupt-channel','foreign-secret'):
++        connection.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
++          SELECT %s::uuid,%s::uuid,id,'corrupt' FROM saas_crm_messages WHERE external_id=%s''',
++          (A,other if external=='unlinked' else keys[0],external))
++    for n in range(55):
++        message(connection,'linked-'+str(n),44,C3,at='2026-10-15T22:%02d:00Z'%n,body='Linked '+str(n))
++        connection.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
++          SELECT %s::uuid,%s::uuid,id,'case-material' FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s''',(A,keys[0],A,'linked-'+str(n)))
++    cursor=connection.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='unlinked'",(A,))[0]['id']
++    connection.commit()
++    first=store.detail(PERSON,ticket_id=keys[0]);older=store.detail(PERSON,ticket_id=keys[0],before=first['next_before'])
++    assert len(first['messages'])==50 and len(older['messages'])==6
++    assert not {m['id'] for m in first['messages']} & {m['id'] for m in older['messages']}
++    assert 'SECRET' not in json.dumps(first)+json.dumps(older)
++    assert store.detail(PERSON,ticket_id=keys[0],before=str(cursor))['messages']==[]
++    with pytest.raises(TenantLinearError):store.detail(PERSON,ticket_id=other)
++    with pytest.raises(TenantLinearError):store.detail(PERSON,channel_id=C3,conversation_id='client')
++    connection.execute('DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid',(A,keys[0]));connection.commit()
++    assert store.detail(PERSON,ticket_id=keys[0])['messages']==[]
++
++
++def test_scoped_pages_and_catalog_do_not_grant_other_sections(scoped_night):
++    connection,_=scoped_night
++    with connection.cursor() as cur:current=read_access_profile(cur,A,31)
++    connection.commit()
++    result=access_snapshot(current)
++    assert result['scope_catalog']['night_report']==['view']
++    assert result['pages']['night_report'] is True
++    assert all(result['pages'][name] is False for name in ('dialogs','support','ai_agents','ai_administrator','ai_dashboard'))
++    from tenant_operator_access import access
++    from tenant_ai_management_access import require_unrestricted_dialog_read
++    for section in ('dialogs','support'):
++        with connection.cursor() as cur:
++            with pytest.raises(TenantLinearError):access(cur,PERSON,section)
++        connection.rollback()
++    with connection.cursor() as cur:
++        with pytest.raises(TenantLinearError):require_unrestricted_dialog_read(cur,PERSON)
++    from tenant_scoped_access import validate_access_scopes
++    for action in ('create','update','delete'):
++        with pytest.raises(ValueError):validate_access_scopes({'night_report':{action:'all'}})
++
++
++def test_legacy_guard_and_gate_off_behavior(scoped_night,monkeypatch):
++    connection,keys=scoped_night
++    grants(connection,None,legacy=True)
++    with pytest.raises(TenantLinearError,match='unrestricted_support'):read()
++    with connection.cursor() as cur:current=read_access_profile(cur,A,31)
++    connection.commit()
++    assert access_snapshot(current)['pages']['night_report'] is False
++    # The explicit report grant, including all, is independent of support/dialogs.
++    grants(connection,'all')
++    assert read()['metrics']['dialogs']==4
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++    with pytest.raises(TenantLinearError):read() # scope alone cannot enable legacy access
++    grants(connection,'none',legacy=True)
++    assert read()['access_scope'] is None
++    assert read()['metrics']['dialogs']==4
++    assert store.detail(PERSON,ticket_id=keys[0])['history_scope']=='conversation'
++
++
++def test_owner_master_and_no_provider_or_settings_change(scoped_night):
++    connection,keys=scoped_night
++    seed=connection.execute('SELECT * FROM saas_ai_agent_settings');connection.commit()
++    with patch('tenant_connect_transport._request',side_effect=AssertionError('No provider')),\
++         patch('tenant_support_inbox_summary.summarize',side_effect=AssertionError('No AI generation')):
++        assert read()['metrics']['dialogs']==1
++        assert store.detail(PERSON,ticket_id=keys[0])['messages']
++    assert connection.execute('SELECT * FROM saas_ai_agent_settings')==seed;connection.commit()
++    connection.execute("UPDATE saas_tenant_members SET role='master' WHERE tenant_id=%s::uuid AND telegram_id=31",(A,));connection.commit()
++    with pytest.raises(TenantLinearError):read()
++    assert store.report(PROFILE,'2026-10-15','UTC','19:00','09:00',now=NOW)['metrics']['dialogs']==4
++
++
++def test_narrow_report_defaults_do_not_disclose_other_agent_schedule(scoped_night):
++    connection,_=scoped_night
++    connection.execute('UPDATE saas_ai_agents SET schedule=%s::jsonb WHERE tenant_id=%s::uuid',
++      (json.dumps({'timezone':'America/New_York','start':'21:00','end':'08:00'}),A));connection.commit()
++    defaults=store.report(PERSON,'2026-10-15',now=NOW)['defaults']
++    assert defaults=={'timezone':'Asia/Baku','start':'19:00','end':'09:00','timezone_source':'default',
++                     'hours_source':'default','multiple_schedules':False}
++
++
++def test_ticket_pagination_does_not_reveal_other_rows_or_counts(scoped_night):
++    connection,keys=scoped_night
++    for n in range(53):
++        conversation='owned-'+str(n);route(connection,channel=C3,conversation=conversation,lead=300+n)
++        key=ticket(connection,channel=C3,conversation=conversation)
++        connection.execute('UPDATE saas_support_tickets SET access_responsible_id=31 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,key))
++    connection.commit()
++    first=read();second=read(offset=first['next_offset'])
++    assert first['metrics']['attention_count']==54 and second['metrics']['attention_count']==54
++    assert len(first['tickets'])==50 and len(second['tickets'])==4 and second['next_offset'] is None
++    assert not {r['id'] for r in first['tickets']} & {r['id'] for r in second['tickets']}
++    assert not set(keys[1:]) & {r['id'] for r in first['tickets']+second['tickets']}
++
++
++@pytest.mark.parametrize('change',['permission','source','department','ticket_owner'])
++def test_opaque_access_snapshot_rejects_stale_pages_and_detail(scoped_night,change):
++    connection,keys=scoped_night;grants(connection,'department')
++    version=read()['access_version']
++    assert len(version)==64
++    if change=='permission':grants(connection,'self')
++    elif change=='source':
++        connection.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=32',(A,));connection.commit()
++    elif change=='department':
++        connection.execute('UPDATE saas_tenant_members SET department_id=%s::uuid WHERE tenant_id=%s::uuid AND telegram_id=32',(D2,A));connection.commit()
++    else:
++        connection.execute('UPDATE saas_support_tickets SET access_responsible_id=33 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,keys[1]));connection.commit()
++    for operation in (lambda:read(offset=50,expected_access_version=version),
++                      lambda:store.detail(PERSON,ticket_id=keys[0],expected_access_version=version)):
++        with pytest.raises(TenantLinearError) as stale:operation()
++        assert stale.value.status==409
++    assert read()['access_version']!=version
++
++
++def test_only_permitted_rows_influence_access_snapshot(scoped_night):
++    connection,keys=scoped_night
++    version=read()['access_version']
++    connection.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=33',(A,))
++    connection.execute('UPDATE saas_support_tickets SET access_responsible_id=32 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,keys[2]));connection.commit()
++    assert read()['access_version']==version
++
++
++def test_exact_message_snapshot_rejects_removed_material_on_earlier_page(scoped_night):
++    connection,keys=scoped_night
++    first=store.detail(PERSON,ticket_id=keys[0])
++    connection.execute('DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid',(A,keys[0]));connection.commit()
++    with pytest.raises(TenantLinearError) as stale:
++        store.detail(PERSON,ticket_id=keys[0],before=first['messages'][0]['id'],expected_history_version=first['history_version'])
++    assert stale.value.status==409
++    assert store.detail(PERSON,ticket_id=keys[0])['messages']==[]
 +
 +
 +@pytest.mark.asyncio
-+async def test_actual_member_api_feed_cannot_select_other_tenant_or_review_status(feed):
-+    app=web.Application();handle=news_handler(lambda request:reader(),'http://fixture.test',Mock())
-+    app.router.add_get('/api/platform/news',handle);app.router.add_post('/api/platform/news',handle)
++async def test_http_report_routes_reauthorize_and_never_mutate(scoped_night):
++    """Actual aiohttp dispatch + SQL, no external server/provider dependencies."""
++    from aiohttp import web
++    from aiohttp.test_utils import TestServer, TestClient
++    from unittest.mock import Mock
++    from tenant_night_report_api import handler
++    connection,keys=scoped_night
++    app=web.Application()
++    root='/api/platform/ai/night-report'
++    for path,resource in (('', 'report'),('/tickets/{ticket_id}', 'ticket'),('/dialog','dialog')):
++        app.router.add_get(root+path,handler(lambda _:PERSON,Mock(),resource))
 +    async with TestClient(TestServer(app)) as client:
-+        response=await client.get('/api/platform/news?feed=published&status=pending&tenant_id='+B)
++        params={'date':'2026-10-15','timezone':'UTC','start':'19:00','end':'09:00',
++                'expected_tenant_id':A,'expected_user_id':'31','tenant_id':B}
++        response=await client.get(root,params=params)
++        assert response.status==200 and response.headers['Cache-Control']=='no-store'
++        result=(await response.json())['result']
++        assert [r['id'] for r in result['tickets']]==[keys[0]]
++        version=result['access_version']
++        response=await client.get(root+'/tickets/'+keys[0],params={'expected_access_version':version})
 +        assert response.status==200
-+        result=await response.json();assert [r['title'] for r in result['news']]==['A shared']
-+        assert response.headers['Vary']=='Cookie'
-+        assert (await client.get('/api/platform/news?status=pending')).status==403
-+        response=await client.post('/api/platform/news?feed=published',headers={'Origin':'http://fixture.test'},json={
-+            'expected_tenant_id':A,'expected_user_id':32,'action':'reject','id':str(uuid.uuid4())})
-+        assert response.status==403
-diff --git a/beintaskbot-main/tests/test_tenant_news_member_ui.cjs b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
++        assert [m['body'] for m in (await response.json())['result']['messages']]==['Customer 0']
++        response=await client.get(root+'/dialog',params={'channel_id':C3,'conversation_id':'client'})
++        assert response.status==404
++        response=await client.get(root+'/tickets/'+keys[2]);assert response.status==404
++        response=await client.get(root,params={**params,'expected_user_id':'33'});assert response.status==409
++        for method in ('post','put','patch','delete'):
++            response=await getattr(client,method)(root+'/tickets/'+keys[0]);assert response.status==405
++        grants(connection,'department')
++        response=await client.get(root,params={**params,'offset':'50','expected_access_version':version});assert response.status==409
++        grants(connection,'none')
++        response=await client.get(root,params=params);assert response.status==403
++        assert (await response.json())['success'] is False
++        response=await client.get(root+'/tickets/'+keys[0]);assert response.status==403
++
++
++def legacy_grants(connection):
++    """An ordinary report grant with no scoped overrides in any section."""
++    grants(connection,None,legacy=True)
++    connection.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes}','{}') WHERE tenant_id=%s::uuid AND policy_key='members'",(A,))
++    connection.commit()
++
++
++@pytest.mark.parametrize('start,end',[('legacy','self'),('self','legacy'),('gate_off','self'),('self','gate_off')])
++def test_legacy_scoped_transitions_have_non_null_snapshots(scoped_night,monkeypatch,start,end):
++    connection,keys=scoped_night
++    def choose(mode):
++        monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
++        if mode=='legacy':legacy_grants(connection)
++        elif mode=='gate_off':
++            grants(connection,'self',legacy=True)
++            monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++        else:grants(connection,'self',legacy=True)
++    choose(start)
++    before=read()
++    version=before['access_version']
++    assert isinstance(version,str) and len(version)==64
++    first=store.detail(PERSON,ticket_id=keys[0],expected_access_version=version)
++    assert isinstance(first['history_version'],str) and first['access_version']==version
++    choose(end)
++    for operation in (lambda:read(offset=50,expected_access_version=version),
++                      lambda:store.detail(PERSON,ticket_id=keys[0],expected_access_version=version),
++                      lambda:store.detail(PERSON,channel_id=CA,conversation_id='client',expected_access_version=version)):
++        with pytest.raises(TenantLinearError) as stale:operation()
++        assert stale.value.status==409
++    after=read()
++    assert after['access_version']!=version
++    assert after['metrics']['attention_count']==(1 if end=='self' else 4)
++    detail=store.detail(PERSON,ticket_id=keys[0],expected_access_version=after['access_version'])
++    assert detail['access_scope']==('self' if end=='self' else None)
++
++
++def test_legacy_history_snapshots_also_detect_removed_messages(scoped_night):
++    connection,keys=scoped_night;legacy_grants(connection)
++    before=store.detail(PERSON,ticket_id=keys[0])
++    assert before['access_scope'] is None and before['history_version']
++    connection.execute('DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,before['messages'][0]['id']));connection.commit()
++    with pytest.raises(TenantLinearError) as stale:
++        store.detail(PERSON,ticket_id=keys[0],expected_history_version=before['history_version'])
++    assert stale.value.status==409
+diff --git a/beintaskbot-main/tests/test_night_report_scopes_postgres.py b/beintaskbot-main/tests/test_night_report_scopes_postgres.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e1263042fd32abf76411bafc69aa5e09ba0cb624
+index 0000000000000000000000000000000000000000..0c320515af9dab433a0f40a4e4f2b18b2de2a18a
 --- /dev/null
-+++ b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
-@@ -0,0 +1,22 @@
-+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
-+const read=name=>fs.readFileSync(path.join(__dirname,'../docs',name),'utf8');
-+const settle=async()=>{for(let n=0;n<12;n++)await new Promise(resolve=>setImmediate(resolve))};
-+(async()=>{
-+ const dom=new JSDOM('<head></head><body><nav class="nav"></nav><main></main></body>',{url:'https://fixture.test/app?view=news',runScripts:'outside-only',pretendToBeVisual:true});
-+ const w=dom.window,calls=[],profile={member:{tenant_id:'company-a',telegram_id:32,active:true,role:'operator',permissions:[]},capabilities:{pages:{news:true},modules:{linear:false}},integrations:[]};
-+ w.tenantProfileSnapshot=profile;w.tenantI18n={language:'ru'};w.Response=Response;w.confirm=()=>true;w.tenantAppNavigate=view=>{w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+view));w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view}}))};
-+ let held=null;w.fetch=async(url,options={})=>{calls.push({url,options});if(String(url).includes('news?')){const response=()=>new Response(JSON.stringify({success:true,tenant_id:profile.member.tenant_id,user_id:profile.member.telegram_id,news:[{id:'n1',title:'Shared published news',summary:'Safe text',published_at:'2026-11-10',href:'',url:'',project_name:'Test'}]}));if(held)return new Promise(resolve=>held.resolve=()=>resolve(response()));return response()}throw Error('Unexpected endpoint '+url)};
-+ try{
-+  w.eval(read('tenant-view-demand.js'));w.eval(read('tenant-news.js'));await settle();
-+  assert.equal(w.tenantViewDemand.newsAvailable(profile),true);assert.equal(w.tenantViewDemand.newsReviewAvailable(profile),false);
-+  assert(calls.some(call=>call.url==='/api/platform/news?feed=published'));assert.equal(calls.some(call=>call.url.includes('/telegram')),false);
-+  assert.match(w.document.getElementById('tnRows').textContent,/Shared published news/);
-+  for(const id of ['tnCreate','tnStatus','tnRecover'])assert(w.document.getElementById(id).hidden,id);
-+  assert.equal(w.document.querySelector('[data-edit],[data-reject],[data-telegram],[data-cancel-telegram]'),null);
-+  assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Telegram|AI:/);
-+  const count=calls.length;w.document.getElementById('tnCreate').click();w.document.getElementById('tnRecover').click();assert.equal(w.document.getElementById('tnModal').classList.contains('show'),false);assert.equal(calls.length,count);
-+  held={};w.document.getElementById('tnRefresh').click();await settle();w.document.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));held.resolve();await settle();assert.equal(w.document.getElementById('tnNav').hidden,true);assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Shared published news/,'Late read cannot resurrect revoked content');
-+  console.log('PASS common news reader without Linear: safe feed only, no review/Telegram calls or controls, forged clicks inert and auth revoke fences');
-+ }finally{dom.window.close()}
-+})().catch(error=>{console.error(error.stack);process.exitCode=1});
-diff --git a/beintaskbot-main/tests/test_tenant_night_report_api.py b/beintaskbot-main/tests/test_tenant_night_report_api.py
-index 88956687bd8d269f5dc0cd73e9dd3597ad2bacaf..2ee30082842a441f94025fb73faac9694983447f 100644
---- a/beintaskbot-main/tests/test_tenant_night_report_api.py
-+++ b/beintaskbot-main/tests/test_tenant_night_report_api.py
-@@ -64,10 +64,18 @@ def test_safe_errors(error,status):
-     assert json.loads(response.text)['success'] is False
++++ b/beintaskbot-main/tests/test_night_report_scopes_postgres.py
+@@ -0,0 +1,25 @@
++"""Run the report scope matrix unchanged on disposable native PostgreSQL too."""
++from test_night_report_scopes import (
++    db, night_db, scoped_night,
++    test_scoped_lists_counts_summaries_failures_and_details,
++    test_none_and_malformed_report_cells_override_legacy,
++    test_current_permissions_departments_sources_and_membership,
++    test_current_tenant_status_denies,
++    test_ticket_linked_history_never_falls_back_to_entire_source_or_other_cases,
++    test_scoped_pages_and_catalog_do_not_grant_other_sections,
++    test_legacy_guard_and_gate_off_behavior,
++    test_owner_master_and_no_provider_or_settings_change,
++    test_narrow_report_defaults_do_not_disclose_other_agent_schedule,
++    test_ticket_pagination_does_not_reveal_other_rows_or_counts,
++)
++from test_connect_channel_multiprocess import database
++from test_night_report_scopes import (
++    test_opaque_access_snapshot_rejects_stale_pages_and_detail,
++    test_only_permitted_rows_influence_access_snapshot,
++    test_exact_message_snapshot_rejects_removed_material_on_earlier_page,
++    test_http_report_routes_reauthorize_and_never_mutate,
++)
++from test_night_report_scopes import (
++    test_legacy_scoped_transitions_have_non_null_snapshots,
++    test_legacy_history_snapshots_also_detect_removed_messages,
++)
+diff --git a/beintaskbot-main/tests/test_operator_list_performance.py b/beintaskbot-main/tests/test_operator_list_performance.py
+index 75c05e37734a443896284023d84050467d3e415a..540046206c0d104587ff026ba0b46d082ba79c6a 100644
+--- a/beintaskbot-main/tests/test_operator_list_performance.py
++++ b/beintaskbot-main/tests/test_operator_list_performance.py
+@@ -4,7 +4,7 @@ Synthetic tenants only. Statement counts are not production latency claims.
+ """
+ import importlib.util
+ import json
+-from datetime import datetime
++from datetime import datetime, timezone
+ from pathlib import Path
+ import uuid
  
- 
--def test_report_ui_is_app_only_and_preserves_pilot():
--    import subprocess
--    changed=subprocess.check_output(['git','diff','--name-only','77d5312a','--','docs/index.html','docs/tenant-webapp.html'],cwd=ROOT,text=True)
--    assert changed==''
-+def test_report_ui_is_app_only_and_has_no_pilot_dependencies():
-+    # Assert the actual route/asset boundary. A whole-tree git diff against the
-+    # original feature branch base also flags unrelated later pilot work and
-+    # cannot establish whether this report depends on or rewrites the pilot.
-+    page=(ROOT/'docs/tenant-night-report.html').read_text(encoding='utf-8-sig')
-+    assert 'id="nightReport"' in page
-+    assert 'src="/assets/tenant-night-report.js"' in page
-+    assert 'href="/assets/tenant-night-report.css"' in page
-+    assert '/webapp' not in page and 'tenant-webapp' not in page
-+    pilot=(ROOT/'docs/index.html').read_text(encoding='utf-8-sig')
-+    assert 'nightReportNav' not in pilot and '/assets/tenant-night-report.js' not in pilot
-+    assert '/app/night-report' not in pilot
-     app=(ROOT/'docs/tenant-app.html').read_text(encoding='utf-8-sig')
-     assert app.count('id="nightReportNav"') == 1
-     assert 'href="/app/night-report"' in app
+@@ -27,7 +27,7 @@ def normalize(value):
+         return [normalize(item) for item in value]
+     if isinstance(value, str) and len(value) > 19 and value[4] == '-' and value[10] == 'T':
+         try:
+-            return datetime.fromisoformat(value.replace('Z', '+00:00')).isoformat()
++            return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone.utc).isoformat()
+         except ValueError:
+             pass
+     return value
+diff --git a/beintaskbot-main/tests/test_scope_activation_preflight.py b/beintaskbot-main/tests/test_scope_activation_preflight.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0ffc1b8f9f966767a305cda13930e5e9babc65b6
+--- /dev/null
++++ b/beintaskbot-main/tests/test_scope_activation_preflight.py
+@@ -0,0 +1,112 @@
++"""Disposable PGlite inventory tests; no bootstrap/provider calls."""
++import importlib.util
++import json
++from pathlib import Path
++import pytest
++from test_tenant_support_inbox import Database
++PATH=Path(__file__).resolve().parents[1]/'scripts/scope_activation_preflight.py'
++spec=importlib.util.spec_from_file_location('preflight',PATH)
++p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
++A='00000000-0000-0000-0000-000000000001'
++E='00000000-0000-0000-0000-000000000002'
++@pytest.fixture
++def db():
++    if not (PATH.parents[1]/'.support-test-deps/node_modules/@electric-sql/pglite').exists():pytest.skip('PGlite unavailable')
++    d=Database()
++    tables={
++      'saas_access_migration_issues':'tenant_id uuid,resource_table text,resource_id text',
++      'saas_tenant_members':'tenant_id uuid,telegram_id bigint,active bool,department_id uuid,role text',
++      'saas_tenant_departments':'tenant_id uuid,id uuid,active bool',
++      'saas_tenants':'id uuid,status text,owner_telegram_id bigint',
++      'saas_connect_channels':'tenant_id uuid,connect_channel_id uuid',
++      'saas_dialog_source_members':'tenant_id uuid,source_id uuid,employee_id bigint,provider text',
++      'saas_crm_messages':'tenant_id uuid,channel text,body text',
++      'saas_crm_sync_outbox':'id uuid,tenant_id uuid,entity_type text,internal_id uuid,state text,attempts int',
++      'saas_crm_legacy_delivery_attempts':'event_id uuid,outcome text,claim_attempt int',
++      'saas_crm_entity_links':'tenant_id uuid,entity_type text,internal_id uuid,provider text',
++      'saas_crm_relation_identities':'tenant_id uuid,entity_type text,internal_id uuid,provider text,account_id text,connection_generation text',
++      'saas_tenant_integrations':'tenant_id uuid,provider text,status text,account_domain text,connected_at timestamptz',
++      'saas_crm_scalar_outbox':'id uuid,state text,attempt_outcome text,binding jsonb,external_id text',
++      'saas_crm_relation_outbox':'id uuid,state text,attempt_outcome text',
++      'saas_crm_scalar_heads':'tenant_id uuid,entity_type text,internal_id uuid',
++      'saas_crm_relation_heads':'tenant_id uuid,changed_type text,changed_id uuid',
++    }
++    for n in ['saas_crm_native_'+x for x in ('contacts','companies','deals','tasks')]+['saas_ai_agents','saas_support_tickets']:
++        tables[n]='tenant_id uuid,id uuid,access_responsible_id bigint'
++    for n,cols in tables.items():d.execute(f'CREATE TABLE {n} ({cols})')
++    d.commit()
++    yield d
++    d.rollback();d.process.stdin.close();d.process.wait(timeout=20)
++def test_empty_not_authorization(db):
++    r=p.inventory(db)
++    assert r['safe_to_enable'] is False
++    assert all(x['status']=='observed' and x['count']==0 for x in r['checks'].values())
++    assert len(r['mandatory_external_evidence_not_certified'])==7
++    assert not db.transaction
++def test_opaque_bounded_unchanged(db):
++    db.execute("INSERT INTO saas_tenants VALUES(%s,'active',123456789)",(A,))
++    db.execute("INSERT INTO saas_tenant_members VALUES(%s,123456789,true,NULL,'owner')",(A,))
++    db.execute('INSERT INTO saas_connect_channels VALUES(%s,%s)',(A,E))
++    db.execute("INSERT INTO saas_crm_messages VALUES(%s,'secret-provider','RAW MESSAGE')",(A,))
++    db.execute("INSERT INTO saas_crm_sync_outbox VALUES(%s,%s,'contact',%s,'pending',2)",(E,A,E))
++    db.execute("INSERT INTO saas_crm_legacy_delivery_attempts VALUES(%s,'not_started',2)",(E,))
++    db.execute("INSERT INTO saas_crm_scalar_outbox VALUES(%s,'needs_verification','not_started',NULL,'SECRET EXTERNAL ID')",(E,))
++    db.execute('INSERT INTO saas_crm_native_contacts VALUES(%s,%s,NULL)',(A,E));db.commit()
++    r=p.inventory(db,sample_limit=1);c=r['checks']
++    for k in ('connect_unassigned_sources','kommo_source_mapping_required','legacy_attempted_pending','legacy_claim_aware_unsent','scalar_unverified_binding','unowned_saas_crm_native_contacts'):
++        assert c[k]['count']==1 and len(c[k]['sample_ids'])==1
++    assert c['legacy_mismatched_unsent_evidence']['count']==0
++    for secret in (A,E,'123456789','SECRET','RAW MESSAGE','secret-provider'):assert secret not in json.dumps(r)
++    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']==1
++    db.commit();r=p.inventory(db,sample_limit=0)
++    assert r['checks']['scalar_unverified_binding']['sample_ids']==[]
++    assert r['checks']['scalar_unverified_binding']['sample_truncated']
++def test_missing_schema_unknown(db):
++    db.execute('DROP TABLE saas_access_migration_issues');db.commit()
++    r=p.inventory(db)
++    assert r['checks']['historical_ownership_issues']=={'status':'unknown','reason':'query_unavailable_or_failed'}
++    assert r['checks']['inactive_members']['count']==0
++def test_database_rejects_write(db,monkeypatch):
++    original=db.query;checked=[]
++    def spy(sql,params=()):
++        r=original(sql,params)
++        if sql=='SHOW transaction_read_only':
++            original('SAVEPOINT prove_readonly')
++            with pytest.raises(Exception) as exc:original("INSERT INTO saas_tenants VALUES('00000000-0000-0000-0000-000000000003','active',1)")
++            assert 'read-only' in str(exc.value).lower()
++            original('ROLLBACK TO SAVEPOINT prove_readonly');original('RELEASE SAVEPOINT prove_readonly');checked.append(True)
++        return r
++    monkeypatch.setattr(db,'query',spy);p.inventory(db)
++    assert checked==[True]
++def test_cli_no_ambient_connection(monkeypatch,tmp_path,capsys):
++    import psycopg
++    monkeypatch.setenv('DATABASE_URL','postgresql://secret:password@production/db')
++    monkeypatch.setattr(psycopg,'connect',lambda *a,**k:pytest.fail('must not connect'))
++    with pytest.raises(SystemExit):p.main([])
++    f=tmp_path/'dsn';f.write_text('dbname=postgres')
++    assert p.main(['--dsn-file',str(f)])==3
++    assert 'password' not in capsys.readouterr().out
++def test_invalid_limit():
++    with pytest.raises(ValueError):p.inventory(None,sample_limit=101)
++
++def test_stale_generation_and_mismatched_unsent(db):
++    db.execute("INSERT INTO saas_tenant_integrations VALUES(%s,'kommo','connected','private.example','2026-11-11T12:00:00+00:00')",(A,))
++    db.execute("INSERT INTO saas_crm_relation_identities VALUES(%s,'contact',%s,'kommo','private.example','kommo:2026-11-11T12:00:00+00:00')",(A,E))
++    db.execute("INSERT INTO saas_crm_sync_outbox VALUES(%s,%s,'contact',%s,'pending',3)",(E,A,E))
++    db.execute("INSERT INTO saas_crm_legacy_delivery_attempts VALUES(%s,'not_started',2)",(E,));db.commit()
++    r=p.inventory(db)
++    assert r['checks']['stale_account_or_generation_identities']['count']==0
++    assert r['checks']['legacy_mismatched_unsent_evidence']['count']==1
++    assert r['checks']['legacy_claim_aware_unsent']['count']==0
++    db.execute("UPDATE saas_tenant_integrations SET connected_at='2026-11-12T12:00:00+00:00'");db.commit()
++    r=p.inventory(db)
++    assert r['checks']['stale_account_or_generation_identities']['count']==1
++    assert 'private.example' not in json.dumps(r)
++
++@pytest.mark.parametrize('owner', [None, 99])
++def test_null_and_mismatched_company_owner_are_ambiguous(db,owner):
++    db.execute("INSERT INTO saas_tenants VALUES(%s,'active',%s)",(A,owner))
++    db.execute("INSERT INTO saas_tenant_members VALUES(%s,11,true,NULL,'owner')",(A,));db.commit()
++    assert p.inventory(db)['checks']['ambiguous_company_owners']['count']==1
++    db.execute('UPDATE saas_tenants SET owner_telegram_id=11');db.commit()
++    assert p.inventory(db)['checks']['ambiguous_company_owners']['count']==0
+diff --git a/beintaskbot-main/tests/test_scope_activation_preflight_bootstrap.py b/beintaskbot-main/tests/test_scope_activation_preflight_bootstrap.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..73ab0cb00e27bff603ac68ea64c20669b781143b
+--- /dev/null
++++ b/beintaskbot-main/tests/test_scope_activation_preflight_bootstrap.py
+@@ -0,0 +1,34 @@
++"""Exercise inventory queries against real application bootstrap, not guessed DDL."""
++import re
++from test_tenant_support_inbox import database, db
++from test_scope_activation_preflight import p
++
++# This shared support fixture does not promise optional native CRM/sync bootstrap.
++# A missing optional table must still yield unknown, never a successful zero.
++OPTIONAL_TABLES = {
++    'saas_crm_native_contacts','saas_crm_native_companies','saas_crm_native_deals','saas_crm_native_tasks',
++    'saas_crm_sync_outbox','saas_crm_legacy_delivery_attempts','saas_crm_entity_links',
++    'saas_crm_relation_identities','saas_crm_relation_outbox','saas_crm_relation_heads',
++    'saas_crm_scalar_outbox','saas_crm_scalar_heads',
++}
++
++
++def test_current_bootstrap_columns_types_and_fail_closed_optional_schema(db):
++    tables={table for sql in p.QUERIES.values() for table in re.findall(r'public\.(saas_\w+)',sql)}
++    present={table: bool(db.execute('SELECT to_regclass(%s) AS relation',('public.'+table,))[0]['relation'])
++             for table in tables}
++    db.commit()
++    missing={table for table,exists in present.items() if not exists}
++    assert missing <= OPTIONAL_TABLES, missing
++    report=p.inventory(db)
++    for name,sql in p.QUERIES.items():
++        dependencies=set(re.findall(r'public\.(saas_\w+)',sql))
++        check=report['checks'][name]
++        if dependencies & missing:
++            assert check=={'status':'unknown','reason':'query_unavailable_or_failed'}, name
++        else:
++            assert check['status']=='observed', name
++            assert isinstance(check['count'],int),name
++    assert report['checks']['connect_unassigned_sources']['count']==2
++    assert report['checks']['ambiguous_company_owners']['count']==0
++    assert report['safe_to_enable'] is False
+diff --git a/beintaskbot-main/tests/test_scoped_access_foundation.py b/beintaskbot-main/tests/test_scoped_access_foundation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0b8ac78f978c0a244ca9ebda039e672c48c48d92
+--- /dev/null
++++ b/beintaskbot-main/tests/test_scoped_access_foundation.py
+@@ -0,0 +1,215 @@
++from copy import deepcopy
++import uuid
++
++import pytest
++
++from tenant_member_access import access_snapshot, apply_access_patch
++from tenant_policy import TenantPolicy
++from tenant_scoped_access import SCOPE_ACTION_CATALOG, validate_access_scopes
++from tenant_scoped_access_store import resource_scope_sql
++
++A, B = str(uuid.UUID(int=6001)), str(uuid.UUID(int=6002))
++SALES, SUPPORT = str(uuid.UUID(int=6101)), str(uuid.UUID(int=6102))
++
++
++def person(scopes=None, **changes):
++    value = {'tenant_id': A, 'telegram_id': 11, 'active': True, 'role': 'manager',
++             'department_id': SALES, 'tenant_status': 'active',
++             'permissions': ['tasks', 'deals', 'customers', 'dialogs'],
++             'modules': {'tasks': True, 'deals': True, 'customers': True},
++             'workflow': {'policies': {'members': {'11': {'access_scopes': scopes or {}}}}}}
++    value.update(changes)
++    return value
++
++
++@pytest.fixture(autouse=True)
++def enabled(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++
++
++@pytest.mark.parametrize('module', ['tasks', 'deals', 'customers', 'companies'])
++@pytest.mark.parametrize('action', ['view', 'create', 'update', 'delete'])
++@pytest.mark.parametrize('scope,expected', [
++    ('none', [False, False, False, False]), ('self', [True, False, False, False]),
++    ('department', [True, True, False, False]), ('all', [True, True, True, False])])
++def test_matrix_is_independent_and_tenant_bound(module, action, scope, expected):
++    policy = TenantPolicy(person({module: {action: scope}}))
++    resources = [dict(tenant_id=t, access_responsible_id=u, responsible_department_id=d)
++                 for t, u, d in [(A, 11, SALES), (A, 12, SALES), (A, 13, SUPPORT), (B, 11, SALES)]]
++    assert [policy.allows_resource(module, action, row) for row in resources] == expected
++    assert policy.action_scope(module, action) == scope
++    assert not TenantPolicy({**policy.profile, 'active': False}).allows_resource(module, action, resources[0])
++
++
++def test_gate_off_preserves_legacy_authority_and_disables_editing(monkeypatch):
++    p = person({'tasks': {'view': 'none'}})
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++    assert TenantPolicy(p).action_scope('tasks', 'view') is None
++    assert TenantPolicy(p).allows_action('tasks', 'view')
++    assert TenantPolicy(p).allows('tasks')
++    assert access_snapshot(p)['scope_catalog'] == {}
++    with pytest.raises(ValueError, match='not_enabled'):
++        apply_access_patch(p, {'scopes': {'tasks': {'view': 'self'}}})
++
++
++def test_absent_scope_retains_exact_legacy_rules_without_conversion():
++    p = person({'tasks': {'delete': 'none'}})
++    assert TenantPolicy(p).action_scope('tasks', 'view') is None
++    assert TenantPolicy(p).allows_action('tasks', 'view')
++    assert not TenantPolicy(p).allows_action('tasks', 'delete')
++    # Coarse legacy routes cannot enforce a scoped override.
++    assert not TenantPolicy(p).allows('tasks')
++    snapshot = access_snapshot(p)
++    assert snapshot['scoped_actions']['tasks']['view'] is None
++    assert snapshot['legacy_actions']['tasks']['view'] is True
++    assert snapshot['access_scopes'] == {'tasks': {'delete': 'none'}}
++
++
++def test_sparse_edit_preserves_unrelated_workflow_permissions_and_legacy_grants():
++    p = person({'tasks': {'view': 'department'}, 'deals': {'view': 'self'}})
++    p['permissions'] += ['custom:kept']
++    p['workflow']['policies']['members']['11'].update(
++        native_crm_actions={'tasks': {'delete': False}}, ai_enabled=True,
++        notifications={'task_assigned': {'push': False}}, pipeline_ids=['5'])
++    before = deepcopy(p)
++    result = apply_access_patch(p, {'scopes': {'tasks': {'update': 'self', 'delete': 'none'}}})
++    assert p == before
++    assert result['permissions'] == p['permissions']
++    assert result['native_crm_actions'] == {'tasks': {'delete': False}}
++    assert result['access_scopes'] == {'tasks': {'view': 'department', 'update': 'self', 'delete': 'none'},
++                                       'deals': {'view': 'self'}}
++
++
++def test_companies_and_contacts_are_independent_only_after_explicit_scope():
++    p = person({'companies': {'view': 'none'}})
++    policy = TenantPolicy(p)
++    assert policy.allows_action('customers', 'view')
++    assert policy.action_scope('customers', 'view') is None
++    assert not policy.allows_action('companies', 'view')
++    assert TenantPolicy(person({'customers': {'view': 'self'}})).action_scope('contacts', 'view') == 'self'
++
++
++@pytest.mark.parametrize('gate', [False, True])
++@pytest.mark.parametrize('scope', [None, 'none', 'self', 'department', 'all'])
++@pytest.mark.parametrize('legacy_grant', [False, True])
++def test_contacts_sql_alias_preserves_legacy_and_explicit_scopes(monkeypatch, gate, scope, legacy_grant):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true' if gate else 'false')
++    scopes = {'customers': {'view': scope}} if scope is not None else {}
++    p = person(scopes, role='admin', permissions=['customers:view'] if legacy_grant else [])
++    predicate = resource_scope_sql(p, 'contacts', 'view')
++    assert predicate == resource_scope_sql(p, 'customers', 'view')
++    assert TenantPolicy(p).allows_action('contacts', 'view') == (predicate != ('FALSE', []))
++    effective_scope = scope if gate and scope is not None else ('all' if legacy_grant else 'none')
++    if effective_scope == 'none':
++        assert predicate == ('FALSE', [])
++    elif effective_scope == 'all':
++        assert predicate == ('r.tenant_id=%s::uuid', [A])
++    elif effective_scope == 'self':
++        assert predicate == ('(r.tenant_id=%s::uuid AND r.access_responsible_id=%s)', [A, 11])
++    else:
++        assert 'scope_member.tenant_id=r.tenant_id' in predicate[0]
++        assert predicate[1] == [A, SALES]
++
++
++def test_edit_and_delete_do_not_inherit_read_scope():
++    p = person({'deals': {'view': 'all', 'update': 'self', 'delete': 'none'}})
++    row = dict(tenant_id=A, access_responsible_id=12, responsible_department_id=SALES)
++    policy = TenantPolicy(p)
++    assert policy.allows_resource('deals', 'view', row)
++    assert not policy.allows_resource('deals', 'update', row)
++    assert not policy.allows_resource('deals', 'delete', row)
++
++
++@pytest.mark.parametrize('bad', [None, [], True, {'tasks': None}, {'tasks': {'view': True}},
++                                 {'tasks': {'view': 'anything'}}])
++def test_malformed_stored_matrix_fails_closed(bad):
++    p = person()
++    p['workflow']['policies']['members']['11']['access_scopes'] = bad
++    assert TenantPolicy(p).action_scope('tasks', 'view') == 'none'
++
++
++@pytest.mark.parametrize('bad', [[], None, {'invented': {'view': 'all'}},
++    {'tasks': {}}, {'tasks': {'manage': 'all'}}, {'tasks': {'view': True}},
++    {'dialogs': {'delete': 'all'}}, {'dialogs': {'create': 'all'}}])
++def test_catalog_rejects_unimplemented_actions(bad):
++    with pytest.raises(ValueError):
++        validate_access_scopes(bad)
++    assert SCOPE_ACTION_CATALOG['dialogs'] == ('view', 'update')
++
++
++def test_snapshot_version_tracks_department_and_matrix_but_not_unrelated_work():
++    p = person()
++    v = access_snapshot(p)['version']
++    p['department_id'] = SUPPORT
++    assert access_snapshot(p)['version'] != v
++    p['department_id'] = SALES
++    p['workflow']['policies']['members']['11']['access_scopes']['tasks'] = {'view': 'self'}
++    assert access_snapshot(p)['version'] != v
++
++
++@pytest.mark.parametrize('status,allowed', [('active', True), ('onboarding', True),
++    ('ready_for_integration', True), ('disabled', False), ('suspended', False), ('archived', False)])
++def test_setup_status_is_not_mistaken_for_suspension(status, allowed):
++    p = person({'tasks': {'view': 'all'}}, tenant_status=status)
++    assert TenantPolicy(p).allows_resource('tasks', 'view', {'tenant_id': A}) is allowed
++
++
++def test_sql_is_parameterized_and_rejects_dynamic_identifiers():
++    p = person({'tasks': {'view': 'department'}})
++    sql, params = resource_scope_sql(p, 'tasks', 'view')
++    assert 'scope_member.tenant_id=r.tenant_id' in sql
++    assert params == [A, SALES]
++    assert A not in sql and SALES not in sql
++    assert resource_scope_sql({**p, 'department_id': None}, 'tasks', 'view') == ('FALSE', [])
++    with pytest.raises(ValueError):
++        resource_scope_sql(p, 'tasks', 'view', alias='r; DROP TABLE dangerous')
++
++
++def test_assignee_can_open_tasks_without_any_generic_crud_scope():
++    from tenant_member_access import page_capabilities
++    p = person({'tasks': {a: 'none' for a in ('view', 'create', 'update', 'delete')}})
++    assert page_capabilities(p)['tasks']
++    assert not any(TenantPolicy(p).allows_action('tasks', a) for a in ('view', 'create', 'update', 'delete'))
++    assert not page_capabilities({**p, 'active': False})['tasks']
++
++
++def test_legacy_native_patch_cannot_silently_edit_beneath_authoritative_scope():
++    with pytest.raises(ValueError, match='scope_conflict'):
++        apply_access_patch(person({'tasks': {'view': 'self'}}), {'actions': {'tasks': {'view': False}}})
++
++
++def test_old_workflow_forms_retain_scopes_and_cannot_write_or_erase_them():
++    from tenant_scoped_access import preserve_workflow_access_scopes
++    old = {'11': {'access_scopes': {'tasks': {'view': 'department'}}, 'ai_enabled': True}}
++    assert preserve_workflow_access_scopes(old, {'11': {'ai_enabled': False}}) == {
++        '11': {'access_scopes': {'tasks': {'view': 'department'}}, 'ai_enabled': False}}
++    assert preserve_workflow_access_scopes(old, {}) == {
++        '11': {'access_scopes': {'tasks': {'view': 'department'}}}}
++    assert preserve_workflow_access_scopes(old, old) == old
++    for value in [{'11': {'access_scopes': {}}}, {'11': {'access_scopes': {'tasks': {'view': 'all'}}}},
++                  {'12': {'access_scopes': {'tasks': {'view': 'all'}}}}]:
++        with pytest.raises(ValueError, match='requires_employee_editor'):
++            preserve_workflow_access_scopes(old, value)
++    with pytest.raises(ValueError, match='requires_employee_editor'):
++        preserve_workflow_access_scopes({}, old)
++
++
++@pytest.mark.parametrize('scope,visible', [('none', False), ('self', True), ('department', True), ('all', True)])
++def test_finance_read_capabilities_never_advertise_write_grants(scope, visible):
++    from tenant_member_access import page_capabilities
++    p = person({'finance': {'view': scope}}, permissions=[], role='operator')
++    capabilities = TenantPolicy(p).public_capabilities()
++    assert capabilities['modules']['finance'] is visible
++    assert capabilities['pages']['finance'] is visible
++    assert page_capabilities(p)['finance'] is visible
++    assert capabilities['finance']['can_write'] is False
++    assert capabilities['finance']['read_scope'] == scope
++    assert access_snapshot(p)['scope_catalog']['finance'] == ['view']
++    for action in ('create', 'update', 'delete'):
++        with pytest.raises(ValueError):
++            validate_access_scopes({'finance': {action: 'all'}})
++
++
++def test_legacy_capabilities_do_not_gain_finance_metadata_when_gate_is_off(monkeypatch):
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
++    assert 'finance' not in TenantPolicy(person()).public_capabilities()
+diff --git a/beintaskbot-main/tests/test_scoped_access_foundation_postgres.py b/beintaskbot-main/tests/test_scoped_access_foundation_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e89451f40f006349b9cf804db5363f20687745e
+--- /dev/null
++++ b/beintaskbot-main/tests/test_scoped_access_foundation_postgres.py
+@@ -0,0 +1,232 @@
++"""Ownership migration and scopes against a disposable synthetic local DB only."""
++import os
++import uuid
++
++import psycopg
++from psycopg.conninfo import conninfo_to_dict, make_conninfo
++from psycopg.rows import dict_row
++import pytest
++
++from tenant_platform_schema_identity import migrate_identity_schema
++from tenant_scoped_access_schema import RESOURCE_TABLES, migrate_scoped_access_schema
++from tenant_scoped_access_store import read_access_profile, resource_scope_sql
++
++
++def tid(number):
++    return str(uuid.UUID(int=number))
++
++
++@pytest.fixture
++def db(monkeypatch):
++    dsn = os.environ.get('BEINTASKBOT_TEST_POSTGRES_DSN')
++    if not dsn:
++        pytest.skip('Disposable localhost PostgreSQL required')
++    if conninfo_to_dict(dsn).get('host') not in {'127.0.0.1', 'localhost', '::1'}:
++        raise RuntimeError('Synthetic localhost database only')
++    name = 'test_scoped_foundation_' + uuid.uuid4().hex
++    with psycopg.connect(dsn, autocommit=True) as admin:
++        admin.execute(psycopg.sql.SQL('CREATE DATABASE {}').format(psycopg.sql.Identifier(name)))
++    factory = lambda: psycopg.connect(make_conninfo(dsn, dbname=name), row_factory=dict_row)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    with factory() as conn:
++        with conn.cursor() as cur:
++            migrate_identity_schema(cur)
++            for table in RESOURCE_TABLES:
++                # Minimal old schemas deliberately lack the new ownership
++                # column; all old data is installed before first migration.
++                cur.execute(f'''CREATE TABLE {table}(id UUID PRIMARY KEY,
++                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id),
++                    responsible_id BIGINT, created_by BIGINT)''')
++            for number, owners in [(1, [(11, True)]), (2, [(21, True), (22, True)]),
++                                   (3, []), (4, [(41, False)]), (5, [(52, True)])]:
++                tenant = tid(number)
++                cur.execute('''INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id)
++                    VALUES(%s,%s,'Synthetic','active',%s)''', (tenant, tenant, number * 10 + 1))
++                for actor, active in owners:
++                    cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,active)
++                        VALUES(%s,%s,'owner',%s)''', (tenant, actor, active))
++                for actor in [number * 10 + 3, number * 10 + 4, number * 10 + 5]:
++                    cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,permissions)
++                        VALUES(%s,%s,'manager','["tasks"]')''', (tenant, actor))
++                for table in RESOURCE_TABLES:
++                    cur.execute(f'''INSERT INTO {table}(id,tenant_id,responsible_id,created_by)
++                        VALUES(%s,%s,%s,%s)''', (tid(100 + number), tenant, number * 10 + 3, number * 10 + 4))
++    yield factory
++    with psycopg.connect(dsn, autocommit=True) as admin:
++        admin.execute(psycopg.sql.SQL('DROP DATABASE {} WITH (FORCE)').format(psycopg.sql.Identifier(name)))
++
++
++def migrate(factory):
++    with factory() as conn:
++        with conn.cursor() as cur:
++            migrate_scoped_access_schema(cur)
++
++
++def test_backfill_requires_unique_active_matching_owner_and_preserves_assignee(db):
++    migrate(db)
++    with db() as conn:
++        for table in RESOURCE_TABLES:
++            rows = conn.execute(f'SELECT * FROM {table} ORDER BY tenant_id').fetchall()
++            assert [row['access_responsible_id'] for row in rows] == [11, None, None, None, None]
++            assert [row['responsible_id'] for row in rows] == [13, 23, 33, 43, 53]
++            assert [row['created_by'] for row in rows] == [14, 24, 34, 44, 54]
++        issues = conn.execute('SELECT * FROM saas_access_migration_issues').fetchall()
++        assert len(issues) == len(RESOURCE_TABLES) * 4
++        assert {row['reason'] for row in issues} == {'sole_active_company_owner_required'}
++        assert len(conn.execute('SELECT * FROM saas_access_schema_migrations').fetchall()) == 4
++
++
++def test_rerun_never_fills_new_system_null_documents_or_reinterprets_old_assignee(db):
++    migrate(db)
++    with db() as conn:
++        for table in RESOURCE_TABLES:
++            conn.execute(f'''INSERT INTO {table}(id,tenant_id,responsible_id,created_by)
++                VALUES(%s,%s,13,NULL)''', (tid(200), tid(1)))
++    migrate(db)
++    with db() as conn:
++        for table in RESOURCE_TABLES:
++            row = conn.execute(f'SELECT * FROM {table} WHERE id=%s', (tid(200),)).fetchone()
++            assert row['access_responsible_id'] is None
++            assert row['created_by'] is None
++            assert row['responsible_id'] == 13
++        assert len(conn.execute('SELECT * FROM saas_access_migration_issues').fetchall()) == 16
++
++
++def test_new_ownership_and_department_references_cannot_cross_tenant(db):
++    migrate(db)
++    with db() as conn:
++        conn.execute('INSERT INTO saas_tenant_departments(tenant_id,id,name) VALUES(%s,%s,%s)', (tid(2), tid(600), 'Other tenant'))
++    with pytest.raises(psycopg.errors.ForeignKeyViolation):
++        with db() as conn:
++            conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=13', (tid(600), tid(1)))
++    for table in RESOURCE_TABLES:
++        with pytest.raises(psycopg.errors.ForeignKeyViolation):
++            with db() as conn:
++                conn.execute(f'UPDATE {table} SET access_responsible_id=21 WHERE tenant_id=%s', (tid(1),))
++
++
++def test_migration_is_atomic_with_enclosing_transaction(db):
++    with pytest.raises(RuntimeError):
++        with db() as conn:
++            with conn.cursor() as cur:
++                migrate_scoped_access_schema(cur)
++                raise RuntimeError('Synthetic rollback')
++    with db() as conn:
++        assert conn.execute("SELECT to_regclass('saas_access_schema_migrations') AS relation").fetchone()['relation'] is None
++        assert not conn.execute("SELECT 1 FROM information_schema.columns WHERE table_name='saas_crm_native_tasks' AND column_name='access_responsible_id'").fetchone()
++    migrate(db)
++
++
++def setup_scope_data(db):
++    migrate(db)
++    with db() as conn:
++        for n, name in [(600, 'Sales'), (601, 'Support')]:
++            conn.execute('INSERT INTO saas_tenant_departments(tenant_id,id,name) VALUES(%s,%s,%s)', (tid(1), tid(n), name))
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id IN (13,14)', (tid(600), tid(1)))
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=15', (tid(601), tid(1)))
++        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)",
++                     (tid(1), '{"13":{"access_scopes":{"tasks":{"view":"department"}}}}'))
++        for n, actor in [(201, 13), (202, 14), (203, 15)]:
++            conn.execute('INSERT INTO saas_crm_native_tasks(id,tenant_id,access_responsible_id) VALUES(%s,%s,%s)', (tid(n), tid(1), actor))
++
++
++def test_sql_reads_current_department_and_company_and_inactive_actor_is_denied(db):
++    setup_scope_data(db)
++    with db() as conn:
++        with conn.cursor() as cur:
++            profile = read_access_profile(cur, tid(1), 13, lock=True)
++            assert profile['department_id'] == uuid.UUID(tid(600))
++            sql, args = resource_scope_sql(profile, 'tasks', 'view')
++            cur.execute('SELECT r.id FROM saas_crm_native_tasks r WHERE ' + sql + ' ORDER BY r.id', args)
++            assert [str(row['id']) for row in cur.fetchall()] == [tid(201), tid(202)]
++    with db() as conn:
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=14', (tid(601), tid(1)))
++    with db() as conn:
++        with conn.cursor() as cur:
++            profile = read_access_profile(cur, tid(1), 13, lock=True)
++            sql, args = resource_scope_sql(profile, 'tasks', 'view')
++            cur.execute('SELECT r.id FROM saas_crm_native_tasks r WHERE ' + sql, args)
++            assert [str(row['id']) for row in cur.fetchall()] == [tid(201)]
++            assert read_access_profile(cur, tid(2), 13) is None
++    with db() as conn:
++        conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=13', (tid(1),))
++    with db() as conn:
++        with conn.cursor() as cur:
++            assert read_access_profile(cur, tid(1), 13) is None
++
++
++def test_locked_profile_holds_company_fence_against_department_writer(db):
++    setup_scope_data(db)
++    with db() as reader, db() as writer:
++        with reader.cursor() as cur:
++            read_access_profile(cur, tid(1), 13, lock=True)
++        writer.execute("SET lock_timeout='100ms'")
++        with pytest.raises(psycopg.errors.LockNotAvailable):
++            writer.execute('SELECT id FROM saas_tenants WHERE id=%s FOR UPDATE', (tid(1),))
++
++
++@pytest.fixture
++def workflow_db(db, monkeypatch):
++    import tenant_workflow_store as workflow
++    with db() as conn:
++        conn.execute('''CREATE TABLE saas_tenant_audit_events (
++            id UUID PRIMARY KEY,tenant_id UUID,actor_telegram_id BIGINT,
++            action TEXT,entity_type TEXT,payload JSONB)''')
++    monkeypatch.setattr(workflow, '_connect', db)
++    monkeypatch.setattr(workflow, '_ensure_schema', lambda conn: None)
++    monkeypatch.setattr(workflow, '_member', lambda *args: {'role': 'owner', 'telegram_id': 11})
++    monkeypatch.setattr(workflow, 'list_tenant_workflow_config', lambda **kwargs: {})
++    return workflow
++
++
++def test_workflow_cannot_add_change_clear_or_alias_bypass_matrix(db, workflow_db):
++    import json
++    old = {'13': {'access_scopes': {'tasks': {'view': 'self'}}, 'ai_enabled': True}}
++    with db() as conn:
++        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)",
++                     (tid(1), json.dumps(old)))
++    for raw in ['members', ' members ']:
++        for patch in [{'13': {'access_scopes': {'tasks': {'view': 'all'}}}},
++                      {'13': {'access_scopes': {}}},
++                      {'14': {'access_scopes': {'tasks': {'view': 'self'}}}}]:
++            with pytest.raises(workflow_db.TenantPlatformError, match='requires_employee_editor'):
++                workflow_db.save_tenant_workflow_config(tenant_id=tid(1), owner_id=11, policies={raw: patch})
++            with db() as conn:
++                assert conn.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s AND policy_key='members'", (tid(1),)).fetchone()['value'] == old
++                assert conn.execute('SELECT count(*) n FROM saas_tenant_audit_events').fetchone()['n'] == 0
++
++
++def test_old_workflow_save_preserves_even_omitted_inactive_member_scopes(db, workflow_db):
++    import json
++    old = {'13': {'access_scopes': {'tasks': {'view': 'self'}}, 'ai_enabled': True},
++           '14': {'access_scopes': {'tasks': {'delete': 'none'}}}}
++    with db() as conn:
++        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)",
++                     (tid(1), json.dumps(old)))
++        conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=14', (tid(1),))
++    workflow_db.save_tenant_workflow_config(tenant_id=tid(1), owner_id=11,
++        policies={'members': {'13': {'ai_enabled': False, 'notifications': {'task_assigned': {'push': False}}}}})
++    with db() as conn:
++        saved = conn.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s AND policy_key='members'", (tid(1),)).fetchone()['value']
++        assert saved == {'13': {'ai_enabled': False, 'notifications': {'task_assigned': {'push': False}},
++                               'access_scopes': old['13']['access_scopes']},
++                         '14': {'access_scopes': old['14']['access_scopes']}}
++
++
++def test_current_profile_preserves_legacy_onboarding_pipeline_fallback(db, monkeypatch):
++    from tenant_policy import TenantPolicy
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED', raising=False)
++    with db() as conn:
++        conn.execute('''UPDATE saas_tenants SET onboarding=%s::jsonb,modules='{"deals":true}'
++            WHERE id=%s''', ('{"pipeline":{"selected":[{"id":10,"stage_ids":[100,200]}]}}', tid(1)))
++        conn.execute("UPDATE saas_tenant_members SET permissions='[\"deals\"]' WHERE tenant_id=%s AND telegram_id=13", (tid(1),))
++        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members','{\"13\":{\"pipeline_ids\":[\"10\"]}}')", (tid(1),))
++    with db() as conn:
++        with conn.cursor() as cur:
++            profile = read_access_profile(cur, tid(1), 13, lock=True)
++            policy = TenantPolicy(profile)
++            assert profile['onboarding'] == {'pipeline': {'selected': [{'id': 10, 'stage_ids': [100, 200]}]}}
++            assert policy.action_scope('deals', 'view') is None
++            assert policy.pipeline_scope() == [{'pipeline_id': 10, 'status_ids': [100, 200]}]
++            assert policy.can_access_deal({'tenant_id': tid(1), 'pipeline_id': 10, 'status_id': 100})
++            assert not policy.can_access_deal({'tenant_id': tid(2), 'pipeline_id': 10, 'status_id': 100})

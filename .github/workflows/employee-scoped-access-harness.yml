@@ -1,7 +1,7 @@
 name: Employee scoped access isolated patch harness
 on:
   push:
-    branches: [codex/employee-scope-ci-20261110]
+    branches: [codex/employee-scope-ci-20261110, codex/employee-scoped-gate-off-release-20261111]
 permissions:
   contents: read
 jobs:
@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == '3c17c43fc8de107526012599ec655aa43d063050340144e655843b602c98564e'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == 'c36d436fae1413d8e31c7db5ff5c54097877abc06c3c86991c28525e69dcc559'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == 'bb08e951fa5ef84c8cb6e020058fc1d11c60d4a9', actual
+          assert actual == manifest['target_tree'] == 'df54a17c27284007453f4cd0745b14294ed881c6', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -93,6 +93,8 @@ jobs:
       - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Select installed Chromium
         run: node -e "require('fs').appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Fetch historical startup-upgrade baseline
+        run: git fetch --no-tags --depth=1 origin 972528e30b9750d8b121f55a89d8b21aa20ddf5b
       - name: Scoped authorization and PostgreSQL
         run: >-
           python -m pytest -q -rs
@@ -175,6 +177,22 @@ jobs:
           tests/test_tenant_connect_configure.py
           tests/test_tenant_connect_diagnostics.py
           tests/test_tenant_connect_access_api.py
+          tests/test_crm_sync_history.py
+          tests/test_crm_sync_history_postgres.py
+          tests/test_crm_import_provenance.py
+          tests/test_crm_import_provenance_postgres.py
+          tests/test_crm_import_provenance_fences_postgres.py
+          tests/test_tenant_crm_sync.py
+          tests/test_tenant_crm_sync_windows.py
+          tests/test_tenant_crm_deletions.py
+          tests/test_tenant_crm_identity.py
+          tests/test_tenant_crm_contacts.py
+          tests/test_tenant_bein_crm.py
+          tests/test_crm_create_only_page_contract.py
+          tests/test_tenant_ai_agent_startup.py
+          tests/test_ai_schema_cold_readiness.py
+          tests/test_request_schema_deadlocks.py
+          tests/test_consultation_startup_upgrade_postgres.py
       - name: Interface regressions
         run: |
           node tests/test_employee_creation_scopes_ui.cjs
@@ -184,6 +202,7 @@ jobs:
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_contacts_directory_ui.cjs
           node tests/test_crm_save_receipt_ui.cjs
+          node tests/test_crm_sync_history_ui.cjs
           node tests/test_tenant_crm_native_workflow_ui.cjs
           node tests/test_tenant_app_syntax.cjs
           node tests/test_native_company_relation_ui.cjs
@@ -208,6 +227,7 @@ jobs:
           node tests/employee_scope_matrix_browser.cjs || status=1
           python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py || status=1
           node tests/test_native_company_deal_source_browser.cjs || status=1
+          node tests/test_crm_sync_history_browser.cjs || status=1
           python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres || status=1
           python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history || status=1
           exit "$status"

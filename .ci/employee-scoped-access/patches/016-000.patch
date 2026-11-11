@@ -1,3 +1,336 @@
+diff --git a/beintaskbot-main/tenant_shared_integration_access.py b/beintaskbot-main/tenant_shared_integration_access.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa63b136752a7e462c009ef9f2fca9496769914e
+--- /dev/null
++++ b/beintaskbot-main/tenant_shared_integration_access.py
+@@ -0,0 +1,223 @@
++"""Current-DB CRUD scopes for company-wide integrations.
++
++The responsible member is the unique active company owner, never the caller.
++Provider-specific guards remain inside the operation. Credentials are never
++returned here. Callers must wrap the complete operation, including provider I/O.
++"""
++from contextlib import contextmanager
++from contextvars import ContextVar
++from functools import wraps
++import inspect
++
++from tenant_linear_policy import TenantLinearError, identifier
++from tenant_policy import TenantPolicy
++from tenant_scoped_access import allows_owned_resource, profile_actor, scoped_access_enabled
++from tenant_scoped_access_store import read_access_profile
++
++_ADMISSION = ContextVar('shared_integration_admission', default=None)
++PROVIDERS = frozenset({'kommo', 'kommo_manual', 'beinsystems', 'linear', 'connect', 'chat_ai'})
++LEGACY_ROLES = {'connect': {'owner', 'admin'}, 'chat_ai': {'owner', 'admin'}}
++
++
++def principal(profile):
++    if not isinstance(profile, dict):
++        raise TenantLinearError('integration_access_denied', 403)
++    tenant = identifier(profile.get('tenant_id'))
++    try:
++        if isinstance(profile.get('telegram_id'), bool): raise ValueError()
++        actor = int(profile.get('telegram_id'))
++    except (ValueError, TypeError):
++        raise TenantLinearError('integration_access_denied', 403) from None
++    if actor <= 0:
++        raise TenantLinearError('integration_access_denied', 403)
++    return tenant, actor
++
++
++def admitted(profile, provider):
++    value = _ADMISSION.get()
++    return bool(value and isinstance(profile, dict) and value[:2] == principal(profile) and value[2] == provider)
++
++
++def current_role(profile, provider):
++    value = _ADMISSION.get()
++    return value[4] if admitted(profile, provider) else None
++
++
++def owner_resource(cur, current):
++    """Ambiguous owner records do not become self/department grants."""
++    tenant = str(current['tenant_id'])
++    cur.execute("SELECT telegram_id,department_id,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND role='owner' AND active=TRUE ORDER BY telegram_id FOR SHARE", (tenant,))
++    rows = cur.fetchall()
++    owner = rows[0] if len(rows) == 1 else None
++    valid = bool(owner and owner.get('active') is True
++                 and str(owner['telegram_id']) == str(current.get('company_owner_id')))
++    return {'tenant_id': tenant,
++            'responsible_member_id': owner['telegram_id'] if valid else None,
++            'responsible_department_id': owner.get('department_id') if valid else None}
++
++
++def allowed(current, resource, provider, action):
++    if action not in {'view', 'create', 'update', 'delete'} or provider not in PROVIDERS:
++        return False
++    if current.get('active') is not True or current.get('tenant_status') != 'active':
++        return False
++    if current.get('role') == 'owner':
++        return True
++    scope = TenantPolicy(current).action_scope('integrations', action)
++    if scope is None:
++        return current.get('role') in LEGACY_ROLES.get(provider, {'owner'})
++    return allows_owned_resource(profile_actor(current), resource, scope)
++
++
++def capabilities(cur, current, provider):
++    resource = owner_resource(cur, current)
++    return {action: allowed(current, resource, provider, action)
++            for action in ('view', 'create', 'update', 'delete')}
++
++
++
++def _action(cur, tenant, provider, action):
++    if action != 'connect': return action
++    cur.execute("SELECT 1 FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=ANY(%s::text[]) AND (secrets IS NOT NULL OR status IN ('connected','configured','awaiting_oauth'))", (tenant, ['kommo','kommo_manual'] if provider in {'kommo','kommo_manual'} else [provider]))
++    if cur.fetchone(): return 'update'
++    if provider == 'connect':
++        cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid LIMIT 1', (tenant,))
++        if cur.fetchone(): return 'update'
++    return 'create'
++
++
++def _context(tenant, actor, action, connecting, data):
++    if action == 'view': return
++    if not isinstance(data, dict) or str(data.get('expected_tenant_id')) != tenant or str(data.get('expected_user_id')) != str(actor):
++        raise TenantLinearError('integration_context_changed', 409)
++    impact = action == 'delete' or (action == 'update' and (connecting or any(data.get(k) for k in ('api_key','access_token','token','remove_key'))))
++    if impact and data.get('confirm_company_impact') is not True:
++        raise TenantLinearError('integration_company_impact_confirmation_required',409)
++
++
++def mutation_receipt(result, provider):
++    """No previous settings/channel/employee projection through a write grant."""
++    if isinstance(result, tuple) and len(result) == 2:
++        return ({}, mutation_receipt(result[1], provider))  # manual Kommo account/connection
++    result = result if isinstance(result, dict) else {}
++    return {'provider': provider, **{key: result[key] for key in
++        ('status','updated_at','connected','configured') if key in result}}
++
++@contextmanager
++def guard(factory, profile, provider, action, *, data=None, required_actions=(), legacy_member_read=False):
++    """Hold current member/department/policy fences across a scoped operation.
++
++    No override means the exact old provider guard remains authoritative. The
++    context marker is internal and bound to actor, tenant and provider; a caller
++    cannot manufacture it using role fields or JSON.
++    """
++    if not scoped_access_enabled():
++        yield
++        return
++    existing = _ADMISSION.get()
++    if existing:
++        if not admitted(profile, provider):
++            raise TenantLinearError('integration_nested_operation_denied',403)
++        nested_action = _action(existing[7], existing[0], provider, action)
++        if nested_action != existing[3] or not all(allowed(existing[5],existing[6],provider,item) for item in required_actions):
++            raise TenantLinearError('integration_nested_operation_denied',403)
++        _context(existing[0],existing[1],nested_action,action == 'connect',data)
++        yield
++        return
++    tenant, actor = principal(profile)
++    with factory() as conn:
++        with conn.cursor() as cur:
++            current = read_access_profile(cur, tenant, actor, lock=True)
++            if not current:
++                raise TenantLinearError('integration_access_denied', 403)
++            policy = TenantPolicy(current)
++            explicit = policy.has_scoped_access('integrations')
++            if not explicit and current.get('tenant_status') != 'active':
++                # Release these new locks before old onboarding operations,
++                # whose own provider-specific transaction model is unchanged.
++                conn.commit()
++                yield
++                return
++            if provider not in PROVIDERS:
++                if explicit: raise TenantLinearError('integration_operation_not_scoped',403)
++                conn.commit()
++                yield
++                return
++            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('shared-integration:'+tenant+':'+('kommo' if provider=='kommo_manual' else provider),))
++            connecting = action == 'connect'
++            action = _action(cur, tenant, provider, action)
++            resource = owner_resource(cur, current)
++            legacy_status = (legacy_member_read and action == 'view'
++                             and policy.action_scope('integrations', 'view') is None)
++            if not ((legacy_status or allowed(current, resource, provider, action))
++                    and all(allowed(current, resource, provider, item) for item in required_actions)):
++                raise TenantLinearError('integration_action_denied', 403)
++            _context(tenant,actor,action,connecting,data)
++            token = _ADMISSION.set((tenant, actor, provider, action, current['role'], current, resource, cur))
++            try:
++                yield
++            finally:
++                _ADMISSION.reset(token)
++
++
++def operation(provider, action, *, data_arg=None, required_actions=(), legacy_member_read=False):
++    """Decorate an existing synchronous provider service, never a background job."""
++    def decorate(function):
++        signature = inspect.signature(function)
++        @wraps(function)
++        def run(*args, **kwargs):
++            if not scoped_access_enabled():
++                return function(*args, **kwargs)
++            bound = signature.bind(*args, **kwargs)
++            bound.apply_defaults()
++            values = bound.arguments
++            profile = values.get('profile', values.get('session'))
++            if profile is None:
++                profile = {'tenant_id': values['tenant_id'], 'telegram_id': values['owner_id']}
++            actual_provider = provider(values) if callable(provider) else provider
++            actual_action = action(values) if callable(action) else action
++            data = values.get(data_arg) if data_arg else None
++            additional = required_actions(values) if callable(required_actions) else required_actions
++            # Initialize schema before holding member/company row fences. Legacy
++            # service initializers can commit or acquire DDL locks.
++            if scoped_access_enabled() and _ADMISSION.get() is None:
++                initializer = next((function.__globals__.get(name) for name in
++                    ('_schema', 'ensure_schema', '_ensure_schema') if callable(function.__globals__.get(name))), None)
++                if initializer:
++                    with function.__globals__['_connect']() as conn:
++                        initializer(conn)
++                        conn.commit()
++            with guard(function.__globals__['_connect'], profile, actual_provider, actual_action, data=data, required_actions=additional, legacy_member_read=legacy_member_read):
++                result = function(*args, **kwargs)
++                admission = _ADMISSION.get()
++                if admission and admission[3] != 'view' and not allowed(admission[5],admission[6],actual_provider,'view'):
++                    return mutation_receipt(result, actual_provider)
++                return result
++        return run
++    return decorate
++
++
++def safe_status(row):
++    """Public connection state, never an arbitrary metadata/settings projection."""
++    row = row or {}
++    return {'provider': str(row.get('provider') or ''),
++            'status': str(row.get('status') or 'not_connected'),
++            'connected_at': str(row.get('connected_at') or '') or None,
++            'updated_at': str(row.get('updated_at') or '') or None}
++
++
++def project_status(cur, current, rows):
++    """Scope-aware bootstrap projection; non-managers see only connection state."""
++    resource = owner_resource(cur, current)
++    by_provider = {row['provider']: row for row in rows}
++    for provider in sorted(PROVIDERS - {'kommo_manual'}):
++        by_provider.setdefault(provider, {'provider': provider, 'status': 'not_connected'})
++    result = []
++    for provider, row in by_provider.items():
++        actions = {action: allowed(current, resource, provider, action)
++                   for action in ('view', 'create', 'update', 'delete')}
++        # Even managers never receive arbitrary metadata from bootstrap. Each
++        # provider's guarded settings endpoint owns its explicit safe projection.
++        result.append({**safe_status(row), 'management_actions': actions,
++                       'status_only': not actions['view']})
++    return sorted(result, key=lambda row: row['provider'])
+diff --git a/beintaskbot-main/tenant_support_access.py b/beintaskbot-main/tenant_support_access.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6be60b2f6b0b579e93a4953a720e99780e1896d7
+--- /dev/null
++++ b/beintaskbot-main/tenant_support_access.py
+@@ -0,0 +1,82 @@
++"""Independent support-inbox actions; never authorizes a general dialog read."""
++from tenant_linear_policy import TenantLinearError, identifier
++from tenant_operator_access import access
++from tenant_scoped_access_store import resource_scope_sql, owned_resource_metadata
++
++
++def policy_access(cur, profile, action='view'):
++    return access(cur, profile, 'support', action)
++
++
++def predicate(policy, action='view', alias='t'):
++    # Sparse cells preserve the old support permission (not generic CRUD rules).
++    if policy.action_scope('support', action) is None:
++        return ('TRUE', []) if policy.legacy_allows('support') else ('FALSE', [])
++    return resource_scope_sql(policy.profile, 'support', action, alias)
++
++
++def require(cur, profile, ticket_id, action='view', *, lock=False):
++    tenant, actor, policy = policy_access(cur, profile, action)
++    # Only scoped requests need another resource query. Legacy callers retain
++    # their original missing-row and role/source checks exactly.
++    if policy.action_scope('support', action) is not None:
++        cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid'
++                    + (' FOR UPDATE' if lock else ''), (tenant, identifier(ticket_id)))
++        row = cur.fetchone()
++        if not row or not policy.allows_resource('support', action,
++                owned_resource_metadata(cur, tenant, row, lock=True)):
++            raise TenantLinearError('Обращение недоступно.', 404)
++    return tenant, actor, policy
++
++
++def require_create(cur, profile):
++    tenant, actor, policy = policy_access(cur, profile, 'create')
++    if policy.action_scope('support', 'create') is not None:
++        resource = {'tenant_id': tenant, 'responsible_member_id': actor,
++                    'responsible_department_id': policy.profile.get('department_id')}
++        if not policy.allows_resource('support', 'create', resource):
++            raise TenantLinearError('Нет доступа к созданию обращения.', 403)
++    return tenant, actor, policy
++
++
++def mutation_result(profile, ticket_id):
++    # Independent writes may succeed without read permission. Never commit a
++    # mutation then throw from detail(), nor include protected document content.
++    from tenant_support_inbox_store import _connect, detail
++    from tenant_scoped_access import scoped_access_enabled
++    if not scoped_access_enabled():
++        return detail(profile,ticket_id)
++    with _connect() as conn:
++        with conn.cursor() as cur:
++            try:
++                require(cur, profile, ticket_id)
++            except TenantLinearError as error:
++                if error.status not in (403, 404): raise
++                return {'ticket': {'id': str(ticket_id)}, 'readable': False}
++    from tenant_support_inbox_store import detail
++    return detail(profile, ticket_id)
++
++
++def sql_filter(policy, alias):
++    """Scoped-only filter for legacy SQL projections with fixed parameter order.
++
++    Caller aliases are validated; identity literals are UUID/int conversions.
++    An absent cell preserves the projection's deliberate legacy context rules.
++    """
++    import re
++    import uuid
++    if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', alias):
++        raise ValueError('invalid_scope_sql_identifier')
++    scope = policy.action_scope('support','view')
++    if scope is None: return 'TRUE'
++    if scope == 'none': return 'FALSE'
++    tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
++    actor = int(policy.profile['telegram_id'])
++    boundary = f"{alias}.tenant_id='{tenant}'::uuid"
++    if scope == 'all': return boundary
++    if scope == 'self': return f'({boundary} AND {alias}.access_responsible_id={actor})'
++    return f'''({boundary} AND EXISTS(SELECT 1 FROM saas_tenant_members sr
++      JOIN saas_tenant_members me ON me.tenant_id=sr.tenant_id
++        AND me.telegram_id={actor} AND me.active=TRUE
++      WHERE sr.tenant_id={alias}.tenant_id AND sr.telegram_id={alias}.access_responsible_id
++        AND sr.department_id IS NOT NULL AND sr.department_id=me.department_id))'''
+diff --git a/beintaskbot-main/tenant_support_inbox_schema.py b/beintaskbot-main/tenant_support_inbox_schema.py
+index 27d661000232074c011b05fd557933db0333c480..15555c4e0959e98267c01b674fb843f56e1ebb7e 100644
+--- a/beintaskbot-main/tenant_support_inbox_schema.py
++++ b/beintaskbot-main/tenant_support_inbox_schema.py
+@@ -19,6 +19,11 @@ def create_schema(conn):
+             REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE RESTRICT,
+           FOREIGN KEY(tenant_id,assigned_to) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+           FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
++        # Responsibility is separate from the assigned executor. This is only
++        # additive preparation; support authorization remains on its existing
++        # policy until every case, consultation and background path is scoped.
++        from tenant_scoped_access_schema import migrate_resource_ownership
++        migrate_resource_ownership(cur, ('saas_support_tickets',))
+         cur.execute('CREATE INDEX IF NOT EXISTS saas_support_queue_idx ON saas_support_tickets(tenant_id,status,assigned_to,created_at)')
+         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_outcome TEXT NOT NULL DEFAULT ''")
+         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_note TEXT NOT NULL DEFAULT ''")
 diff --git a/beintaskbot-main/tenant_support_inbox_store.py b/beintaskbot-main/tenant_support_inbox_store.py
 index 41e9015c11b5921fa33f1b4b0f84f3aa54dd2f24..7da39b1686b8d974826884215b63942764a01815 100644
 --- a/beintaskbot-main/tenant_support_inbox_store.py
@@ -520,7 +853,7 @@ index e51812cd00ee11512b063b8f22c624a5d9eb0e1a..8f5273032ba109834a7e7d20dee758e3
          result = dict(source=selected, sources=sources, scope=scope, limit=100 if selected == 'native' else 200)
          if request_id:
 diff --git a/beintaskbot-main/tenant_web_assets.py b/beintaskbot-main/tenant_web_assets.py
-index 564cfd0adf938b9ea421d21e27d3c5cdf5f918a0..c0cd67293ca83a8e844585904e0451921e5c8165 100644
+index 564cfd0adf938b9ea421d21e27d3c5cdf5f918a0..9a372d9d5481784b8ef0a4211c4c583bd8bf0620 100644
 --- a/beintaskbot-main/tenant_web_assets.py
 +++ b/beintaskbot-main/tenant_web_assets.py
 @@ -47,6 +47,7 @@ ASSETS = (
@@ -531,11 +864,12 @@ index 564cfd0adf938b9ea421d21e27d3c5cdf5f918a0..c0cd67293ca83a8e844585904e045192
      ('/assets/tenant-kommo-settings.js', 'tenant-kommo-settings.js', 'no-cache'),
      ('/assets/tenant-linear-board.js', 'tenant-linear-board.js', 'no-cache'),
      ('/assets/tenant-risk-alert-detail.css', 'tenant-risk-alert-detail.css', 'no-cache'),
-@@ -94,6 +95,8 @@ ASSETS = (
+@@ -94,6 +95,9 @@ ASSETS = (
      ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
      ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
      ('/assets/tenant-contacts-directory.js', 'tenant-contacts-directory.js', 'no-store'),
 +    ('/assets/tenant-crm-save-receipt.js', 'tenant-crm-save-receipt.js', 'no-store'),
++    ('/assets/tenant-crm-sync-history.js', 'tenant-crm-sync-history.js', 'no-store'),
 +    ('/assets/tenant-dialog-source-members.js', 'tenant-dialog-source-members.js', 'no-cache, max-age=0, must-revalidate'),
      ('/assets/tenant-members-ui.js', 'tenant-members-ui.js', 'no-cache, max-age=0, must-revalidate'),
      ('/assets/tenant-members-ui.css', 'tenant-members-ui.css', 'no-cache, max-age=0, must-revalidate'),
@@ -721,155 +1055,3 @@ index 0000000000000000000000000000000000000000..4f6ebe6627db7d1bebc1de668d020503
 +  assert.deepEqual(errors,[]);global.console.log(result.textContent);
 + }finally{dom.window.close();}
 +})().catch(error=>{console.error(error.stack);process.exitCode=1;});
-diff --git a/beintaskbot-main/tests/contacts_directory_fixture.cjs b/beintaskbot-main/tests/contacts_directory_fixture.cjs
-index 3d47a8e4030e7e6dd116a17cb679d109ac31f005..a8c15c168d009133ca5e4e5110a7294cf39bc74c 100644
---- a/beintaskbot-main/tests/contacts_directory_fixture.cjs
-+++ b/beintaskbot-main/tests/contacts_directory_fixture.cjs
-@@ -8,14 +8,14 @@ const tenant='10000000-0000-4000-8000-000000000101',contactA='10000000-0000-4000
- const actions={view:true,create:true,update:true,archive:true,assign:true,update_deals:true};
- const native=(id=contactA,name='PRIVATE CONTACT A')=>({key:'native:'+id,id,kind:'native_contact',source:'native',display_name:name,phone:'+994501234567',email:'contact@example.test',company_id:null,company_name:null,actions:{...actions}});
- const external=()=>({key:'kommo:9007199254740993123:9007199254740993456',kind:'kommo_contact',source:'kommo',account_id:'9007199254740993123',contact_id:'9007199254740993456',display_name:'Saved Kommo contact',phone:'+994501234567',lead_id:'9007199254740993777',lead_name:'Saved deal',stage_name:'Saved stage',historical:true,actions:{view:true,create:false,update:false,archive:false}});
--function html(){const names=['tenant-operator-i18n.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-contacts-directory.js','tenant-crm-sync.js'];return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,(tag,url)=>{const name=path.basename(url);if(name==='tenant-chakra-ui.js'){const shell=fs.readFileSync(path.join(root,'ui/src/app-shell.js'),'utf8').replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(fs.readFileSync(path.join(root,'ui/src/app-theme.css'),'utf8')));return '<script>'+shell.replace(/<\/script/gi,'<\\/script')+'</script>'}return names.includes(name)?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':''})}
-+function html(){const names=['tenant-operator-i18n.js','tenant-crm-save-receipt.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-contacts-directory.js','tenant-crm-sync.js'];return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,(tag,url)=>{const name=path.basename(url);if(name==='tenant-chakra-ui.js'){const shell=fs.readFileSync(path.join(root,'ui/src/app-shell.js'),'utf8').replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(fs.readFileSync(path.join(root,'ui/src/app-theme.css'),'utf8')));return '<script>'+shell.replace(/<\/script/gi,'<\\/script')+'</script>'}return names.includes(name)?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':''})}
- const clone=value=>JSON.parse(JSON.stringify(value));
- const settle=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediate(resolve))};
- const until=async predicate=>{for(let i=0;i<140;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert(predicate(),'actual contacts app did not settle')};
- async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));const dom=new JSDOM(html(),{url:'https://fixture.test/app?view='+(config.view||'customers')+'&lang='+(config.language||'en')+(config.query||''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){
-  w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installCompanyEmployeesFixture.toString()+')('+JSON.stringify({role:'owner',modules:{customers:true,deals:true},...config})+')');const f=w.companyEmployeesFixture,base=w.fetch;if(config.permissions)f.profile.member.permissions=config.permissions;if(config.tenantId)f.profile.member.tenant_id=config.tenantId;
-- f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions=clone(actions);f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
-- f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
-+ f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions={...clone(actions),scoped_relations:config.scopedRelations!==false};f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
-+ f.syncReceipt=config.syncReceipt||null;f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
-  const response=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}),ok=data=>response({success:true,...data}),failure=(status,code)=>response({success:false,error:code,code},status);
-  w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;if(url.pathname==='/api/platform/me'&&f.meFailure){f.calls.push({path:url.pathname,url:url.pathname+url.search,method,body});return failure(f.meFailure,'Synthetic profile unavailable')}if(!url.pathname.startsWith('/api/platform/crm/native/contacts')&&!url.pathname.startsWith('/api/platform/crm/native/companies')&&!url.pathname.startsWith('/api/platform/crm/native/deals'))return base(input,options);const call={path:url.pathname,url:url.pathname+url.search,method,body};f.calls.push(call);
-  if(url.pathname==='/api/platform/crm/native/contacts'&&method==='GET'&&url.searchParams.get('listing')==='1'){
-@@ -28,12 +28,12 @@ async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('j
-   if(f.holdDirectory||f.holdNextDirectory||chosen?.hold){f.holdNextDirectory=false;return new Promise(resolve=>f.pendingDirectory.push(()=>resolve(response(payload,status))))}return response(payload,status);
-  }
-  if(url.pathname==='/api/platform/crm/native/contacts'&&method==='GET')return ok({data:clone(f.nativeRows)});
-- if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
-+ if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);if(row)row.actions={...f.actions,...(config.recordActions||{})};const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
-  if(url.pathname==='/api/platform/crm/native/companies'&&method==='GET')return f.companyFailure?failure(f.companyFailure,'forbidden'):ok({companies:clone(f.companyRows)});
-- if(url.pathname.startsWith('/api/platform/crm/native/deals')&&method==='GET')return f.dealFailure?failure(f.dealFailure,'forbidden'):ok(url.pathname!=='/api/platform/crm/native/deals'?{deal:clone(f.dealRows.find(row=>row.id===url.pathname.split('/').at(-1)))}:url.searchParams.has('options')?{workflows:[],contacts:[],companies:[],members:[]}:{deals:clone(f.dealRows)});
-+ if(url.pathname.startsWith('/api/platform/crm/native/deals')&&method==='GET')return f.dealFailure?failure(f.dealFailure,'forbidden'):ok(url.pathname!=='/api/platform/crm/native/deals'?{deal:clone(f.dealRows.find(row=>row.id===url.pathname.split('/').at(-1)))}:url.searchParams.has('options')?(config.dealOptions||{workflows:[],contacts:[],companies:[],members:[]}):{deals:clone(f.dealRows)});
-  if(method==='POST'){
-   f.savedWrites.push(call);const error=f.writeFailure,raw=f.writeRaw;
--  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:clone(row)})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:clone(row)})};
-+  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:{...clone(row),...(f.syncReceipt?{sync:clone(f.syncReceipt)}:{})}})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(['link_deal','unlink_deal'].includes(body.action)){const deal=f.dealRows.find(item=>item.id===body.deal_id);if(!deal)return failure(404,'not_found');deal.contact_id=body.action==='link_deal'?id:null;return ok({data:{id,deal_id:body.deal_id,linked:body.action==='link_deal'}})}if(['link_company','unlink_company'].includes(body.action)){const contact=f.nativeRows.find(item=>item.id===id),company=f.companyRows.find(item=>item.id===body.company_id);if(!contact||!company)return failure(404,'not_found');if(body.action==='unlink_company'&&contact.company_id!==body.company_id)return failure(404,'not_found');contact.company_id=body.action==='link_company'?body.company_id:null;contact.company_name=body.action==='link_company'?company.name:null;return ok({data:{id,company_id:body.company_id,linked:body.action==='link_company'}})}if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:{...clone(row),...(f.syncReceipt?{sync:clone(f.syncReceipt)}:{})}})};
-   if(f.holdWrite)return new Promise(resolve=>f.pendingWrites.push(()=>resolve(finish())));return finish();
-  }return base(input,options);
-  };
-diff --git a/beintaskbot-main/tests/contacts_directory_http_browser.cjs b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
-index 5d5b758ec68eb8fd64cd19abed051492f418f8d8..cfad8afe94ffddf7fe4893c5d5a2fafee0ac374c 100644
---- a/beintaskbot-main/tests/contacts_directory_http_browser.cjs
-+++ b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
-@@ -490,7 +490,9 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
-         await page.locator('#nativeEntityBody').filter({hasText:'Browser isolated edited'}).waitFor();
-         const archiveReceipt=page.waitForResponse(response=>response.request().method()==='POST' && new URL(response.url()).pathname==='/api/platform/crm/native/contacts/'+newId);
-         await page.locator('#nativeEntityCard [data-native-card-archive]').click();
--        assert.equal((await archiveReceipt).status(),200);
-+        const archived=await archiveReceipt;
-+        assert.equal(archived.status(),200);
-+        assert.deepEqual(archived.request().postDataJSON(),{action:'archive'});
-         await page.waitForFunction(()=>!document.getElementById('nativeEntityCard').classList.contains('show'));
-         await settled();
-         assert.equal(await row('native:'+newId).count(),0);
-diff --git a/beintaskbot-main/tests/employee_scope_matrix_browser.cjs b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..325e8b5c4759a119fb427827ed54225f06eaa12e
---- /dev/null
-+++ b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
-@@ -0,0 +1,48 @@
-+/* Real employee controller/shell/CSS in Chromium; all HTTP data is synthetic. */
-+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-+const {chromium}=require('../.support-test-deps/node_modules/playwright');
-+const {nodeHtml,installCompanyEmployeesFixture,docs}=require('./company_employees_entry_fixture.cjs');
-+const origin='https://scope-fixture.test';
-+// Keep browser acceptance on the actual server catalog, including every new
-+// scoped section, instead of a hand-maintained subset that silently goes stale.
-+const scopeCatalog=JSON.parse(require('node:child_process').execFileSync(
-+ process.env.PYTHON||'python',['-c','import json; from tenant_scoped_access import SCOPE_ACTION_CATALOG; print(json.dumps(SCOPE_ACTION_CATALOG))'],{encoding:'utf8'}));
-+const row={tenant_id:'10000000-0000-4000-8000-000000000101',telegram_id:22,display_name:'Synthetic employee',role:'worker',active:true,permissions:['tasks'],explicit_permissions:['tasks'],card_version:'card-v1',department_id:null,department_catalog:[{id:'10000000-0000-4000-8000-000000000501',name:'Support',active:true}],editable_fields:['department_id','access_settings','work_settings'],access_settings:{version:'scope-v1',scoped_access_enabled:true,scope_catalog:{tasks:['create','view','update','delete'],deals:['create','view','update','delete'],customers:['create','view','update','delete'],companies:['create','view','update','delete'],dialogs:['view','update']},scoped_actions:{tasks:{create:'self',view:'department',update:'self',delete:'none'},deals:{view:'all'},customers:{view:null},companies:{view:'none'},dialogs:{view:'self',update:'department'}},legacy_actions:{customers:{view:true}}},work_settings:{version:'work-v1',values:{ai_enabled:true,notifications:{}},defaults:{},services:[],notifications:[{key:'task_assigned',label:'Task',channels:['push']}]}};
-+row.access_settings.scope_catalog=scopeCatalog;
-+(async()=>{
-+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
-+ try{for(const [width,language] of [[360,'ru'],[390,'az'],[768,'en'],[1440,'ru']]){
-+  const context=await browser.newContext({viewport:{width,height:860}}),page=await context.newPage(),errors=[];
-+  page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>dialog.accept());
-+  await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==origin)return route.abort();if(url.pathname==='/app')return route.fulfill({contentType:'text/html',body:nodeHtml()});if(url.pathname.startsWith('/assets/')){const file=path.join(docs,path.basename(url.pathname));if(fs.existsSync(file))return route.fulfill({contentType:file.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(file)})}return route.fulfill({contentType:'application/json',body:'{}'})});
-+  await context.addInitScript(installCompanyEmployeesFixture,{role:'owner'});
-+  await context.addInitScript(({row})=>{const original=window.fetch;window.companyEmployeesFixture.members=[row];window.fetch=async(input,opt={})=>{const u=new URL(String(input),location.href);if(u.pathname!=='/api/platform/members')return original(input,opt);if((opt.method||'GET')==='GET')return new Response(JSON.stringify({success:true,members:[row]}),{headers:{'Content-Type':'application/json'}});const body=JSON.parse(opt.body);window.companyEmployeesFixture.calls.push({path:u.pathname,method:'POST',body});return new Response(JSON.stringify({success:false,code:'member_card_conflict',fields:{expected_version:'version_conflict'}}),{status:409,headers:{'Content-Type':'application/json'}})}} ,{row});
-+  await page.goto(origin+'/app?view=employees&lang='+language);
-+  await page.locator('[data-staff-edit="22"]').click();
-+  const form=page.locator('#staffEditForm');
-+  await form.locator('[name=department_id]').selectOption(row.department_catalog[0].id);
-+  await form.locator('[data-staff-pane-tab=rights]').click();
-+  assert.equal(await form.locator('[data-access-scope]').count(),Object.values(scopeCatalog).reduce((n,actions)=>n+actions.length,0));
-+  for(const [section,actions] of Object.entries(scopeCatalog)){for(const action of ['create','view','update','delete'])assert.equal(await form.locator('[data-access-module='+section+'][data-access-scope='+action+']').count(),Number(actions.includes(action)),section+' only advertises real '+action);}
-+  assert.deepEqual(await form.locator('[data-access-module=employees][data-access-scope=create] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['legacy','none','department','all'],'employee creation never offers Self');
-+  const matrix=form.locator('.staff-scope-matrix');
-+  assert(await matrix.isVisible());
-+  for(const selector of ['.staff-scope-matrix','[data-staff-pane=rights]','.staff-modal-actions']){
-+   assert.equal(await form.locator(selector).evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,selector+' fits '+width);
-+  }
-+  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=view]').inputValue(),'department');
-+  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=update]').inputValue(),'self');
-+  await form.locator('[data-access-module=tasks][data-access-scope=delete]').selectOption('department');
-+  await form.locator('[type=submit]').click();
-+  await page.waitForFunction(()=>window.companyEmployeesFixture.calls.some(c=>c.method==='POST'));
-+  const body=await page.evaluate(()=>window.companyEmployeesFixture.calls.find(c=>c.method==='POST').body);
-+  assert.equal(body.changes.department_id,row.department_catalog[0].id);assert.deepEqual(body.changes.access_settings.changes,{scopes:{tasks:{delete:'department'}}});
-+  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'department','Draft remains after conflict');
-+  await form.locator('[data-staff-pane-tab=rights]').focus();await page.keyboard.press('ArrowLeft');assert.equal(await form.locator('[data-staff-pane-tab=details]').getAttribute('aria-selected'),'true');await page.keyboard.press('ArrowRight');
-+  const output=process.env.EMPLOYEE_SCOPE_SCREENSHOTS||'/tmp/employee-scoped-matrix-screens';fs.mkdirSync(output,{recursive:true});await page.screenshot({path:path.join(output,`scope-matrix-${width}-${language}.png`)});
-+  await form.locator('[data-staff-cancel]').click();assert.equal(await page.locator('#staffMemberModal').evaluate(n=>n.classList.contains('show')),false);await page.locator('[data-staff-edit="22"]').click();assert.equal(await page.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'none','Cancel discards draft');
-+  assert.deepEqual(errors,[]);await context.close();
-+ }
-+ console.log('PASS Chromium scoped matrix 360/RU, 390/AZ, 768/EN, 1440/RU: no overflow, sparse independent save, conflict retention, keyboard tabs and cancel/reopen');
-+ }finally{await browser.close()}
-+})().catch(error=>{console.error(error.stack);process.exitCode=1});
-diff --git a/beintaskbot-main/tests/native_company_deal_fixture.cjs b/beintaskbot-main/tests/native_company_deal_fixture.cjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..c0f9ea83146e075762ae40778097004efee85591
---- /dev/null
-+++ b/beintaskbot-main/tests/native_company_deal_fixture.cjs
-@@ -0,0 +1,39 @@
-+/* Synthetic API boundary; renderer, form, modal lifecycle and capabilities are the real /app code. */
-+const {docs,assets,appHtml,installNativeTaskFixture}=require('./native_task_assignee_fixture.cjs');
-+function installNativeCompanyDealFixture(config={}){
-+ const f=window.nativeTaskFixture,ids={company:'10000000-0000-4000-8000-000000000601',otherCompany:'10000000-0000-4000-8000-000000000602',deal:'10000000-0000-4000-8000-000000000701',otherDeal:'10000000-0000-4000-8000-000000000702',contact:'10000000-0000-4000-8000-000000000501'};
-+ Object.assign(f,{ids,scoped:config.scoped!==false,pendingRelations:[],holdRelations:false,relationError:null});
-+ const action=(read=true,update=false)=>({view:read,create:false,update,delete:false});
-+ f.profile.capabilities={modules:{deals:config.dealRead!==false,customers:config.contactRead!==false},actions:{companies:action(config.companyRead!==false,config.companyUpdate===true),deals:{...action(config.dealRead!==false,config.dealUpdate===true),create:config.dealCreate===true},customers:action(config.contactRead!==false,false),tasks:action(false,false)}};
-+ const rel=(source,kind)=>({['link_'+kind]:source,['unlink_'+kind]:source});
-+ f.companies=[{id:ids.company,name:'Source company',contacts:[],deals:[{id:ids.deal,title:'Existing linked deal'}],actions:{update:config.companyUpdate===true},relation_actions:{...rel(config.companyUpdate===true,'contact'),...rel(config.companyUpdate===true,'deal')}},{id:ids.otherCompany,name:'Available company',contacts:[],deals:[]}];
-+ f.deals=[{id:ids.deal,title:'Source deal',pipeline_id:'1',stage_id:'2',contact_id:ids.contact,contact_name:'Readable contact context',company_id:ids.company,company_name:'Source company',description:'',scoped_relations:f.scoped,actions:{update:config.dealUpdate===true},relation_actions:rel(config.dealUpdate===true,'company')},{id:ids.otherDeal,title:'Available deal',pipeline_id:'1',stage_id:'2',contact_id:null,company_id:null,scoped_relations:f.scoped,actions:{update:false},relation_actions:rel(false,'company')}];
-+ if(!f.scoped)for(const company of f.companies)delete company.relation_actions;
-+ f.options={workflows:[{pipeline_id:'1',pipeline_name:'Main',stage_id:'2',stage_name:'Open'}],members:[],contacts:config.contactRead===false?[]:[{id:ids.contact,display_name:'Readable contact'}],scoped_relations:f.scoped,relation_actions:rel(config.dealUpdate===true,'company')};
-+ const base=window.fetch,clone=value=>JSON.parse(JSON.stringify(value)),response=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
-+ window.fetch=async(input,options={})=>{
-+  const u=new URL(String(input),location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;
-+  if(!/^\/api\/platform\/crm\/native\/(companies|deals|contacts)(\/|$)/.test(u.pathname))return base(input,options);
-+  f.calls.push({url:u.pathname+u.search,path:u.pathname,method,body});
-+  const kind=u.pathname.split('/')[5],id=u.pathname.split('/')[6];
-+  if(method==='GET'){
-+   if(kind==='deals'&&u.searchParams.get('options')==='1')return response(clone(f.options));
-+   if(kind==='contacts')return f.profile.capabilities.actions.customers.view?response({data:clone(f.options.contacts)}):response({error:'forbidden'},403);
-+   if(!f.profile.capabilities.actions[kind].view||f[kind+'Failure'])return response({error:'forbidden'},403);
-+   const rows=f[kind];return response(id?{[kind==='deals'?'deal':'company']:clone(rows.find(row=>row.id===id))}:{[kind]:clone(rows)});
-+  }
-+  const relation=u.pathname.endsWith('/company-link')||['link_deal','unlink_deal','link_contact','unlink_contact'].includes(body?.action);
-+  const finish=()=>{
-+   if(relation){
-+    if(f.relationError)return response({error:f.relationError},409);
-+    const deal=f.deals.find(row=>row.id===(kind==='deals'?id:body.entity_id)),company=kind==='deals'?body.company_id:id,unlink=kind==='deals'?body.unlink:body.action==='unlink_deal';
-+    if(deal){deal.company_id=unlink?null:company;deal.company_name=unlink?null:f.companies.find(row=>row.id===company)?.name;for(const c of f.companies)c.deals=f.deals.filter(d=>d.company_id===c.id).map(d=>({id:d.id,title:d.title}))}
-+    return response({data:{id:deal?.id,company_id:company,linked:!unlink}});
-+   }
-+   if(kind==='deals'){let row=f.deals.find(row=>row.id===id);if(row)Object.assign(row,body);else{row={id:'10000000-0000-4000-8000-000000000703',...body};f.deals.push(row)}return response({deal:clone(row)})}
-+   throw new Error('Unexpected write '+u.pathname);
-+  };
-+  if(relation&&f.holdRelations)return new Promise(resolve=>f.pendingRelations.push(()=>resolve(finish())));return finish();
-+ };
-+}
-+module.exports={docs,assets,appHtml,installNativeTaskFixture,installNativeCompanyDealFixture};

@@ -1,0 +1,1081 @@
+diff --git a/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs b/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
+index a32e37128954bf71b613977e3fc1505874b25ccf..a6ac02471cb11c96a90b2a9910241a30f074d1f9 100644
+--- a/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
++++ b/beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs
+@@ -46,7 +46,7 @@ assert(app.includes('data-deal-tab=\"contacts\"') && app.includes('data-deal-tab
+ assert(app.includes('data-task-tab=\"related\"') && app.includes('başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil'), 'task card shows its real links and reports that reassignment is unsupported');
+ assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}'), 'CRM action rows wrap at mobile widths without horizontal overflow');
+ assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');
+-assert(contacts.includes("action:'link_contact'") && contacts.includes("action:'unlink_contact'") && app.includes("action:'link_deal'") && app.includes("action:'unlink_deal'"), 'contact and deal relations retain their existing tenant-scoped company APIs in the current controllers');
++assert(contacts.includes("'link_company'") && contacts.includes("'unlink_company'") && app.includes("action:unlink?'unlink_deal':'link_deal'") && app.includes("'/company-link'"), 'source-card company relations retain explicit scoped and legacy commands');
+ for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
+ assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
+ assert(!view('deals').includes('externalCrmSyncPanel'));
+diff --git a/beintaskbot-main/tests/test_tenant_crm_notice.py b/beintaskbot-main/tests/test_tenant_crm_notice.py
+index aa10080ceef7d45b548cd747556fc10fa18a9f96..29ca9507e51e164e4149ec0a8140e8914d89d98e 100644
+--- a/beintaskbot-main/tests/test_tenant_crm_notice.py
++++ b/beintaskbot-main/tests/test_tenant_crm_notice.py
+@@ -159,7 +159,7 @@ class OutboxTests(unittest.TestCase):
+         self.p=member();self.row=task()
+         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
+             'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
+-            'connect_dialog_route':connect_dialog_route},
++            'connect_dialog_route':connect_dialog_route,'source_eligible':lambda cur,*args:eligible(*args)},
+             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
+         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
+                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
+@@ -229,7 +229,7 @@ class OutboxTests(unittest.TestCase):
+ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
+     async def test_complete_text_and_one_delivery_attempt(self):
+         worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
+-            'send_push':Mock()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
++            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
+         row=task();row['deal'].update(contact_name='Client',phone='+994123')
+         item={'resource':row,'event':'task_assigned','send':True,'recipient_id':20,'tenant_name':'Company'}
+         self.assertIn('Call client',worker.message(item));self.assertIn('+994123',worker.message(item))
+@@ -237,3 +237,21 @@ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
+         await worker.deliver(bot,'',{},Mock())
+         bot.send_message.assert_awaited_once()
+         self.assertEqual(worker.finish.call_args.args[1],'unknown')
++
++
++class ScopedNoticeDeadline(unittest.IsolatedAsyncioTestCase):
++    async def test_scoped_provider_timeout_is_unknown_without_retry(self):
++        import asyncio
++        from unittest.mock import patch
++        worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
++            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()},
++            {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
++        worker.deliver.__globals__['DELIVERY_TIMEOUT']=.01
++        item={'resource':{'body':'synthetic'},'event':'incoming_message','send':True,'recipient_id':20}
++        worker.claim.side_effect=[item,None]
++        async def slow(**kwargs):await asyncio.sleep(5)
++        bot=AsyncMock();bot.send_message.side_effect=slow
++        with patch.dict('os.environ',{'TENANT_SCOPED_ACCESS_ENABLED':'true'}):
++            await asyncio.wait_for(worker.deliver(bot,'',{},Mock()),timeout=2)
++        bot.send_message.assert_awaited_once()
++        assert worker.finish.call_args.args[1]=='unknown'
+diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_contract.py b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b2c974d6a4fbb11022bff23f465906e30edf36af
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_crm_relation_contract.py
+@@ -0,0 +1,238 @@
++"""Synthetic, I/O-free checks for the deliberately inactive relation contract."""
++from dataclasses import FrozenInstanceError, replace
++from datetime import datetime, timedelta, timezone
++import hashlib
++import json
++
++import pytest
++
++from tenant_crm_relation_contract import (
++    BoundIdentity, ProviderBinding, ProviderExpectation, RecordRef,
++    RelationContractError, RelationIntent, classify_observation,
++)
++
++
++TENANT = '10000000-0000-4000-8000-000000000001'
++EVENT = '20000000-0000-4000-8000-000000000001'
++DEAL = RecordRef('deal', '30000000-0000-4000-8000-000000000001')
++CONTACT_A = RecordRef('contact', '40000000-0000-4000-8000-000000000001')
++CONTACT_B = RecordRef('contact', '40000000-0000-4000-8000-000000000002')
++COMPANY = RecordRef('company', '50000000-0000-4000-8000-000000000001')
++BINDING = ProviderBinding(TENANT, 'kommo', 'synthetic-account', 'synthetic-generation-1')
++REVISION = datetime(2026, 11, 11, 12, 0, 0, 123456, timezone.utc)
++EXPECTED, DESIRED, OTHER = 'a' * 64, 'b' * 64, 'c' * 64
++
++
++def identity(record, external_id, binding=BINDING):
++    return BoundIdentity(record, external_id, binding)
++
++
++def intent(**overrides):
++    values = dict(event_id=EVENT, actor_id=42, source=CONTACT_B, relation='deal_contact',
++                  changed=identity(DEAL, '101'), before=identity(CONTACT_A, '201'),
++                  after=identity(CONTACT_B, '202'), local_revision=REVISION)
++    values.update(overrides)
++    return RelationIntent(**values)
++
++
++def planned():
++    # Synthetic digests test the classifier. No production Kommo/BEIN adapter
++    # or approved relation semantics are implied by this fixture.
++    return intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, DESIRED))
++
++
++def classify(event=None, **overrides):
++    event = event or planned()
++    values = dict(event_fingerprint=event.fingerprint(), binding=event.changed.binding,
++                  contract_version='synthetic-v1', observed_digest=EXPECTED,
++                  attempt_outcome='not_started')
++    values.update(overrides)
++    return classify_observation(event, **values)
++
++
++def test_event_round_trip_is_strict_narrow_and_detached_from_mutable_payload():
++    event = intent()
++    payload = json.loads(json.dumps(event.to_payload()))
++    assert RelationIntent.from_payload(payload) == event
++    assert payload['source_action'] == 'update'
++    assert payload['provider_expectation'] is None
++    assert set(payload['changed']) == {'entity_type', 'internal_id', 'external_id'}
++    assert not {'name', 'title', 'phone', 'email', 'description', 'pipeline_id',
++                'stage_id', 'responsible_id', 'access_token', 'secrets'} & set(payload)
++    payload['after']['external_id'] = '999'
++    assert event.after.external_id == '202'
++    with pytest.raises(FrozenInstanceError):
++        event.actor_id = 99
++    with pytest.raises(FrozenInstanceError):
++        event.after.external_id = '999'
++
++
++@pytest.mark.parametrize('source', [DEAL, CONTACT_B])
++def test_deal_card_and_contact_card_share_narrow_change_with_distinct_source(source):
++    event = intent(source=source)
++    assert event.source == source
++    assert event.changed.record == DEAL
++    assert event.after.record == CONTACT_B
++
++
++@pytest.mark.parametrize('source', [CONTACT_A, COMPANY])
++@pytest.mark.parametrize('unlink', [False, True])
++def test_company_contact_directions_preserve_changed_entity_and_exact_unlink(source, unlink):
++    company = identity(COMPANY, '301')
++    event = intent(source=source, relation='contact_company', changed=identity(CONTACT_A, '201'),
++                   before=company if unlink else None, after=None if unlink else company)
++    assert event.changed.record == CONTACT_A
++    assert event.source == source
++    assert RelationIntent.from_payload(event.to_payload()) == event
++
++
++def test_contact_card_unlink_retains_exact_old_contact():
++    event = intent(source=CONTACT_A, after=None)
++    assert event.before.record == CONTACT_A and event.after is None
++    with pytest.raises(RelationContractError, match='source_not_in_relation'):
++        intent(source=CONTACT_B, after=None)
++    with pytest.raises(RelationContractError, match='source_action_mismatch'):
++        intent(source=CONTACT_A)
++
++
++@pytest.mark.parametrize('changes', [
++    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
++    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
++    {'connection_generation': 'synthetic-generation-2'},
++])
++@pytest.mark.parametrize('target', ['before', 'after'])
++def test_mixed_tenant_provider_account_or_connection_identity_is_rejected(changes, target):
++    event = intent()
++    changed_identity = replace(getattr(event, target), binding=replace(BINDING, **changes))
++    with pytest.raises(RelationContractError, match='relation_binding_mismatch'):
++        replace(event, **{target: changed_identity})
++
++
++@pytest.mark.parametrize('actor', [None, 0, -1, True, 42.0, '42'])
++def test_exact_human_actor_is_required_without_integration_fallback(actor):
++    with pytest.raises(RelationContractError, match='human_actor_required'):
++        intent(actor_id=actor)
++
++
++@pytest.mark.parametrize('changes,error', [
++    ({'relation': 'company_deal'}, 'invalid_local_relation'),
++    ({'changed': identity(CONTACT_A, '201')}, 'invalid_changed_entity'),
++    ({'after': identity(COMPANY, '301')}, 'invalid_relation_target'),
++    ({'source': COMPANY}, 'source_not_in_relation'),
++    ({'before': None, 'after': None}, 'no_local_relation_change'),
++    ({'before': identity(CONTACT_B, '999')}, 'no_local_relation_change'),
++    ({'after': identity(CONTACT_B, '201')}, 'external_identity_collision'),
++    ({'local_revision': datetime(2026, 11, 11)}, 'timezone_aware_revision_required'),
++    ({'event_id': 'not-a-uuid'}, 'invalid_record_identity'),
++])
++def test_invalid_or_ambiguous_local_intent_is_rejected(changes, error):
++    with pytest.raises(RelationContractError, match=error):
++        intent(**changes)
++
++
++@pytest.mark.parametrize('location,key', [
++    (None, 'title'), ('source', 'phone'), ('changed', 'name'),
++    ('before', 'email'), ('after', 'description'), ('binding', 'access_token'),
++    ('provider_expectation', 'json_body'),
++])
++def test_payload_cannot_smuggle_record_fields_credentials_or_wire_requests(location, key):
++    payload = planned().to_payload()
++    target = payload if location is None else payload[location]
++    target[key] = 'SYNTHETIC-NOT-A-SECRET'
++    with pytest.raises(RelationContractError, match='invalid_relation_payload'):
++        RelationIntent.from_payload(payload)
++
++
++@pytest.mark.parametrize('key,value', [('version', 2), ('version', True),
++                                      ('source_action', 'delete'), ('source_action', 'view')])
++def test_unknown_contract_and_non_update_source_actions_are_rejected(key, value):
++    payload = intent().to_payload()
++    payload[key] = value
++    with pytest.raises(RelationContractError, match='unsupported_relation_contract'):
++        RelationIntent.from_payload(payload)
++
++
++@pytest.mark.parametrize('value', ['', ' ', ' account', 'account ', 'account\nsecret', 101])
++def test_binding_identifier_must_be_explicit_and_canonical(value):
++    with pytest.raises(RelationContractError, match='invalid_binding_identifier'):
++        replace(BINDING, connection_generation=value)
++
++
++def test_fingerprint_is_canonical_and_not_just_event_id():
++    event = planned()
++    reverse_order = dict(reversed(list(event.to_payload().items())))
++    assert RelationIntent.from_payload(reverse_order).fingerprint() == event.fingerprint()
++    offset_revision = REVISION.astimezone(timezone(timedelta(hours=4)))
++    assert replace(event, local_revision=offset_revision).fingerprint() == event.fingerprint()
++    changes = [replace(event, actor_id=43), replace(event, source=DEAL),
++               replace(event, local_revision=REVISION + timedelta(microseconds=1)),
++               replace(event, before=None), replace(event, provider_expectation=None),
++               replace(event, provider_expectation=ProviderExpectation('other-contract', EXPECTED, DESIRED))]
++    assert all(other.event_id == event.event_id and other.fingerprint() != event.fingerprint()
++               for other in changes)
++
++
++def test_no_provider_semantics_or_digests_are_inferred_from_local_foreign_key():
++    event = intent()
++    assert event.provider_expectation is None
++    assert classify(event) == 'provider_contract_missing'
++    # Different possible full remote states remain distinct evidence. The
++    # contract does not choose which one implements the local change.
++    def digest(value):
++        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
++    add = digest([{'id': 201, 'is_main': True}, {'id': 202, 'is_main': False}])
++    replace_primary = digest([{'id': 201, 'is_main': False}, {'id': 202, 'is_main': True}])
++    replace_all = digest([{'id': 202, 'is_main': True}])
++    assert len({add, replace_primary, replace_all}) == 3
++    assert len({replace(event, provider_expectation=ProviderExpectation('synthetic', EXPECTED, desired))
++                .fingerprint() for desired in (add, replace_primary, replace_all)}) == 3
++
++
++@pytest.mark.parametrize('attempt', ['not_started', 'definitely_not_sent', 'unknown', 'acknowledged'])
++@pytest.mark.parametrize('observed,expected_result', [
++    (None, 'observation_unknown'), (OTHER, 'relation_conflict'), (DESIRED, 'desired_observed'),
++])
++def test_reconciliation_does_not_replay_missing_conflicting_or_desired_state(attempt, observed, expected_result):
++    assert classify(attempt_outcome=attempt, observed_digest=observed) == expected_result
++
++
++@pytest.mark.parametrize('attempt,result', [
++    ('not_started', 'expected_observed'), ('definitely_not_sent', 'expected_observed'),
++    ('unknown', 'outcome_unknown'), ('acknowledged', 'outcome_unknown'),
++])
++def test_unchanged_read_after_timeout_or_acknowledgement_does_not_prove_safe_retry(attempt, result):
++    assert classify(attempt_outcome=attempt) == result
++
++
++@pytest.mark.parametrize('changes', [
++    {'tenant_id': '10000000-0000-4000-8000-000000000002'},
++    {'provider': 'beinsystems'}, {'account_id': 'other-account'},
++    {'connection_generation': 'synthetic-generation-2'},
++])
++def test_read_back_from_another_connection_never_settles_this_event(changes):
++    assert classify(binding=replace(BINDING, **changes), observed_digest=DESIRED) == 'connection_changed'
++
++
++def test_old_event_or_contract_observation_never_settles_new_intent():
++    event = planned()
++    assert classify(event, event_fingerprint=replace(event, actor_id=43).fingerprint(),
++                    observed_digest=DESIRED) == 'event_changed'
++    assert classify(contract_version='old-contract', observed_digest=DESIRED) == 'provider_contract_changed'
++
++
++@pytest.mark.parametrize('digest', ['', 'a' * 63, 'G' * 64, {}, None])
++def test_invalid_state_evidence_cannot_be_interpreted_as_empty_relation(digest):
++    with pytest.raises(RelationContractError, match='invalid_relation_digest'):
++        ProviderExpectation('synthetic', digest, DESIRED)
++
++
++def test_expired_lease_is_not_definitely_not_sent_evidence():
++    with pytest.raises(RelationContractError, match='invalid_attempt_outcome'):
++        classify(attempt_outcome='lease_expired')
++
++
++def test_empty_remote_operation_is_observed_without_forcing_a_write():
++    # Some approved adapter might determine that the full remote relation set
++    # already satisfies a local change. Do not impose a remote cardinality rule.
++    event = intent(provider_expectation=ProviderExpectation('synthetic-v1', EXPECTED, EXPECTED))
++    assert classify(event) == 'desired_observed'
+diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py b/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..396ee24c44ff15207aecda451515b4b7bd4ea38a
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py
+@@ -0,0 +1,230 @@
++"""Isolated PostgreSQL/WASM journal tests with conditional provider mock only.
++
++The mock's atomic compare/apply is deliberately stronger than Kommo HTTP. These
++checks do NOT prove that production Kommo supports conditional relationship I/O.
++"""
++import json
++from datetime import datetime
++import uuid
++import pytest
++
++from test_tenant_support_inbox import database, db, A, B
++from tenant_crm_relation_contract import BoundIdentity, RecordRef, ProviderExpectation
++from tenant_crm_relation_identity import current_binding, bind_identity
++from tenant_crm_relation_kommo import CONTRACT_VERSION, digest
++from tenant_crm_relation_store import change_relation
++from tenant_crm_relation_delivery import drive
++from tenant_crm_native_access import CRMAccessError, require_local_relation
++
++
++@pytest.fixture
++def graph(db, monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    # The WASM bridge returns ISO timestamps; mirror psycopg's native values.
++    original = getattr(db, 'query', None)
++    def query(sql, params=()):
++        rows = original(sql, params)
++        for row in rows:
++            for key in ('updated_at', 'connected_at'):
++                if isinstance(row.get(key), str):
++                    row[key] = datetime.fromisoformat(row[key].replace('Z', '+00:00'))
++        return rows
++    if original:
++        monkeypatch.setattr(db, 'query', query)
++    db.execute("UPDATE saas_tenants SET modules='{\"customers\":true,\"deals\":true}' WHERE id=%s::uuid", (A,))
++    db.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,permissions)
++      VALUES(%s::uuid,81,'admin','["customers","deals"]')''', (A,))
++    matrix = {kind: {action: ('self' if action == 'update' else 'none')
++        for action in ('view', 'create', 'update', 'delete')} for kind in ('customers', 'deals')}
++    db.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
++      VALUES(%s::uuid,'members',%s::jsonb)''', (A, json.dumps({'81': {'access_scopes': matrix}})))
++    db.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain,connected_at)
++      VALUES(%s::uuid,'kommo','connected','synthetic.kommo.com',clock_timestamp())''', (A,))
++    db.execute('''INSERT INTO saas_crm_provider_settings(tenant_id,entity_type,provider,mode,primary_provider,
++      sync_direction,allowed_fields) VALUES(%s::uuid,'deal','kommo','beintaskbot','beintaskbot',
++      'to_external','["contact_id"]')''', (A,))
++    db.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name) VALUES(%s::uuid,'p','Pipeline')", (A,))
++    db.execute("INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name) VALUES(%s::uuid,'p','s','Stage')", (A,))
++    contacts = [RecordRef('contact', str(uuid.uuid4())) for _ in range(3)]
++    deal = RecordRef('deal', str(uuid.uuid4()))
++    for contact in contacts:
++        db.execute('''INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,access_responsible_id)
++          VALUES(%s::uuid,%s::uuid,'Synthetic',81)''', (contact.internal_id, A))
++    db.execute('''INSERT INTO saas_crm_native_deals(id,tenant_id,title,pipeline_id,stage_id,contact_id,access_responsible_id)
++      VALUES(%s::uuid,%s::uuid,'Synthetic','p','s',%s::uuid,81)''', (deal.internal_id, A, contacts[0].internal_id))
++    with db.cursor() as cur:
++        binding = current_binding(cur, A)
++        for record, external in [(deal, '10'), *zip(contacts, ('1','2','3'))]:
++            bind_identity(cur, BoundIdentity(record, external, binding), provenance='imported', evidence_id='synthetic-import')
++    db.commit()
++    return {'db': db, 'binding': binding, 'deal': deal, 'contacts': contacts}
++
++
++def enqueue(graph, *, source=None, before=None, after=None):
++    db, deal = graph['db'], graph['deal']
++    initial, desired = {'1': True, '2': False}, {'2': False, '3': True}
++    revision = db.execute('SELECT updated_at FROM saas_crm_native_deals WHERE id=%s::uuid', (deal.internal_id,))[0]['updated_at']
++    with db.cursor() as cur:
++        return change_relation(cur, tenant=A, actor=81, source=source or deal, changed=deal,
++            relation='deal_contact', before=before or graph['contacts'][0], after=after or graph['contacts'][2],
++            expected_revision=revision,
++            expectation=ProviderExpectation(CONTRACT_VERSION, digest(initial, 'deal_contact'), digest(desired, 'deal_contact')))
++
++
++class ConditionalMock:
++    def __init__(self, binding):
++        self.binding, self.state, self.calls = binding, {'1': True, '2': False}, []
++        self.timeout, self.crash, self.concurrent = False, False, False
++    def observe(self, binding, relation, changed_id):
++        assert binding == self.binding and relation == 'deal_contact' and changed_id == '10'
++        return dict(self.state)
++    def compare_and_apply(self, binding, relation, expected, request):
++        assert binding == self.binding
++        if self.concurrent:
++            self.state = {'1': False, '2': True}
++        if self.state != expected:
++            return 'conflict'
++        method, path, body = request
++        assert method == 'POST' and path.startswith('leads/10/') and len(body) == 1
++        self.calls.append(request)
++        key = str(body[0]['to_entity_id'])
++        if path.endswith('/link'):
++            assert body[0]['metadata'] == {'is_main': True}
++            self.state = {key: False for key in self.state}
++            self.state[key] = True
++        else:
++            assert path.endswith('/unlink') and 'metadata' not in body[0]
++            del self.state[key]
++        if self.crash: raise KeyboardInterrupt('simulated process loss')
++        if self.timeout: raise TimeoutError('simulated timeout after apply')
++        return 'applied'
++
++
++def result(graph, event):
++    return graph['db'].execute('SELECT * FROM saas_crm_relation_outbox WHERE id=%s::uuid', (event,))[0]
++
++
++def test_atomic_change_and_journal_rollback(graph):
++    intent = enqueue(graph)
++    assert result(graph, intent.event_id)['intent_hash'] == intent.fingerprint()
++    graph['db'].rollback()
++    assert not graph['db'].execute('SELECT id FROM saas_crm_relation_outbox')
++    row = graph['db'].execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid', (graph['deal'].internal_id,))[0]
++    assert str(row['contact_id']) == graph['contacts'][0].internal_id
++
++
++def test_dormant_production_path_and_existing_409(graph):
++    intent = enqueue(graph); graph['db'].commit()
++    assert drive(lambda: graph['db'], intent.event_id) == 'disabled'
++    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='scoped_relation_sync_not_configured'):
++        require_local_relation(cur, A, 'deal')
++
++
++def test_two_steps_preserve_secondary_and_duplicate_delivery_is_noop(graph):
++    intent = enqueue(graph); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding'])
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'synced'
++    assert adapter.state == {'2': False, '3': True}
++    assert len(adapter.calls) == 2
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'synced'
++    assert len(adapter.calls) == 2
++
++
++@pytest.mark.parametrize('failure', ['timeout', 'crash'])
++def test_uncertain_after_apply_is_never_replayed_or_followed_by_unlink(graph, failure):
++    intent = enqueue(graph); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding']); setattr(adapter, failure, True)
++    if failure == 'crash':
++        with pytest.raises(KeyboardInterrupt): drive(lambda: graph['db'], intent.event_id, adapter=adapter)
++    else:
++        assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'unknown'
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'unknown'
++    assert len(adapter.calls) == 1
++    assert adapter.state == {'1': False, '2': False, '3': True}
++
++
++@pytest.mark.parametrize('mutation', [
++    "UPDATE saas_tenant_members SET active=false WHERE telegram_id=81",
++    "UPDATE saas_tenants SET status='disabled'",
++    "UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'",
++    "UPDATE saas_tenant_integrations SET account_domain='other.kommo.com'",
++    "UPDATE saas_tenant_integrations SET status='disconnected'",
++    "UPDATE saas_crm_provider_settings SET sync_direction='off'",
++    "UPDATE saas_crm_relation_identities SET external_id='99' WHERE entity_type='deal'",
++    "UPDATE saas_crm_native_deals SET access_responsible_id=11",
++    "UPDATE saas_crm_native_deals SET updated_at=updated_at+interval '1 second'",
++    "UPDATE saas_crm_native_contacts SET archived_at=now()",
++])
++def test_dispatch_revalidates_every_fence(graph, mutation):
++    intent = enqueue(graph); graph['db'].commit()
++    graph['db'].execute(mutation); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding'])
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) in ('disabled', 'superseded')
++    assert adapter.calls == []
++
++
++def test_remote_concurrent_edit_is_conditional_conflict_without_overwrite(graph):
++    intent = enqueue(graph); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding']); adapter.concurrent = True
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'conflict'
++    assert adapter.calls == [] and adapter.state == {'1': False, '2': True}
++
++
++def test_reverse_contact_source_requires_only_its_update_not_deal_update(graph):
++    graph['db'].execute('UPDATE saas_crm_native_deals SET access_responsible_id=11')
++    intent = enqueue(graph, source=graph['contacts'][2]); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding'])
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
++    graph['db'].execute('UPDATE saas_crm_native_contacts SET access_responsible_id=11'); graph['db'].commit()
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'disabled'
++    assert len(adapter.calls) == 1  # Revocation between steps prevents unlink.
++
++
++def test_mapping_never_adopts_legacy_id_after_reconnect(graph):
++    graph['db'].execute("UPDATE saas_tenant_integrations SET connected_at=connected_at+interval '1 second'")
++    with pytest.raises(CRMAccessError, match='relation_mapping_unverified'): enqueue(graph)
++
++
++def test_owner_verification_rejects_nonowner_and_cross_tenant_mapping(graph):
++    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='relation_identity_owner_required'):
++        bind_identity(cur, BoundIdentity(graph['deal'], '10', graph['binding']),
++                      provenance='owner_verified', evidence_id='assertion', verified_by=81)
++    foreign = RecordRef('contact', str(uuid.uuid4()))
++    graph['db'].execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name) VALUES(%s::uuid,%s::uuid,'Foreign')", (foreign.internal_id, B))
++    with graph['db'].cursor() as cur, pytest.raises(CRMAccessError, match='relation_resource_unavailable'):
++        bind_identity(cur, BoundIdentity(foreign, '99', graph['binding']), provenance='imported', evidence_id='foreign')
++
++
++def test_deal_card_cannot_bypass_relation_gate_via_full_record_export(graph, monkeypatch):
++    import tenant_crm_native_deals as deals
++    monkeypatch.setattr(deals, '_connect', lambda: graph['db'])
++    with pytest.raises(CRMAccessError, match='scoped_relation_sync_not_configured'):
++        deals.update_deal(A, graph['deal'].internal_id, 'Synthetic', 'p', 's',
++                          contact_id=graph['contacts'][2].internal_id, actor_id=81)
++    row = graph['db'].execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid',
++                              (graph['deal'].internal_id,))[0]
++    assert str(row['contact_id']) == graph['contacts'][0].internal_id
++    assert not graph['db'].execute('SELECT id FROM saas_crm_sync_outbox')
++
++
++def test_policy_revocation_between_two_successful_steps_prevents_detach(graph):
++    intent = enqueue(graph); graph['db'].commit()
++    adapter = ConditionalMock(graph['binding'])
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'pending'
++    graph['db'].execute("""UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,
++      '{81,access_scopes,deals,update}', '\"none\"'::jsonb) WHERE policy_key='members'""")
++    graph['db'].commit()
++    assert drive(lambda: graph['db'], intent.event_id, adapter=adapter) == 'disabled'
++    assert len(adapter.calls) == 1 and '1' in adapter.state
++
++
++@pytest.mark.parametrize('scoped,change_contact', [(False, False), (False, True), (True, False)])
++def test_unrelated_edit_and_gate_off_legacy_relation_behavior_preserved(graph, monkeypatch, scoped, change_contact):
++    import tenant_crm_native_deals as deals
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true' if scoped else 'false')
++    monkeypatch.setattr(deals, '_connect', lambda: graph['db'])
++    contact = graph['contacts'][2 if change_contact else 0].internal_id
++    row = deals.update_deal(A, graph['deal'].internal_id, 'Changed scalar', 'p', 's',
++                           contact_id=contact, actor_id=81)
++    assert row['title'] == 'Changed scalar' and str(row['contact_id']) == contact
+diff --git a/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6b21e3c27fa89646defa85fdbf690e9c908bc46
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_crm_relation_kommo.py
+@@ -0,0 +1,67 @@
++"""Pure planning tests: no provider network or credentials."""
++import pytest
++from tenant_crm_relation_kommo import plan, snapshot, digest, RelationConflict
++
++
++def test_replace_main_preserves_all_secondaries_and_uses_narrow_payloads():
++    p = plan('deal_contact', '10', '1', '3', {'1': True, '2': False, '3': False})
++    assert p.states == ({'1': True, '2': False, '3': False},
++                        {'1': False, '2': False, '3': True}, {'2': False, '3': True})
++    assert p.request(0) == ('POST', 'leads/10/link', [
++        {'to_entity_id': 3, 'to_entity_type': 'contacts', 'metadata': {'is_main': True}}])
++    assert p.request(1) == ('POST', 'leads/10/unlink', [{'to_entity_id': 1, 'to_entity_type': 'contacts'}])
++    assert p.read_path() == 'leads/10/links'
++
++
++def test_unlink_never_deletes_secondary_contacts():
++    p = plan('deal_contact', '10', '1', None, {'1': True, '2': False})
++    assert p.states[-1] == {'2': False}
++    assert len(p.steps) == 1 and p.steps[0].target_id == '1'
++
++
++def test_company_replacement_is_two_explicit_steps():
++    p = plan('contact_company', '7', '1', '2', {'1': False})
++    assert p.states == ({'1': False}, {}, {'2': False})
++    assert p.request(0) == ('POST', 'contacts/7/unlink', [{'to_entity_id': 1, 'to_entity_type': 'companies'}])
++    assert p.request(1) == ('POST', 'contacts/7/link', [{'to_entity_id': 2, 'to_entity_type': 'companies'}])
++
++
++@pytest.mark.parametrize('payload', [{}, {'_embedded': {'links': None}},
++    {'_embedded': {'links': []}, '_links': {'next': {'href': 'next'}}},
++    {'_embedded': {'links': []}, '_links': []},
++    {'_embedded': {'links': []}, '_total_items': 2},
++    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts'}]}},
++    {'_embedded': {'links': [{'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': 1}}]}}])
++def test_incomplete_or_ambiguous_remote_graph_is_not_empty(payload):
++    with pytest.raises(RelationConflict): snapshot(payload, 'deal_contact', '10')
++
++
++def test_snapshot_main_metadata_is_part_of_full_digest():
++    raw = {'_embedded': {'links': [
++        {'to_entity_id': 1, 'to_entity_type': 'contacts', 'metadata': {'main_contact': True}},
++        {'to_entity_id': 2, 'to_entity_type': 'contacts', 'metadata': {'main_contact': False}}]}}
++    assert snapshot(raw, 'deal_contact', '10') == {'1': True, '2': False}
++    assert digest({'1': True, '2': False}, 'deal_contact') != digest({'1': False, '2': True}, 'deal_contact')
++    assert digest({'1': True}, 'deal_contact') != digest({'1': True, '2': False}, 'deal_contact')
++
++
++@pytest.mark.parametrize('before,after,initial', [('1', '3', {'2': True}),
++    (None, '3', {'2': True}), ('1', '3', {'1': True, '2': True})])
++def test_conflicting_main_never_plans_write(before, after, initial):
++    with pytest.raises(RelationConflict): plan('deal_contact', '10', before, after, initial)
++
++
++def test_binding_refresh_stable_reconnect_distinct_and_malformed_generation_closed():
++    from datetime import datetime, timezone, timedelta
++    from tenant_crm_relation_identity import connection_binding
++    from uuid import UUID
++    tenant = str(UUID(int=1)); stamp = datetime.now(timezone.utc)
++    row = {'provider': 'kommo', 'status': 'connected', 'account_domain': 'synthetic.kommo.com', 'connected_at': stamp}
++    first = connection_binding(tenant, row)
++    assert connection_binding(tenant, {**row, 'updated_at': stamp + timedelta(seconds=1)}) == first
++    assert connection_binding(tenant, {**row, 'connected_at': stamp + timedelta(seconds=1)}) != first
++    assert connection_binding(tenant, {**row, 'account_domain': 'other.kommo.com'}) != first
++    assert connection_binding(tenant, {**row, 'provider': 'kommo_manual'}) != first
++    for changed in ({'connected_at': 'bad'}, {'connected_at': stamp.replace(tzinfo=None)},
++                    {'status': 'disconnected'}, {'provider': 'beinsystems'}):
++        assert connection_binding(tenant, {**row, **changed}) is None
+diff --git a/beintaskbot-main/tests/test_tenant_crm_sync_windows.py b/beintaskbot-main/tests/test_tenant_crm_sync_windows.py
+index 020e4696772156bf6670d813aa62ead8010225ae..1659e939a3843d0c235779b5d9ca5bad3cab35bd 100644
+--- a/beintaskbot-main/tests/test_tenant_crm_sync_windows.py
++++ b/beintaskbot-main/tests/test_tenant_crm_sync_windows.py
+@@ -45,7 +45,9 @@ class IncrementalStorageTests(unittest.TestCase):
+     store = base.StorageTests.store
+     current = base.StorageTests.current
+     def test_new_connection_discards_old_account_watermark(self):
+-        self.cur.fetchone.side_effect = [{'account_domain':'new.kommo.com','connected_at':'new'},
++        self.cur.fetchall.return_value = [
++            {'provider':'kommo','status':'connected','account_domain':'new.kommo.com','connected_at':'new'}]
++        self.cur.fetchone.side_effect = [
+             {**self.row,'status':'done','watermark':9999999999,'last_full_sync':9999999999},
+             {'resource':'leads','status':'queued'}]
+         self.module.enqueue('company-a','leads')
+@@ -62,7 +64,9 @@ class IncrementalStorageTests(unittest.TestCase):
+         self.assertNotIn('watermark=',self.cur.execute.call_args.args[0])
+ 
+     def test_manual_full_can_restart_failed_cursor(self):
+-        self.cur.fetchone.side_effect = [{'account_domain':'example.kommo.com','connected_at':'connected'},
++        self.cur.fetchall.return_value = [
++            {'provider':'kommo','status':'connected','account_domain':'example.kommo.com','connected_at':'connected'}]
++        self.cur.fetchone.side_effect = [
+             {**self.row,'status':'failed','watermark':100,'last_full_sync':100},
+             {'resource':'leads','status':'queued'}]
+         self.module.enqueue('company-a','leads',force_full=True)
+diff --git a/beintaskbot-main/tests/test_tenant_customer_voice_service.py b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
+index 084032d34f2ebe7411bc4dc74e8d0d849587e61b..9a5514b91be11606d95dd6854597f80a948d0b65 100644
+--- a/beintaskbot-main/tests/test_tenant_customer_voice_service.py
++++ b/beintaskbot-main/tests/test_tenant_customer_voice_service.py
+@@ -52,6 +52,7 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
+     def setUp(self):
+         self.item = {'key': (TENANT, 20, REQUEST), 'command': COMMAND, 'connection': ['connect', CHANNEL, JID]}
+         self.receipt = _checked_receipt(RECEIPT, ROUTE, REQUEST)
++        patch('tenant_customer_voice_service.dispatch_guarded',side_effect=lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs)).start()
+         self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
+         self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
+         self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()
+diff --git a/beintaskbot-main/tests/test_tenant_linear.py b/beintaskbot-main/tests/test_tenant_linear.py
+index 7224a28ab388ea004dab07ec6c5eb1f05932cd54..269692657ae4aa6b8a09aff4fa8947da82f8970e 100644
+--- a/beintaskbot-main/tests/test_tenant_linear.py
++++ b/beintaskbot-main/tests/test_tenant_linear.py
+@@ -53,7 +53,7 @@ class StorageTests(unittest.TestCase):
+         self.conn.commit.assert_called_once()
+ 
+     def test_encryption_failure_stops_before_provider(self):
+-        self.service.command.__globals__['_fernet'].side_effect = RuntimeError('configuration')
++        self.service.command.__wrapped__.__globals__['_fernet'].side_effect = RuntimeError('configuration')
+         with self.assertRaises(RuntimeError): self.service.command(PROFILE, {'action': 'connect', 'api_key': 'key'})
+         self.verify.assert_not_called(); self.connect.assert_not_called()
+ 
+@@ -87,7 +87,7 @@ class StorageTests(unittest.TestCase):
+         with self.assertRaises(TenantLinearError): self.service.credential(PROFILE)
+ 
+     def test_foreign_status_or_project_fails_before_write(self):
+-        self.service.command.__globals__['choices'] = Mock(return_value={'team': {
++        self.service.command.__wrapped__.__globals__['choices'] = Mock(return_value={'team': {
+             'states': {'nodes': []}, 'projects': {'nodes': []}}})
+         with self.assertRaises(TenantLinearError):
+             self.service.command(PROFILE, {'action': 'settings', 'settings': {'team_id': ID, 'done_state_ids': [ID]}})
+diff --git a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
+index 02546487b40ce72c0fc99d942a593867870ceb7d..1a81406d946135b65c02c0f2ab45e447448d3c30 100644
+--- a/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
++++ b/beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs
+@@ -29,6 +29,7 @@ async function harness(){
+   if(url==='/api/platform/members'){state.memberReads++;return {ok:true,json:async()=>({success:true,members:state.rows})};}
+   return {ok:true,json:async()=>({success:true,status:'disconnected',updated_at:'v1',settings:{},members:state.rows})};
+  };
++ w.eval(fs.readFileSync(require("node:path").join(__dirname,"../docs/tenant-shared-integration-settings.js"),"utf8"));
+  w.eval(source);watcher.activate({member:{tenant_id:'A',telegram_id:1,role:'owner'}});
+  w.document.getElementById('tlLoad').click();await flush();
+  return {w,state,watcher,root:id=>w.document.querySelector(`[data-tl-employee="${id}"]`)};
+diff --git a/beintaskbot-main/tests/test_tenant_member_store.py b/beintaskbot-main/tests/test_tenant_member_store.py
+index 4eac8d4dfd15f21dcbc07c72b8d8b569fde0887c..1238a7e55fbbe34414e17cb3f048ca72c288a60e 100644
+--- a/beintaskbot-main/tests/test_tenant_member_store.py
++++ b/beintaskbot-main/tests/test_tenant_member_store.py
+@@ -24,7 +24,7 @@ class Cursor:
+         if 'AS ready' in query: return {'ready': True}
+         if 'SELECT id,modules' in query: return {'id':'tenant-a','modules':{'tasks':True}}
+         if 'INSERT INTO saas_tenant_members' in query:
+-            _, person, name, role, permissions, _ = params
++            _, person, name, role, permissions, _, department = params
+         elif 'UPDATE saas_tenant_members SET display_name' in query:
+             name, role, permissions, _, person = params
+         else: raise AssertionError(query)
+diff --git a/beintaskbot-main/tests/test_tenant_members_api.py b/beintaskbot-main/tests/test_tenant_members_api.py
+index dc362de69483b9840e4b7cd0d4293c14aac4639e..f5ee0a2fb09d392d66be23df7d2b09178bd73b2c 100644
+--- a/beintaskbot-main/tests/test_tenant_members_api.py
++++ b/beintaskbot-main/tests/test_tenant_members_api.py
+@@ -54,6 +54,24 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual((await self.api["invite_requests"](self.request("GET"))).status, 403)
+         self.listing.assert_not_called(); self.create.assert_not_called(); self.requests.assert_not_called()
+ 
++    async def test_scoped_update_without_read_returns_receipt_not_failed_readback(self):
++        from test_employee_card_scopes import actor
++        self.member.return_value = actor('none', 'all')
++        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
++            response = await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))
++        self.assertEqual(response.status, 200)
++        self.assertEqual(self.payload(response), {'success': True, 'applied': True})
++        self.deactivate.assert_called_once_with(tenant_id='a', owner_id=2, telegram_id=3)
++        self.listing.assert_not_called()
++
++    async def test_scoped_read_does_not_admit_update(self):
++        from test_employee_card_scopes import actor
++        self.member.return_value = actor('all', 'none')
++        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
++            self.assertEqual((await self.api['members'](self.request('GET'))).status, 200)
++            self.assertEqual((await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))).status, 403)
++        self.deactivate.assert_not_called()
++
+     async def test_member_list_upsert_and_deactivate(self):
+         result = self.payload(await self.api["members"](self.request("GET")))
+         self.assertEqual(result["members"], [{"telegram_id": 22}])
+diff --git a/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1edc19f4d7d223fff47c235f35ff1b2f6f6b381a
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_news_member_read_postgres.py
+@@ -0,0 +1,101 @@
++"""Published company news is readable without a Linear grant; all writes stay protected."""
++import json
++import uuid
++
++import pytest
++from aiohttp.test_utils import TestClient, TestServer
++from aiohttp import web
++from unittest.mock import Mock
++
++import tenant_news as news
++from tenant_news_api import news_handler
++from tenant_linear_policy import TenantLinearError
++from tenant_member_access import page_capabilities
++from test_company_employees_navigation_postgres import A,B,database,db,staff
++
++
++@pytest.fixture
++def feed(staff,monkeypatch):
++    monkeypatch.setattr(news,'_connect',staff['factory'])
++    import tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema
++    for module in (tenant_linear_observer_schema,tenant_news_ai_schema,tenant_news_telegram_schema):
++        monkeypatch.setattr(module,'_ready',False)
++    with staff['factory']() as conn:
++        news.ensure_observer_schema(conn)
++        for tenant,status,age,title in [(A,'published',1,'A shared'),(B,'published',1,'B private'),
++                (A,'pending',1,'A pending private'),(A,'rejected',1,'A rejected private'),(A,'published',100,'A expired')]:
++            key=str(uuid.uuid4())
++            conn.execute('''INSERT INTO saas_linear_news
++              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
++              VALUES(%s,%s,%s,'SRC-1','Project',%s,'Public summary','https://example.test',%s::jsonb,%s,
++                now()-(%s * interval '1 day'))''',(tenant,key,key,title,json.dumps({'_news_ai':{'private':'SECRET CLASSIFICATION'},'private':'SECRET SOURCE'}),status,age))
++    return staff
++
++
++def reader():return {'tenant_id':A,'telegram_id':32,'role':'operator','active':True,'permissions':[]}
++
++
++def test_active_employee_reads_only_published_same_company_without_linear(feed,monkeypatch):
++    monkeypatch.setattr(news,'_read_tenant_workflow',Mock(side_effect=AssertionError('Published reading must not require integration rights')))
++    response=news.member_published(reader())
++    assert response['tenant_id']==A and response['user_id']==32
++    assert [row['title'] for row in response['news']]==['A shared']
++    serialized=json.dumps(response)
++    for private in ('SECRET','reviewed_by','telegram_status','classification','source','status','updated_at'):
++        assert private not in serialized
++    assert page_capabilities({**reader(),'modules':{}})['news'] is True
++    assert page_capabilities({**reader(),'active':False})['news'] is False
++
++
++@pytest.mark.parametrize('change',['inactive_member','inactive_company','not_member'])
++def test_reader_rechecks_current_membership_and_company(feed,change):
++    with feed['factory']() as conn:
++        if change=='inactive_member':conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=32',(A,))
++        if change=='inactive_company':conn.execute("UPDATE saas_tenants SET status='suspended' WHERE id=%s",(A,))
++    session={**reader(),'telegram_id':999999} if change=='not_member' else reader()
++    with pytest.raises(TenantLinearError) as error:news.member_published(session)
++    assert error.value.status==403
++
++
++def test_reader_cannot_read_review_queues_or_publish_reject_or_send(feed):
++    for status in ('pending','published','rejected'):
++        with pytest.raises(TenantLinearError) as error:news.listing(reader(),status=status)
++        assert error.value.status==403
++    for action in ('publish','reject','create_publish'):
++        data={'action':action,'confirm_publication':True,'request_id':str(uuid.uuid4()),'id':str(uuid.uuid4()),
++            'title':'Disallowed','summary':'Disallowed','project_name':'Test','url':''}
++        with pytest.raises(TenantLinearError) as error:news.command(reader(),data)
++        assert error.value.status==403
++    from tenant_news_telegram_settings import read
++    import tenant_news_telegram_settings
++    with pytest.MonkeyPatch.context() as monkeypatch:
++        monkeypatch.setattr(tenant_news_telegram_settings,'_connect',feed['factory'])
++        with pytest.raises(TenantLinearError):read(reader())
++
++
++def test_member_feed_keyset_is_tenant_scoped(feed):
++    with feed['factory']() as conn:
++        for n in range(33):
++            key=str(uuid.uuid4())
++            conn.execute('''INSERT INTO saas_linear_news
++              (tenant_id,id,issue_id,identifier,project_name,title,summary,url,source,status,published_at)
++              VALUES(%s,%s,%s,'','Test',%s,'Text','','{}','published',now())''',(A,key,key,'Page '+str(n)))
++    first=news.member_published(reader());second=news.member_published(reader(),after=first['after'])
++    assert len(first['news'])==30 and len(second['news'])==4 and second['after'] is None
++    assert len({r['id'] for r in first['news']+second['news']})==34
++    assert 'B private' not in json.dumps([first,second])
++
++
++@pytest.mark.asyncio
++async def test_actual_member_api_feed_cannot_select_other_tenant_or_review_status(feed):
++    app=web.Application();handle=news_handler(lambda request:reader(),'http://fixture.test',Mock())
++    app.router.add_get('/api/platform/news',handle);app.router.add_post('/api/platform/news',handle)
++    async with TestClient(TestServer(app)) as client:
++        response=await client.get('/api/platform/news?feed=published&status=pending&tenant_id='+B)
++        assert response.status==200
++        result=await response.json();assert [r['title'] for r in result['news']]==['A shared']
++        assert response.headers['Vary']=='Cookie'
++        assert (await client.get('/api/platform/news?status=pending')).status==403
++        response=await client.post('/api/platform/news?feed=published',headers={'Origin':'http://fixture.test'},json={
++            'expected_tenant_id':A,'expected_user_id':32,'action':'reject','id':str(uuid.uuid4())})
++        assert response.status==403
+diff --git a/beintaskbot-main/tests/test_tenant_news_member_ui.cjs b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e1263042fd32abf76411bafc69aa5e09ba0cb624
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_news_member_ui.cjs
+@@ -0,0 +1,22 @@
++const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
++const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
++const read=name=>fs.readFileSync(path.join(__dirname,'../docs',name),'utf8');
++const settle=async()=>{for(let n=0;n<12;n++)await new Promise(resolve=>setImmediate(resolve))};
++(async()=>{
++ const dom=new JSDOM('<head></head><body><nav class="nav"></nav><main></main></body>',{url:'https://fixture.test/app?view=news',runScripts:'outside-only',pretendToBeVisual:true});
++ const w=dom.window,calls=[],profile={member:{tenant_id:'company-a',telegram_id:32,active:true,role:'operator',permissions:[]},capabilities:{pages:{news:true},modules:{linear:false}},integrations:[]};
++ w.tenantProfileSnapshot=profile;w.tenantI18n={language:'ru'};w.Response=Response;w.confirm=()=>true;w.tenantAppNavigate=view=>{w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+view));w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view}}))};
++ let held=null;w.fetch=async(url,options={})=>{calls.push({url,options});if(String(url).includes('news?')){const response=()=>new Response(JSON.stringify({success:true,tenant_id:profile.member.tenant_id,user_id:profile.member.telegram_id,news:[{id:'n1',title:'Shared published news',summary:'Safe text',published_at:'2026-11-10',href:'',url:'',project_name:'Test'}]}));if(held)return new Promise(resolve=>held.resolve=()=>resolve(response()));return response()}throw Error('Unexpected endpoint '+url)};
++ try{
++  w.eval(read('tenant-view-demand.js'));w.eval(read('tenant-news.js'));await settle();
++  assert.equal(w.tenantViewDemand.newsAvailable(profile),true);assert.equal(w.tenantViewDemand.newsReviewAvailable(profile),false);
++  assert(calls.some(call=>call.url==='/api/platform/news?feed=published'));assert.equal(calls.some(call=>call.url.includes('/telegram')),false);
++  assert.match(w.document.getElementById('tnRows').textContent,/Shared published news/);
++  for(const id of ['tnCreate','tnStatus','tnRecover'])assert(w.document.getElementById(id).hidden,id);
++  assert.equal(w.document.querySelector('[data-edit],[data-reject],[data-telegram],[data-cancel-telegram]'),null);
++  assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Telegram|AI:/);
++  const count=calls.length;w.document.getElementById('tnCreate').click();w.document.getElementById('tnRecover').click();assert.equal(w.document.getElementById('tnModal').classList.contains('show'),false);assert.equal(calls.length,count);
++  held={};w.document.getElementById('tnRefresh').click();await settle();w.document.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));held.resolve();await settle();assert.equal(w.document.getElementById('tnNav').hidden,true);assert.doesNotMatch(w.document.getElementById('tnRows').textContent,/Shared published news/,'Late read cannot resurrect revoked content');
++  console.log('PASS common news reader without Linear: safe feed only, no review/Telegram calls or controls, forged clicks inert and auth revoke fences');
++ }finally{dom.window.close()}
++})().catch(error=>{console.error(error.stack);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_tenant_night_report_api.py b/beintaskbot-main/tests/test_tenant_night_report_api.py
+index 88956687bd8d269f5dc0cd73e9dd3597ad2bacaf..2ee30082842a441f94025fb73faac9694983447f 100644
+--- a/beintaskbot-main/tests/test_tenant_night_report_api.py
++++ b/beintaskbot-main/tests/test_tenant_night_report_api.py
+@@ -64,10 +64,18 @@ def test_safe_errors(error,status):
+     assert json.loads(response.text)['success'] is False
+ 
+ 
+-def test_report_ui_is_app_only_and_preserves_pilot():
+-    import subprocess
+-    changed=subprocess.check_output(['git','diff','--name-only','77d5312a','--','docs/index.html','docs/tenant-webapp.html'],cwd=ROOT,text=True)
+-    assert changed==''
++def test_report_ui_is_app_only_and_has_no_pilot_dependencies():
++    # Assert the actual route/asset boundary. A whole-tree git diff against the
++    # original feature branch base also flags unrelated later pilot work and
++    # cannot establish whether this report depends on or rewrites the pilot.
++    page=(ROOT/'docs/tenant-night-report.html').read_text(encoding='utf-8-sig')
++    assert 'id="nightReport"' in page
++    assert 'src="/assets/tenant-night-report.js"' in page
++    assert 'href="/assets/tenant-night-report.css"' in page
++    assert '/webapp' not in page and 'tenant-webapp' not in page
++    pilot=(ROOT/'docs/index.html').read_text(encoding='utf-8-sig')
++    assert 'nightReportNav' not in pilot and '/assets/tenant-night-report.js' not in pilot
++    assert '/app/night-report' not in pilot
+     app=(ROOT/'docs/tenant-app.html').read_text(encoding='utf-8-sig')
+     assert app.count('id="nightReportNav"') == 1
+     assert 'href="/app/night-report"' in app
+diff --git a/beintaskbot-main/tests/test_tenant_night_report_ui.cjs b/beintaskbot-main/tests/test_tenant_night_report_ui.cjs
+index de016b6f85f6ad614b4063b434ed1009758c96ee..fff8bd8b4c1b9e10f3ea16cec0a89ff8cf50b9f7 100644
+--- a/beintaskbot-main/tests/test_tenant_night_report_ui.cjs
++++ b/beintaskbot-main/tests/test_tenant_night_report_ui.cjs
+@@ -7,10 +7,10 @@ async function waitFor(check,label){for(let n=0;n<100;n++){if(check())return;awa
+ function setup(url='https://crm.test/app/night-report',options={}){
+  const dom=new JSDOM(read('docs/tenant-night-report.html'),{url,runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[],errors=[];
+  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;};w.matchMedia=()=>({matches:false});w.addEventListener('error',e=>errors.push(e.error));
+- const member={tenant_id:A,telegram_id:11,role:'owner',active:true};let deny=false,deferred=null;
++ const member={tenant_id:A,telegram_id:11,role:'owner',active:true};let deny=false,deferred=null,detailDeny=0,detailDeferred=null;
+  const ticket={id:ID,channel_id:CA,conversation_id:'same-jid',lead_id:41,contact_name:'Customer <img src=x onerror=alert(1)>',phone:'+994111',channel_name:'Night WhatsApp',description:'No internet <script>bad()</script>',summary:'AI suggested restarting router',suggestions:'Restart router',next_steps:'Check line',status:'waiting',assigned_to:null,created_in_shift:true,created_at:'2026-10-15T21:00:00Z',updated_at:'2026-10-16T01:00:00Z'};
+  const messages=[{id:'message-1',body:'<img src=x onerror=alert(1)>',direction:'incoming',message_type:'text',happened_at:'2026-10-15T21:00:00Z'}];
+- function payload(tenant=A,offset='0') {return {tenant_id:tenant,company_name:tenant===A?'Company A':'Company B',scope:'connect',period:{date:'2026-10-15',timezone:'Asia/Baku',start:'19:00',end:'09:00',starts_at:'2026-10-15T19:00:00+04:00',ends_at:'2026-10-16T09:00:00+04:00',state:'completed'},defaults:{timezone_source:'company',multiple_schedules:false},metrics:{dialogs:3,ai_dialogs:2,handed_off:1,unresolved:2,ai_errors:1,connect_errors:0,taken_in_work:1,attention_count:2},tickets:offset==='0'?[{...ticket}]:[{...ticket,id:'other-ticket',contact_name:'Older backlog'}],failures:[{kind:'ai',code:'ai_failed',channel_id:CC,conversation_id:'same-jid',contact_name:'Second channel',channel_name:'Second WhatsApp',lead_id:43}],generated_at:'2026-10-16T09:01:00+04:00',next_offset:offset==='0'?50:null};}
++ function payload(tenant=A,offset='0') {return {tenant_id:tenant,company_name:tenant===A?'Company A':'Company B',scope:'connect',access_scope:options.scope||null,access_version:options.missingVersion?null:options.scope?'access-v1':'legacy-v1',period:{date:'2026-10-15',timezone:'Asia/Baku',start:'19:00',end:'09:00',starts_at:'2026-10-15T19:00:00+04:00',ends_at:'2026-10-16T09:00:00+04:00',state:'completed'},defaults:{timezone_source:'company',multiple_schedules:false},metrics:{dialogs:3,ai_dialogs:2,handed_off:1,unresolved:2,ai_errors:1,connect_errors:0,taken_in_work:1,attention_count:2},tickets:offset==='0'?[{...ticket}]:[{...ticket,id:'other-ticket',contact_name:'Older backlog'}],failures:[{kind:'ai',code:'ai_failed',channel_id:CC,conversation_id:'same-jid',contact_name:'Second channel',channel_name:'Second WhatsApp',lead_id:43}],generated_at:'2026-10-16T09:01:00+04:00',next_offset:offset==='0'?50:null};}
+  const result=value=>({ok:true,status:200,json:async()=>structuredClone({success:true,result:value})});
+  w.fetch=async(url,init={})=>{const u=new URL(String(url),'https://crm.test');calls.push({url:u,method:init.method||'GET'});if(u.pathname==='/api/platform/me')return{ok:true,status:200,json:async()=>({member})};
+    const tenant=u.searchParams.get('expected_tenant_id');
+@@ -19,11 +19,13 @@ function setup(url='https://crm.test/app/night-report',options={}){
+      if(deferred){const fn=deferred;deferred=null;return await fn();}
+      return result(payload(tenant,u.searchParams.get('offset')));
+    }
++   if(detailDeny)return{ok:false,status:detailDeny,json:async()=>({success:false,error:'Detail access revoked'})};
++   if(detailDeferred){const fn=detailDeferred;detailDeferred=null;return await fn();}
+    const channel=u.searchParams.get('channel_id')||CA;
+-   return result({ticket:u.pathname.includes('/tickets/')?ticket:null,dialog:{channel_name:channel===CA?'Night WhatsApp':'Second WhatsApp',channel_id:channel,conversation_id:'same-jid',contact_name:'Customer',lead_id:channel===CA?41:43},messages:messages.map(m=>({...m,id:u.searchParams.has('before')?'older':m.id})),next_before:u.searchParams.has('before')?null:'message-1'});
++   return result({access_scope:options.scope||null,access_version:options.missingVersion?null:options.scope?'access-v1':'legacy-v1',history_version:options.scope?'history-v1':'legacy-history-v1',history_scope:options.scope?'ticket_messages':'conversation',ticket:u.pathname.includes('/tickets/')?ticket:null,dialog:{channel_name:channel===CA?'Night WhatsApp':'Second WhatsApp',channel_id:channel,conversation_id:'same-jid',contact_name:'Customer',lead_id:channel===CA?41:43},messages:messages.map(m=>({...m,id:u.searchParams.has('before')?'older':m.id})),next_before:u.searchParams.has('before')?null:'message-1'});
+  };
+  w.eval(read('docs/tenant-night-report.js'));
+- return {w,d,calls,errors,member,payload,result,ticket,get deny(){return deny;},set deny(value){deny=value;},set defer(value){deferred=value;}};
++ return {w,d,calls,errors,member,payload,result,ticket,get deny(){return deny;},set deny(value){deny=value;},set defer(value){deferred=value;},set detailDeny(value){detailDeny=value;},set detailDefer(value){detailDeferred=value;}};
+ }
+ (async()=>{
+  const app=setup(),{w,d,calls}=app;await waitFor(()=>d.querySelector('[data-metric=dialogs]'),'initial report');
+@@ -40,5 +42,79 @@ function setup(url='https://crm.test/app/night-report',options={}){
+  const stale=setup();await waitFor(()=>stale.d.querySelector('[data-metric]'),'stale setup');let resolveOld;stale.defer=()=>new Promise(resolve=>{resolveOld=resolve;});stale.d.querySelector('#nrForm').dispatchEvent(new stale.w.Event('submit',{cancelable:true}));await waitFor(()=>resolveOld,'deferred request');stale.w.document.dispatchEvent(new stale.w.CustomEvent('tenant-profile',{detail:{member:{...stale.member,tenant_id:B}}}));await waitFor(()=>stale.d.querySelector('#nrCompany').textContent==='Company B','new company');resolveOld(stale.result({...stale.payload(A),company_name:'SECRET stale company'}));await settle();assert.equal(stale.d.querySelector('#nrCompany').textContent,'Company B');assert.ok(!stale.d.body.textContent.includes('SECRET'));stale.w.close();
+  const deep=setup('https://crm.test/app/night-report?tenant_id='+B+'&ticket_id='+ID);await settle();assert.equal(deep.calls.filter(c=>c.url.pathname.includes('/night-report')).length,0);assert.equal(deep.d.querySelector('#nrResult').children.length,0);deep.w.close();
+  const linked=setup('https://crm.test/app/night-report?tenant_id='+A+'&ticket_id='+ID);await waitFor(()=>linked.d.querySelector('#nrHistory'),'direct ticket URL');assert.equal(linked.d.querySelector('#nrDetail').open,true);linked.w.close();
+- console.log('PASS: report metrics, filters/date, ticket/history/channel links, pagination, safe text, read-only GETs, language and stale tenant isolation.');
++ for(const [lang,scope,scopeText] of [['ru','self','свои источники'],['az','department','şöbənizin'],['en','all','all company sources']]){
++   const scoped=setup('https://crm.test/app/night-report?site_lang='+lang,{scope});await waitFor(()=>scoped.d.querySelector('.nr-scope'),'scope label '+lang);
++   assert.ok(scoped.d.querySelector('.nr-scope').textContent.toLowerCase().includes(scopeText));
++   const escaped=[];scoped.w.tenantNightReportNavigation={openTicket:r=>escaped.push(r),openDialog:r=>escaped.push(r)};
++   assert.ok(scoped.d.querySelector('[data-nr-dialog]').href.includes('ticket_id='+ID),'Ticket history deep link retains ticket authority');
++   scoped.d.querySelector('[data-nr-dialog]').click();await waitFor(()=>scoped.d.querySelector('#nrHistory'),'bounded ticket history');
++   assert.equal(escaped.length,0,'Scoped report never escapes into general dialog/support navigation');
++   assert.ok(scoped.calls.at(-1).url.pathname.endsWith('/tickets/'+ID));
++   assert.equal(scoped.calls.at(-1).url.searchParams.get('expected_access_version'),'access-v1');
++   scoped.d.querySelector('#nrEarlier').click();await settle();assert.equal(scoped.calls.at(-1).url.searchParams.get('expected_history_version'),'history-v1');
++   scoped.d.querySelector('#nrClose').click();assert.equal(scoped.d.querySelector('#nrDetailBody').children.length,0);
++   scoped.d.querySelector('[data-nr-error]').click();await waitFor(()=>scoped.d.querySelector('#nrHistory'),'scoped source history');
++   assert.ok(scoped.calls.at(-1).url.pathname.endsWith('/dialog'));assert.equal(escaped.length,0);
++   scoped.d.querySelector('#nrClose').click();scoped.d.querySelector('#nrMore').click();await settle();assert.equal(scoped.calls.at(-1).url.searchParams.get('expected_access_version'),'access-v1');
++   scoped.d.querySelector('#nrForm').dispatchEvent(new scoped.w.Event('submit',{cancelable:true}));await settle();assert.equal(scoped.calls.at(-1).url.searchParams.has('expected_access_version'),false,'Full refresh accepts current authorization');
++   scoped.w.close();
++ }
++ for(const status of [403,404,409]){
++   const revoked=setup('https://crm.test/app/night-report',{scope:'self'});await waitFor(()=>revoked.d.querySelector('[data-metric]'),'revocation report');
++   revoked.d.querySelector('[data-nr-ticket]').click();await waitFor(()=>revoked.d.querySelector('#nrEarlier'),'revocation detail');
++   revoked.detailDeny=status;revoked.d.querySelector('#nrEarlier').click();await settle();
++   assert.equal(revoked.d.querySelector('#nrDetail').open,false);assert.equal(revoked.d.querySelector('#nrDetailBody').textContent,'');
++   assert.equal(revoked.d.querySelector('#nrDetailTitle').textContent,'');assert.equal(revoked.d.querySelector('#nrResult').textContent,'');
++   assert.equal(revoked.d.querySelector('#nrCompany').textContent,'');assert.match(revoked.d.querySelector('#nrNotice').textContent,/revoked/);revoked.w.close();
++ }
++ const detailRace=setup('https://crm.test/app/night-report',{scope:'department'});await waitFor(()=>detailRace.d.querySelector('[data-metric]'),'detail race');
++ let resolveDetail;detailRace.detailDefer=()=>new Promise(resolve=>{resolveDetail=resolve;});
++ detailRace.d.querySelector('[data-nr-ticket]').click();await waitFor(()=>resolveDetail,'pending detail');
++ detailRace.deny=true;detailRace.d.querySelector('#nrForm').dispatchEvent(new detailRace.w.Event('submit',{cancelable:true}));await settle();
++ resolveDetail(detailRace.result({ticket:detailRace.ticket,dialog:{contact_name:'SECRET stale detail'},messages:[],next_before:null}));await settle();
++ assert.equal(detailRace.d.querySelector('#nrDetail').open,false);assert.ok(!detailRace.d.body.textContent.includes('SECRET'));assert.equal(detailRace.d.querySelector('#nrResult').textContent,'');detailRace.w.close();
++ const sameMember=setup('https://crm.test/app/night-report',{scope:'self'});await waitFor(()=>sameMember.d.querySelector('[data-metric]'),'same-member revoke');
++ let resolveMember;sameMember.defer=()=>new Promise(resolve=>{resolveMember=resolve;});sameMember.d.querySelector('#nrForm').dispatchEvent(new sameMember.w.Event('submit',{cancelable:true}));await waitFor(()=>resolveMember,'old permission response');
++ sameMember.deny=true;sameMember.d.dispatchEvent(new sameMember.w.CustomEvent('tenant-profile',{detail:{member:{...sameMember.member,access:{pages:{night_report:false}}}}}));await settle();
++ resolveMember(sameMember.result({...sameMember.payload(A),company_name:'SECRET old scope'}));await settle();assert.ok(!sameMember.d.body.textContent.includes('SECRET'));assert.equal(sameMember.d.querySelector('#nrResult').textContent,'');sameMember.w.close();
++ // A success response from an older deployment must not mix authority sets,
++ // even if it ignores expected_access_version or omits the version entirely.
++ for(const transition of [
++   {label:'legacy to self',initial:{},scope:'self',version:'new-self'},
++   {label:'self to legacy',initial:{scope:'self'},scope:null,version:'new-legacy'},
++   {label:'old null legacy to self',initial:{missingVersion:true},scope:'self',version:'new-self'},
++   {label:'self to old null legacy',initial:{scope:'self'},scope:null,version:null},
++   {label:'unversioned legacy continuation',initial:{missingVersion:true},scope:null,version:null},
++   {label:'scope changed with unchanged version',initial:{},scope:'self',version:'legacy-v1'}
++ ])for(const operation of ['append','detail','earlier']){
++   const changed=setup('https://crm.test/app/night-report',transition.initial);await waitFor(()=>changed.d.querySelector('[data-metric]'),transition.label);
++   if(operation==='earlier'){
++     // Seed an old-version detail as a standalone compatibility scenario. The
++     // old null-version report cannot open any continuation, so assert that now.
++     changed.d.querySelector('[data-nr-ticket]').click();await settle();
++     if(transition.initial.missingVersion){assert.equal(changed.d.querySelector('#nrResult').textContent,'');changed.w.close();continue;}
++     await waitFor(()=>changed.d.querySelector('#nrEarlier'),'history transition');
++   }
++   changed.w.fetch=async(url)=>{
++     const u=new URL(String(url),'https://crm.test');
++     if(u.pathname==='/api/platform/ai/night-report')return changed.result({...changed.payload(A,'50'),access_scope:transition.scope,access_version:transition.version,
++       tickets:[{...changed.ticket,id:'new-authority-ticket',contact_name:'SECRET new response'}],next_offset:null});
++     return changed.result({access_scope:transition.scope,access_version:transition.version,history_version:'different-history',history_scope:transition.scope?'ticket_messages':'conversation',
++       ticket:changed.ticket,dialog:{channel_name:'Changed',contact_name:'SECRET new detail'},messages:[{body:'SECRET new history'}],next_before:null});
++   };
++   changed.d.querySelector(operation==='append'?'#nrMore':operation==='detail'?'[data-nr-ticket]':'#nrEarlier').click();await settle();
++   assert.equal(changed.d.querySelector('#nrResult').textContent,'',transition.label+' '+operation+' clears old report');
++   assert.equal(changed.d.querySelector('#nrDetailBody').textContent,'');assert.equal(changed.d.querySelector('#nrDetailTitle').textContent,'');
++   assert.equal(changed.d.querySelector('#nrDetail').open,false);assert.equal(changed.d.querySelector('#nrCompany').textContent,'');
++   assert.ok(!changed.d.body.textContent.includes('SECRET'));changed.w.close();
++ }
++ for(const historyVersion of [null,'changed-history']){
++   const historyRace=setup('https://crm.test/app/night-report',{scope:'self'});await waitFor(()=>historyRace.d.querySelector('[data-metric]'),'history version setup');
++   historyRace.d.querySelector('[data-nr-ticket]').click();await waitFor(()=>historyRace.d.querySelector('#nrEarlier'),'history version loaded');
++   historyRace.w.fetch=async()=>historyRace.result({access_scope:'self',access_version:'access-v1',history_version:historyVersion,
++     ticket:historyRace.ticket,dialog:{contact_name:'Customer'},messages:[{body:'SECRET stale history'}],next_before:null});
++   historyRace.d.querySelector('#nrEarlier').click();await settle();assert.equal(historyRace.d.querySelector('#nrResult').textContent,'');
++   assert.equal(historyRace.d.querySelector('#nrDetailBody').textContent,'');assert.ok(!historyRace.d.body.textContent.includes('SECRET'));historyRace.w.close();
++ }
++ console.log('PASS: report metrics, filters/date, ticket/history/channel links, pagination, safe text, read-only GETs, language, scoped navigation, exact ticket links, permission revocation, legacy/scoped transitions, stale detail and tenant isolation.');
+ })().catch(error=>{console.error(error);process.exitCode=1;});
+diff --git a/beintaskbot-main/tests/test_tenant_operator_copilot.py b/beintaskbot-main/tests/test_tenant_operator_copilot.py
+index 078ef9d2923e596a2e5c4d4c1e0fd708f409865c..d6e64c606c6e039d530f4fbe56582831186f9f5c 100644
+--- a/beintaskbot-main/tests/test_tenant_operator_copilot.py
++++ b/beintaskbot-main/tests/test_tenant_operator_copilot.py
+@@ -351,3 +351,23 @@ def test_reply_selection_version_invalidates_old_cached_request_hash():
+     legacy=hashlib.sha256(json.dumps({'mode':'reply','prompt':''},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+     assert _hash(command)!=legacy
+     assert _hash(command)==_hash({**command,'request_id':'different'})
++
++
++@pytest.mark.parametrize('enabled',[False,True])
++def test_finish_imports_and_rechecks_independent_ai_grant(monkeypatch,enabled):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true' if enabled else 'false')
++    tenant=str(uuid.uuid4());actor=22
++    conn=MagicMock();conn.__enter__.return_value=conn
++    cur=conn.cursor.return_value.__enter__.return_value
++    cur.fetchone.side_effect=[{'config_version':'version'},{'updated_at':'version'}]
++    policy=SimpleNamespace(has_scoped_access=lambda *_:enabled,allows=lambda *_:False,can_use_chat_ai=lambda:True)
++    monkeypatch.setattr(copilot,'_connect',lambda:conn)
++    monkeypatch.setattr(copilot,'ensure_schema',Mock())
++    monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,policy)))
++    monkeypatch.setattr(copilot,'assert_route',Mock())
++    monkeypatch.setattr(copilot,'_assigned_context',Mock(return_value={}))
++    monkeypatch.setattr(copilot,'_agent_binding',lambda _:'binding')
++    monkeypatch.setattr('tenant_episode_media.revalidate_sources',Mock())
++    command={**request(),'_agent_binding':'binding'}
++    copilot._finish(tenant,command,actor,{'answer':'synthetic'},[],'question','answer')
++    assert any(call.args[1][0]=='completed' for call in cur.execute.call_args_list if 'UPDATE saas_chat_ai_runs' in call.args[0])
+diff --git a/beintaskbot-main/tests/test_tenant_scoped_access.py b/beintaskbot-main/tests/test_tenant_scoped_access.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..92be45a70d7bb629b7bbfd074226f421742da6c2
+--- /dev/null
++++ b/beintaskbot-main/tests/test_tenant_scoped_access.py
+@@ -0,0 +1,47 @@
++import unittest
++
++from tenant_scoped_access import allows_assigned_task_exception, allows_owned_resource
++
++
++class ScopedAccessTests(unittest.TestCase):
++    def setUp(self):
++        self.actor = {'tenant_id': 'one', 'member_id': 'a', 'department_id': 'sales', 'active': True}
++        self.own = {'tenant_id': 'one', 'responsible_member_id': 'a', 'responsible_department_id': 'sales'}
++        self.colleague = {'tenant_id': 'one', 'responsible_member_id': 'b', 'responsible_department_id': 'sales'}
++        self.other_department = {'tenant_id': 'one', 'responsible_member_id': 'c', 'responsible_department_id': 'support'}
++        self.other_tenant = {'tenant_id': 'two', 'responsible_member_id': 'a', 'responsible_department_id': 'sales'}
++
++    def test_four_scopes_across_members_departments_and_tenants(self):
++        expected = {
++            'none': (False, False, False, False),
++            'self': (True, False, False, False),
++            'department': (True, True, False, False),
++            'all': (True, True, True, False),
++        }
++        for scope, results in expected.items():
++            with self.subTest(scope=scope):
++                self.assertEqual(tuple(allows_owned_resource(self.actor, r, scope) for r in
++                                       (self.own, self.colleague, self.other_department, self.other_tenant)), results)
++
++    def test_missing_inactive_and_invalid_values_fail_closed(self):
++        self.assertFalse(allows_owned_resource({**self.actor, 'active': False}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'tenant_id': None}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'member_id': None}, self.own, 'all'))
++        self.assertFalse(allows_owned_resource(self.actor, self.own, 'everything'))
++        self.assertFalse(allows_owned_resource({**self.actor, 'department_id': None},
++                                                {**self.colleague, 'responsible_department_id': None}, 'department'))
++        self.assertFalse(allows_owned_resource(self.actor, {**self.own, 'responsible_member_id': None}, 'department'))
++
++    def test_assignee_exception_is_only_read_and_complete_and_never_cross_tenant(self):
++        task = {**self.colleague, 'assignee_member_id': 'a'}
++        for operation in ('read', 'complete'):
++            self.assertTrue(allows_assigned_task_exception(self.actor, task, operation))
++        for operation in ('create', 'update', 'delete', 'approve', 'reward'):
++            self.assertFalse(allows_assigned_task_exception(self.actor, task, operation))
++        self.assertFalse(allows_assigned_task_exception(self.actor, {**task, 'tenant_id': 'two'}, 'read'))
++        self.assertFalse(allows_assigned_task_exception(self.actor, {**task, 'assignee_member_id': 'b'}, 'read'))
++        self.assertFalse(allows_assigned_task_exception({**self.actor, 'active': False}, task, 'complete'))
++
++
++if __name__ == '__main__':
++    unittest.main()

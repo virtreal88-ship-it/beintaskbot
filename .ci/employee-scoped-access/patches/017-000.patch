@@ -1,3 +1,199 @@
+diff --git a/beintaskbot-main/tests/contacts_directory_fixture.cjs b/beintaskbot-main/tests/contacts_directory_fixture.cjs
+index 3d47a8e4030e7e6dd116a17cb679d109ac31f005..13f814c20d52bb2b9d7ab4b26df784a4423ac361 100644
+--- a/beintaskbot-main/tests/contacts_directory_fixture.cjs
++++ b/beintaskbot-main/tests/contacts_directory_fixture.cjs
+@@ -8,16 +8,17 @@ const tenant='10000000-0000-4000-8000-000000000101',contactA='10000000-0000-4000
+ const actions={view:true,create:true,update:true,archive:true,assign:true,update_deals:true};
+ const native=(id=contactA,name='PRIVATE CONTACT A')=>({key:'native:'+id,id,kind:'native_contact',source:'native',display_name:name,phone:'+994501234567',email:'contact@example.test',company_id:null,company_name:null,actions:{...actions}});
+ const external=()=>({key:'kommo:9007199254740993123:9007199254740993456',kind:'kommo_contact',source:'kommo',account_id:'9007199254740993123',contact_id:'9007199254740993456',display_name:'Saved Kommo contact',phone:'+994501234567',lead_id:'9007199254740993777',lead_name:'Saved deal',stage_name:'Saved stage',historical:true,actions:{view:true,create:false,update:false,archive:false}});
+-function html(){const names=['tenant-operator-i18n.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-contacts-directory.js','tenant-crm-sync.js'];return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,(tag,url)=>{const name=path.basename(url);if(name==='tenant-chakra-ui.js'){const shell=fs.readFileSync(path.join(root,'ui/src/app-shell.js'),'utf8').replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(fs.readFileSync(path.join(root,'ui/src/app-theme.css'),'utf8')));return '<script>'+shell.replace(/<\/script/gi,'<\\/script')+'</script>'}return names.includes(name)?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':''})}
++function html(){const names=['tenant-operator-i18n.js','tenant-crm-save-receipt.js','tenant-crm-sync-history.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-contacts-directory.js','tenant-crm-sync.js'];return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,(tag,url)=>{const name=path.basename(url);if(name==='tenant-chakra-ui.js'){const shell=fs.readFileSync(path.join(root,'ui/src/app-shell.js'),'utf8').replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(fs.readFileSync(path.join(root,'ui/src/app-theme.css'),'utf8')));return '<script>'+shell.replace(/<\/script/gi,'<\\/script')+'</script>'}return names.includes(name)?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':''})}
+ const clone=value=>JSON.parse(JSON.stringify(value));
+ const settle=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediate(resolve))};
+ const until=async predicate=>{for(let i=0;i<140;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert(predicate(),'actual contacts app did not settle')};
+ async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));const dom=new JSDOM(html(),{url:'https://fixture.test/app?view='+(config.view||'customers')+'&lang='+(config.language||'en')+(config.query||''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){
+  w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installCompanyEmployeesFixture.toString()+')('+JSON.stringify({role:'owner',modules:{customers:true,deals:true},...config})+')');const f=w.companyEmployeesFixture,base=w.fetch;if(config.permissions)f.profile.member.permissions=config.permissions;if(config.tenantId)f.profile.member.tenant_id=config.tenantId;
+- f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions=clone(actions);f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
+- f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
++ f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions={...clone(actions),scoped_relations:config.scopedRelations!==false};f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
++ f.syncReceipt=config.syncReceipt||null;f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
+  const response=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}),ok=data=>response({success:true,...data}),failure=(status,code)=>response({success:false,error:code,code},status);
+  w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;if(url.pathname==='/api/platform/me'&&f.meFailure){f.calls.push({path:url.pathname,url:url.pathname+url.search,method,body});return failure(f.meFailure,'Synthetic profile unavailable')}if(!url.pathname.startsWith('/api/platform/crm/native/contacts')&&!url.pathname.startsWith('/api/platform/crm/native/companies')&&!url.pathname.startsWith('/api/platform/crm/native/deals'))return base(input,options);const call={path:url.pathname,url:url.pathname+url.search,method,body};f.calls.push(call);
++ if(url.pathname.endsWith('/sync-history')&&method==='GET')return ok({history:{events:[],has_more:false,next_cursor:null,external_state_checked:false}});
+  if(url.pathname==='/api/platform/crm/native/contacts'&&method==='GET'&&url.searchParams.get('listing')==='1'){
+   const selected=url.searchParams.get('source')||(f.sources[0].allowed?'native':'kommo'),needle=url.searchParams.get('search')||'',offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||50),lookup=url.searchParams.get('row_key'),legacy=url.searchParams.get('legacy_deal_id');
+   let rows=selected==='native'?f.nativeRows:f.kommoRows;if(lookup)rows=rows.filter(row=>row.key===lookup);else if(legacy)rows=[{...external(),key:'legacy-deal:'+legacy,kind:'legacy_deal_context',source:'legacy',lead_id:legacy}];const filtered=needle?rows.filter(row=>[row.display_name,row.phone,row.email,row.lead_name].join(' ').toLowerCase().includes(needle.toLowerCase())):rows;
+@@ -28,12 +29,12 @@ async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('j
+   if(f.holdDirectory||f.holdNextDirectory||chosen?.hold){f.holdNextDirectory=false;return new Promise(resolve=>f.pendingDirectory.push(()=>resolve(response(payload,status))))}return response(payload,status);
+  }
+  if(url.pathname==='/api/platform/crm/native/contacts'&&method==='GET')return ok({data:clone(f.nativeRows)});
+- if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
++ if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);if(row)row.actions={...f.actions,...(config.recordActions||{})};const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
+  if(url.pathname==='/api/platform/crm/native/companies'&&method==='GET')return f.companyFailure?failure(f.companyFailure,'forbidden'):ok({companies:clone(f.companyRows)});
+- if(url.pathname.startsWith('/api/platform/crm/native/deals')&&method==='GET')return f.dealFailure?failure(f.dealFailure,'forbidden'):ok(url.pathname!=='/api/platform/crm/native/deals'?{deal:clone(f.dealRows.find(row=>row.id===url.pathname.split('/').at(-1)))}:url.searchParams.has('options')?{workflows:[],contacts:[],companies:[],members:[]}:{deals:clone(f.dealRows)});
++ if(url.pathname.startsWith('/api/platform/crm/native/deals')&&method==='GET')return f.dealFailure?failure(f.dealFailure,'forbidden'):ok(url.pathname!=='/api/platform/crm/native/deals'?{deal:clone(f.dealRows.find(row=>row.id===url.pathname.split('/').at(-1)))}:url.searchParams.has('options')?(config.dealOptions||{workflows:[],contacts:[],companies:[],members:[]}):{deals:clone(f.dealRows)});
+  if(method==='POST'){
+   f.savedWrites.push(call);const error=f.writeFailure,raw=f.writeRaw;
+-  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:clone(row)})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:clone(row)})};
++  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:{...clone(row),...(f.syncReceipt?{sync:clone(f.syncReceipt)}:{})}})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(['link_deal','unlink_deal'].includes(body.action)){const deal=f.dealRows.find(item=>item.id===body.deal_id);if(!deal)return failure(404,'not_found');deal.contact_id=body.action==='link_deal'?id:null;return ok({data:{id,deal_id:body.deal_id,linked:body.action==='link_deal'}})}if(['link_company','unlink_company'].includes(body.action)){const contact=f.nativeRows.find(item=>item.id===id),company=f.companyRows.find(item=>item.id===body.company_id);if(!contact||!company)return failure(404,'not_found');if(body.action==='unlink_company'&&contact.company_id!==body.company_id)return failure(404,'not_found');contact.company_id=body.action==='link_company'?body.company_id:null;contact.company_name=body.action==='link_company'?company.name:null;return ok({data:{id,company_id:body.company_id,linked:body.action==='link_company'}})}if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:{...clone(row),...(f.syncReceipt?{sync:clone(f.syncReceipt)}:{})}})};
+   if(f.holdWrite)return new Promise(resolve=>f.pendingWrites.push(()=>resolve(finish())));return finish();
+  }return base(input,options);
+  };
+diff --git a/beintaskbot-main/tests/contacts_directory_http_browser.cjs b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
+index 5d5b758ec68eb8fd64cd19abed051492f418f8d8..cfad8afe94ffddf7fe4893c5d5a2fafee0ac374c 100644
+--- a/beintaskbot-main/tests/contacts_directory_http_browser.cjs
++++ b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
+@@ -490,7 +490,9 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
+         await page.locator('#nativeEntityBody').filter({hasText:'Browser isolated edited'}).waitFor();
+         const archiveReceipt=page.waitForResponse(response=>response.request().method()==='POST' && new URL(response.url()).pathname==='/api/platform/crm/native/contacts/'+newId);
+         await page.locator('#nativeEntityCard [data-native-card-archive]').click();
+-        assert.equal((await archiveReceipt).status(),200);
++        const archived=await archiveReceipt;
++        assert.equal(archived.status(),200);
++        assert.deepEqual(archived.request().postDataJSON(),{action:'archive'});
+         await page.waitForFunction(()=>!document.getElementById('nativeEntityCard').classList.contains('show'));
+         await settled();
+         assert.equal(await row('native:'+newId).count(),0);
+diff --git a/beintaskbot-main/tests/crm_sync_history_fixture.cjs b/beintaskbot-main/tests/crm_sync_history_fixture.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..23e251bb8341345a3cd83fe3592ed847c7f0eeef
+--- /dev/null
++++ b/beintaskbot-main/tests/crm_sync_history_fixture.cjs
+@@ -0,0 +1,17 @@
++/* Local-journal HTTP boundary. It performs no provider reads or mutations. */
++function installSyncHistoryFixture(config={}){
++ const clone=value=>JSON.parse(JSON.stringify(value)),base=window.fetch;
++ const event=(state='pending',index=1)=>({event_id:'20000000-0000-4000-8000-'+String(index).padStart(12,'0'),kind:'scalar',state,attempt_outcome:state==='synced'?'acknowledged':'not_started',created_at:'2026-11-11T08:00:00.000Z',local_revision:'2026-11-11T08:00:00.000Z',recorded_at:'2026-11-11T09:00:00.000Z',issue:'none'});
++ const f=window.syncHistoryFixture={calls:[],events:config.events||[event('pending')],replies:[],pending:[],pendingBodies:[],sourceFailures:{},holdSources:false,pendingSources:[]};
++ const response=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
++ window.fetch=async(input,options={})=>{
++  const u=new URL(String(input),location.href),method=options.method||'GET';
++  if(!u.pathname.endsWith('/sync-history')){if(method==='GET'&&/^\/api\/platform\/crm\/native\/(contacts|deals|companies)\/[^/]+$/.test(u.pathname)){if(f.sourceFailures[u.pathname])return response({success:false,error:'private source error'},f.sourceFailures[u.pathname]);const result=await base(input,options);if(f.holdSources)return new Promise(resolve=>f.pendingSources.push(()=>resolve(result)));return result}return base(input,options)}
++  if(method!=='GET')throw Error('History fixture received a write');
++  f.calls.push({url:u.pathname+u.search,path:u.pathname,method,cache:options.cache,credentials:options.credentials});
++  const reply=f.replies.shift()||{},status=reply.status||200,payload=clone(reply.payload||{success:status===200,...(status===200?{history:{events:f.events,has_more:false,next_cursor:null,external_state_checked:false}}:{error:'PRIVATE PROVIDER ERROR'})});
++  if(reply.bodyHold)return new Response(new ReadableStream({start(controller){f.pendingBodies.push(()=>{controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));controller.close()})}}),{status,headers:{'Content-Type':'application/json'}});
++  const finish=()=>response(payload,status);if(reply.hold)return new Promise(resolve=>f.pending.push(()=>resolve(finish())));return finish();
++ };
++}
++module.exports={installSyncHistoryFixture};
+diff --git a/beintaskbot-main/tests/employee_scope_matrix_browser.cjs b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..325e8b5c4759a119fb427827ed54225f06eaa12e
+--- /dev/null
++++ b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
+@@ -0,0 +1,48 @@
++/* Real employee controller/shell/CSS in Chromium; all HTTP data is synthetic. */
++const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
++const {chromium}=require('../.support-test-deps/node_modules/playwright');
++const {nodeHtml,installCompanyEmployeesFixture,docs}=require('./company_employees_entry_fixture.cjs');
++const origin='https://scope-fixture.test';
++// Keep browser acceptance on the actual server catalog, including every new
++// scoped section, instead of a hand-maintained subset that silently goes stale.
++const scopeCatalog=JSON.parse(require('node:child_process').execFileSync(
++ process.env.PYTHON||'python',['-c','import json; from tenant_scoped_access import SCOPE_ACTION_CATALOG; print(json.dumps(SCOPE_ACTION_CATALOG))'],{encoding:'utf8'}));
++const row={tenant_id:'10000000-0000-4000-8000-000000000101',telegram_id:22,display_name:'Synthetic employee',role:'worker',active:true,permissions:['tasks'],explicit_permissions:['tasks'],card_version:'card-v1',department_id:null,department_catalog:[{id:'10000000-0000-4000-8000-000000000501',name:'Support',active:true}],editable_fields:['department_id','access_settings','work_settings'],access_settings:{version:'scope-v1',scoped_access_enabled:true,scope_catalog:{tasks:['create','view','update','delete'],deals:['create','view','update','delete'],customers:['create','view','update','delete'],companies:['create','view','update','delete'],dialogs:['view','update']},scoped_actions:{tasks:{create:'self',view:'department',update:'self',delete:'none'},deals:{view:'all'},customers:{view:null},companies:{view:'none'},dialogs:{view:'self',update:'department'}},legacy_actions:{customers:{view:true}}},work_settings:{version:'work-v1',values:{ai_enabled:true,notifications:{}},defaults:{},services:[],notifications:[{key:'task_assigned',label:'Task',channels:['push']}]}};
++row.access_settings.scope_catalog=scopeCatalog;
++(async()=>{
++ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
++ try{for(const [width,language] of [[360,'ru'],[390,'az'],[768,'en'],[1440,'ru']]){
++  const context=await browser.newContext({viewport:{width,height:860}}),page=await context.newPage(),errors=[];
++  page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>dialog.accept());
++  await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==origin)return route.abort();if(url.pathname==='/app')return route.fulfill({contentType:'text/html',body:nodeHtml()});if(url.pathname.startsWith('/assets/')){const file=path.join(docs,path.basename(url.pathname));if(fs.existsSync(file))return route.fulfill({contentType:file.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(file)})}return route.fulfill({contentType:'application/json',body:'{}'})});
++  await context.addInitScript(installCompanyEmployeesFixture,{role:'owner'});
++  await context.addInitScript(({row})=>{const original=window.fetch;window.companyEmployeesFixture.members=[row];window.fetch=async(input,opt={})=>{const u=new URL(String(input),location.href);if(u.pathname!=='/api/platform/members')return original(input,opt);if((opt.method||'GET')==='GET')return new Response(JSON.stringify({success:true,members:[row]}),{headers:{'Content-Type':'application/json'}});const body=JSON.parse(opt.body);window.companyEmployeesFixture.calls.push({path:u.pathname,method:'POST',body});return new Response(JSON.stringify({success:false,code:'member_card_conflict',fields:{expected_version:'version_conflict'}}),{status:409,headers:{'Content-Type':'application/json'}})}} ,{row});
++  await page.goto(origin+'/app?view=employees&lang='+language);
++  await page.locator('[data-staff-edit="22"]').click();
++  const form=page.locator('#staffEditForm');
++  await form.locator('[name=department_id]').selectOption(row.department_catalog[0].id);
++  await form.locator('[data-staff-pane-tab=rights]').click();
++  assert.equal(await form.locator('[data-access-scope]').count(),Object.values(scopeCatalog).reduce((n,actions)=>n+actions.length,0));
++  for(const [section,actions] of Object.entries(scopeCatalog)){for(const action of ['create','view','update','delete'])assert.equal(await form.locator('[data-access-module='+section+'][data-access-scope='+action+']').count(),Number(actions.includes(action)),section+' only advertises real '+action);}
++  assert.deepEqual(await form.locator('[data-access-module=employees][data-access-scope=create] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['legacy','none','department','all'],'employee creation never offers Self');
++  const matrix=form.locator('.staff-scope-matrix');
++  assert(await matrix.isVisible());
++  for(const selector of ['.staff-scope-matrix','[data-staff-pane=rights]','.staff-modal-actions']){
++   assert.equal(await form.locator(selector).evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,selector+' fits '+width);
++  }
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=view]').inputValue(),'department');
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=update]').inputValue(),'self');
++  await form.locator('[data-access-module=tasks][data-access-scope=delete]').selectOption('department');
++  await form.locator('[type=submit]').click();
++  await page.waitForFunction(()=>window.companyEmployeesFixture.calls.some(c=>c.method==='POST'));
++  const body=await page.evaluate(()=>window.companyEmployeesFixture.calls.find(c=>c.method==='POST').body);
++  assert.equal(body.changes.department_id,row.department_catalog[0].id);assert.deepEqual(body.changes.access_settings.changes,{scopes:{tasks:{delete:'department'}}});
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'department','Draft remains after conflict');
++  await form.locator('[data-staff-pane-tab=rights]').focus();await page.keyboard.press('ArrowLeft');assert.equal(await form.locator('[data-staff-pane-tab=details]').getAttribute('aria-selected'),'true');await page.keyboard.press('ArrowRight');
++  const output=process.env.EMPLOYEE_SCOPE_SCREENSHOTS||'/tmp/employee-scoped-matrix-screens';fs.mkdirSync(output,{recursive:true});await page.screenshot({path:path.join(output,`scope-matrix-${width}-${language}.png`)});
++  await form.locator('[data-staff-cancel]').click();assert.equal(await page.locator('#staffMemberModal').evaluate(n=>n.classList.contains('show')),false);await page.locator('[data-staff-edit="22"]').click();assert.equal(await page.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'none','Cancel discards draft');
++  assert.deepEqual(errors,[]);await context.close();
++ }
++ console.log('PASS Chromium scoped matrix 360/RU, 390/AZ, 768/EN, 1440/RU: no overflow, sparse independent save, conflict retention, keyboard tabs and cancel/reopen');
++ }finally{await browser.close()}
++})().catch(error=>{console.error(error.stack);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/native_company_deal_fixture.cjs b/beintaskbot-main/tests/native_company_deal_fixture.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..02bb4e6c7fa00008f58efe4e278a860d0a37e420
+--- /dev/null
++++ b/beintaskbot-main/tests/native_company_deal_fixture.cjs
+@@ -0,0 +1,44 @@
++/* Synthetic API boundary; renderer, form, modal lifecycle and capabilities are the real /app code. */
++const {docs,assets,appHtml,installNativeTaskFixture}=require('./native_task_assignee_fixture.cjs');
++function installNativeCompanyDealFixture(config={}){
++ const f=window.nativeTaskFixture,ids={company:'10000000-0000-4000-8000-000000000601',otherCompany:'10000000-0000-4000-8000-000000000602',deal:'10000000-0000-4000-8000-000000000701',otherDeal:'10000000-0000-4000-8000-000000000702',contact:'10000000-0000-4000-8000-000000000501'};
++ Object.assign(f,{ids,scoped:config.scoped!==false,pendingRelations:[],holdRelations:false,relationError:null});
++ const action=(read=true,update=false)=>({view:read,create:false,update,delete:false});
++ f.profile.capabilities={modules:{deals:config.dealRead!==false,customers:config.contactRead!==false},actions:{companies:action(config.companyRead!==false,config.companyUpdate===true),deals:{...action(config.dealRead!==false,config.dealUpdate===true),create:config.dealCreate===true},customers:action(config.contactRead!==false,false),tasks:action(false,false)}};
++ // Match production's explicit scoped page admission; module flags remain
++ // independent provider/read grants and must not stand in for native C/U/D.
++ const a=f.profile.capabilities.actions;
++ f.profile.capabilities.pages={profile:true,deals:Object.values(a.deals).some(Boolean),companies:Object.values(a.companies).some(Boolean),customers:Object.values(a.customers).some(Boolean),tasks:false};
++ const rel=(source,kind)=>({['link_'+kind]:source,['unlink_'+kind]:source});
++ f.companies=[{id:ids.company,name:'Source company',contacts:[],deals:[{id:ids.deal,title:'Existing linked deal'}],actions:{update:config.companyUpdate===true},relation_actions:{...rel(config.companyUpdate===true,'contact'),...rel(config.companyUpdate===true,'deal')}},{id:ids.otherCompany,name:'Available company',contacts:[],deals:[]}];
++ f.deals=[{id:ids.deal,title:'Source deal',pipeline_id:'1',stage_id:'2',contact_id:ids.contact,contact_name:'Readable contact context',company_id:ids.company,company_name:'Source company',description:'',scoped_relations:f.scoped,actions:{update:config.dealUpdate===true},relation_actions:rel(config.dealUpdate===true,'company')},{id:ids.otherDeal,title:'Available deal',pipeline_id:'1',stage_id:'2',contact_id:null,company_id:null,scoped_relations:f.scoped,actions:{update:false},relation_actions:rel(false,'company')}];
++ if(!f.scoped)for(const company of f.companies)delete company.relation_actions;
++ f.options={workflows:[{pipeline_id:'1',pipeline_name:'Main',stage_id:'2',stage_name:'Open'}],members:[],contacts:config.contactRead===false?[]:[{id:ids.contact,display_name:'Readable contact'}],scoped_relations:f.scoped,relation_actions:rel(config.dealUpdate===true,'company')};
++ const base=window.fetch,clone=value=>JSON.parse(JSON.stringify(value)),response=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
++ window.fetch=async(input,options={})=>{
++  const u=new URL(String(input),location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;
++  if(!/^\/api\/platform\/crm\/native\/(companies|deals|contacts)(\/|$)/.test(u.pathname))return base(input,options);
++  f.calls.push({url:u.pathname+u.search,path:u.pathname,method,body});
++  const kind=u.pathname.split('/')[5],id=u.pathname.split('/')[6];
++  if(method==='GET'){
++   if(u.pathname.endsWith('/sync-history'))return response({history:{events:[],has_more:false,next_cursor:null,external_state_checked:false}});
++   if(kind==='deals'&&u.searchParams.get('options')==='1')return response(clone(f.options));
++   if(kind==='contacts')return f.profile.capabilities.actions.customers.view?response({data:clone(f.options.contacts)}):response({error:'forbidden'},403);
++   if(!f.profile.capabilities.actions[kind].view||f[kind+'Failure'])return response({error:'forbidden'},403);
++   const rows=f[kind];return response(id?{[kind==='deals'?'deal':'company']:clone(rows.find(row=>row.id===id))}:{[kind]:clone(rows)});
++  }
++  const relation=u.pathname.endsWith('/company-link')||['link_deal','unlink_deal','link_contact','unlink_contact'].includes(body?.action);
++  const finish=()=>{
++   if(relation){
++    if(f.relationError)return response({error:f.relationError},409);
++    const deal=f.deals.find(row=>row.id===(kind==='deals'?id:body.entity_id)),company=kind==='deals'?body.company_id:id,unlink=kind==='deals'?body.unlink:body.action==='unlink_deal';
++    if(deal){deal.company_id=unlink?null:company;deal.company_name=unlink?null:f.companies.find(row=>row.id===company)?.name;for(const c of f.companies)c.deals=f.deals.filter(d=>d.company_id===c.id).map(d=>({id:d.id,title:d.title}))}
++    return response({data:{id:deal?.id,company_id:company,linked:!unlink}});
++   }
++   if(kind==='deals'){let row=f.deals.find(row=>row.id===id);if(row)Object.assign(row,body);else{row={id:'10000000-0000-4000-8000-000000000703',...body};f.deals.push(row)}return response({deal:clone(row)})}
++   throw new Error('Unexpected write '+u.pathname);
++  };
++  if(relation&&f.holdRelations)return new Promise(resolve=>f.pendingRelations.push(()=>resolve(finish())));return finish();
++ };
++}
++module.exports={docs,assets,appHtml,installNativeTaskFixture,installNativeCompanyDealFixture};
+diff --git a/beintaskbot-main/tests/native_task_assignee_fixture.cjs b/beintaskbot-main/tests/native_task_assignee_fixture.cjs
+index 143cc6f66588533c21d93cd14846f4a2a9f5444c..a873dc5fcd03e0af1a546187900148305bee1c6c 100644
+--- a/beintaskbot-main/tests/native_task_assignee_fixture.cjs
++++ b/beintaskbot-main/tests/native_task_assignee_fixture.cjs
+@@ -1,7 +1,7 @@
+ /* Synthetic HTTP boundary for the real /app controller. No access-policy replacement. */
+ const fs=require('node:fs'),path=require('node:path');
+ const root=path.join(__dirname,'..'),docs=path.join(root,'docs');
+-const assets=['tenant-operator-i18n.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-members-ui.js'];
++const assets=['tenant-operator-i18n.js','tenant-crm-sync-history.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-members-ui.js'];
+ function appHtml(inline=false){return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b([^>]*)src="([^"]+)"[^>]*><\/script>/gi,(tag,attributes,url)=>{const name=path.basename(url);return assets.includes(name)?inline?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':tag:'';});}
+ function installNativeTaskFixture(config={}){
+   const tenant='00000000-0000-0000-0000-000000000101',dealA='00000000-0000-0000-0000-000000000201',dealB='00000000-0000-0000-0000-000000000202',taskId='00000000-0000-0000-0000-000000000301';
 diff --git a/beintaskbot-main/tests/test_ai_access_ownership_postgres.py b/beintaskbot-main/tests/test_ai_access_ownership_postgres.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..749fe1262e9d0bed0c8fd13b301238b9678b5b7e
@@ -644,567 +840,3 @@ index 0000000000000000000000000000000000000000..3db6936901ae6014ce864d646a1dbf65
 +    assert db.execute('SELECT id FROM saas_ai_agent_triggers WHERE id=%s',(trigger,))
 +    assert not db.execute("SELECT id FROM saas_tenant_audit_events WHERE entity_id=%s AND action='ai_agent_trigger_deleted'",(trigger,))
 +    assert store.delete_trigger({'tenant_id':A,'telegram_id':11},ids['self'],trigger)=={'deleted':True}
-diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b957747cc0e5cbbe85de1ce7cfcdce59ece55d97
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
-@@ -0,0 +1,165 @@
-+"""Chromium acceptance for the unmodified production AI controller.
-+
-+Synthetic HTTP boundary runs locally without a provider/database. This is not cookie/PostgreSQL authorization evidence. It uses the production
-+HTML DOM/controller and browser assertions. Other
-+app controllers are omitted; this is not a full application-bootstrap test.
-+"""
-+import asyncio
-+import json
-+import os
-+from pathlib import Path
-+import re
-+import shutil
-+import socket
-+import subprocess
-+import threading
-+import uuid
-+
-+from aiohttp import web
-+import pytest
-+
-+ROOT=Path(__file__).resolve().parents[1]
-+A='00000000-0000-0000-0000-000000000065'
-+B='00000000-0000-0000-0000-000000000066'
-+OWN='00000000-0000-0000-0000-000000000301'
-+PEER='00000000-0000-0000-0000-000000000302'
-+SOURCE='00000000-0000-0000-0000-000000000201'
-+OTHER='00000000-0000-0000-0000-000000000299'
-+MODES={'read':{'view':'all','create':'none','update':'none'},
-+       'create':{'view':'none','create':'self','update':'none'},
-+       'mixed':{'view':'all','create':'none','update':'self'},
-+       'revoked':{'view':'none','create':'none','update':'none'},
-+       'foreign':{'view':'none','create':'none','update':'none'}}
-+
-+
-+def chromium():
-+    path=os.environ.get('CHROMIUM_EXECUTABLE_PATH') or shutil.which('chromium')
-+    if not path:pytest.skip('Local Chromium executable required')
-+    return path
-+
-+
-+class SyntheticBoundary:
-+    backend='synthetic HTTP boundary (not backend authorization proof)'
-+    own,other_source,tenant,actor=OWN,OTHER,A,31
-+    def __init__(self):
-+        self.mode='read';self.current_tenant=A
-+        self.rows=[{'id':OWN,'tenant_id':A,'name':'Own agent','instructions':'Own private instructions','version':1,'enabled':False,'scopes':[]},
-+                   {'id':PEER,'tenant_id':A,'name':'Peer agent','instructions':'Peer instructions','version':1,'enabled':False,'scopes':[]}]
-+    def set_mode(self,name):self.mode=name;self.current_tenant=B if name=='foreign' else A
-+    def profile(self,request):
-+        return {'member':{'tenant_id':self.current_tenant,'telegram_id':31,'role':'admin','active':True},
-+                'capabilities':{'modules':{'ai_agents':False},'pages':{'ai_agents':True},'ai_documents':{'scoped':True,**{key:value!='none' for key,value in MODES[self.mode].items()}}}}
-+    def cookie(self,response):pass
-+    def facts(self):return {'created':sum(row['name']=='Created through Chromium' for row in self.rows),'own_name':self.rows[0]['name']}
-+    async def api(self,request):
-+        rights=MODES[self.mode]
-+        def response(value,status=200):return web.json_response({'success':status==200,**({'result':value} if status==200 else {'error':value})},status=status)
-+        if request.method=='GET':
-+            if request.path.endswith('/options'):
-+                return response({'scoped':True,'connect_channels':[{'id':SOURCE,'name':'Assigned source'}],'pipelines':[],'stages':[],'channels':[],'models':[]})
-+            if rights['view']=='none':return response('read denied',403)
-+            return response([{**row,'capabilities':{'update':rights['update']!='none' and row['id']!=PEER}} for row in self.rows])
-+        body=await request.json()
-+        if body.get('expected_tenant_id')!=self.current_tenant:return response('identity changed',409)
-+        action='create' if request.method=='POST' else 'update'
-+        if rights[action]=='none':return response('write denied',404 if action=='update' else 403)
-+        if any(source.get('channel_id')!=SOURCE for source in body.get('scopes',[])):return response('source denied',403)
-+        if action=='create':
-+            row={'id':str(uuid.uuid4()),'tenant_id':A,'name':body['name'],'instructions':body['instructions'],'scopes':body.get('scopes',[]),'enabled':False,'version':1}
-+            self.rows.append(row)
-+        else:
-+            row=next(row for row in self.rows if row['id']==request.match_info['agent_id'])
-+            if row['id']==PEER:return response('not owned',404)
-+            row.update({key:body[key] for key in ('name','instructions','scopes') if key in body});row['version']+=1
-+        return response({'id':row['id'],'version':row['version']})
-+
-+
-+def run_browser(boundary,width,*,runner='ai_scoped_documents_http_browser.cjs'):
-+    executable=chromium() if runner=='ai_scoped_documents_http_browser.cjs' else ''
-+    sock=socket.socket();sock.bind(('127.0.0.1',0))
-+    origin='http://127.0.0.1:'+str(sock.getsockname()[1])
-+    loop=asyncio.new_event_loop();ready=threading.Event()
-+    state={'list_reads':0,'receipts':[],'shared':[],'pending':0,'released':0,'hold':False}
-+    errors=[]
-+    async def start():
-+        state['release']=asyncio.Event()
-+        @web.middleware
-+        async def observe(request,handler):
-+            response=await handler(request)
-+            if request.path=='/api/platform/ai/agents' and request.method=='GET':
-+                state['list_reads']+=1
-+                if state['hold']:
-+                    state['hold']=False;state['pending']=1
-+                    await state['release'].wait();state['released']=1
-+            if request.path.startswith('/api/platform/ai/agents') and request.method in {'POST','PATCH'} and response.status==200:
-+                state['receipts'].append(sorted(json.loads(response.body)['result']))
-+            return response
-+        app=web.Application(middlewares=[observe])
-+        config={'backend':boundary.backend,'own':boundary.own,'otherSource':boundary.other_source,'tenant':boundary.tenant,'actor':boundary.actor}
-+        async def page(request):
-+            html=(ROOT/'docs/tenant-app.html').read_text()
-+            html=re.sub(r'<script\b[^>]*>[\s\S]*?</script>','',html,flags=re.I)
-+            # Preserve real HTML/styles but block every external resource.
-+            html=re.sub(r'<link\b[^>]*>','',html,flags=re.I)
-+            # Shared app bootstrap is deliberately omitted; provide its full
-+            # translation interface, without loading other app controllers.
-+            bootstrap="window.AI_ACCEPTANCE_ERRORS=[];window.addEventListener('error',e=>AI_ACCEPTANCE_ERRORS.push(e.message));window.tenantI18n={language:'en',t:key=>key,source:value=>value,date:value=>String(value),capture:()=>{}};document.querySelectorAll('.view').forEach(n=>n.classList.remove('active'));document.getElementById('view-ai_agents').classList.add('active');window.AI_ACCEPTANCE_CONFIG="+json.dumps(config)+';'
-+            html=html.replace('</body>','<script>'+bootstrap+'</script><script src="/assets/tenant-ai-agents.js"></script><script src="/test/acceptance.js"></script></body>')
-+            response=web.Response(text=html,content_type='text/html',headers={'Content-Security-Policy':"default-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"})
-+            boundary.cookie(response)
-+            return response
-+        async def me(request):
-+            value=boundary.profile(request)
-+            return web.json_response(value,dumps=lambda value:json.dumps(value,default=str))
-+        async def control(request):
-+            command=request.match_info['command']
-+            if command=='mode':boundary.set_mode(request.query['name'])
-+            elif command=='revoke':boundary.set_mode('revoked')
-+            elif command=='hold':state['hold']=True;state['release'].clear();state['pending']=0;state['released']=0
-+            elif command=='release':state['release'].set()
-+            elif command!='state':raise web.HTTPNotFound()
-+            response=web.json_response({key:value for key,value in state.items() if key not in {'release','runner'} }|boundary.facts())
-+            boundary.cookie(response)
-+            return response
-+        async def asset(request):return web.Response(text=(ROOT/'docs/tenant-ai-agents.js').read_text(),content_type='application/javascript')
-+        async def acceptance(request):return web.Response(text=(ROOT/'tests/ai_scoped_documents_browser_acceptance.js').read_text(),content_type='application/javascript')
-+        app.router.add_get('/app',page);app.router.add_get('/api/platform/me',me)
-+        app.router.add_get('/assets/tenant-ai-agents.js',asset);app.router.add_get('/test/acceptance.js',acceptance)
-+        app.router.add_get('/test/{command}',control)
-+        if hasattr(boundary,'register'):boundary.register(app,origin)
-+        else:
-+            app.router.add_get('/api/platform/ai/agents/options',boundary.api)
-+            app.router.add_get('/api/platform/ai/agents',boundary.api)
-+            app.router.add_post('/api/platform/ai/agents',boundary.api)
-+            app.router.add_patch('/api/platform/ai/agents/{agent_id}',boundary.api)
-+        async def forbidden(request):
-+            if request.path.startswith('/api/'):
-+                state['shared'].append(request.path)
-+                return web.json_response({'success':False,'error':'Unexpected shared API'},status=501)
-+            raise web.HTTPNotFound()
-+        app.router.add_route('*','/{tail:.*}',forbidden)
-+        state['runner']=web.AppRunner(app);await state['runner'].setup();await web.SockSite(state['runner'],sock).start();ready.set()
-+    def serve():
-+        asyncio.set_event_loop(loop)
-+        try:loop.run_until_complete(start());loop.run_forever()
-+        except BaseException as error:errors.append(error);ready.set()
-+    thread=threading.Thread(target=serve,daemon=True);thread.start();assert ready.wait(10)
-+    try:
-+        assert not errors,errors
-+        process=subprocess.run(['node',str(ROOT/'tests'/runner)],cwd=ROOT,
-+            env={**os.environ,'AI_RUNTIME_ORIGIN':origin,'AI_RUNTIME_WIDTH':str(width),'CHROMIUM_EXECUTABLE_PATH':executable},capture_output=True,text=True,timeout=70)
-+        assert process.returncode==0,process.stdout+'\n'+process.stderr
-+        assert state['shared']==[]
-+        return process.stdout
-+    finally:
-+        if 'runner' in state:
-+            loop.call_soon_threadsafe(state['release'].set)
-+            asyncio.run_coroutine_threadsafe(state['runner'].cleanup(),loop).result(10)
-+        loop.call_soon_threadsafe(loop.stop);thread.join(10);loop.close();sock.close()
-+        assert not thread.is_alive()
-+
-+
-+@pytest.mark.parametrize('width',[390,1100])
-+def test_production_ai_controller_in_chromium_synthetic_http(width):
-+    """Browser/DOM/transport evidence only: this API boundary is synthetic."""
-+    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),width)
-diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..de663b0d9a278577b27d3c5f8d6a0357eaeb7056
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
-@@ -0,0 +1,6 @@
-+"""Full-controller bootstrap/HTTP contract; JSDOM is not browser layout proof."""
-+from test_ai_scoped_documents_browser import run_browser,SyntheticBoundary
-+
-+
-+def test_full_controller_bootstrap_and_acceptance_over_http():
-+    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),1100,runner='ai_scoped_documents_http_dom.cjs')
-diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..eb2ace307cc2d03b1782cc5dde5aa42991d0f1bf
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
-@@ -0,0 +1,136 @@
-+"""Actual concurrent AI scope fences; disposable localhost PostgreSQL only.
-+
-+PGlite cannot run this suite. Final CI must supply BEINTASKBOT_TEST_POSTGRES_DSN.
-+"""
-+from concurrent.futures import ThreadPoolExecutor
-+import threading
-+import time
-+
-+import psycopg
-+from psycopg.rows import dict_row
-+import pytest
-+
-+from test_connect_channel_multiprocess import database
-+from test_tenant_support_inbox import db, A
-+from test_ai_scoped_documents import scoped, grants, ACTOR
-+import tenant_ai_agents_store as store
-+from tenant_linear_policy import TenantLinearError
-+
-+
-+@pytest.fixture
-+def concurrent(scoped, monkeypatch):
-+    database, ids = scoped
-+    grants(database, {'view': 'self', 'update': 'self'})
-+    def factory():
-+        connection = psycopg.connect(database.dsn, row_factory=dict_row)
-+        connection.execute("SET statement_timeout='8s'")
-+        connection.execute("SET lock_timeout='6s'")
-+        return connection
-+    monkeypatch.setattr(store, '_connect', factory)
-+    return factory, ids
-+
-+
-+def save(factory, ident, name, ready=None):
-+    with factory() as conn:
-+        if ready:
-+            ready(conn.info.backend_pid)
-+        try:
-+            return store.save_agent(ACTOR, {'name': name, 'expected_version': 1}, agent_id=ident, connection=conn)
-+        except TenantLinearError as error:
-+            return error.status
-+
-+
-+def wait_blocked(factory, pid, blocker):
-+    deadline = time.monotonic() + 4
-+    with factory() as observer:
-+        while time.monotonic() < deadline:
-+            row = observer.execute('SELECT %s=ANY(pg_blocking_pids(%s)) AS waiting', (blocker, pid)).fetchone()
-+            if row['waiting']:
-+                return
-+            time.sleep(.01)
-+    pytest.fail('Expected PostgreSQL lock wait was not observed')
-+
-+
-+def worker_pid():
-+    event = threading.Event()
-+    ids = []
-+    def ready(pid):
-+        ids.append(pid)
-+        event.set()
-+    return event, ids, ready
-+
-+
-+def test_concurrent_updates_serialize_without_share_upgrade(concurrent):
-+    factory, ids = concurrent
-+    barrier = threading.Barrier(2)
-+    def update(name):
-+        return save(factory, ids['self'], name, lambda _: barrier.wait(timeout=4))
-+    with ThreadPoolExecutor(max_workers=2) as pool:
-+        futures = [pool.submit(update, name) for name in ('first', 'second')]
-+        outcomes = [future.result(timeout=12) for future in futures]
-+    assert sum(isinstance(value, dict) for value in outcomes) == 1
-+    assert outcomes.count(409) == 1
-+    with factory() as conn:
-+        assert conn.execute('SELECT version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone()['version'] == 2
-+
-+
-+def test_configuration_mutex_precedes_agent_row_even_for_scoped_update(concurrent):
-+    factory, ids = concurrent
-+    event, pids, ready = worker_pid()
-+    with ThreadPoolExecutor(max_workers=1) as pool:
-+        with factory() as creator:
-+            creator.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('ai-agent-config:' + A,))
-+            future = pool.submit(save, factory, ids['self'], 'updated', ready)
-+            assert event.wait(4)
-+            wait_blocked(factory, pids[0], creator.info.backend_pid)
-+            # Models setup recovery after acquiring the configuration mutex.
-+            # The updater must not already hold SHARE/UPDATE on this agent.
-+            creator.execute('SELECT id FROM saas_ai_agents WHERE id=%s FOR UPDATE NOWAIT', (ids['self'],))
-+        assert future.result(timeout=12)=={'id':ids['self'],'version':2}
-+
-+
-+def test_revocation_committed_before_admission_denies_update(concurrent):
-+    factory, ids = concurrent
-+    event, pids, ready = worker_pid()
-+    with ThreadPoolExecutor(max_workers=1) as pool:
-+        with factory() as revoke:
-+            revoke.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
-+            future = pool.submit(save, factory, ids['self'], 'must not write', ready)
-+            assert event.wait(4)
-+            wait_blocked(factory, pids[0], revoke.info.backend_pid)
-+        assert future.result(timeout=12) in (403, 404)
-+    with factory() as conn:
-+        assert conn.execute('SELECT name,version FROM saas_ai_agents WHERE id=%s', (ids['self'],)).fetchone() == {'name':'self','version':1}
-+
-+
-+def test_admitted_update_fences_revocation_until_commit(concurrent, monkeypatch):
-+    factory, ids = concurrent
-+    admitted, release = threading.Event(), threading.Event()
-+    original = store._authorize
-+    update_pid = []
-+    def pause(cur, profile, **kwargs):
-+        value = original(cur, profile, **kwargs)
-+        update_pid.append(cur.connection.info.backend_pid)
-+        admitted.set()
-+        if not release.wait(4):
-+            raise AssertionError('Timed out waiting for revocation observer')
-+        return value
-+    monkeypatch.setattr(store, '_authorize', pause)
-+    event, pids, ready = worker_pid()
-+    def revoke():
-+        with factory() as conn:
-+            ready(conn.info.backend_pid)
-+            conn.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,ai_agents,update}','\"none\"') WHERE tenant_id=%s AND policy_key='members'", (A,))
-+    with ThreadPoolExecutor(max_workers=2) as pool:
-+        first = pool.submit(save, factory, ids['self'], 'admitted')
-+        assert admitted.wait(4)
-+        second = pool.submit(revoke)
-+        try:
-+            assert event.wait(4)
-+            wait_blocked(factory, pids[0], update_pid[0])
-+        finally:
-+            release.set()
-+        assert first.result(timeout=12)=={'id':ids['self'],'version':2}
-+        second.result(timeout=12)
-+    monkeypatch.setattr(store, '_authorize', original)
-+    assert save(factory, ids['self'], 'revoked') in (403, 404)
-diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..ef17250325ae8bd54313e2173e3dc5f77ee3ac4e
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
-@@ -0,0 +1,30 @@
-+/* Strict scoped document UI: actual DOM, synthetic data, no shared requests. */
-+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-+const {JSDOM}=require('jsdom');
-+const source=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant-ai-agents.js'),'utf8');
-+const code=source.slice(source.indexOf(' function createScopedAgentConsole(){'),source.indexOf(' const scopedAgentConsole=createScopedAgentConsole();'));
-+assert(code.length>100);
-+const dom=new JSDOM('<section id="view-ai_agents"><article id="legacy">Shared administration</article></section>',{url:'https://synthetic.invalid/app'});
-+const {window}=dom,document=window.document;window.tenantI18n={language:'en'};
-+let requests=[],pending=null,deny=false;
-+const profile=(view,create,update,tenant='tenant-a',remove=false)=>({member:{tenant_id:tenant,telegram_id:31,active:true},capabilities:{modules:{ai_agents:false},pages:{ai_agents:view||create||update||remove},ai_documents:{scoped:true,view,create,update,delete:remove}}});
-+const rows=[{id:'own',name:'Owned agent',instructions:'Saved instruction',enabled:false,version:1,scopes:[],capabilities:{update:true,delete:true}},{id:'peer',name:'Read-only peer',instructions:'Peer instruction',version:1,scopes:[],capabilities:{update:false,delete:false}}];
-+const options={scoped:true,connect_channels:[{id:'source-a',name:'Assigned source'}],stages:[],pipelines:[],models:[{id:'configured',label:'Configured model'}]};
-+async function fetch(url,request={}){requests.push({url,...request});assert(/^\/api\/platform\/ai\/agents(?:\/options\?cached=1|\/own(?:\/archive-unused)?)?$/.test(url),'Unexpected broad dependency '+url);if(pending){const promise=pending;pending=null;return promise;}if(deny)return {ok:false,status:typeof deny==='number'?deny:403,json:async()=>({success:false,error:'revoked'})};return {ok:true,status:200,json:async()=>({success:true,result:request.method==='POST'||request.method==='PATCH'?{id:'own',version:2}:url.includes('options')?options:rows})};}
-+const context={window,document,fetch,endpoint:'/api/platform/ai/',agentsVisible:()=>true,$:id=>document.getElementById(id),esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))};
-+vm.createContext(context);vm.runInContext(code+'; consoleUI=createScopedAgentConsole();',context);const ui=context.consoleUI;
-+const flush=()=>new Promise(resolve=>setTimeout(resolve,0));const settle=async()=>{await flush();await flush();};
-+const host=()=>document.getElementById('aiScopedDocuments');
-+(async()=>{
-+ ui.profile(profile(true,false,false));await settle();assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/platform/ai/agents');assert(document.getElementById('legacy').hidden);assert(!host().querySelector('[data-scoped-create]'));assert(![...host().querySelectorAll('button')].some(b=>b.textContent==='Edit'));
-+ let releaseOptions;pending=new Promise(resolve=>releaseOptions=resolve);ui.profile(profile(false,true,false));await flush();assert(host().querySelector('[data-scoped-create]').disabled);host().querySelector('[data-scoped-create]').click();assert(!host().querySelector('form'));releaseOptions({ok:true,status:200,json:async()=>({success:true,result:options})});await settle();assert(!host().querySelector('[data-scoped-create]').disabled);
-+ requests=[];ui.profile(profile(false,true,false));await settle();assert.equal(requests.length,1);assert(requests[0].url.includes('options'));assert(host().textContent.includes('viewing is not allowed'));host().querySelector('[data-scoped-create]').click();let form=host().querySelector('form');assert(form.elements.enabled.disabled);form.elements.name.value='New';form.elements.instructions.value='Known text';form.dispatchEvent(new window.Event('submit',{cancelable:true}));form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='POST').length,1);assert(!requests.some(r=>r.url.endsWith('/agents')&&r.method==='GET'));const created=JSON.parse(requests.find(r=>r.method==='POST').body);assert.equal(created.enabled,false);assert.equal(created.expected_tenant_id,'tenant-a');
-+ requests=[];ui.profile(profile(true,false,true));await settle();let edits=[...host().querySelectorAll('button')].filter(b=>b.textContent==='Edit');assert.equal(edits.length,1);edits[0].click();host().querySelector('[data-scoped-cancel]').click();assert(!host().querySelector('form'));edits[0].click();form=host().querySelector('form');form.elements.name.value='Changed';form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='PATCH').length,1);assert.equal(JSON.parse(requests.find(r=>r.method==='PATCH').body).expected_version,1);
-+ let release;pending=new Promise(resolve=>release=resolve);const old=ui.load();await flush();ui.profile(profile(false,false,false,'tenant-b'));release({ok:true,status:200,json:async()=>({success:true,result:[{id:'old',name:'PRIVATE OLD',instructions:'stale'}]})});await old;await settle();assert(!host().textContent.includes('PRIVATE OLD'));assert(!host().querySelector('[data-scoped-create]'));
-+ ui.profile(profile(true,false,false));await settle();deny=true;await ui.load();assert(!host().textContent.includes('Owned agent'));assert(host().textContent.includes('revoked'));deny=false;
-+ ui.profile(profile(true,false,true));await settle();host().querySelector('[data-scoped-list] article button').click();deny=404;host().querySelector('form').dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert(!host().querySelector('form'));assert(!host().textContent.includes('Saved instruction'));assert(!host().textContent.includes('Owned agent'));deny=false;
-+ requests=[];ui.profile(profile(false,false,false,'tenant-a',true));await settle();assert.equal(requests.length,0);assert(!host().querySelector('[data-scoped-archive]'));
-+ ui.profile(profile(true,false,false,'tenant-a',true));await settle();const archive=host().querySelectorAll('[data-scoped-archive]');assert.equal(archive.length,1);requests=[];archive[0].click();await settle();const deleted=requests.find(r=>r.url.endsWith('/archive-unused'));assert(deleted);assert.equal(deleted.method,'POST');assert.equal(JSON.parse(deleted.body).expected_version,1);
-+ ui.profile(null);assert(host().hidden);assert(!document.getElementById('legacy').hidden);assert(!host().textContent.includes('Saved instruction'));
-+ console.log('PASS scoped AI DOM: independent C/R/U and unused D, D-only no list, no shared requests, bounded submit, cancel, stale tenancy, revocation.');
-+})().catch(error=>{console.error(error);process.exitCode=1});
-diff --git a/beintaskbot-main/tests/test_ai_unused_archive.py b/beintaskbot-main/tests/test_ai_unused_archive.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..4e83f767bf1cdd5c4f68fbf84a72467dcc672504
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_unused_archive.py
-@@ -0,0 +1,197 @@
-+"""Unused scoped D: isolated database and fail-fast provider fixtures."""
-+import json
-+import uuid
-+import pytest
-+from test_ai_scoped_documents import scoped, grants, ACTOR, db, database, A
-+from tenant_ai_unused_archive import archive_unused_agent, install_schema_references
-+from tenant_linear_policy import TenantLinearError
-+import tenant_ai_agents_store as store
-+
-+
-+@pytest.mark.parametrize('scope,permitted',[('self',{'self'}),('department',{'self','peer'}),('all',{'self','peer','other','system'}),('none',set())])
-+def test_independent_delete_scope(scoped,scope,permitted):
-+    db,ids=scoped;grants(db,dict(view='none',create='none',update='none',delete=scope),manage=False)
-+    for name in ('self','peer','other','system','foreign'):
-+        if name in permitted:
-+            assert archive_unused_agent(ACTOR,ids[name],expected_version=1)=={'id':ids[name],'version':2,'archived':True}
-+            assert db.execute('SELECT id FROM saas_ai_agent_history_identities WHERE tenant_id=%s AND id=%s',(A,ids[name]))
-+        else:
-+            with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids[name],expected_version=1)
-+            assert error.value.status==404
-+    with pytest.raises(TenantLinearError):store.list_agents(ACTOR)
-+    with pytest.raises(TenantLinearError):store.configuration_options(ACTOR)
-+
-+
-+def test_exact_version_revocation_and_legacy_boundary(scoped,monkeypatch):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    for version in (None,True,'1',0):
-+        with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=version)
-+        assert error.value.status==400
-+    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=2)
-+    assert error.value.status==409
-+    grants(db,{'delete':'none'})
-+    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    grants(db,{'delete':'self'})
-+    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
-+    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    assert archive_unused_agent({'tenant_id':A,'telegram_id':11},ids['self'],expected_version=1)['archived']
-+
-+
-+@pytest.mark.parametrize('field,value',[('enabled',True),('scopes',[{'provider':'connect'}]),('expert_policy',{'allowed_primary_ids':['peer']})])
-+def test_outgoing_binding_blocks_without_changes(scoped,field,value):
-+    db,ids=scoped;grants(db,{'delete':'all'})
-+    if field=='expert_policy':value={'allowed_primary_ids':[ids['peer']]}
-+    db.execute(f'UPDATE saas_ai_agents SET {field}=%s WHERE id=%s',(value if field=='enabled' else json.dumps(value),ids['self']));db.commit()
-+    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    assert error.value.status==409
-+    assert db.execute('SELECT archived_at,version FROM saas_ai_agents WHERE id=%s',(ids['self'],))[0]=={'archived_at':None,'version':1}
-+
-+
-+def test_trigger_and_reverse_team_block(scoped):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    db.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']));db.commit()
-+    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    assert str(error.value)=='ai_agent_archive_requires_unused_agent'
-+    db.execute("UPDATE saas_ai_agents SET expert_policy='{}' WHERE id=%s",(ids['peer'],))
-+    db.execute("INSERT INTO saas_ai_agent_triggers(tenant_id,id,agent_id,name,trigger_type,actions) VALUES(%s,%s,%s,'trigger','phrase','[]')",(A,str(uuid.uuid4()),ids['self']));db.commit()
-+    with pytest.raises(TenantLinearError):archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+
-+
-+def test_new_structural_references_rejected_but_prose_not_a_reference(scoped):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    with pytest.raises(Exception,match='ai_agent_archived_reference'):
-+        db.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']))
-+    db.rollback()
-+    db.execute('UPDATE saas_ai_agents SET instructions=%s,expert_policy=%s::jsonb WHERE id=%s',(ids['self'],json.dumps({'notes':ids['self']}),ids['peer']));db.commit()
-+    assert db.execute('SELECT instructions FROM saas_ai_agents WHERE id=%s',(ids['peer'],))[0]['instructions']==ids['self']
-+
-+
-+def test_optional_table_installed_after_archive_is_fenced(scoped,monkeypatch):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    import tenant_ai_simulation_schema as simulation_schema
-+    # This test has a fresh module-scoped DB, but a prior module may have set
-+    # the simulation bootstrap's process-local cache for a different DB.
-+    # Explicitly run its real bootstrap here, restoring the prior flag afterward.
-+    monkeypatch.setattr(simulation_schema,'_ready',False)
-+    with store._connect() as conn:simulation_schema.ensure_schema(conn);conn.commit()
-+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present']
-+    assert db.execute("SELECT 1 FROM pg_trigger WHERE tgrelid='saas_ai_simulation_configs'::regclass AND tgname='saas_ai_unused_archive_reference_v1' AND tgenabled IN ('O','A')")
-+    with pytest.raises(Exception,match='ai_agent_archived_reference'):
-+        db.execute('INSERT INTO saas_ai_simulation_configs(tenant_id,agent_id) VALUES(%s,%s)',(A,ids['self']))
-+    db.rollback()
-+
-+
-+def test_current_projection_has_independent_delete(scoped):
-+    db,ids=scoped;grants(db,{'view':'all','update':'none','delete':'self'})
-+    rows=store.list_agents(ACTOR)
-+    assert {row['name'] for row in rows if row['capabilities']['delete']}=={'self'}
-+    assert not any(row['capabilities']['update'] for row in rows)
-+
-+
-+def test_reference_extractor_uses_relationship_keys_not_prose(scoped):
-+    db,ids=scoped
-+    data={'notes':ids['self'],'agent_assignment_id':ids['self'],'nested':{'allowed_primary_ids':[ids['peer']]},'developer_reply_bindings':[{'developer_expected_agent_id':ids['other']}]}
-+    result=db.execute('SELECT saas_ai_reference_ids(%s::jsonb) AS ids',(json.dumps(data),))[0]['ids']
-+    assert set(map(str,result))=={ids['peer'],ids['other']}
-+
-+
-+def test_installed_reference_manifest_has_no_missing_columns_or_fences(scoped):
-+    db,_=scoped
-+    from tenant_ai_unused_archive import REFERENCES
-+    for table,columns in REFERENCES.items():
-+        if not db.execute('SELECT to_regclass(%s) AS present',(table,))[0]['present']:continue
-+        found={r['attname'] for r in db.execute('SELECT attname FROM pg_attribute WHERE attrelid=%s::regclass AND attnum>0 AND NOT attisdropped',(table,))}
-+        assert set(columns)<=found,(table,set(columns)-found)
-+        assert db.execute("SELECT 1 FROM pg_trigger WHERE tgrelid=%s::regclass AND tgname='saas_ai_unused_archive_reference_v1' AND tgenabled<>'D'",(table,))
-+
-+
-+def test_optional_schema_creators_install_their_actual_reference_fences(scoped,monkeypatch):
-+    import importlib
-+    db,_=scoped
-+    creators=[('tenant_ai_instructor_store','schema'),('tenant_ai_simulation_schema','ensure_schema'),
-+              ('tenant_dialog_consultations','schema'),('tenant_dialog_audio_store','schema'),
-+              ('tenant_owner_asr_comparison','schema'),('tenant_instruction_library','schema'),('tenant_instruction_videos','schema'),
-+              ('tenant_ai_learning_mcp','ensure_mcp_schema')]
-+    for module,name in creators:
-+        implementation=importlib.import_module(module)
-+        if module=='tenant_ai_simulation_schema':monkeypatch.setattr(implementation,'_ready',False)
-+        with store._connect() as conn:
-+            getattr(implementation,name)(conn);conn.commit()
-+    test_installed_reference_manifest_has_no_missing_columns_or_fences(scoped)
-+
-+
-+def test_archive_api_checks_identity_origin_and_returns_only_receipt(scoped):
-+    import asyncio
-+    from types import SimpleNamespace
-+    from unittest.mock import Mock,AsyncMock
-+    from tenant_ai_agents_api import handler
-+    db,ids=scoped;grants(db,{'view':'none','delete':'self'},manage=False)
-+    remote=AsyncMock(side_effect=AssertionError('provider forbidden'))
-+    call=handler(lambda request:ACTOR,'https://synthetic.invalid',Mock(),'agent_archive_unused',request_provider=remote)
-+    def request(origin='https://synthetic.invalid',actor=31):
-+        return SimpleNamespace(method='POST',content_length=200,headers={'Origin':origin},content_type='application/json',match_info={'agent_id':ids['self']},json=AsyncMock(return_value={'expected_tenant_id':A,'expected_user_id':actor,'expected_version':1}))
-+    assert asyncio.run(call(request(origin='https://other.invalid'))).status==403
-+    assert asyncio.run(call(request(actor=32))).status==409
-+    response=asyncio.run(call(request()))
-+    assert response.status==200,response.text
-+    assert json.loads(response.text)['result']=={'id':ids['self'],'version':2,'archived':True}
-+    remote.assert_not_called()
-+
-+
-+def test_missing_disabled_or_stale_fence_is_not_schema_ready(scoped):
-+    db,ids=scoped
-+    from tenant_ai_unused_archive import fences_ready,install_existing
-+    for change in ('ALTER TABLE saas_ai_agents DISABLE TRIGGER saas_ai_unused_archive_reference_v1',
-+                   'DROP TRIGGER saas_ai_unused_archive_reference_v1 ON saas_ai_agents'):
-+        db.execute(change);db.commit()
-+        with db.cursor() as cur:
-+            assert not fences_ready(cur)
-+            install_existing(cur)
-+            assert fences_ready(cur)
-+        db.commit()
-+    db.execute('DROP TRIGGER saas_ai_unused_archive_reference_v1 ON saas_ai_agents')
-+    db.execute("CREATE TRIGGER saas_ai_unused_archive_reference_v1 BEFORE INSERT OR UPDATE ON saas_ai_agents FOR EACH ROW EXECUTE FUNCTION saas_ai_unused_archive_reference_fn('name')")
-+    db.commit()
-+    with db.cursor() as cur:
-+        assert not fences_ready(cur)
-+        install_existing(cur)
-+        assert fences_ready(cur)
-+    db.commit()
-+
-+
-+@pytest.mark.parametrize('state',['queued','processing','drafted','skipped'])
-+def test_any_job_including_active_or_historical_blocks_archive(scoped,state):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s,'unused-job-test','connect')",(A,))
-+    db.execute("""INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,event_fingerprint,state,due_at)
-+      VALUES(%s,%s,'connect','synthetic',1,'','','unused-job-test',%s,now())""",(A,ids['self'],state));db.commit()
-+    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    assert error.value.status==409
-+    assert db.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s AND agent_id=%s',(A,ids['self']))[0]['state']==state
-+
-+
-+def test_pending_webhook_nested_binding_blocks_archive(scoped):
-+    db,ids=scoped;grants(db,{'delete':'self'})
-+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,payload) VALUES(%s,'unused-event-test','connect',%s::jsonb)",(A,json.dumps({'developer_reply_bindings':[{'developer_expected_agent_id':ids['self']}]})));db.commit()
-+    with pytest.raises(TenantLinearError) as error:archive_unused_agent(ACTOR,ids['self'],expected_version=1)
-+    assert error.value.status==409
-+
-+
-+def test_gate_off_owner_archive_and_deleted_tombstone_keep_legacy_history(scoped,monkeypatch):
-+    db,ids=scoped;monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED')
-+    owner={'tenant_id':A,'telegram_id':11}
-+    result=store.delete_agent(owner,ids['self'],replacement_agent_id=ids['peer'],expected_version=1)
-+    assert result['archived']
-+    assert not db.execute('SELECT id FROM saas_ai_scoped_archives WHERE id=%s',(ids['self'],))
-+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s,'legacy-history-test','connect')",(A,))
-+    def insert_run(revision):
-+        db.execute("""INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state)
-+          VALUES(%s,%s,%s,'legacy-history-test',%s,'fixture','completed')""",(A,str(uuid.uuid4()),ids['self'],revision));db.commit()
-+    insert_run(1)
-+    result=store.permanently_delete_agent(owner,ids['self'],expected_version=2,confirm_agent_id=ids['self'])
-+    assert result['deleted']
-+    insert_run(2)
-+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s AND agent_id=%s',(A,ids['self']))[0]['n']==2
-+    assert db.execute('SELECT deleted_at FROM saas_ai_agent_history_identities WHERE id=%s',(ids['self'],))[0]['deleted_at']

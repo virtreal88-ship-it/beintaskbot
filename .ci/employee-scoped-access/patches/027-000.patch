@@ -1,0 +1,504 @@
+diff --git a/beintaskbot-main/tests/test_tenant_web_routes.py b/beintaskbot-main/tests/test_tenant_web_routes.py
+index 501fd8aafc4ee314e0e20a27b20ade65f19cb9c0..c7efefea1ea73390afc5760cb2e9fe167dcc326b 100644
+--- a/beintaskbot-main/tests/test_tenant_web_routes.py
++++ b/beintaskbot-main/tests/test_tenant_web_routes.py
+@@ -31,7 +31,7 @@ EXPECTED_API += tuple((method,path) for path,methods in [
+  ('/api/instructions/shared/{token}/assets/{asset_id}',('GET',))] for method in methods)
+ EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowledge-pilot-admin.js","/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-ai-teams.js","/assets/tenant-ai-teams.css","/assets/tenant-knowledge-center.js","/assets/tenant-knowledge-center.css","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
+ 
+-EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js']
++EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js', '/assets/tenant-shared-integration-settings.js']
+ EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.js']
+ EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.css']
+ 
+@@ -39,8 +39,8 @@ EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-ins
+ EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
+ EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-alert-detail.css']
+ EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
+-EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
+-EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
++EXPECTED_ASSETS += ['/assets/tenant-dialog-source-members.js','/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
++EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js','/assets/tenant-crm-save-receipt.js','/assets/tenant-crm-sync-history.js']
+ EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
+ EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
+ EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
+@@ -84,7 +84,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
+     ('knowledge/deduplication', ('GET','POST')),
+     ('administrator/approvals', ('GET','POST')),
+     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
+-    ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
++    ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
+     ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
+     ('dialogs/agent-assignment', ('GET','POST')),
+     ('dialogs/agent-assignment-bulk', ('GET','POST')),
+@@ -103,6 +103,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
+     ('channels', ('GET',)), ('state', ('GET',)), ('state/technical', ('GET',)),
+     ('reliability', ('GET',)), ('handoffs', ('GET',)), ('diagnostics', ('GET',)), ('agents/{agent_id}', ('PATCH','DELETE')),
+     ('agents/{agent_id}/delete-preview', ('GET',)),
++    ('agents/{agent_id}/archive-unused', ('POST',)),
+     ('agents/{agent_id}/triggers', ('GET','POST')),
+     ('agents/{agent_id}/triggers/{trigger_id}', ('PATCH','DELETE')),
+     ('conversations/{conversation_id}/state', ('GET',)),
+diff --git a/beintaskbot-main/ui/src/main.jsx b/beintaskbot-main/ui/src/main.jsx
+index 1203994a2db6be67c062b866938f224b8b669762..7f078934939e9e9d3896cf6286729f4133c6f9c6 100644
+--- a/beintaskbot-main/ui/src/main.jsx
++++ b/beintaskbot-main/ui/src/main.jsx
+@@ -1210,7 +1210,7 @@ function IntegrationMarketplace() {
+         connected: !!me.member?.telegram_id,
+         label: "connected",
+       };
+-      if (["owner", "admin"].includes(me.member?.role)) {
++      if (!(me.integrations || []).some(row => row.management_actions) && ["owner", "admin"].includes(me.member?.role)) {
+         const checks = await Promise.allSettled([
+           api("/api/platform/linear/settings"),
+           api("/api/platform/chat/ai/settings"),
+@@ -1269,8 +1269,8 @@ function IntegrationMarketplace() {
+   useEffect(() => {
+     if (
+       !selected ||
+-      tab !== "settings" ||
+-      (selected.id === "connect" && !owner)
++      (tab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
++      (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
+     )
+       return;
+     const detail = {
+@@ -1642,7 +1642,7 @@ function IntegrationMarketplace() {
+                     </Box>
+                   )}
+                   <Dialog.Body p={{ base: "5", md: "6" }} overflowY="auto">
+-                    {tab === "connection" && (
++                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box><Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                       <Stack gap="4">
+                         {!owner && (
+                           <Box
+@@ -1832,7 +1832,7 @@ function IntegrationMarketplace() {
+                         )}
+                       </Stack>
+                     )}
+-                    {tab === "settings" && (
++                    {tab === "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id) && (
+                       <>
+                         {selected.id === "connect" ? (
+                           owner ? (
+diff --git a/docs/crm-import-verified-identities.md b/docs/crm-import-verified-identities.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ca55ca5f7b42ef956b74534c2598880622d2098
+--- /dev/null
++++ b/docs/crm-import-verified-identities.md
+@@ -0,0 +1,88 @@
++# Verified identities from existing Kommo imports
++
++## Bounded implementation
++
++An already-configured Kommo contact/lead read can now retain server-only
++provenance. The request still uses the existing URL, request count, payload,
++refresh and retry behavior. The credential store exposes the selected provider
++and connected_at from the same row snapshot as the token. No token or setting is
++changed by this addition.
++
++Only a direct successful GET of `contacts` or `leads`, with no redirect history
++and an unambiguous bounded page of canonical numeric IDs, produces an in-memory
++observation. The observation includes the actual successful attempt's tenant,
++account domain, connection generation, resource, observed IDs and an opaque
++request evidence ID. Refresh or a 401 retry uses the credentials of the final
++successful attempt, not a queued job's assumed account. Plain dicts remain
++compatible; JSON fields named `observation` are never accepted as evidence.
++
++The page transaction locks the tenant and all relevant integration rows, checks
++that this observation still matches the selected connection, then checks the
++existing job/run/connection fences. It retains those locks through import,
++verified mapping insertion and checkpoint commit. A stale response cannot be
++attached to a new generation; a valid new-generation response cannot be saved
++under an old job. A concurrent preferred OAuth INSERT is fenced even when only
++a manual connection existed when the read started.
++
++A verified mapping is registered only in the branch that just INSERTed the new
++native contact or deal, after the existing import policy, required-field and
++legacy-link checks. The mapping, native row, legacy link and page checkpoint share
++one transaction. Uniqueness conflicts abort that transaction, rather than
++reassigning an existing internal or external identity. Existing mapping evidence
++is retained on replay. No provider operation, grant or global gate is activated.
++
++## Deliberate non-adoption
++
++These paths never create verified mappings for:
++
++- A pre-existing native row found by a legacy provider ID.
++- A contact selected by phone/email matching, even if the remote record exists.
++- An existing imported row that lacks an observation, including rows imported
++  before this change. Reading the same numeric ID again is not verification.
++- A previously verified row after reconnect or account/auth-mode generation
++  change. The old binding remains historical and cannot authorize the new one.
++- Company, pipeline or stage identities, nested contact/company relationships,
++  browser-supplied metadata or BEIN provider records.
++
++The legacy import's existing matching and field-update behavior is unchanged.
++Registering a freshly imported deal does not certify its existing pipeline,
++stage, contact or company mappings. This is not a bulk backfill or a migration
++that upgrades old `saas_crm_entity_links` rows.
++
++## Audit of remaining hooks
++
++`tenant_crm_sync_outbox._send_unfenced` receives a naked create result, stores the
++legacy link in a later transaction and does not currently retain exact source
++binding. No create/export hook was added here. It needs a separately verified
++create receipt and current local-card/connection revalidation; ambiguous creates
++must remain unknown, never repeated to obtain an ID.
++
++`TenantKommo.request_bound` requires an already verified mapping and is not a
++bootstrap path. A successful record GET alone cannot prove a historical native
++record belongs to that remote record. The `owner_verified` storage primitive
++exists, but no browser verification UI or permission flow is implemented.
++
++BEIN's client has base URL/branch configuration, but no generation-bound identity
++receipt contract or supported relation mapping schema. There is no BEIN import
++path here and no safe BEIN registration hook. It remains unsupported.
++
++For existing records, the product choice is an explicit owner assertion of the
++exact native UUID, provider account/generation and remote entity/ID, with a
++current-owner check, current connection fence and durable evidence. Any remote
++read would confirm that exact asserted target, never choose one by name/phone or
++coincident numeric ID. Decide that UI and evidence contract before implementing
++it. Do not reuse automatic import as owner verification.
++
++## Verification
++
++Synthetic transport tests cover pre-send refresh, 401 retry, actual final source,
++manual/OAuth distinction, redirects, malformed/duplicate IDs, JSON spoofing and
++unchanged request count/body. Isolated SQL tests cover rollback with the page
++checkpoint, current/old job generations, tenant/provider/entity/ID mismatch,
++legacy and phone/email non-adoption, uniqueness collision and immutable evidence.
++
++The separate localhost PostgreSQL fence suite covers concurrent reconnect,
++preferred integration INSERT and duplicate imports. It requires an explicit
++`BEINTASKBOT_TEST_POSTGRES_DSN` and rejects non-local hosts. PGlite/WASM tests do
++not prove multi-session lock behavior. No production/provider calls or real
++customer records are used by these tests.
+diff --git a/docs/crm-relation-delivery-safety.md b/docs/crm-relation-delivery-safety.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd81c0ceca2c52292eeb72c3e7e9c247229106cf
+--- /dev/null
++++ b/docs/crm-relation-delivery-safety.md
+@@ -0,0 +1,91 @@
++# Dormant relationship delivery
++
++## What is implemented
++
++The relation store changes a single native FK and inserts its durable intent and
++latest-head marker in the same transaction. It records the authenticated source
++card and actor, not merely the changed FK owner. Delivery rechecks the source
++card's update permission, active tenant/member, ownership/department scope,
++active records, exact local revision/head, current sync policy, verified mapping,
++account domain and connection generation. Tenant and row locks stay held through
++conditional provider I/O. The tenant key lock also fences insertion of a newly
++preferred integration while a manual connection is selected.
++
++Identity rows are separate from legacy unbound IDs. Import/create evidence or an
++explicit owner verification is required; reconnect never adopts old mappings
++just because the same numeric provider ID exists. Token refresh preserves the
++integration generation; a connection or account change invalidates it.
++
++Kommo planning uses only POST /leads/{id}/link and /unlink (or the corresponding
++contact/company endpoints), one target at a time. Replacing a main contact links
++the new main before detaching only the previous main. Secondary contacts remain
++in every planned state. Company replacement is explicitly two steps, not atomic.
++All remote snapshots include the complete relevant ID set and main flags; partial,
++paged, malformed or ambiguous snapshots fail closed. No record PATCH is used.
++
++The driver commits a sending marker before I/O and keeps a session advisory lock
++across commits. A duplicate worker cannot dispatch concurrently. Crash, timeout,
++unknown result, or lost read-back causes no replay and no compensating unlink.
++Even observing the desired state does not prove an earlier in-flight request has
++finished. A later invocation cannot infer permission from a queued event.
++
++## Deliberate activation blocker
++
++There is no production adapter or scheduled caller. Existing scoped relation
++requests continue to return 409 when outbound synchronization is configured.
++The journal API is dormant; the migration only creates additive empty tables.
++No identities are automatically backfilled and no live sync policy is changed.
++
++A valid delivery adapter must compare the full expected remote relation graph and
++apply the one narrow operation under an actual atomic/exclusive provider fence.
++The test mock does this in memory. Kommo's published link/unlink API does not
++supply a documented CAS/version precondition. Read/check/POST/read can detect
++some concurrent changes but cannot prevent overwriting a main-contact edit that
++arrives between the check and POST. Local PostgreSQL locks do not fence Kommo UI
++users or other integrations. This is a missing integration contract, not a new
++permanent restriction on the product or the user's approved relation semantics.
++
++The smallest missing safety contract is provider-supported conditional relation
++writes (or a verified exclusive-write mechanism covering *all* remote writers),
++plus a way to establish that an uncertain prior request has finished before any
++subsequent step. Without those guarantees, activating the current mock contract
++as ordinary Kommo HTTP would be unsafe. Do not replace it with a boolean flag or
++an in-process lock. Unlinking the only main while secondary contacts remain also
++needs verified provider behavior regarding automatic main-contact reassignment.
++
++BEIN has no independently verified narrow link/unlink contract here. It remains
++unsupported; do not invent PUT/PATCH semantics or route relation intents through
++the whole-record exporter. Contact-company activation additionally needs an
++explicit supported sync-policy field, since the current policy UI does not offer
++company_id for contact synchronization.
++
++## Scoped scalar provenance follow-up
++
++New scoped scalar mutations now have a separate atomic journal with actor,
++revision and immutable changed-field masks. See `crm-scoped-scalar-sync.md` for
++dispatch fences, narrow API receipts and the remaining activation blockers.
++Existing legacy event contents are not rewritten. Unknown historical provenance,
++in-flight legacy delivery, recovery UI and provider concurrency guarantees still
++need a rollout resolution. This is not a claim that the scoped gate can be enabled.
++
++## Verified primary references (2026-11-11)
++
++- https://developers.kommo.com/reference/linking-entities : POST relation endpoint;
++  response metadata main_contact.
++- https://developers.kommo.com/reference/unlinking-entities : POST unlink endpoint.
++- https://developers.kommo.com/reference/linked-entities : full links observation.
++- https://raw.githubusercontent.com/amocrm/amocrm-api-php/master/src/AmoCRM/Models/ContactModel.php :
++  getMetadataForLink serializes the request field is_main (not main_contact).
++
++These references establish endpoint shapes, not a concurrency or idempotency
++contract. No live provider requests were made during development.
++
++## Verification
++
++Pure contract/planner tests and isolated PostgreSQL/WASM tests exercise rollback,
++source-only update authorization, stale/revoked access, reconnect/account changes,
++mapping changes, local edits, secondary preservation, duplicate delivery,
++timeout-after-apply and simulated process loss. A separate localhost PostgreSQL
++suite exercises actual multi-session blocking and concurrent dispatch. It is
++skipped without BEINTASKBOT_TEST_POSTGRES_DSN; WASM is not evidence of real
++multi-session locking. Tests never use production databases or credentials.
+diff --git a/docs/crm-scoped-scalar-sync.md b/docs/crm-scoped-scalar-sync.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..874beba6b1a19eaa3b939b95867cf388979bf2c5
+--- /dev/null
++++ b/docs/crm-scoped-scalar-sync.md
+@@ -0,0 +1,137 @@
++# Scoped scalar synchronization
++
++New human contact/deal mutations with an effective scoped profile now write a
++separate scalar journal in the same transaction as the native row mutation. The
++API does not enqueue a second actorless legacy event. A public `sync` receipt
++separates `local_saved` from external `pending`, `needs_verification`, `off` and
++`unchanged` states. No response claims external synchronization completed merely
++because the local card was saved.
++
++An event contains source actor/action, tenant/card, exact local revision, immutable
++changed-and-allowed scalar field mask, before/after values, content fingerprint,
++and verified account/generation/record mapping. Relations never enter its mask.
++Policy additions cannot expand an accepted event. Dispatch locks current source U,
++tenant/member/department, native record, integration, mappings and provider policy
++until the single PATCH/read-back completes. Later local revisions are rejected;
++no worker exports another actor's newer row values under an older event.
++
++The Kommo transport uses a single object PATCH for a mapped existing lead/contact,
++with only name or supported custom scalar fields. It does not call the legacy
++record exporter, POST/create, link/unlink, refresh tokens under locks, or replay an
++uncertain request. Known divergent remote field values conflict. Existing single
++phone/email category metadata is retained; multiple provider values are not
++flattened. Timeout, crash or unavailable read-back is unknown, never an automatic
++retry. A prior unknown/sending event blocks later writes for the same card.
++
++## Legacy behavior
++
++Records that have never had scoped provenance retain their original legacy queue
++and payload behavior, including gate-off operation. There is no blanket legacy
++queue pause and no global field stripping. A legacy event for a record with a scoped provenance head is rejected as
++`legacy_scoped_revision_conflict`, whether its revision is older, equal or newer.
++A later service/legacy phone edit cannot authorize exporting a prior scoped name
++through a full-record payload. This is record-specific quarantine, not successful
++sync or inferred service/human authority. Unrelated legacy/service cards are
++untouched. The per-record barrier persists when the rollout flag is disabled:
++rollback cannot erase a scoped value's provenance or authorize its export through
++an actorless event. No markers are deleted or reset. Writer provenance for
++subsequent mixed-writer events and an explicit resolution path for quarantined events remain activation blockers.
++Already in-flight actorless requests cannot be recalled. Historical provenance
++and a drain/transition plan remain prerequisites for activating scoped mode.
++
++## Explicit current limits, not successful synchronization
++
++- Legacy external IDs are never silently adopted as account-bound mappings.
++  Missing verified record mapping produces `needs_verification` after local save.
++- New scoped creates do not silently create a provider record under update
++  authority. They report `needs_verification` with their original create action.
++- BEIN account-bound scalar identity, pipeline/stage catalog bindings, and an
++  independently verified phone/email clearing contract are not implemented by
++  this change. These specific events report `needs_verification`; mapped Kommo
++  name/title/nonempty single phone/email edits can use the guarded scalar path.
++- Expiring OAuth requires a refresh outside the dispatch fence. The bound
++  transport neither refreshes nor retries a 401 while authorization locks are held.
++- A newer edit explicitly supersedes an older unsent event. Its original values
++  and unsent outcome remain in the journal. The new receipt includes
++  `review_required` and `superseded_unsent_event_ids`. The new event contains only
++  its own changed fields and never silently coalesces another actor's unsent values.
++- Contact/deal save paths now display the receipt in RU/AZ/EN, distinguish local
++  save from queued/unverified/conflicting external synchronization, and explicitly
++  warn about an earlier unsent value. A separate notice survives list refresh and
++  remains visible inside a partially completed form. It makes no provider reads,
++  retries or mapping changes. Auth revalidation clears old-context receipts.
++- Native contact/deal/company cards now have a persisted, read-only event history,
++  authorized by current R of the exact source card. It shows the latest stored
++  outcome for each event, with immutable event identity/local revision and safe
++  issue labels. It does not display payloads, actors or provider/account metadata.
++  A recorded completion is not a fresh check of the external CRM. Empty history
++  does not establish successful sync or mean that no older external work exists.
++- There is still no recovery or mapping-verification UI. History cannot retry,
++  resolve unknown outcomes, clear barriers or adopt legacy mappings. Those
++  contracts and the existing provider/rollout prerequisites remain blockers.
++- Kommo's scalar PATCH, like its existing legacy scalar writes, does not provide
++  documented remote CAS. Pre-read conflict detection cannot eliminate a remote
++  edit between GET and PATCH. Narrow scalar payloads cannot alter relations, but
++  a stronger guarantee against same-field remote races needs a provider contract.
++
++No production policies or rights are changed, the global gate remains off, and
++no production credentials or provider requests were used during development.
++
++Primary API shapes checked:
++https://developers.kommo.com/reference/update-contact
++https://developers.kommo.com/reference/updating-single-lead
++https://developers.kommo.com/reference/custom-fields
++
++Tests include isolated PostgreSQL/WASM, mocked transport/API routing, rollback,
++revocation, changed provider policy, connection generation, stale revisions,
++unknown-outcome ordering and successive different-field edits. Real multi-session
++PostgreSQL fence tests require a disposable localhost DSN; they are skipped when
++unavailable, not represented as passing concurrency evidence.
++
++
++## Legacy-to-scoped admission fence
++
++Legacy delivery now owns a per-card PostgreSQL session advisory lock across the
++provider call and its local result commit. Native human contact/deal updates,
++when the scoped gate is enabled, take the matching transaction lock before any
++tenant/member/card locks. Thus the first scoped mutation waits for a currently
++running fenced legacy request; different cards can still proceed. Busy duplicate
++workers do not send or finish another worker's claim. After admission, the worker
++also validates the persisted processing state and attempt counter, not just an
++expired lease.
++
++New scoped-era claims atomically record `not_started` with the exact claim attempt
++before worker admission. A busy card therefore leaves durable evidence that this
++claim never sent. A later claim may renew only matching unsent evidence; it cannot
++replace another sender's `sending`/`unknown` outcome or invent evidence for a
++historical attempt. Send admission locks the outbox row while validating the
++claim and committing possible-send evidence. An expired unsent Kommo create is
++also safe to admit for its first actual send, unlike a possible earlier create.
++
++In scoped mode, legacy possible-send evidence is committed before I/O. Exceptions,
++process death and lost replies leave unknown/sending evidence, including when the
++old retry scheduler later puts the event back into pending. Such an event cannot
++be replayed, even after disabling the flag. A historical retry with no durable
++send evidence is also unverified rather than replayed while scoped mode is on.
++Unmarked gate-off records retain their existing successful exporter payload and
++retry behavior, with same-card serialization added.
++
++A first scoped local save with a processing/unknown legacy event, an attempted
++pending legacy retry, or unresolved possible-send evidence reports
++`needs_verification` / `scalar_legacy_outcome_unknown`. The scalar dispatcher
++rechecks this before any provider call. Processing/pending claims with matching
++durable `not_started` evidence are excluded, so ordinary card contention cannot
++permanently quarantine an unsent event or block a new scoped scalar edit. Unknown
++states and possible-send evidence are never excluded. Neither lease expiry nor a new local
++revision proves that a remote operation has stopped. There is no automatic
++recovery or clearing of this evidence.
++
++This is a bounded fence for the native human update entry points and this legacy
++delivery worker. Native stores open their own connections and do not accept an
++existing transaction. Actorless service writes, imports and direct SQL writers
++have not been globally converted or granted human authority. No lock is added to
++their tenant/config-first paths. New/updated workers must be fully rolled out and
++old in-flight workers drained before activation: an old worker cannot honor a
++new advisory lock. Historical ambiguous operations still require an explicit
++resolution contract. The fence is not remote CAS and does not prevent provider
++users or other applications from editing concurrently.
+diff --git a/docs/scope-activation-preflight.md b/docs/scope-activation-preflight.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a69f16e57c685b7bb36e740d18481c8a8db5b79d
+--- /dev/null
++++ b/docs/scope-activation-preflight.md
+@@ -0,0 +1,81 @@
++# Read-only scope activation inventory and deployment drain
++
++This tool does not enable the flag, modify grants, repair schema, register identities,
++retry delivery, or call providers. It cannot certify a safe full rollout.
++
++## Run the inventory
++
++Use a separately authorized read-only DB identity. Supply its complete connection
++through a private file (not a command-line credential and not DATABASE_URL).
++Do not attach that file to reports. The DSN must explicitly contain host, dbname,
++and user; service files and ambient PG variables are not used.
++
++```
++python beintaskbot-main/scripts/scope_activation_preflight.py --dsn-file /private/readonly-dsn --sample-limit 20 > preflight.json
++code=$?
++test "$code" -eq 2   # 2 means inventory produced, NOT_SAFE_TO_ENABLE
++```
++
++Exit 3 means connection/snapshot failure; missing table, column, permission or
++query timeout yields an unknown check, never a zero. Exit 2 is deliberately never
++a success-to-enable signal. JSON contains only code-owned labels, counts and salted
++opaque sample tokens. It excludes names, message text, phone/email, external IDs,
++account domains, credentials, DSN, raw database errors and workflow JSON. Samples
++cannot be resolved across reports; use a separately authorized owner review to
++resolve records. Counts span all tenants and are one repeatable-read snapshot.
++No query repairs even an empty database. Use only a fresh dedicated connection.
++
++Historical issue receipts and current NULL owners are separate observations:
++receipts can survive resolution, while newly created system documents can be NULL
++without being failed historical migrations. Missing departments/inactive members
++are review inventory, not automatic defects. Identity-table presence does not prove
++current account/generation validity. All mandatory evidence remains uncertified.
++
++## Executable deployment/drain checklist
++
++These are operator-executed steps, not permission for automatic production actions.
++Use the deployment platform's authenticated service/process listing and release
++records, not a local branch, guessed container tag or the frontend version.
++
++1. Record the exact immutable candidate Git SHA and successful CI run IDs for it.
++   Require real PostgreSQL concurrency tests, browser tests, and startup/migration
++   checks. Record baseline schema and a verified recoverable backup.
++2. Export the actual service inventory: web replicas, queue consumers, schedulers,
++   one-off jobs and autoscaling templates. Record each process ID, image digest,
++   deployed SHA, start time and rollout-flag value. A missing process/version or
++   unknown flag is a STOP, not an assumption that the default is off.
++3. Keep the global flag off. Deploy compatible code through the existing authorized
++   platform workflow. Replace every old process and its restart/autoscale template.
++   Query the platform again and compare *every* live process to the target digest
++   and SHA. Do not proceed while old versions or unidentifiable workers remain.
++4. Stop old-worker admission through the approved platform drain mechanism. Observe
++   old process termination and record its request/queue completion evidence. Wait
++   for tracked provider calls to finish. Lease expiry, empty queue, process death,
++   or a later GET with the desired values is NOT proof an old remote call finished.
++5. Run the read-only inventory. Reconcile processing/unknown/attempted legacy rows
++   with durable sending/unknown and claim-aware not_started evidence. Never reset
++   attempts, delete markers, or replay a possible send merely to make counts zero.
++   For unknown calls obtain provider completion evidence and use a reviewed recovery
++   workflow; if absent, STOP activation.
++6. Review actual source assignments, owner issues, departments and before/after
++   effective access with the owner. Verify account-generation mapping evidence,
++   production adapter registration and provider guarantees separately. Do not
++   infer ownership/mappings or change real rights as part of this inventory.
++7. Confirm a durable status/recovery path for conflicts, unmapped identities,
++   superseded values and mixed-writer quarantine. Record approval/evidence for
++   every mandatory item. Missing adapter/CAS/unknown completion guarantee means
++   STOP full-model activation even when all database counts are zero.
++8. If a later separately authorized activation proceeds, record the exact flag
++   change, process/version inventory and observation window. This document and
++   tool neither perform nor authorize that action.
++
++## Compatible rollback
++
++Turning the flag off does not erase scoped provenance. Preserve scalar/relation
++journals and heads, legacy delivery evidence and claim attempts, ownership/mapping
++receipts, and additive schema/triggers. Never truncate/reset them or run a down
++migration. The rollback image must retain actorless-export quarantine, same-card
++admission and possible-send barriers, and AI archive-reference fences. Verify the
++candidate rollback image against synthetic persisted post-scope data before use.
++An older pre-fence binary is not compatible. Re-query actual live processes after
++rollback and keep uncertain events blocked; flag-off alone does not prove safety.
