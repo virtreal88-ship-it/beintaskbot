@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == 'b786dadfb442d72e804d5aa3fda95340471c9c58ae46a59e7154ab22a59a9d34'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == '50ac19d7e63a96a4e2edc44c63ad0c1680bac5245c099c799da4c30061fceaf6'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == '44cd220fa0ab7ac7b53ca28f111294682ecb9a7e', actual
+          assert actual == manifest['target_tree'] == 'e964ef5fa1c52add29ec7b9b343e6048f61db98e', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -99,11 +99,15 @@ jobs:
           tests/test_scoped_access_foundation.py
           tests/test_scoped_access_foundation_postgres.py
           tests/test_employee_scope_settings_postgres.py
+          tests/test_employee_creation_scopes.py
+          tests/test_employee_creation_scopes_postgres.py
           tests/test_employee_card_scopes.py
           tests/test_employee_card_scopes_postgres.py
           tests/test_employee_task_scopes.py
           tests/test_task_b4_scope_regression.py
           tests/test_crm_scoped_access_postgres.py
+          tests/test_crm_source_card_relations.py
+          tests/test_crm_source_card_relations_postgres.py
           tests/test_native_crud_dispatch.py
           tests/test_employee_finance_scopes.py
           tests/test_dialog_source_scopes.py
@@ -126,10 +130,19 @@ jobs:
           tests/test_instruction_member_access_postgres.py
           tests/test_ai_scoped_documents.py
           tests/test_ai_scoped_documents_postgres.py
+          tests/test_ai_unused_archive.py
+          tests/test_ai_unused_archive_postgres.py
+          tests/test_ai_admin_config_lock_order.py
+          tests/test_ai_admin_config_archive_postgres.py
           tests/test_tenant_policy.py
           tests/test_tenant_scoped_access.py
           tests/test_tenant_ai_agents_api_diagnostics.py
           tests/test_tenant_web_routes.py
+          tests/test_night_report_scopes.py
+          tests/test_night_report_scopes_postgres.py
+          tests/test_tenant_night_report.py
+          tests/test_tenant_night_report_api.py
+          tests/test_tenant_member_access.py
           tests/test_shared_integration_scopes.py
           tests/test_shared_integration_scopes_postgres.py
           tests/test_tenant_crm_relation_contract.py
@@ -139,6 +152,8 @@ jobs:
           tests/test_crm_scoped_scalar_postgres.py
           tests/test_crm_scoped_scalar_api_transport.py
           tests/test_crm_scalar_fences_postgres.py
+          tests/test_crm_legacy_transition.py
+          tests/test_crm_legacy_transition_postgres.py
           tests/test_tenant_crm_external_sync.py
           tests/test_crm_native_deals.py
           tests/test_crm_native_deal_api.py
@@ -159,7 +174,9 @@ jobs:
           tests/test_tenant_connect_access_api.py
       - name: Interface regressions
         run: |
+          node tests/test_employee_creation_scopes_ui.cjs
           node tests/test_employee_card_scopes_ui.cjs
+          node tests/test_tenant_night_report_ui.cjs
           node tests/test_employee_scope_settings_ui.cjs
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_contacts_directory_ui.cjs
@@ -167,6 +184,7 @@ jobs:
           node tests/test_tenant_crm_native_workflow_ui.cjs
           node tests/test_tenant_app_syntax.cjs
           node tests/test_native_company_relation_ui.cjs
+          node tests/test_native_company_deal_source_ui.cjs
           node tests/test_tenant_crm_native_modal_ui.cjs
           node tests/test_employee_finance_scopes_ui.cjs
           node tests/test_dialog_source_members_ui.cjs
@@ -185,6 +203,7 @@ jobs:
         run: |
           node tests/employee_scope_matrix_browser.cjs
           python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
+          node tests/test_native_company_deal_source_browser.cjs
           python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
           python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
       - name: Save synthetic matrix screenshots

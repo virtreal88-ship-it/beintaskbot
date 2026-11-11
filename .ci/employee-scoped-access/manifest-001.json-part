@@ -1,0 +1,72 @@
+        "beintaskbot-main/tests/test_support_inbox_scopes.py",
+        "beintaskbot-main/tests/test_support_inbox_scopes_postgres.py",
+        "beintaskbot-main/tests/test_support_inbox_scopes_ui.cjs",
+        "beintaskbot-main/tests/test_task_b4_scope_regression.py",
+        "beintaskbot-main/tests/test_task_read_save_flow_ui.cjs"
+      ],
+      "sha256": "0f93e9a97eeaa42428334a25e80c010dbde99cac9af92297ad68b2fe0d1b97ba",
+      "bytes": 79899,
+      "parts": [
+        {
+          "file": "patches/023-000.patch",
+          "sha256": "0f93e9a97eeaa42428334a25e80c010dbde99cac9af92297ad68b2fe0d1b97ba",
+          "bytes": 79899
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tests/test_tenant_chat_ai.py",
+        "beintaskbot-main/tests/test_tenant_chat_ai_api.py",
+        "beintaskbot-main/tests/test_tenant_chat_ai_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_chat_api.py",
+        "beintaskbot-main/tests/test_tenant_chat_attachments.py",
+        "beintaskbot-main/tests/test_tenant_chat_history.py",
+        "beintaskbot-main/tests/test_tenant_chat_send.py",
+        "beintaskbot-main/tests/test_tenant_chat_upload.py",
+        "beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_crm_notice.py",
+        "beintaskbot-main/tests/test_tenant_crm_relation_contract.py",
+        "beintaskbot-main/tests/test_tenant_crm_relation_delivery_postgres.py",
+        "beintaskbot-main/tests/test_tenant_crm_relation_kommo.py",
+        "beintaskbot-main/tests/test_tenant_customer_voice_service.py",
+        "beintaskbot-main/tests/test_tenant_linear.py",
+        "beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs",
+        "beintaskbot-main/tests/test_tenant_member_store.py",
+        "beintaskbot-main/tests/test_tenant_members_api.py",
+        "beintaskbot-main/tests/test_tenant_news_member_read_postgres.py",
+        "beintaskbot-main/tests/test_tenant_news_member_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_night_report_api.py"
+      ],
+      "sha256": "8639fc5e41ac4184b7a442a4ee4973bce201cbd6bc99b92cfa611c1288a37010",
+      "bytes": 64842,
+      "parts": [
+        {
+          "file": "patches/024-000.patch",
+          "sha256": "8639fc5e41ac4184b7a442a4ee4973bce201cbd6bc99b92cfa611c1288a37010",
+          "bytes": 64842
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tests/test_tenant_night_report_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_operator_copilot.py",
+        "beintaskbot-main/tests/test_tenant_scoped_access.py",
+        "beintaskbot-main/tests/test_tenant_web_routes.py",
+        "beintaskbot-main/ui/src/main.jsx",
+        "docs/crm-relation-delivery-safety.md",
+        "docs/crm-scoped-scalar-sync.md"
+      ],
+      "sha256": "782c17641d20b103c158a8eabe177b37dbbec5909f1c19df4d62e0a5b132afc6",
+      "bytes": 43936,
+      "parts": [
+        {
+          "file": "patches/025-000.patch",
+          "sha256": "782c17641d20b103c158a8eabe177b37dbbec5909f1c19df4d62e0a5b132afc6",
+          "bytes": 43936
+        }
+      ]
+    }
+  ]
+}

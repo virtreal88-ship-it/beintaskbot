@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144d5fc86b9
+index 0000000000000000000000000000000000000000..0a6837737b69fd76f60ae142b0431ce7ff43441f
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,171 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -61,11 +61,15 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +          tests/test_scoped_access_foundation.py
 +          tests/test_scoped_access_foundation_postgres.py
 +          tests/test_employee_scope_settings_postgres.py
++          tests/test_employee_creation_scopes.py
++          tests/test_employee_creation_scopes_postgres.py
 +          tests/test_employee_card_scopes.py
 +          tests/test_employee_card_scopes_postgres.py
 +          tests/test_employee_task_scopes.py
 +          tests/test_task_b4_scope_regression.py
 +          tests/test_crm_scoped_access_postgres.py
++          tests/test_crm_source_card_relations.py
++          tests/test_crm_source_card_relations_postgres.py
 +          tests/test_native_crud_dispatch.py
 +          tests/test_employee_finance_scopes.py
 +          tests/test_dialog_source_scopes.py
@@ -88,10 +92,19 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +          tests/test_instruction_member_access_postgres.py
 +          tests/test_ai_scoped_documents.py
 +          tests/test_ai_scoped_documents_postgres.py
++          tests/test_ai_unused_archive.py
++          tests/test_ai_unused_archive_postgres.py
++          tests/test_ai_admin_config_lock_order.py
++          tests/test_ai_admin_config_archive_postgres.py
 +          tests/test_tenant_policy.py
 +          tests/test_tenant_scoped_access.py
 +          tests/test_tenant_ai_agents_api_diagnostics.py
 +          tests/test_tenant_web_routes.py
++          tests/test_night_report_scopes.py
++          tests/test_night_report_scopes_postgres.py
++          tests/test_tenant_night_report.py
++          tests/test_tenant_night_report_api.py
++          tests/test_tenant_member_access.py
 +          tests/test_shared_integration_scopes.py
 +          tests/test_shared_integration_scopes_postgres.py
 +          tests/test_tenant_crm_relation_contract.py
@@ -101,6 +114,8 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +          tests/test_crm_scoped_scalar_postgres.py
 +          tests/test_crm_scoped_scalar_api_transport.py
 +          tests/test_crm_scalar_fences_postgres.py
++          tests/test_crm_legacy_transition.py
++          tests/test_crm_legacy_transition_postgres.py
 +          tests/test_tenant_crm_external_sync.py
 +          tests/test_crm_native_deals.py
 +          tests/test_crm_native_deal_api.py
@@ -121,7 +136,9 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +          tests/test_tenant_connect_access_api.py
 +      - name: Interface regressions
 +        run: |
++          node tests/test_employee_creation_scopes_ui.cjs
 +          node tests/test_employee_card_scopes_ui.cjs
++          node tests/test_tenant_night_report_ui.cjs
 +          node tests/test_employee_scope_settings_ui.cjs
 +          node tests/test_task_read_save_flow_ui.cjs
 +          node tests/test_contacts_directory_ui.cjs
@@ -129,6 +146,7 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +          node tests/test_tenant_crm_native_workflow_ui.cjs
 +          node tests/test_tenant_app_syntax.cjs
 +          node tests/test_native_company_relation_ui.cjs
++          node tests/test_native_company_deal_source_ui.cjs
 +          node tests/test_tenant_crm_native_modal_ui.cjs
 +          node tests/test_employee_finance_scopes_ui.cjs
 +          node tests/test_dialog_source_members_ui.cjs
@@ -147,6 +165,7 @@ index 0000000000000000000000000000000000000000..5a46cfa4337e2fa72d4a7a9bb5601144
 +        run: |
 +          node tests/employee_scope_matrix_browser.cjs
 +          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
++          node tests/test_native_company_deal_source_browser.cjs
 +          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
 +          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
 +      - name: Save synthetic matrix screenshots
@@ -182,7 +201,7 @@ index 171b9ab785a973d51afb3c55fba37052f8ef3bed..aff8f32bf6c75456330e7bd70c204063
            tests/test_tenant_kommo.py
            tests/test_tenant_integration_store.py
 diff --git a/beintaskbot-main/bot.py b/beintaskbot-main/bot.py
-index 09a1230ec3565e412c36b08252c7e9cf5af6d039..1451ffcc433bb92d738571ae8f751dfcf694feec 100644
+index 09a1230ec3565e412c36b08252c7e9cf5af6d039..3136b291f98de7cf92251b5d5e5e29506ca751f9 100644
 --- a/beintaskbot-main/bot.py
 +++ b/beintaskbot-main/bot.py
 @@ -16863,7 +16863,8 @@ async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -195,22 +214,33 @@ index 09a1230ec3565e412c36b08252c7e9cf5af6d039..1451ffcc433bb92d738571ae8f751dfc
      except Exception:
          logger.error('Tenant CRM background sync unavailable')
  
-@@ -18683,6 +18684,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
+@@ -18683,6 +18684,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
      from tenant_member_password_assign import assign_member_password
      from tenant_member_email_assign import assign_member_email
      from tenant_member_profile_assign import assign_member_profile
 +    from tenant_department_store import upsert_department
++    from tenant_member_store import employee_creation_options
      member_api = tenant_member_handlers(MemberApiContext(
          member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
          telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
-@@ -18692,6 +18694,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
+@@ -18692,6 +18695,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
          assign_member_password=assign_member_password,
          assign_member_email=assign_member_email,
          assign_member_profile=assign_member_profile,
 +        upsert_department=upsert_department,
++        employee_creation_options=employee_creation_options,
          deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
          request_invite_acceptance=request_tenant_invite_acceptance,
          list_invite_requests=list_tenant_invite_requests,
+@@ -18740,6 +18745,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
+     app_web.router.add_post('/api/platform/crm/native/deals', native_deals_api)
+     app_web.router.add_get('/api/platform/crm/native/deals/{id}', native_deals_api)
+     app_web.router.add_post('/api/platform/crm/native/deals/{id}', native_deals_api)
++    app_web.router.add_post('/api/platform/crm/native/deals/{id}/company-link',
++        native_crm_deals_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, company_relation=True))
+     from tenant_crm_native_task_api import handler as native_crm_tasks_handler
+     native_tasks_api = native_crm_tasks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+     app_web.router.add_get('/api/platform/crm/native/tasks', native_tasks_api)
 diff --git a/beintaskbot-main/docs/crm-relation-sync-contract.md b/beintaskbot-main/docs/crm-relation-sync-contract.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..ea5944052aa69e4764de0fa80dced3beff934ec7
@@ -293,6 +323,99 @@ index 0000000000000000000000000000000000000000..ea5944052aa69e4764de0fa80dced3be
 +unknown/conflict observations. The existing mocked CRM synchronization workflow
 +includes this suite. There is no database schema or enabled dispatcher for it to
 +exercise yet; these tests do not establish end-to-end sync readiness.
+diff --git a/beintaskbot-main/docs/crm-source-card-relations-ui.md b/beintaskbot-main/docs/crm-source-card-relations-ui.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..f3b3ff8929073d9974988a7a4d3b7b747e612680
+--- /dev/null
++++ b/beintaskbot-main/docs/crm-source-card-relations-ui.md
+@@ -0,0 +1,87 @@
++# Company/deal source-card relation UI
++
++The server supplies the mode explicitly. Deal records and deal options expose
++`scoped_relations` plus `relation_actions.link_company` and
++`relation_actions.unlink_company`. Company records expose
++`relation_actions.link_deal` and `relation_actions.unlink_deal`.
++
++- In scoped mode, changing a company from a deal card or deal form uses
++  `POST /api/platform/crm/native/deals/{id}/company-link` with exactly
++  `{company_id, unlink}`. Controls use the source deal's update authority.
++- From a company card, the existing company endpoint receives
++  `{action: "link_deal" | "unlink_deal", entity_id}`. Its row-specific source
++  company authority governs controls, without target deal update/delete.
++- Gate-off deal operations retain the original company endpoint and legacy
++  permission guards. There is no fallback from a failed scoped write.
++- Update authority never requests an otherwise denied target directory. A
++  denied related list does not destroy the source card; its already known
++  company can still be detached when source update is allowed. Editing a deal
++  preserves its embedded existing contact even when the contact directory is
++  unavailable, instead of accidentally clearing the contact selector.
++- Initial deal contact selection comes only from the existing server-filtered
++  deal options. Deal creation does not require deal update. A create-only save
++  does not subsequently request the deal directory. A separate post-create
++  company change still requires deal update.
++- A `scoped_relation_sync_not_configured` response leaves the link unsaved,
++  shows a relation-specific error and does not retry another route. Pending
++  relation clicks send once. A closed card or a newer opening cannot be
++  overwritten or reopened by an older relation completion.
++
++## Local verification (2026-11-11)
++
++Passed against the current application markup and controllers:
++
++```sh
++node tests/test_native_company_deal_source_ui.cjs
++node tests/test_native_company_relation_ui.cjs
++node tests/test_tenant_crm_native_modal_ui.cjs
++node tests/test_contacts_directory_ui.cjs
++node tests/test_tenant_crm_native_workflow_ui.cjs
++node tests/test_crm_save_receipt_ui.cjs
++node tests/test_tenant_crm_sync_ui.cjs
++node --check tests/native_company_deal_fixture.cjs
++node --check tests/test_native_company_deal_source_browser.cjs
++git diff --check
++```
++
++The new DOM suite loads the real `/app` inline controller and its supporting
++assets. API responses are synthetic, so this validates frontend request shape,
++visibility, denial handling and interaction lifecycle, not database
++permissions. The separate backend PostgreSQL/HTTP suites establish those
++boundaries.
++
++## Chromium runner and environment limitation
++
++The checked-in runner covers 1280px and 390px layouts, company-source and
++deal-source linking/unlinking, exact request bodies, readable-contact creation,
++409 handling, repeated clicks, closing during a pending write, and known-target
++unlink with a denied company directory. Its HTTP fixture serves current app
++assets and blocks external browser traffic. It performs no provider calls or
++production writes.
++
++Dependencies: Node, `jsdom` in `.support-test-deps/node_modules` for DOM tests,
++`playwright` for the browser runner, and an installed Chromium executable.
++Normal CI command from `beintaskbot-main`:
++
++```sh
++CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
++  node tests/test_native_company_deal_source_browser.cjs
++```
++
++By default the runner loads Playwright from
++`.support-test-deps/node_modules/playwright`. If CI installs it elsewhere, set
++`PLAYWRIGHT_MODULE` to that absolute package path, for example:
++
++```sh
++PLAYWRIGHT_MODULE=/tmp/crm-source-browser-deps/node_modules/playwright \
++CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
++  node tests/test_native_company_deal_source_browser.cjs
++```
++
++**Browser assertions did not run in the current container.** Both the normal
++launch and one permitted escalated launch failed before page creation with
++Chromium `process_singleton_posix.cc` reporting `socket() failed: Operation not
++permitted` and SIGABRT. There are no browser screenshots or visual-pass claims.
++The runner is syntax-checked but still needs execution on browser-capable CI.
++The temporary Playwright installation did not modify repository manifests or
++the shared DOM test dependency directory.
 diff --git a/beintaskbot-main/docs/dialog-source-scope-rollout.md b/beintaskbot-main/docs/dialog-source-scope-rollout.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..735c9ffd69d0fd8e1bd87731f77fcaed46b9e91d
@@ -374,17 +497,17 @@ index 0000000000000000000000000000000000000000..735c9ffd69d0fd8e1bd87731f77fcaed
 +No real provider or paid model was called. The test cluster was stopped.
 diff --git a/beintaskbot-main/docs/employee-ai-integration-scope-audit.md b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c899e20fe8
+index 0000000000000000000000000000000000000000..bb3dc1751c7700472373f04c0fe778444a20d272
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-ai-integration-scope-audit.md
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,121 @@
 +# AI and integration scope audit
 +
 +This describes implementation boundaries, not production configuration or release approval. The rollout gate remains off by default. No real rights, credentials, connections, customer messages or imports were changed by this work.
 +
 +## Historical preparation
 +
-+The initial audit added hidden AI `access_responsible_id` ownership, tenant-bound foreign keys, readiness checks and an idempotent migration receipt. Historical ownership was backfilled only for an unambiguous active company owner; new user-created agents use the authenticated employee, and browser patches cannot reassign ownership. That checkpoint deliberately exposed no AI matrix or UI. It has since been replaced by the limited C/R/U feature below; the earlier absence of a configurable row is no longer the current state.
++The initial audit added hidden AI `access_responsible_id` ownership, tenant-bound foreign keys, readiness checks and an idempotent migration receipt. Historical ownership was backfilled only for an unambiguous active company owner; new user-created agents use the authenticated employee, and browser patches cannot reassign ownership. That checkpoint deliberately exposed no AI matrix or UI. It has since been replaced by the limited document feature below; the earlier absence of a configurable row is no longer the current state.
 +
 +## Shared integration management
 +
@@ -400,9 +523,9 @@ index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c8
 +This is local implementation, not rollout permission or evidence of deployment.
 +See `shared-integration-scopes.md` and its isolated tests for exact coverage.
 +
-+## Current limited AI document feature (C/R/U only)
++## Current limited AI document feature (C/R/U and unused archive D)
 +
-+This feature covers **agent documents only**, not the entire AI administration surface. `ai_agents` now registers exactly view/create/update in the employee scope catalog. There is no employee delete cell. The global rollout gate is still off by default; no production settings or rights were changed.
++This feature covers **agent documents only**, not the entire AI administration surface. `ai_agents` registers view/create/update/delete. Employee D means only archive of an unused, unbound agent, not permanent deletion. The global rollout gate is still off by default; no production settings or rights were changed.
 +
 +- Separate `ai_documents` capabilities expose action-specific navigation while the coarse `modules.ai_agents` management capability remains false for scoped actors. Shared AI applications therefore do not become accessible through a document grant. A dedicated scoped console loads only the authorized agent list and local source-bound editor options. It supports create, edit, source/model/mode selection and enable/disable, with per-document update eligibility. Create-only users never request the list; read-only users never load editing catalogs. Stale identity responses and repeated saves are fenced, and Cancel closes the editor without writing.
 +- Create always produces a disabled agent for scoped actors; activation is a subsequent update. All scoped mutation responses contain only id/version, including retries and trigger writes. Updating without read permission cannot reveal old instructions, policies or bindings.
@@ -412,7 +535,7 @@ index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c8
 +- Operator assignment/recovery, employee case-learning bypasses, and dialog projections no longer restore broad agent identities/configuration to scoped document users. Shared group/candidate enrichment is skipped; agent filters are rejected, agent metadata is removed, and shared AI controls are disabled. Ordinary authorized dialogue/message reads remain available. The support worker's separate ticket projection filtering must also be retained during integration.
 +- Independent integration/Chat AI settings permissions remain separate and unchanged. This matrix does not create or revoke provider-configuration authority. The scoped editor does not depend on those management endpoints.
 +
-+Shared knowledge, team management, diagnostic dashboards, simulations, historical replay, paid tests, instructor/learning and administrator workflows are not document CRUD and remain behind their existing owner/unscoped-management boundaries. No scoped user is newly admitted to personal test/learning jobs. Company runtime execution continues under its existing company/agent runtime safety policy; this change does not retroactively cancel company runtime when an employee loses editor rights. Employee deletion semantics remain a product decision; both existing archive/transfer and permanent deletion remain owner-only.
++Shared knowledge, team management, diagnostic dashboards, simulations, historical replay, paid tests, instructor/learning and administrator workflows are not document CRUD and remain behind their existing owner/unscoped-management boundaries. No scoped user is newly admitted to personal test/learning jobs. Company runtime execution continues under its existing company/agent runtime safety policy; this change does not retroactively cancel company runtime when an employee loses editor rights. The approved employee D operation archives only unused/unbound agents. Existing archive/transfer and permanent deletion remain owner-only.
 +
 +Verification adds a real JSDOM test (`tests/test_ai_scoped_documents_ui.cjs`), strict source/pipeline and receipt/projection backend regressions, and real PostgreSQL concurrency tests collected for CI. Local PostgreSQL tests remain skipped without an isolated DSN. Full Chromium and concurrent PostgreSQL release validation remain integration-CI responsibilities.
 +
@@ -427,7 +550,7 @@ index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c8
 +
 +## Remaining decisions and release checks
 +
-+- **Employee D remains unimplemented and absent from the catalog.** Existing archive transfers dialogs, rewrites other teams/triggers and cancels work; permanent deletion has stronger confirmation/version checks. Both remain owner-only. Whether employee D should allow archiving only an unused/unbound agent remains a product decision.
++- **Employee D is narrowly implemented as unused-agent archive.** Existing archive/transfer and permanent deletion remain owner-only. Bound or historically used agents fail closed rather than moving or rewriting data.
 +- Shared knowledge, teams, diagnostics, simulation, replay, paid tests, instructor/learning and administrator workflows are not covered by document C/R/U. Their owner/unscoped-management boundaries must remain intact. This is not a claim of complete AI CRUD coverage.
 +- Preserve independent integration/provider permissions and the separate support/employee guards when combining changes. Source rights must not become credential-management authority, and a document grant must not become manage-all.
 +- Keep the global gate off until combined synthetic comparisons, full release tests and rollout review are complete.
@@ -455,46 +578,104 @@ index 0000000000000000000000000000000000000000..f018d836c55c8e7865e72fef6124c0c8
 +must be installed and allowed to create local sockets. A missing executable
 +skips; a failed browser launch or assertion fails. This environment's sandbox
 +blocked Chromium's singleton socket, so local execution is not a browser pass.
++
++### Unused-agent archive D
++
++`POST /agents/{id}/archive-unused` requires current independent D ownership
++scope and an exact integer version. It does not require R, expose a dependency
++preview, or return document content. D-only UI does not enumerate agents; a
++readable card can offer Archive only when its independent D scope permits it.
++Enabled agents, source-bound agents, outgoing helper bindings, and all registered
++operational or historical references block this operation. Creation/configuration
++audit and identity tombstones are not use and are preserved. No references are
++transferred, cancelled, deleted or rewritten.
++
++`tenant_ai_unused_archive.REFERENCES` is the shared blocker/admission registry.
++It covers direct agent IDs, reverse helper policies, trigger/group bindings,
++queued/running/historical work, knowledge/test/campaign records, instructor and
++simulation records, OAuth/owner grants, training drafts/rollbacks, retained
++dialogue snapshots and nested webhook execution bindings. Structural JSON keys
++are inspected recursively; prompt/message prose and assignment receipt UUIDs
++are excluded. Optional schema creators install the same reference fence before
++first writes. Adding a new relationship requires extending this registry/hook.
++
++Archive holds agent UPDATE, while new reference admission holds agent SHARE.
++Previously admitted references make archive fail; waiting reference creation
++sees the committed scoped-archive marker and fails. Updates preserving the same
++reference set do not acquire fresh agent locks, avoiding lock inversion with
++existing worker/owner cleanup. Existing owner archive behavior is unchanged.
++
++Tests: `test_ai_unused_archive.py` checks scopes, version/current authority,
++legacy/gate-off boundaries, generic denial receipts, outgoing/incoming blockers,
++structural extraction and optional-table fences. `test_ai_unused_archive_postgres.py`
++checks both JSON-association race orders and concurrent membership revocation
++using actual independent PostgreSQL connections. DOM tests cover per-row D and
++D-only no-list behavior. PostgreSQL race tests require the isolated CI DSN.
++
++Compatibility is marker-specific: existing owner archive rows and permanent-delete
++identity tombstones do not acquire a scoped-archive marker. Their legitimate
++historical writes remain allowed, including with the rollout gate off. Only a
++row archived through the new unused operation rejects new references, even if
++the rollout gate is subsequently disabled. Schema readiness checks helper
++signatures and exact enabled trigger/function/arguments for every present
++registered relation; disabled, missing or stale fences require migration repair.
++Do not enable the feature during a mixed-version rollout: old processes could
++create an optional table without its new hook. All workers must run the updated
++code before the global gate can be enabled.
 diff --git a/beintaskbot-main/docs/employee-card-scopes.md b/beintaskbot-main/docs/employee-card-scopes.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..7a0585fb99ee66a65acc7d5badf337c59fd8f464
+index 0000000000000000000000000000000000000000..0066b4e64fd0925d9b486c7672788db731bfe9a6
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-card-scopes.md
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,31 @@
 +# Employee card scopes
 +
-+The global `TENANT_SCOPED_ACCESS_ENABLED` flag remains off by default. Employee matrix cells expose only implemented `view` and `update`. Self means the employee's own tenant membership; department compares current database department IDs within the same company. Null departments grant no department scope. An absent cell preserves the former `employees:manage` admission; explicit none denies that action.
++The global `TENANT_SCOPED_ACCESS_ENABLED` flag remains off by default. Employee matrix cells expose implemented `view`, `create` and `update`. Self means the employee's own tenant membership; department compares current database department IDs within the same company. Null departments grant no department scope. An absent cell preserves the former `employees:manage` admission; explicit none denies that action.
 +
-+GET `/api/platform/members` and `/api/platform/me` member previews use the same filtered list. There is no employee pagination/count/options API in this version; all returned identity, role, contact, WhatsApp and editability fields belong only to rows selected by the scoped SQL. The list reads current membership/workflow while holding the shared tenant/policy/membership fences. Department moves use the existing exclusive tenant fence. Writes lock tenant, policies and actor/target memberships and re-evaluate independent update scope. Legacy upsert, deactivation and number mutation entry points use those same fences.
++GET `/api/platform/members` and `/api/platform/me` member previews use the same filtered list. There is no employee-list pagination/count API in this version; all returned identity, role, contact, WhatsApp and editability fields belong only to rows selected by the scoped SQL. The list reads current membership/workflow while holding the shared tenant/policy/membership fences. Department moves use the existing exclusive tenant fence. Writes lock tenant, policies and actor/target memberships and re-evaluate independent update scope. Legacy upsert, deactivation and number mutation entry points use those same fences.
 +
-+The UI uses separate read/update flags and row-level `editable_fields`. Read-only users can open cards without receiving editable controls; creation, invitations and access-request tabs remain behind the coarse management flag. Access revocation clears cards and closes the editor. Existing owner/admin target protections and owner-only account-credential/profile assignment paths remain authoritative.
++The UI uses separate read/update flags and row-level `editable_fields`. Read-only users can open cards without receiving editable controls; creation uses its independent C flag; invitations and access-request tabs remain behind the coarse management flag. Access revocation clears cards and closes the editor. Existing owner/admin target protections and owner-only account-credential/profile assignment paths remain authoritative.
 +
 +Non-owner self update retains only the previously permitted WhatsApp recognition-number edits. Own role, status, display alias, permissions, department and access settings are not newly editable. The existing password-change route remains separate from employee administration.
 +
 +## Deliberately unresolved operations
 +
-+There is no employee deletion operation. Deactivation/reactivation is a membership update, not a fabricated delete grant. Creation/provisioning/invitations do exist but have no department-target input and a new employee is not the acting employee's own card. Therefore create is not yet advertised in the scoped catalog. A non-owner with an explicit employee scope cannot enter unconverted coarse creation/invitation flows; owner and wholly legacy flows are unchanged. To extend creation, specify how a new member's department is selected and whether scoped creators may assign it; do not infer `self` creation or change account credential rules. No further self-field decision is required to preserve today's safe update behavior.
++There is no employee deletion operation. Deactivation/reactivation is a membership update, not a fabricated delete grant. Creation/provisioning now accepts a validated `department_id`. Explicit C=department requires the creator's current, active department and rejects omitted, foreign, archived or different departments. C=all accepts any active department in this company and retains creation without a department. C=self is not applicable: validation rejects it, malformed stored values fail closed, and the per-action editor omits it. Sparse C preserves legacy creation admission, but cannot delegate unrestricted versions of other scoped or Boolean-restricted grants. Gate-off preserves the legacy grant-subset rule.
++
++`GET /api/platform/members?options=create` checks fresh creation authority and returns only permitted active departments plus assignable permission keys, never employee cards. A C-only user can create and receive an opaque receipt without gaining R. Provisioning creates a new account only; credential changes to existing accounts retain owner-only checks. Scoped non-owner creators cannot assign owner/admin roles, grants they do not hold, or unrestricted versions of rights restricted by their scopes/native Boolean overrides. Existing-target direct upsert still requires U and cannot move departments; use the versioned owner-protected card operation for such moves. Invitation workflows remain on the legacy coarse guard and are not silently upgraded to scoped creation.
++
++Creation holds tenant, policy and actor membership locks and the selected department lock through commit. Current department/status, role and grants are rechecked in the write transaction; option lists are not authorization. No deletion operation is introduced.
 +
 +## Verification
 +
 +- `tests/test_employee_card_scopes.py`: four levels, independent read/update, two departments/tenants, sparse and gate-off behavior, protected self fields, SQL parameters and capabilities.
 +- `tests/test_employee_card_scopes_postgres.py`: real filtered identity lists, department moves, revocation, write fences, denied self privilege edits and independent update with no read. Requires disposable localhost PostgreSQL.
 +- `tests/test_employee_card_scopes_ui.cjs`: actual app read-only card, hidden management controls, revocation cleanup and zero writes.
++
++- `tests/test_employee_creation_scopes.py`: creation levels, unsupported self, sparse/gate-off behavior, missing/archived department and grant escalation guards.
++- `tests/test_employee_creation_scopes_postgres.py`: actual memberships and HTTP provisioning, C without R, foreign departments, revocation, and lock contention through commit.
++- `tests/test_employee_creation_scopes_ui.cjs`: RU/AZ/EN per-action choices, C-only form/receipt, repeated submit and stale options after revocation.
++
++## Grant attenuation
++
++With the gate enabled, sparse C retains admission but not a bypass around other restrictions. New grants are evaluated across their effective domains, including customers → companies, ordinary role defaults, HotOrderPolicy create/claim and approval, task/deal approval, task markers and pipeline/stage sets. Explicit All can delegate equivalent grants when underlying provider/domain restrictions are not narrower. Source/member settings are never implicitly copied. Non-owner creation cannot revive orphan per-member policy records without owner review. Existing-card U checks added grants and role-based authority expansion while retaining unrelated existing rights; the scoped matrix writer remains owner-only. Gate-off retains the original grant-subset behavior.
 diff --git a/beintaskbot-main/docs/employee-scoped-access-foundation.md b/beintaskbot-main/docs/employee-scoped-access-foundation.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..da5756e6cd275d3fd6a7d12f07790c5503a88e9b
+index 0000000000000000000000000000000000000000..e59d2d86aadcd5fd2b419667f485a3e69710672a
 --- /dev/null
 +++ b/beintaskbot-main/docs/employee-scoped-access-foundation.md
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,62 @@
 +# Employee access scopes: foundation and rollout contract
 +
 +## Default behavior and release gate
 +
 +`TENANT_SCOPED_ACCESS_ENABLED` is **off by default**. Additive schema installation does not rewrite permissions, `native_crm_actions`, roles, source bindings, integration configuration, AI settings, services, or notification preferences. While the gate is off, legacy authorization remains in force, the scoped editor catalog is empty, and the employee-card writer rejects scoped edits.
 +
-+Enabling this flag is a separate rollout decision after all applicable routes and their tests are verified. A passing foundation test suite is not sufficient evidence to enable it. The current catalog contains native task/deal/contact/company CRUD, real dialog read/update operations, finance read, AI document create/read/update, employee-card read/update, support-ticket create/read/update, and shared-integration CRUD. No dialog create/delete, employee create/delete, support delete, or AI delete operation is invented. Each section retains the narrower contracts documented in its scope audit; catalog presence is not rollout approval.
++Enabling this flag is a separate rollout decision after all applicable routes and their tests are verified. A passing foundation test suite is not sufficient evidence to enable it. The current catalog contains native task/deal/contact/company CRUD, real dialog read/update operations, finance read, night-report read, AI document create/read/update plus unused-agent archive, employee-card create/read/update, support-ticket create/read/update, and shared-integration CRUD. Employee creation supports only none/department/all, not self. Agent D does not transfer data or permanently delete an agent. No dialog create/delete, employee delete, or support delete operation is invented. Each section retains the narrower contracts documented in its scope audit; catalog presence is not rollout approval.
 +
 +For a member with any explicit scope in a section, coarse legacy entry points for that section fail closed. This prevents unconverted external-provider/AI/legacy routes from bypassing a restriction. It may remove previously available provider operations, so rollout requires a source-specific access comparison and resolution, not silent activation. Existing source bindings are never inferred or imported.
++
++Turning the rollout flag off is not permission to discard safety provenance. Records already marked by scoped CRM edits retain their actorless-export barrier, and uncertain delivery attempts remain blocked. A binary rollback must retain these protections and the additive tables; an older worker that lacks them is not a safe rollback target. See `../../docs/crm-scoped-scalar-sync.md` for transition and recovery prerequisites.
 +
 +## Stored data and compatibility
 +
@@ -541,21 +722,26 @@ index 0000000000000000000000000000000000000000..da5756e6cd275d3fd6a7d12f07790c55
 +Foundation tests cover every CRUD action across the four scopes, two departments and two tenants; disabled memberships; setup/suspended lifecycle states; sparse legacy preservation; catalog validation; uneditable authoritative cells; generic workflow bypass attempts; access versions; SQL parameterization; and assigned-only task navigation.
 +
 +Disposable localhost PostgreSQL tests verify historical backfill and unresolved owners, unchanged task executors, tenant-composite foreign keys, transactional rollback, idempotent startup without filling new NULL documents, department changes, membership revocation, shared/exclusive tenant fencing, workflow write rejection and preservation of unrelated settings. These tests use synthetic databases only and send no provider traffic.
++
++
++## Night-report read scopes
++
++`night_report.view` is an independent read grant. Connect activity/error figures use current source ownership; ticket queues and ticket counts use the ticket's `access_responsible_id`. Ticket-scoped correspondence requires explicit message links and never grants the complete conversation. See [the report boundary audit](night-report-scopes.md) for all read routes, stale-page handling, compatibility and verification. This addition does not enable the rollout gate or grant report generation/settings authority.
 diff --git a/beintaskbot-main/docs/native-crm-scoped-access.md b/beintaskbot-main/docs/native-crm-scoped-access.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..665d19a1b4be43dfdab0678c3ad9cc2bcba87970
+index 0000000000000000000000000000000000000000..8ce73630ab03e78080944bc1a1e879f2aa27f7db
 --- /dev/null
 +++ b/beintaskbot-main/docs/native-crm-scoped-access.md
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,40 @@
 +# Native CRM scoped access
 +
-+Implementation is behind `TENANT_SCOPED_ACCESS_ENABLED`; it is not an approval to enable the rollout. With the gate off, the contact directory uses its original company/deal routes and guards; the new narrow contact relation routes reject with `scoped_relation_unavailable` (403). Company-card contact unlink keeps its legacy delete check when off. The server explicitly supplies the UI relation mode and row-specific company relation capabilities; the browser never infers rollout from role or a guessed scope. The native sections are `deals`, `customers` (contacts), and `companies`. An absent cell retains its previous native CRUD permission, without converting a provider permission into an all-record scope.
++Implementation is behind `TENANT_SCOPED_ACCESS_ENABLED`; it is not an approval to enable the rollout. With the gate off, the contact directory uses its original company/deal routes and guards; the new narrow contact and deal-company relation routes reject with `scoped_relation_unavailable` (403). Company-card contact unlink keeps its legacy delete check when off. The server explicitly supplies the UI relation mode and row-specific company relation capabilities; the browser never infers rollout from role or a guessed scope. The native sections are `deals`, `customers` (contacts), and `companies`. An absent cell retains its previous native CRUD permission, without converting a provider permission into an all-record scope.
 +
 +## Covered boundaries
 +
 +- Native contact collection, direct contact read, creation, update, and archival.
 +- Source-qualified contact directory: native authority is applied before search, source totals, pagination, and row action flags. Kommo identities, pipeline restrictions, account provenance, and read-only actions remain separate.
-+- Native deal collection/detail, creation, update, archival, and form options. Options are usable for a permitted create/update action independently of view. Contact options respect the activated contact scope.
++- Native deal collection/detail, creation, update, archival, and form options. Options are usable for a permitted create/update action independently of view. Contact options require the current contact view permission when either contact or deal scopes are active.
 +- Native company collection/detail, creation, update, archival, and related lists/counts. Activated contact/deal scopes restrict their embedded lists and counts without leaking inaccessible IDs via totals.
 +- Every HTTP handler forwards the authenticated actor to its store. The store rereads current active tenant/membership, workflow grants and department under database fences. Writes authorize and lock the target inside the same transaction. Department mutations use the common tenant fence; department-scoped writes also lock and recheck the responsible membership.
 +- New human-created records receive immutable `access_responsible_id=actor_id`. Existing `responsible_id` retains its previous operational assignment meaning. Client payloads never set access ownership. Idempotent creates under the matrix cannot return another creator's document.
@@ -564,27 +750,71 @@ index 0000000000000000000000000000000000000000..665d19a1b4be43dfdab0678c3ad9cc2b
 +
 +The company selector and company tab inside an existing contact card use the contact-specific `link_company` / `unlink_company` actions. Both require only that contact's update scope, even when company view/update/delete and contact delete are denied. The transaction locks the authorized contact and a tenant-bound active company, changes only `contact.company_id` and its modification time, and returns a narrow relation receipt with no company fields. Unlink is conditional on the exact current company. The company row, including its modification time and hidden owner, is never changed. A denied company collection does not expose alternative targets; the UI can still detach the already known company. Creation alone does not grant permission to change a company link: the separate post-create link operation also requires contact update authority.
 +
-+With the gate on, company-card contact link/unlink similarly requires only U of the source company, never contact R/U/D or company D. Both directions lock the contact before the company, preventing an opposite-direction lock cycle. The target contact stays tenant-bound and active; unlink checks its exact current company. Only its company relation and modification time change. The company card does not expand the contact list or contact fields; a denied target list does not break the readable company card. Company→deal operations remain outside this approved rule.
++With the gate on, company-card contact link/unlink similarly requires only U of the source company, never contact R/U/D or company D. Both directions lock the contact before the company, preventing an opposite-direction lock cycle. The target contact stays tenant-bound and active; unlink checks its exact current company. Only its company relation and modification time change. The company card does not expand the contact list or contact fields; a denied target list does not break the readable company card. Company-card deal link/unlink now follows the same source-company U rule. The deal-specific `/deals/{id}/company-link` endpoint instead requires U of that deal. Both directions lock deal before company, change only the deal company FK/revision, require active same-tenant targets, and condition unlink on the exact current company. Neither grants target-directory access or changes responsibility. With the gate off the existing company route retains its original dual-U link and company-D unlink checks; the new deal-specific route is unavailable.
++
++During scoped deal creation, the initial contact is authorized by deal C and the exact contact’s current R, not contact U. The create transaction checks and locks the contact, its tenant/activity and applicable view scope before insert. An inaccessible, archived or foreign contact cannot be selected with a forged ID. C alone does not open a contact directory. Initial company binding remains a separate existing-card U action after creation.
 +
 +## Explicit rollout blockers
 +
-+1. Company→deal relationship semantics remain unapproved. Their legacy links require customers:update plus deals:update, and unlinks require customers:delete. When either section is scoped, they still return `scoped_relation_not_configured` (409). Initial contact selection during scoped deal creation and changing deal channel/conversation links also remain explicit blockers. Existing deal↔contact, contact→company and company→contact card updates follow the approved source-card U-only contract only with the gate enabled.
++1. Company↔deal source-card U and initial-contact C+R semantics are implemented locally. Changing deal channel/conversation links remains an explicit unresolved relation contract. Existing relation changes still require the provider safeguards below.
 +2. Trusted integration/AI/background stores do not have an authenticated human actor. They retain their separate existing integration authority and create NULL access owners, visible only to an all scope. Deciding how future automatically created documents acquire a human responsible person remains necessary before a complete rollout. Historical-owner backfill is owned by the shared schema migration, not by this code.
-+3. The provider queue exports a full configured record and has no confirmed field-specific relation/unlink event, idempotency or actor-revocation contract. New narrow relation routes never enqueue a full-record sync. If the modified entity type currently has outbound or bidirectional synchronization with nonempty allowed fields, these operations return `scoped_relation_sync_not_configured` (409) before any mutation; the UI explicitly says the link was not changed. This is a temporary safe blocker, not a release-ready synchronization design. Provider-specific relation-only API semantics remain under independent investigation; no real provider calls were made.
++3. The legacy provider queue still exports full configured records. New scoped scalar changes use a separate immutable actor/revision/field-mask journal and account/generation-bound identity checks, with current authorization revalidation. A persistent per-record provenance barrier prevents actorless full-record exports after scoped entry, including flag rollback. Per-card legacy admission fencing and durable possible-send evidence protect the first scoped mutation from tracked in-flight legacy requests; unresolved legacy outcomes block scoped delivery. This does not establish a production-ready external relation adapter. New narrow relation routes never enqueue a full-record sync. If the modified entity type currently has outbound or bidirectional synchronization with nonempty allowed fields, these operations return `scoped_relation_sync_not_configured` (409) before any mutation; the UI explicitly says the link was not changed. This is a temporary safe blocker, not a release-ready synchronization design. Provider-specific relation-only API semantics remain under independent investigation; no real provider calls were made.
 +   Confirmed provider boundaries from read-only documentation research:
-+   - Kommo has relation-only [link](https://developers.kommo.com/reference/linking-entities), [unlink](https://developers.kommo.com/reference/unlinking-entities) and [filtered relation read-back](https://developers.kommo.com/reference/linked-entities) endpoints. A contact-card deal change must operate through the lead endpoint, not an unsupported contact→lead endpoint. [Cardinality](https://developers.kommo.com/docs/subject-area) differs from the local single contact FK: a lead can have multiple contacts. Whether to replace the primary contact or add/remove a relation therefore cannot be inferred from the local FK alone. Documents do not promise idempotent repeated POST, atomic company replacement or conflict-free retries after a timeout.
-+   - The current company entity is absent from `ENTITY_TYPES` and the external identity table's entity-type constraint. Existing mappings lack provider-account/integration-generation binding. Company relations cannot be sent safely by guessing an external ID or reusing an identity after reconnection.
++   - Kommo has relation-only [link](https://developers.kommo.com/reference/linking-entities), [unlink](https://developers.kommo.com/reference/unlinking-entities) and [filtered relation read-back](https://developers.kommo.com/reference/linked-entities) endpoints. A contact-card deal change must operate through the lead endpoint, not an unsupported contact→lead endpoint. [Cardinality](https://developers.kommo.com/docs/subject-area) differs from the local single contact FK: a lead can have multiple contacts. The approved local interpretation is the main contact: narrow planning replaces/unlinks only the old main while preserving secondary contacts. It does not authorize rewriting the complete contact list. Documents do not promise idempotent repeated POST, atomic company replacement or conflict-free retries after a timeout.
++   - Legacy external mappings remain unverified and cannot be reused as account-bound identities. A separate relation identity schema supports account/generation binding; that infrastructure does not verify existing IDs or prove company/provider mappings. Reconnect invalidates prior bindings. Company relations cannot be sent by guessing an external ID.
 +   - BEIN ERP's current implementation PATCHes `crm/leads/{id}` with `partner_id`; a confirmed relation-only clear/unlink payload and provider idempotency guarantee have not been established from [its documentation](https://docs.beinsystems.az/docs/api/). Existing client headers alone are not proof of server behavior.
-+   - A durable safe relation event would additionally need exact actor, source-card U action, old/new targets, account-bound identity and expected relation state, with permission revalidation before delivery and explicit unknown/conflict recovery. The current full-record outbox contains no such contract. These are implementation prerequisites plus unresolved provider semantics, not permission to send other fields.
-+   - An [inactive relation contract](crm-relation-sync-contract.md) now provides strict, immutable event serialization, account/generation-bound identity checks and pure read-back classification. It is not imported by runtime code, creates no outbox or mapping schema and does not remove this blocker. Provider interpretation, transactional persistence, current authorization checks and the delivery/recovery chain still need implementation and verification.
++   - Durable relation identity/outbox/head schemas, immutable source-card actor/action events, transaction-bound local mutation, authorization fences, and a one-step conditional-delivery driver are implemented. They are dormant: normal relation routes do not call the driver and no production provider adapter is registered. The driver requires atomic compare/apply semantics; a GET followed by POST is not remote CAS. Unknown timeout/crash outcomes are not replayed or treated as completed.
++   - The [relation contract](crm-relation-sync-contract.md) is now used by those dormant persistence/driver components, rather than only a standalone pure model. The actual API safeguards still deny outbound relation changes before mutation. See the repository-level relation-delivery and scalar-sync safety documents for implementation limits. BEIN relation-only unlink, provider CAS/exclusive-writer guarantees, verified mappings, old-worker transition, and explicit unknown/conflict recovery remain blockers. No production rollout or verified remote synchronization is implied.
 +
 +4. CRM-specific frontend behavior for independent record actions and scoped-relationship 409 responses still needs the wider rollout review. The existing contact-directory browser regressions are distinct from full scoped-matrix UI acceptance.
 +
 +## Verification
 +
-+`tests/test_crm_scoped_access_postgres.py` uses disposable localhost PostgreSQL and rejects provider traffic through the shared isolated fixture. It covers independent CRUD for all four scopes in three sections, two tenants/departments, list/search/count/pagination authorization, linked client context, creator ownership, unchanged operational assignment, stale HTTP profiles, revoked membership, suspended tenant, concurrent permission revocation, idempotent replay, fail-closed unapproved relationships, contact-card company linking with company R/U/D denied, exact conditional unlink, foreign/archived targets, narrow HTTP payloads and receipts, current U revocation, unchanged company data, company-card contact U-only operations, both gate-off bypasses, row-specific relation capabilities, permission/department revocation, opposite-direction lock ordering, and active outbound blocks with unchanged synthetic outbox state.
++`tests/test_crm_scoped_access_postgres.py` uses disposable localhost PostgreSQL and rejects provider traffic through the shared isolated fixture. It covers independent CRUD for all four scopes in three sections, two tenants/departments, list/search/count/pagination authorization, linked client context, creator ownership, unchanged operational assignment, stale HTTP profiles, revoked membership, suspended tenant, concurrent permission revocation, idempotent replay, fail-closed unapproved relationships, approved company↔deal source-card U and initial contact C+R, contact-card company linking with company R/U/D denied, exact conditional unlink, foreign/archived targets, narrow HTTP payloads and receipts, current U revocation, unchanged company data, company-card contact U-only operations, both gate-off bypasses, row-specific relation capabilities, permission/department revocation, opposite-direction lock ordering, and active outbound blocks with unchanged synthetic outbox state.
 +
 +The existing native CRUD, source-qualified directory, AI native action, WhatsApp identity and browser directory suites remain regression targets. Never use a production DSN or send test messages to real contacts.
+diff --git a/beintaskbot-main/docs/night-report-scopes.md b/beintaskbot-main/docs/night-report-scopes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e6fa4617a27c21dd8bb52033989bbf98434e66b
+--- /dev/null
++++ b/beintaskbot-main/docs/night-report-scopes.md
+@@ -0,0 +1,36 @@
++# Night report: independent read scope
++
++The sole applicable action is `night_report.view`: `none`, `self`, `department`, or `all`. There are no report create/update/delete cells or new generation/settings endpoints. The global `TENANT_SCOPED_ACCESS_ENABLED` gate remains off by default; this change does not enable it or rewrite any employee rights, department, source mapping or ticket owner.
++
++## Authorized rows and aggregates
++
++Each request rereads the selected tenant, active member, current workflow and department inside the same read-only repeatable-read transaction used by the report. A cached/client role or department is not authority. Owner behavior is preserved. The existing exclusion of the `master` role and tenant lifecycle checks remain.
++
++- Connect conversation rows, distinct activity, AI activity, handoffs, AI errors and Connect errors use the current Connect source owners from `saas_dialog_source_members`. Self requires the current employee to be an active source owner. Department requires an active source owner in the actor's current, non-null department. Unmapped sources are not inferred and are invisible to self/department. All remains tenant-bound.
++- Ticket rows, saved descriptions/summaries, unresolved-at-cutoff totals, current attention totals and taken-in-work totals use each ticket's `access_responsible_id`, independently of source ownership. This is the existing access responsibility, not the `assigned_to` executor. Department is resolved from current same-tenant membership. NULL responsibility is visible only to all or preserved legacy authority.
++- Ticket and source predicates are applied before aggregate calculation, ordering, LIMIT and OFFSET. The first 20 failure rows and their totals share the source predicate. A ticket on somebody else's source may be readable without adding that source to dialog/error totals.
++- Scoped projections exclude internal ticket ownership/configuration hashes, developer-route metadata, raw provider fields and diagnostic event keys. Failure codes are projected as known, safe categories. Names included with a visible row are only that row's customer/channel and ticket assignee; no member/source selector or tenant-wide roster is returned.
++- Self/department report defaults use the company timezone or the documented default, not the schedules of inaccessible AI agents. No settings are changed.
++
++## Read route audit
++
++- `GET /api/platform/ai/night-report`: date/time filters, counts, summaries, attention pagination and failure records all use the independent report predicates.
++- `GET /api/platform/ai/night-report/tickets/{ticket_id}`: first proves the exact ticket's responsibility scope. Its read-only history then requires `saas_support_ticket_messages` membership for that exact ticket **and** matching tenant, message lead and channel for the ticket's exact conversation. Other cases in the same conversation, unlinked messages, corrupt cross-tenant/channel links and foreign pagination cursors cannot expand it. This strict linked-message rule also applies to old `legacy` or `conversation` cases. No links means empty history; readers never backfill or fall back to the whole conversation.
++- `GET /api/platform/ai/night-report/dialog`: separately proves source ownership for the exact tenant/channel/conversation and reads only that route's saved messages. A ticket grant alone cannot call this route for another employee's source.
++- No report search, export, mutation or provider-fetch route exists. No new one is added. The three existing routes remain GET-only and no-store.
++
++The report grants no general dialog/support navigation, provider history loading, message send, ticket mutation, AI administration, paid generation or shared settings rights. The scoped report viewer always stays inside its read-only modal, even when an external navigation adapter exists. General AI aggregate guards and operational authority are unchanged.
++
++## Stale pages and revocation
++
++All authorized responses, including legacy and rollout-off reads, include an opaque access snapshot derived only from currently authorized source/ticket IDs and the actor's effective report scope. Pagination/detail calls submit `expected_access_version`; a changed scope, department, source assignment or ticket ownership yields 409 before old and new pages can be combined. Hidden sources and hidden ticket changes do not influence this fingerprint. Exact history pages also bind `expected_history_version` to the currently authorized message set. These values detect stale pages; they never replace current authorization.
++
++The UI compares returned authority/scope and history versions before combining or displaying a continuation, including legacy-to-scoped and reverse transitions. Missing versions from older responses fail closed on continuation. The UI clears cached report rows, modal titles/body, company text and cursors after 403/404/409, on identity/profile change, and before refreshing the report. Pending replies cannot restore cleared content. A full refresh obtains the current scope. Scope explanations and the single report-read cell are available in RU/AZ/EN through the common employee matrix.
++
++## Compatibility and limits
++
++With the gate off, original legacy report permissions, history and defaults remain. With the gate on but no report override, the legacy report grant is still needed and narrower support/dialog scopes continue to fail closed. An explicit report scope supplies the approved independent grant, including when general dialogs/support are denied. No source ownership is inferred; Kommo is not part of this report.
++
++Tests use synthetic PGlite fixtures and no provider or application database access. `test_night_report_scopes.py` covers the scope matrix, all eight metrics, source/ticket independence, exact linked history and malicious links, pagination, lifecycle/department/membership changes, opaque snapshots, actual aiohttp dispatch, and retained general-dialog/AI denial. `test_night_report_scopes_postgres.py` runs the same contract on the existing disposable localhost PostgreSQL fixture; it requires `BEINTASKBOT_TEST_POSTGRES_DSN` and is not simulated with PGlite when unavailable. Existing night-report, API, support scope, shared access and UI regressions remain part of integration verification.
++
++The previous API test compared all repository history to the original report branch base `77d5312a`. Unrelated, later pilot changes made that assertion invalid. It now asserts the actual isolated `/app/night-report` HTML/asset/route/GET-only boundary, without changing the base revision or skipping the test. This implementation changes neither pilot HTML file.
 diff --git a/beintaskbot-main/docs/shared-integration-scopes.md b/beintaskbot-main/docs/shared-integration-scopes.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..076f8eb8055baebb349f41eb13ef7d761ebf8379
@@ -633,120 +863,3 @@ index 0000000000000000000000000000000000000000..076f8eb8055baebb349f41eb13ef7d76
 +models, employee bindings or other channel metadata. The legacy Connect status
 +read remains available to current active members when the view cell is absent;
 +explicit scopes still apply, and this exception grants no management access.
-diff --git a/beintaskbot-main/docs/support-inbox-scoped-access.md b/beintaskbot-main/docs/support-inbox-scoped-access.md
-new file mode 100644
-index 0000000000000000000000000000000000000000..1ff06696b1819552f04cb94ee4901ccdcf064e17
---- /dev/null
-+++ b/beintaskbot-main/docs/support-inbox-scoped-access.md
-@@ -0,0 +1,64 @@
-+# Support inbox employee scopes
-+
-+This change covers **Обращения / support inbox**, not the AI knowledge-case catalog.
-+The opt-in `TENANT_SCOPED_ACCESS_ENABLED` gate remains unchanged. No tenant/member
-+configuration or provider settings are changed by this implementation.
-+
-+## Enforced operations
-+
-+- Catalog: independent `support.view`, `support.create`, `support.update` with
-+  `none`, `self`, `department`, `all`. There is no support-ticket delete route,
-+  so the editor has no Delete scope.
-+- View: list, search, pagination, unresolved count, channel options, detail,
-+  pinned messages/attachments, summary versions and existing in-document context.
-+  Assignee options are returned only when the displayed page contains a currently
-+  update-authorized ticket, never solely because the employee may read tickets.
-+- Update: text, status, executor/developer assignment, completion, summary reserve
-+  and apply, attaching materials and case-bound consultations. Existing owner-only
-+  sharing/group dispatch and source/dialog requirements remain additional checks.
-+- Create: creator is responsible, regardless of executor. Creation on an already
-+  open case is an update and requires that case's independent update scope. Exact
-+  idempotent replay of the creator's event needs no new update grant. Actor-driven
-+  AI handoffs use the same writer and cannot bypass explicit support scopes.
-+- Create/update without View returns a minimal receipt, not document contents.
-+  Existing dialog manual-create UI accepts that receipt. Ticket controls use a
-+  row-specific update capability. Current DB membership and workflow policy are
-+  reloaded; mutation responsibility/department is checked under transaction locks.
-+- Notification list/count/direct lookup and dialog ticket/handoff projections do
-+  not expose support records outside an explicit support View scope. Case-bound
-+  knowledge extraction also rechecks the case. No general dialog permission is
-+  implied by support access.
-+
-+Sparse cells retain their exact old support-module authorization, including old
-+AI-management inheritance for **absent** cells only. Explicit cells are not
-+bypassed by AI-management permission. Owners retain existing company authority.
-+Existing ownership migration is unchanged: historical responsibility requires a
-+unique active matching company owner. Later actorless service tickets are not
-+silently assigned or repaired.
-+
-+## Deliberately conservative aggregate boundary
-+
-+AI diagnostics already using `require_unrestricted_dialog_read` now also reject
-+an explicit support View scope narrower than `all`. The tenant-wide night report
-+likewise rejects narrow support View. These are temporary fail-closed boundaries,
-+not row-filtered aggregate implementations. Absent scopes and gate-off behavior
-+are unchanged. These restrictions do not grant AI or night-report permission.
-+
-+## Background/service boundary and remaining verification
-+
-+Inbound webhook handoffs, autonomous pilot/group follow-ups, system summaries,
-+pre-existing public snapshots and service-only receipt recording do not have an
-+employee request principal. They retain their existing service/owner/source,
-+consent and dispatch fences; this matrix does not convert those service grants
-+into employee rights or revoke previously shared public snapshots. The internal
-+Telegram consultation notifier sends only a generic review notice, not case text;
-+opening the linked inbox rechecks current scoped access. A future requirement to
-+change autonomous service ownership or retract delivered/public material needs a
-+separate design, not an inferred employee grant.
-+
-+Local tests use synthetic in-memory PGlite and mocked providers. The equivalent
-+`test_support_inbox_scopes_postgres.py` suite requires the existing disposable
-+localhost-only `BEINTASKBOT_TEST_POSTGRES_DSN` fixture. No local DSN is available,
-+so real PostgreSQL locking/races remain CI verification, not a claimed local pass.
-+No production configuration, customer message, upload, provider call, push,
-+merge or deployment is part of this change.
-diff --git a/beintaskbot-main/docs/tenant-ai-agents.js b/beintaskbot-main/docs/tenant-ai-agents.js
-index 5b807fae9adbb1112ded22e7e5d1ff024ab19064..c88949201b66536b0824a633159d66a7c04327cb 100644
---- a/beintaskbot-main/docs/tenant-ai-agents.js
-+++ b/beintaskbot-main/docs/tenant-ai-agents.js
-@@ -399,18 +399,40 @@
-  async function syncChatAgentControl(force=false){if(!profile||!aiAllowed)return;const input=$('deal-chat-input')||$('notice-reply-input'),leadId=String(history.state?.leadId||'').trim();if(!input||!leadId){$('aiAgentChatToggle')?.remove();chatControlInput=input;chatControlLead=leadId;return}if(!force&&input===chatControlInput&&leadId===chatControlLead&&($('aiAgentChatToggle')||Date.now()-chatControlAttempt<5000))return;const request=++chatControlEpoch;chatControlInput=input;chatControlLead=leadId;chatControlAttempt=Date.now();$('aiAgentChatToggle')?.remove();let conversation='';let provider='kommo',channelId='';try{if(!conversation){const owned=await api(`conversations/for-lead/${encodeURIComponent(leadId)}`);conversation=String(owned?.conversation_id||'');provider=String(owned?.provider||'kommo');channelId=String(owned?.channel_id||'')}if(!conversation)return;const routeQuery=new URLSearchParams({provider,channel_id:channelId});const state=await api(`conversations/${encodeURIComponent(conversation)}/state?${routeQuery}`);if(request!==chatControlEpoch||input!==($('deal-chat-input')||$('notice-reply-input'))||String(history.state?.leadId||'')!==leadId)return;const meta=dialogStateMeta(state.display_state||state.state),box=document.createElement('div');box.id='aiAgentChatToggle';box.className='ai-agent-chat-toggle';const summary=document.createElement('div');summary.className='ai-agent-chat-summary';const stateText=document.createElement('span');stateText.className=`ai-agent-chat-state is-${meta.state}`;stateText.textContent=`${state.agent_name||'AI Agent'} · ${meta.label}`;summary.append(stateText);const reason=dialogReason(state.display_reason||state.resume_block_reason||state.reason);if(reason){const detail=document.createElement('small');detail.dataset.reason='';detail.textContent=`Причина: ${reason}`;summary.append(detail)}if(state.updated_at){const detail=document.createElement('small');detail.textContent=`Изменено: ${dialogTime(state.updated_at)}`;summary.append(detail)}box.append(summary);const addAction=(label,action,className='outline')=>{const button=document.createElement('button');button.type='button';button.className=`ai-agent-chat-toggle-button ${className}`;button.textContent=label;button.onclick=async()=>{button.disabled=true;const before=button.textContent;button.textContent='Сохраняю…';try{await setConversationAction(conversation,action,{provider,channelId,reason:action==='pause'?'webapp_chat_pause':action==='handoff'?'webapp_chat_handoff':'webapp_chat_resume'});await syncChatAgentControl(true);await loadHandoffs()}catch(error){button.textContent=error.message;button.disabled=false;setTimeout(()=>{if(!button.disabled)button.textContent=before},2800)}};box.append(button)};if(meta.state==='active'){addAction('Приостановить AI','pause');addAction('Передать человеку','handoff','outline danger')}else if((meta.state==='paused'||meta.state==='human')&&state.resume_allowed!==false){addAction('Возобновить AI','resume','primary')}else if(meta.state==='paused'||meta.state==='human'){const blocked=document.createElement('small');blocked.textContent=`Resume недоступен: ${dialogReason(state.resume_block_reason)||'обязательная блокировка'}`;box.append(blocked)}const field=input.closest('.notice-reply-field')||input.closest('.wa-composer')||input.parentElement,aiButton=field?.querySelector('#notice-reply-ai,#deal-chat-ai');if(aiButton)aiButton.insertAdjacentElement('afterend',box);else field.append(box)}catch{/* The server must resolve a tenant-owned dialogue before exposing control. */}}
-  document.addEventListener('tenant-ai-agent-created',()=>load());
-  document.addEventListener('tenant-ai-edit-created-agent',async event=>{try{const rows=await api('agents'),agent=rows.find(row=>row.id===event.detail?.agentId);if(agent)editAgent(agent)}catch(error){notice(window.aiExpertEditor?.error(error.message)||error.message)}});
-+ // Scoped agent documents deliberately do not load company settings, teams,
-+ // knowledge, diagnostics, simulations, destinations or provider refreshes.
-+ function createScopedAgentConsole(){
-+  let generation=0,identity='',snapshot=null,rows=[],options=null,loading=null,busy=false;
-+  const page=$('view-ai_agents'),host=document.createElement('article'),hidden=new Map();
-+  host.id='aiScopedDocuments';host.hidden=true;page?.append(host);
-+  const words=()=>({ru:{title:'AI-агенты',create:'Создать агента',refresh:'Обновить',name:'Название',instructions:'Инструкции',model:'Модель',sources:'Источники',mode:'Режим',manual:'Вручную',automatic:'Автоматически',enabled:'Включён',save:'Сохранить',cancel:'Отмена',edit:'Изменить',limited:'Только документы агентов. Общие настройки, знания, команды и удаление доступны отдельно.',noRead:'Просмотр агентов не разрешён.',saved:'Сохранено',error:'Не удалось выполнить операцию'},az:{title:'AI agentləri',create:'Agent yarat',refresh:'Yenilə',name:'Ad',instructions:'Təlimatlar',model:'Model',sources:'Mənbələr',mode:'Rejim',manual:'Əl ilə',automatic:'Avtomatik',enabled:'Aktiv',save:'Saxla',cancel:'Ləğv et',edit:'Dəyiş',limited:'Yalnız agent sənədləri. Ümumi ayarlar, bilik, komandalar və silmə ayrıdır.',noRead:'Agentlərə baxış icazəsi yoxdur.',saved:'Saxlanıldı',error:'Əməliyyat alınmadı'},en:{title:'AI agents',create:'Create agent',refresh:'Refresh',name:'Name',instructions:'Instructions',model:'Model',sources:'Sources',mode:'Mode',manual:'Manual',automatic:'Automatic',enabled:'Enabled',save:'Save',cancel:'Cancel',edit:'Edit',limited:'Agent documents only. Shared settings, knowledge, teams and deletion are separate.',noRead:'Agent viewing is not allowed.',saved:'Saved',error:'Operation failed'}}[window.tenantI18n?.language||'az']);
-+  const allowed=action=>snapshot?.capabilities?.ai_documents?.[action]===true;
-+  function clear(){rows=[];options=null;host.replaceChildren();}
-+  function show(){for(const child of page?.children||[]){if(child===host)continue;if(!hidden.has(child))hidden.set(child,child.hidden);child.hidden=true;}host.hidden=false;}
-+  function restore(){host.hidden=true;for(const [child,value]of hidden)child.hidden=value;hidden.clear();}
-+  async function request(path,method='GET',body){const epoch=generation,who=identity,member=snapshot.member;const response=await fetch(endpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:{'X-Tenant-Id':String(member.tenant_id),'X-User-Id':String(member.telegram_id),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify({...body,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id})}:{})});const payload=await response.json();if(epoch!==generation||who!==identity)throw new Error('companyChanged');if(!response.ok||!payload.success){if([401,403,404].includes(response.status)){clear();host.textContent=payload.error||words().error;}throw new Error(payload.error||words().error);}return payload.result;}
-+  function render(){show();const w=words();host.innerHTML=`<h2>${esc(w.title)}</h2><p>${esc(w.limited)}</p><p role="status" data-scoped-notice></p><button type="button" data-scoped-refresh>${esc(w.refresh)}</button>${allowed('create')?`<button type="button" data-scoped-create>${esc(w.create)}</button>`:''}<div data-scoped-list></div><div data-scoped-editor></div>`;host.querySelector('[data-scoped-refresh]').onclick=()=>load();host.querySelector('[data-scoped-create]')?.addEventListener('click',()=>edit(null));const list=host.querySelector('[data-scoped-list]');if(!allowed('view'))list.textContent=w.noRead;for(const row of rows){const card=document.createElement('article');const name=document.createElement('h3');name.textContent=row.name;card.append(name);const text=document.createElement('p');text.textContent=row.instructions;card.append(text);if(allowed('update')&&row.capabilities?.update){const button=document.createElement('button');button.textContent=w.edit;button.onclick=()=>edit(row);card.append(button);}list.append(card);}}
-+  function edit(row){if(busy||!(row?allowed('update')&&row.capabilities?.update:allowed('create')))return;const w=words(),editor=host.querySelector('[data-scoped-editor]');const sources=[...(options?.connect_channels||[]).map(item=>({label:item.name,scope:{provider:'connect',channel_id:item.id}})),...(options?.stages||[]).map(item=>({label:((options.pipelines||[]).find(p=>String(p.pipeline_id)===String(item.pipeline_id))?.name||'')+' / '+item.name,scope:{provider:'kommo',pipeline_id:item.pipeline_id,stage_id:item.stage_id}}))];const key=source=>[source.provider||'kommo',source.channel_id||'',source.pipeline_id||'',source.stage_id||''].join(':');const saved=new Map((row?.scopes||[]).map(source=>[key(source),source]));editor.innerHTML=`<form><label>${esc(w.mode)}<select name="mode"><option value="manual">${esc(w.manual)}</option><option value="automatic" ${row?.mode==='automatic'?'selected':''}>${esc(w.automatic)}</option></select></label><label>${esc(w.name)}<input name="name" required maxlength="120" value="${esc(row?.name||'')}"></label><label>${esc(w.instructions)}<textarea name="instructions" required>${esc(row?.instructions||'')}</textarea></label><label>${esc(w.model)}<select name="model"><option value=""></option>${(options?.models||[]).map(item=>`<option value="${esc(item.id)}" ${item.id===row?.model?'selected':''}>${esc(item.label||item.id)}</option>`).join('')}</select></label><label>${esc(w.sources)}<select name="sources" multiple>${sources.map((item,index)=>`<option value="${index}" ${saved.has(key(item.scope))?'selected':''}>${esc(item.label)}</option>`).join('')}</select></label><label><input name="enabled" type="checkbox" ${row?.enabled?'checked':''} ${row?'':'disabled'}>${esc(w.enabled)}</label><button type="submit">${esc(w.save)}</button><button type="button" data-scoped-cancel>${esc(w.cancel)}</button></form>`;
-+   const form=editor.querySelector('form'),epoch=generation;editor.querySelector('[data-scoped-cancel]').onclick=()=>{if(!busy)editor.replaceChildren();};form.onsubmit=async event=>{event.preventDefault();if(busy||epoch!==generation)return;busy=true;for(const button of form.querySelectorAll('button'))button.disabled=true;const data={name:form.elements.name.value,instructions:form.elements.instructions.value,mode:form.elements.mode.value,scopes:[...form.elements.sources.selectedOptions].map(option=>{const scope=sources[Number(option.value)].scope;return saved.get(key(scope))||scope;}),...(row?{enabled:form.elements.enabled.checked,expected_version:row.version}:{enabled:false})};if(form.elements.model.value)data.model=form.elements.model.value;try{await request(row?'agents/'+row.id:'agents',row?'PATCH':'POST',data);if(epoch!==generation)return;editor.replaceChildren();await load();if(epoch===generation)host.querySelector('[data-scoped-notice]').textContent=w.saved;}catch(error){if(epoch===generation){const notice=host.querySelector('[data-scoped-notice]');if(notice)notice.textContent=error.message;}}finally{if(epoch===generation){busy=false;for(const button of form.querySelectorAll('button'))button.disabled=false;}}};
-+  }
-+  function load(){if(!snapshot?.capabilities?.ai_documents?.scoped||!agentsVisible())return Promise.resolve();if(loading)return loading;const epoch=generation;loading=(async()=>{try{const result=await Promise.all([allowed('view')?request('agents'):[],(allowed('create')||allowed('update'))?request('agents/options?cached=1'):null]);if(epoch!==generation)return;[rows,options]=result;render();}catch(error){if(epoch===generation){clear();show();host.textContent=error.message;}}finally{if(epoch===generation)loading=null;}})();return loading;}
-+  return {profile(data){generation++;identity=JSON.stringify([data?.member?.tenant_id,data?.member?.telegram_id,data?.capabilities?.ai_documents]);snapshot=data;loading=null;busy=false;clear();if(data?.member?.active!==false&&data?.capabilities?.ai_documents?.scoped){show();render();void load();return true;}restore();return false;},load};
-+ }
-+ const scopedAgentConsole=createScopedAgentConsole();
-+
-  function receiveProfile(data){
-   if($('view-ai_agents'))$('view-ai_agents').style.visibility='';
-   const next=data?.member||null,nextScope=JSON.stringify([next?.tenant_id,next?.telegram_id,next?.role,next?.active,next?.permissions,data?.capabilities,data?.role_permissions]);
-   if(nextScope!==profileScope){stashKnowledgeDraft();clearKnowledgeFields();knowledgeDraftScope='';document.querySelectorAll('[data-ai-overview-create],[data-ai-overview-settings]').forEach(button=>button.disabled=true);aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiLoadState='idle';closeModal();settings=null;simulationConfig=null;pilotState=null;agents=[];selected=null;agentOptions={pipelines:[],stages:[],channels:[],models:[]};$('aiKnowledgeList').replaceChildren();$('aiStatusSummary').textContent='';$('aiAgentChatToggle')?.remove();if(editorPage)returnEditorHome();renderAgents();}
-   profileScope=nextScope;profile=next;aiAllowed=!!next&&next.active!==false&&data?.capabilities?.modules?.ai_agents!==false;
-+  if(scopedAgentConsole.profile(data)){aiAllowed=false;return;}
-   if(aiAllowed&&agentsVisible())void load();
-   if(!aiAllowed){$('aiAgentList').textContent=t('noAccess');$('aiAgentList').setAttribute('aria-busy','false');}
-  }
-  document.addEventListener('tenant-profile',event=>receiveProfile(event.detail));
-  document.addEventListener('tenant-auth-invalid',()=>receiveProfile(null));
-- document.addEventListener('tenant-auth-pending',()=>{aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiAllowed=false;if(aiLoadState==='loading')aiLoadState='idle';if($('view-ai_agents'))$('view-ai_agents').style.visibility='hidden';});
-- document.addEventListener('tenant-view',event=>{if(event.detail?.view==='ai_agents')void load();});
-+ document.addEventListener('tenant-auth-pending',()=>{scopedAgentConsole.profile(null);aiEpoch++;chatControlEpoch++;aiLoad=null;aiReady=false;aiAllowed=false;if(aiLoadState==='loading')aiLoadState='idle';if($('view-ai_agents'))$('view-ai_agents').style.visibility='hidden';});
-+ document.addEventListener('tenant-view',event=>{if(event.detail?.view==='ai_agents'){void scopedAgentConsole.load();void load();}});
-  if(window.tenantProfileSnapshot)receiveProfile(window.tenantProfileSnapshot);
-  else fetch(uiConfig.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{if(!profile&&data?.member)receiveProfile(data)}).catch(()=>{});
- })();
