@@ -1,0 +1,271 @@
+{
+  "base_commit": "b4ddc50e07d69b7f8c295091d00852086c637d2b",
+  "base_tree": "567514ca8c06a25e82db5d7754ab4cd0cd5edd79",
+  "target_local_commit": "ced6687d689733b80f7051d88469a537d22bfbf5",
+  "target_tree": "bcbaca2bb5787aa8abbd1288c64a79d4588134e5",
+  "patches": [
+    {
+      "paths": [
+        ".github/workflows/employee-scoped-access.yml",
+        "beintaskbot-main/bot.py",
+        "beintaskbot-main/docs/dialog-source-scope-rollout.md",
+        "beintaskbot-main/docs/employee-ai-integration-scope-audit.md",
+        "beintaskbot-main/docs/employee-scoped-access-foundation.md",
+        "beintaskbot-main/docs/native-crm-scoped-access.md",
+        "beintaskbot-main/docs/tenant-app.html"
+      ],
+      "sha256": "5a53dba83e30ef5acf24016871cb4cc8cf5c8cc87bad3a3a45ea4eade32d8ff3",
+      "bytes": 51850,
+      "parts": [
+        {
+          "file": "patches/000.patch",
+          "sha256": "5a53dba83e30ef5acf24016871cb4cc8cf5c8cc87bad3a3a45ea4eade32d8ff3",
+          "bytes": 51850
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/docs/tenant-contacts-directory.js",
+        "beintaskbot-main/docs/tenant-dialog-source-members.js",
+        "beintaskbot-main/docs/tenant-finance.js"
+      ],
+      "sha256": "76717d95765de58600762f2f5c6a5b259b2f39824a79b12ac34515faaba32277",
+      "bytes": 78958,
+      "parts": [
+        {
+          "file": "patches/001.patch",
+          "sha256": "76717d95765de58600762f2f5c6a5b259b2f39824a79b12ac34515faaba32277",
+          "bytes": 78958
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/docs/tenant-members-ui.css",
+        "beintaskbot-main/docs/tenant-members-ui.js",
+        "beintaskbot-main/docs/tenant-news.js",
+        "beintaskbot-main/docs/tenant-operator-dialogs.js",
+        "beintaskbot-main/docs/tenant-task-flow.js",
+        "beintaskbot-main/docs/tenant-view-demand.js",
+        "beintaskbot-main/tenant_ai_agents_api.py",
+        "beintaskbot-main/tenant_ai_agents_schema.py"
+      ],
+      "sha256": "f4bc75dda8e489bbd9c16e2f6929486b96de58104700bde5c6295b146cdf5170",
+      "bytes": 76196,
+      "parts": [
+        {
+          "file": "patches/002.patch",
+          "sha256": "f4bc75dda8e489bbd9c16e2f6929486b96de58104700bde5c6295b146cdf5170",
+          "bytes": 76196
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tenant_ai_agents_store.py",
+        "beintaskbot-main/tenant_ai_group_coordination.py",
+        "beintaskbot-main/tenant_ai_management_access.py",
+        "beintaskbot-main/tenant_ai_state.py",
+        "beintaskbot-main/tenant_chat_ai_store.py",
+        "beintaskbot-main/tenant_chat_api.py",
+        "beintaskbot-main/tenant_chat_attachment_store.py",
+        "beintaskbot-main/tenant_chat_history_store.py",
+        "beintaskbot-main/tenant_chat_import_store.py",
+        "beintaskbot-main/tenant_chat_review_store.py",
+        "beintaskbot-main/tenant_chat_send_service.py",
+        "beintaskbot-main/tenant_chat_send_store.py",
+        "beintaskbot-main/tenant_chat_sync.py",
+        "beintaskbot-main/tenant_chat_upload_service.py",
+        "beintaskbot-main/tenant_connect_transport.py",
+        "beintaskbot-main/tenant_crm_contact_listing.py",
+        "beintaskbot-main/tenant_crm_native_access.py",
+        "beintaskbot-main/tenant_crm_native_api.py"
+      ],
+      "sha256": "a337fab0e2299a27c75c97bd9895239d8689ebdea76679a1efbbef2ef889478e",
+      "bytes": 66011,
+      "parts": [
+        {
+          "file": "patches/003.patch",
+          "sha256": "a337fab0e2299a27c75c97bd9895239d8689ebdea76679a1efbbef2ef889478e",
+          "bytes": 66011
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tenant_crm_native_companies.py",
+        "beintaskbot-main/tenant_crm_native_company_api.py",
+        "beintaskbot-main/tenant_crm_native_contacts.py",
+        "beintaskbot-main/tenant_crm_native_deal_api.py",
+        "beintaskbot-main/tenant_crm_native_deals.py",
+        "beintaskbot-main/tenant_crm_native_task_api.py"
+      ],
+      "sha256": "cf3111879ab091c5b1a8e280571fbb7dd8d9274e843f4d979701b5c211861197",
+      "bytes": 62635,
+      "parts": [
+        {
+          "file": "patches/004.patch",
+          "sha256": "cf3111879ab091c5b1a8e280571fbb7dd8d9274e843f4d979701b5c211861197",
+          "bytes": 62635
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tenant_crm_native_tasks.py",
+        "beintaskbot-main/tenant_crm_notice_outbox.py",
+        "beintaskbot-main/tenant_crm_notice_policy.py",
+        "beintaskbot-main/tenant_crm_notice_store.py",
+        "beintaskbot-main/tenant_crm_notice_worker.py",
+        "beintaskbot-main/tenant_customer_voice_service.py",
+        "beintaskbot-main/tenant_department_store.py",
+        "beintaskbot-main/tenant_dialog_access.py",
+        "beintaskbot-main/tenant_dialog_audio_transcription.py",
+        "beintaskbot-main/tenant_dialog_consultations.py",
+        "beintaskbot-main/tenant_finance.py",
+        "beintaskbot-main/tenant_finance_policy.py",
+        "beintaskbot-main/tenant_member_access.py"
+      ],
+      "sha256": "36fd7c5b0a23cfbc0334587c27216b702e63d19e21765b8d7033c339ffe886b9",
+      "bytes": 77793,
+      "parts": [
+        {
+          "file": "patches/005.patch",
+          "sha256": "36fd7c5b0a23cfbc0334587c27216b702e63d19e21765b8d7033c339ffe886b9",
+          "bytes": 77793
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tenant_member_store.py",
+        "beintaskbot-main/tenant_members_api.py",
+        "beintaskbot-main/tenant_native_task_access.py",
+        "beintaskbot-main/tenant_news.py",
+        "beintaskbot-main/tenant_news_api.py",
+        "beintaskbot-main/tenant_notification_center.py",
+        "beintaskbot-main/tenant_operator_access.py",
+        "beintaskbot-main/tenant_operator_api.py",
+        "beintaskbot-main/tenant_operator_assignment.py",
+        "beintaskbot-main/tenant_operator_copilot.py",
+        "beintaskbot-main/tenant_operator_dialogs.py",
+        "beintaskbot-main/tenant_platform_schema_crm.py",
+        "beintaskbot-main/tenant_platform_schema_identity.py",
+        "beintaskbot-main/tenant_policy.py",
+        "beintaskbot-main/tenant_scoped_access.py",
+        "beintaskbot-main/tenant_scoped_access_schema.py",
+        "beintaskbot-main/tenant_scoped_access_store.py",
+        "beintaskbot-main/tenant_task_flow.py",
+        "beintaskbot-main/tenant_web_assets.py"
+      ],
+      "sha256": "39e7282014a4e33d1a80cf3fce0f39bf74acd617585560baa1a986c85c6a4f19",
+      "bytes": 79396,
+      "parts": [
+        {
+          "file": "patches/006.patch",
+          "sha256": "39e7282014a4e33d1a80cf3fce0f39bf74acd617585560baa1a986c85c6a4f19",
+          "bytes": 79396
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tenant_web_routes.py",
+        "beintaskbot-main/tenant_workflow_store.py",
+        "beintaskbot-main/tests/contacts_directory_fixture.cjs",
+        "beintaskbot-main/tests/contacts_directory_http_browser.cjs",
+        "beintaskbot-main/tests/employee_scope_matrix_browser.cjs",
+        "beintaskbot-main/tests/test_ai_access_ownership_postgres.py",
+        "beintaskbot-main/tests/test_ai_integration_access_preparation.py",
+        "beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py",
+        "beintaskbot-main/tests/test_contacts_directory_postgres.py",
+        "beintaskbot-main/tests/test_contacts_directory_ui.cjs",
+        "beintaskbot-main/tests/test_crm_native_api.py",
+        "beintaskbot-main/tests/test_crm_native_companies.py",
+        "beintaskbot-main/tests/test_crm_native_deal_api.py"
+      ],
+      "sha256": "62c428413963d573b9e4489745cff3498f610f777ca5a58bbe1f8930a46184b7",
+      "bytes": 56010,
+      "parts": [
+        {
+          "file": "patches/007.patch",
+          "sha256": "62c428413963d573b9e4489745cff3498f610f777ca5a58bbe1f8930a46184b7",
+          "bytes": 56010
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tests/test_crm_scoped_access_postgres.py",
+        "beintaskbot-main/tests/test_department_api.py",
+        "beintaskbot-main/tests/test_dialog_mutation_source_scopes.py",
+        "beintaskbot-main/tests/test_dialog_source_locks_postgres.py",
+        "beintaskbot-main/tests/test_dialog_source_members_ui.cjs"
+      ],
+      "sha256": "7669266f3340eeaccb3ae485541fbee9701ba59667041ebd665243f4a2609819",
+      "bytes": 66069,
+      "parts": [
+        {
+          "file": "patches/008.patch",
+          "sha256": "7669266f3340eeaccb3ae485541fbee9701ba59667041ebd665243f4a2609819",
+          "bytes": 66069
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tests/test_dialog_source_scopes.py",
+        "beintaskbot-main/tests/test_employee_card_consistency_postgres.py",
+        "beintaskbot-main/tests/test_employee_finance_scopes.py",
+        "beintaskbot-main/tests/test_employee_finance_scopes_ui.cjs",
+        "beintaskbot-main/tests/test_employee_scope_settings_postgres.py",
+        "beintaskbot-main/tests/test_employee_scope_settings_ui.cjs",
+        "beintaskbot-main/tests/test_employee_task_scopes.py",
+        "beintaskbot-main/tests/test_hidden_panel_loading.cjs"
+      ],
+      "sha256": "7e5473afe0bcdc8db4c2c1342da966ed2757dea6221f63be2d2cefcacb64f510",
+      "bytes": 79431,
+      "parts": [
+        {
+          "file": "patches/009.patch",
+          "sha256": "7e5473afe0bcdc8db4c2c1342da966ed2757dea6221f63be2d2cefcacb64f510",
+          "bytes": 79431
+        }
+      ]
+    },
+    {
+      "paths": [
+        "beintaskbot-main/tests/test_native_company_relation_ui.cjs",
+        "beintaskbot-main/tests/test_native_crud_dispatch.py",
+        "beintaskbot-main/tests/test_operator_list_performance.py",
+        "beintaskbot-main/tests/test_scoped_access_foundation.py",
+        "beintaskbot-main/tests/test_scoped_access_foundation_postgres.py",
+        "beintaskbot-main/tests/test_task_b4_scope_regression.py",
+        "beintaskbot-main/tests/test_task_read_save_flow_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_chat_api.py",
+        "beintaskbot-main/tests/test_tenant_chat_attachments.py",
+        "beintaskbot-main/tests/test_tenant_chat_history.py",
+        "beintaskbot-main/tests/test_tenant_chat_send.py",
+        "beintaskbot-main/tests/test_tenant_chat_upload.py",
+        "beintaskbot-main/tests/test_tenant_crm_native_modal_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_crm_notice.py",
+        "beintaskbot-main/tests/test_tenant_customer_voice_service.py",
+        "beintaskbot-main/tests/test_tenant_news_member_read_postgres.py",
+        "beintaskbot-main/tests/test_tenant_news_member_ui.cjs",
+        "beintaskbot-main/tests/test_tenant_operator_copilot.py",
+        "beintaskbot-main/tests/test_tenant_scoped_access.py",
+        "beintaskbot-main/tests/test_tenant_web_routes.py"
+      ],
+      "sha256": "dadbdd3ece8d54700aaf568522a4bf274653e8db9ad6fcf406562569bdc3b1db",
+      "bytes": 69107,
+      "parts": [
+        {
+          "file": "patches/010.patch",
+          "sha256": "dadbdd3ece8d54700aaf568522a4bf274653e8db9ad6fcf406562569bdc3b1db",
+          "bytes": 69107
+        }
+      ]
+    }
+  ]
+}

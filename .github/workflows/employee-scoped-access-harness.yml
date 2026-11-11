@@ -1,0 +1,135 @@
+name: Employee scoped access isolated patch harness
+on:
+  push:
+    branches: [codex/employee-scope-ci-20261110]
+permissions:
+  contents: read
+jobs:
+  scoped-access:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+      EMPLOYEE_SCOPE_SCREENSHOTS: employee-scope-screenshots
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preserve verified synthetic patch inputs
+        working-directory: .
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/employee-scoped-access"
+          cp -R .ci/employee-scoped-access/. "$RUNNER_TEMP/employee-scoped-access/"
+      - name: Check out the exact reviewed upstream baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b4ddc50e07d69b7f8c295091d00852086c637d2b
+          persist-credentials: false
+          clean: true
+      - name: Apply patches and verify the exact final source tree
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
+          manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
+          assert hashlib.sha256(manifest_bytes).hexdigest() == '08732b75c4f82c6b5d5f6e0ca1ed2619be17e1ad9f56cbfa5a838a291b692f8f'
+          manifest = json.loads(manifest_bytes)
+          def git(*args, data=None):
+              return subprocess.check_output(['git', *args], input=data).decode().strip()
+          assert git('rev-parse', 'HEAD') == manifest['base_commit'] == 'b4ddc50e07d69b7f8c295091d00852086c637d2b'
+          assert git('write-tree') == manifest['base_tree'] == '567514ca8c06a25e82db5d7754ab4cd0cd5edd79'
+          assert not pathlib.Path('.ci/employee-scoped-access').exists()
+          assert not pathlib.Path('.github/workflows/employee-scoped-access-harness.yml').exists()
+          for patch in manifest['patches']:
+              parts = []
+              for part in patch['parts']:
+                  content = (root / part['file']).read_bytes()
+                  assert len(content) == part['bytes']
+                  assert hashlib.sha256(content).hexdigest() == part['sha256']
+                  parts.append(content)
+              content = b''.join(parts)
+              assert len(content) == patch['bytes']
+              assert hashlib.sha256(content).hexdigest() == patch['sha256']
+              subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
+          actual = git('write-tree')
+          assert actual == manifest['target_tree'] == 'bcbaca2bb5787aa8abbd1288c64a79d4588134e5', actual
+          assert not git('diff', '--name-only')
+          print('Verified exact final source tree:', actual)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Tested source tree: ' + actual + '\n\nLocal source revision: ' + manifest['target_local_commit'] + '\n\nCI-only harness commit, not a release or deploy.\n')
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Select installed Chromium
+        run: node -e "require('fs').appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Scoped authorization and PostgreSQL
+        run: >-
+          python -m pytest -q -rs
+          tests/test_scoped_access_foundation.py
+          tests/test_scoped_access_foundation_postgres.py
+          tests/test_employee_scope_settings_postgres.py
+          tests/test_employee_task_scopes.py
+          tests/test_task_b4_scope_regression.py
+          tests/test_crm_scoped_access_postgres.py
+          tests/test_native_crud_dispatch.py
+          tests/test_employee_finance_scopes.py
+          tests/test_dialog_source_scopes.py
+          tests/test_dialog_mutation_source_scopes.py
+          tests/test_dialog_source_locks_postgres.py
+          tests/test_ai_access_ownership_postgres.py
+          tests/test_ai_integration_access_preparation.py
+          tests/test_analytics_scoped_dialog_guard.py
+          tests/test_tenant_news_member_read_postgres.py
+      - name: Interface regressions
+        run: |
+          node tests/test_employee_scope_settings_ui.cjs
+          node tests/test_task_read_save_flow_ui.cjs
+          node tests/test_contacts_directory_ui.cjs
+          node tests/test_native_company_relation_ui.cjs
+          node tests/test_tenant_crm_native_modal_ui.cjs
+          node tests/test_employee_finance_scopes_ui.cjs
+          node tests/test_dialog_source_members_ui.cjs
+          node tests/test_tenant_news_member_ui.cjs
+      - name: Chromium employee matrix, tasks and CRM
+        run: |
+          node tests/employee_scope_matrix_browser.cjs
+          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
+          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
+      - name: Save synthetic matrix screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: employee-scope-synthetic-screenshots
+          path: beintaskbot-main/employee-scope-screenshots/
+          if-no-files-found: warn

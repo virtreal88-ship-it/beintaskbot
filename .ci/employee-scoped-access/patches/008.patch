@@ -1,0 +1,1127 @@
+diff --git a/beintaskbot-main/tests/test_crm_scoped_access_postgres.py b/beintaskbot-main/tests/test_crm_scoped_access_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..802489a6ad9b7d798da8acee86810e7d9e38cd31
+--- /dev/null
++++ b/beintaskbot-main/tests/test_crm_scoped_access_postgres.py
+@@ -0,0 +1,721 @@
++"""Native CRM scopes against isolated localhost PostgreSQL, never providers."""
++import json
++import uuid
++
++import pytest
++from psycopg.rows import dict_row
++import psycopg
++
++from test_company_employees_navigation_postgres import A, B, database, db, staff
++import tenant_crm_native_contacts as contacts
++import tenant_crm_native_companies as companies
++import tenant_crm_native_deals as deals
++import tenant_crm_contact_listing as listing
++import tenant_member_store as members
++from tenant_crm_native_access import CRMAccessError
++
++KINDS = ('customers', 'companies', 'deals')
++SERVICES = {'customers': contacts, 'companies': companies, 'deals': deals}
++TABLES = {'customers': 'saas_crm_native_contacts', 'companies': 'saas_crm_native_companies',
++          'deals': 'saas_crm_native_deals'}
++
++
++def set_scopes(f, actor, matrix):
++    with f['factory']() as conn:
++        conn.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
++          VALUES(%s::uuid,'members','{}') ON CONFLICT DO NOTHING''', (A,))
++        conn.execute('''UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,%s::text[],%s::jsonb)
++          WHERE tenant_id=%s::uuid AND policy_key='members' ''',
++          ([str(actor)], json.dumps({'access_scopes': matrix}), A))
++
++
++@pytest.fixture
++def native(staff, monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    f = staff
++    for service in (*SERVICES.values(), listing):
++        monkeypatch.setattr(service, '_connect', f['factory'])
++    ids = {kind: {key: str(uuid.uuid4()) for key in ('self', 'peer', 'other', 'system', 'foreign')} for kind in KINDS}
++    departments = [str(uuid.uuid4()), str(uuid.uuid4())]
++    with f['factory']() as conn:
++        conn.execute("UPDATE saas_tenants SET modules='{\"customers\":true,\"deals\":true}'")
++        for i, dept in enumerate(departments):
++            conn.execute('INSERT INTO saas_tenant_departments(tenant_id,id,name) VALUES(%s::uuid,%s::uuid,%s)', (A, dept, 'Department '+str(i)))
++        for actor, dept in ((81, departments[0]), (82, departments[0]), (84, departments[1])):
++            conn.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions,department_id)
++              VALUES(%s::uuid,%s,'admin',%s,'["customers","deals"]',%s::uuid)''',
++              (A, actor, 'Actor '+str(actor), dept))
++        for tenant in (A, B):
++            conn.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name) VALUES(%s::uuid,'p','Pipeline')", (tenant,))
++            conn.execute("INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name) VALUES(%s::uuid,'p','s','Stage')", (tenant,))
++        for key, actor in (('self', 81), ('peer', 82), ('other', 84), ('system', None), ('foreign', 22)):
++            tenant = B if key == 'foreign' else A
++            for kind in KINDS:
++                columns = 'display_name,phone' if kind == 'customers' else 'name' if kind == 'companies' else 'title,pipeline_id,stage_id'
++                values = [key, 'phone-'+key] if kind == 'customers' else [key] if kind == 'companies' else [key, 'p', 's']
++                placeholders = ','.join(['%s'] * len(values))
++                conn.execute(f'''INSERT INTO {TABLES[kind]}(tenant_id,id,access_responsible_id,{columns})
++                  VALUES(%s::uuid,%s::uuid,%s,{placeholders})''', [tenant,ids[kind][key],actor,*values])
++    f.update(ids=ids, departments=departments)
++    return f
++
++
++def configure(f, kind, action, scope):
++    matrix = {module: {op: 'none' for op in ('create', 'view', 'update', 'delete')} for module in KINDS}
++    matrix[kind][action] = scope
++    set_scopes(f, 81, matrix)
++
++
++def read(kind, tenant, ident, actor):
++    function = {'customers': contacts.get_contact, 'companies': companies.get_company, 'deals': deals.get_deal}[kind]
++    return function(tenant, ident, actor_id=actor)
++
++
++def update(kind, ident):
++    if kind == 'customers': return contacts.update_contact(A, ident, 'changed', actor_id=81)
++    if kind == 'companies': return companies.update_company(A, ident, 'changed', actor_id=81)
++    return deals.update_deal(A, ident, 'changed', 'p', 's', actor_id=81)
++
++
++def create(kind, **kwargs):
++    if kind == 'customers': return contacts.create_contact(A, 'new', actor_id=81, **kwargs)
++    if kind == 'companies': return companies.create_company(A, 'new', actor_id=81, **kwargs)
++    return deals.create_deal(A, 'new', 'p', 's', actor_id=81, **kwargs)
++
++
++@pytest.mark.parametrize('kind', KINDS)
++@pytest.mark.parametrize('action', ('create', 'view', 'update', 'delete'))
++@pytest.mark.parametrize('scope,visible', [('none', set()), ('self', {'self'}), ('department', {'self','peer'}), ('all', {'self','peer','other','system'})])
++def test_independent_crud_scopes_and_two_tenant_boundary(native, kind, action, scope, visible):
++    f = native
++    configure(f, kind, action, scope)
++    if action == 'create':
++        if scope == 'none':
++            with pytest.raises(CRMAccessError): create(kind)
++        else:
++            row = create(kind)
++            with f['factory']() as conn:
++                owner = conn.execute(f'SELECT access_responsible_id FROM {TABLES[kind]} WHERE id=%s::uuid', (row['id'],)).fetchone()
++            assert owner['access_responsible_id'] == 81
++            assert 'access_responsible_id' not in row
++        return
++    if scope == 'none':
++        with pytest.raises(CRMAccessError):
++            if action == 'view': read(kind, A, f['ids'][kind]['self'], 81)
++            elif action == 'update': update(kind, f['ids'][kind]['self'])
++            else: getattr(SERVICES[kind], 'archive_' + ('contact' if kind=='customers' else 'company' if kind=='companies' else 'deal'))(A, f['ids'][kind]['self'], actor_id=81)
++        return
++    for key, ident in f['ids'][kind].items():
++        if action == 'view': result = read(kind, A, ident, 81)
++        elif action == 'update': result = update(kind, ident)
++        else:
++            function = {'customers': contacts.archive_contact, 'companies': companies.archive_company, 'deals': deals.archive_deal}[kind]
++            result = function(A, ident, actor_id=81)
++        assert bool(result) == (key in visible), (kind, action, scope, key, result)
++    with pytest.raises(CRMAccessError):
++        # Same actor ID is not membership in another tenant.
++        read(kind, B, f['ids'][kind]['foreign'], 81)
++
++
++@pytest.mark.parametrize('kind', KINDS)
++def test_lists_search_and_actions_apply_scope_before_limit(native, kind):
++    configure(native, kind, 'view', 'department')
++    matrix = {kind: {'view':'department','update':'self','delete':'none','create':'self'}}
++    set_scopes(native, 81, matrix)
++    function = {'customers': contacts.list_contacts, 'companies': companies.list_companies, 'deals': deals.list_deals}[kind]
++    rows = function(A, actor_id=81)
++    assert {str(row['id']) for row in rows} == {native['ids'][kind]['self'], native['ids'][kind]['peer']}
++    assert function(A, search='other', actor_id=81) == []
++    for row in rows:
++        assert row['actions']['update'] == (str(row['id']) == native['ids'][kind]['self'])
++        assert row['actions']['archive'] is False
++
++
++def test_contact_directory_counts_filtered_before_pagination(native):
++    configure(native, 'customers', 'view', 'department')
++    profile = members.member(A, 81)
++    result = listing.directory(profile, source='native', limit=1)
++    assert result['total'] == result['source_total'] == 2
++    assert len(result['data']) == 1 and result['next_offset'] == 1
++    assert listing.directory(profile, source='native', search='other')['total'] == 0
++    with pytest.raises(listing.ContactsDirectoryError): listing.directory(profile, source='kommo')
++
++
++def test_deal_keeps_linked_client_but_no_client_directory_or_edit(native):
++    ids = native['ids']
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_crm_native_deals SET contact_id=%s::uuid,company_id=%s::uuid WHERE id=%s::uuid',
++                     (ids['customers']['other'], ids['companies']['other'], ids['deals']['self']))
++    configure(native, 'deals', 'view', 'self')
++    row = deals.get_deal(A, ids['deals']['self'], actor_id=81)
++    assert row['contact_name'] == row['company_name'] == 'other'
++    assert row['contact_phone'] == 'phone-other'
++    assert deals.deal_options(A, actor_id=81)['contacts'] == []
++    with pytest.raises(CRMAccessError): contacts.get_contact(A, ids['customers']['other'], actor_id=81)
++    with pytest.raises(CRMAccessError): contacts.update_contact(A, ids['customers']['other'], 'unauthorized', actor_id=81)
++
++
++def test_company_related_lists_counts_and_link_mutations_do_not_expand_scope(native):
++    ids = native['ids']
++    with native['factory']() as conn:
++        for kind in ('customers', 'deals'):
++            conn.execute(f'UPDATE {TABLES[kind]} SET company_id=%s::uuid WHERE tenant_id=%s::uuid', (ids['companies']['self'], A))
++    set_scopes(native, 81, {kind:{'view':'self','update':'self','delete':'self'} for kind in KINDS})
++    row = companies.get_company(A, ids['companies']['self'], actor_id=81)
++    assert len(row['contacts']) == len(row['deals']) == 1
++    rows = companies.list_companies(A, actor_id=81)
++    assert rows[0]['contact_count'] == rows[0]['deal_count'] == 1
++    for function, company, kind, entity in (
++            (companies.link_entity, 'self', 'deal', 'peer'),
++            (companies.unlink_entity, 'self', 'deal', 'peer')):
++        module = 'customers' if kind == 'contact' else 'deals'
++        with pytest.raises(CRMAccessError, match='scoped_relation_not_configured'):
++            function(A, ids['companies'][company], kind, ids[module][entity], actor_id=81)
++
++
++def test_deal_contact_links_require_only_the_deal_update_scope(native):
++    ids = native['ids']
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_crm_native_deals SET contact_id=%s::uuid WHERE id=%s::uuid',
++                     (ids['customers']['other'], ids['deals']['self']))
++    configure(native, 'deals', 'update', 'self')
++    # A normal edit preserves existing context even when client section is closed.
++    assert deals.update_deal(A, ids['deals']['self'], 'changed', 'p', 's',
++                             contact_id=ids['customers']['other'], actor_id=81)
++    assert deals.update_deal(A, ids['deals']['self'], 'changed', 'p', 's',
++                            contact_id=ids['customers']['self'], actor_id=81)
++    assert deals.update_deal(A, ids['deals']['self'], 'changed', 'p', 's', actor_id=81)
++    assert deals.update_deal(A, ids['deals']['peer'], 'changed', 'p', 's',
++                            contact_id=ids['customers']['self'], actor_id=81) is None
++    with pytest.raises(ValueError, match='contact unavailable'):
++        deals.update_deal(A, ids['deals']['self'], 'changed', 'p', 's',
++                          contact_id=ids['customers']['foreign'], actor_id=81)
++
++
++def test_department_change_deactivation_and_suspension_take_effect(native):
++    configure(native, 'customers', 'view', 'department')
++    assert contacts.get_contact(A, native['ids']['customers']['peer'], actor_id=81)
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s::uuid WHERE tenant_id=%s::uuid AND telegram_id=82', (native['departments'][1], A))
++    assert contacts.get_contact(A, native['ids']['customers']['peer'], actor_id=81) is None
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=81', (A,))
++    with pytest.raises(CRMAccessError): contacts.list_contacts(A, actor_id=81)
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=81', (A,))
++        conn.execute("UPDATE saas_tenants SET status='suspended' WHERE id=%s::uuid", (A,))
++    with pytest.raises(CRMAccessError): contacts.list_contacts(A, actor_id=81)
++
++
++def test_create_replay_cannot_return_someone_elses_record(native):
++    for kind in KINDS:
++        configure(native, kind, 'create', 'all')
++        key = 'contact_id' if kind == 'customers' else 'company_id' if kind == 'companies' else 'deal_id'
++        with pytest.raises(ValueError): create(kind, **{key:native['ids'][kind]['peer']})
++
++
++@pytest.mark.parametrize('kind', KINDS)
++@pytest.mark.parametrize('operation', ('view', 'create', 'update', 'delete'))
++def test_http_reloads_authority_and_never_trusts_request_profile(native, kind, operation):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock, patch
++    import tenant_crm_native_api as contacts_api
++    import tenant_crm_native_company_api as companies_api
++    import tenant_crm_native_deal_api as deals_api
++    api = {'customers':contacts_api, 'companies':companies_api, 'deals':deals_api}[kind]
++    configure(native, kind, operation, 'all')
++    stale_profile = members.member(A, 81)
++    configure(native, kind, operation, 'none')
++    data = ({'title':'new','pipeline_id':'p','stage_id':'s'} if kind == 'deals' else {'name':'new'})
++    if operation == 'update': data['action'] = 'update'
++    if operation == 'delete': data = {'action':'archive'}
++    async def body(): return data
++    request = SimpleNamespace(method='GET' if operation=='view' else 'POST',
++        match_info={} if operation=='create' else {'id':native['ids'][kind]['self']},
++        query={}, content_type='application/json', headers={'Origin':'https://test.invalid'}, json=body)
++    with patch('tenant_crm_sync_outbox.enqueue_change') as enqueue:
++        response = asyncio.run(api.handler(lambda _: stale_profile, 'https://test.invalid', MagicMock())(request))
++    assert response.status == 403
++    enqueue.assert_not_called()
++
++
++def test_permission_writer_wins_before_database_mutation(native, monkeypatch):
++    import concurrent.futures
++    import threading
++    from test_contacts_directory_postgres import _observe_sql
++    configure(native, 'customers', 'update', 'self')
++    entered = threading.Event()
++    def before(sql, cursor):
++        if 'SELECT policy_key' in sql and 'FOR SHARE' in sql:
++            entered.set()
++    monkeypatch.setattr(contacts, '_connect', _observe_sql(native['factory'], before=before))
++    with native['factory']() as writer, concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
++        writer.execute('''UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,
++          '{81,access_scopes,customers,update}','"none"') WHERE tenant_id=%s::uuid AND policy_key='members' ''', (A,))
++        future = pool.submit(contacts.update_contact, A, native['ids']['customers']['self'], 'must not save', actor_id=81)
++        assert entered.wait(5)
++        assert not future.done()
++        writer.commit()
++        with pytest.raises(CRMAccessError): future.result(timeout=5)
++    with native['factory']() as conn:
++        row = conn.execute('SELECT display_name FROM saas_crm_native_contacts WHERE id=%s::uuid',
++                           (native['ids']['customers']['self'],)).fetchone()
++    assert row['display_name'] == 'self'
++
++
++@pytest.mark.parametrize('kind', KINDS)
++def test_department_creation_without_department_fails_closed(native, kind):
++    configure(native, kind, 'create', 'department')
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET department_id=NULL WHERE tenant_id=%s::uuid AND telegram_id=81', (A,))
++    with pytest.raises(CRMAccessError): create(kind)
++
++
++@pytest.mark.parametrize('kind', ('companies', 'deals'))
++def test_operational_responsible_does_not_reassign_access_ownership(native, kind):
++    configure(native, kind, 'update', 'self')
++    ident = native['ids'][kind]['self']
++    if kind == 'companies': row = companies.update_company(A, ident, 'edited', responsible_id=84, actor_id=81)
++    else: row = deals.update_deal(A, ident, 'edited', 'p', 's', responsible_id=84, actor_id=81)
++    assert row['responsible_id'] == 84
++    with native['factory']() as conn:
++        row = conn.execute(f'SELECT access_responsible_id FROM {TABLES[kind]} WHERE id=%s::uuid', (ident,)).fetchone()
++    assert row['access_responsible_id'] == 81
++
++
++def test_company_create_dedupe_does_not_bypass_read_none(native, monkeypatch):
++    configure(native, 'companies', 'create', 'self')
++    ident = str(uuid.uuid4())
++    first = companies.create_company(A, 'Private old name', '+994000001', 'private@example.invalid',
++        'Private old description', company_id=ident, actor_id=81)
++    with pytest.raises(ValueError, match='company already exists'):
++        companies.create_company(A, 'Lookup by phone', '+994000001', actor_id=81)
++    with pytest.raises(ValueError, match='company already exists'):
++        companies.create_company(A, 'Lookup by email', '', 'private@example.invalid',
++            company_id=ident, actor_id=81)
++    replay = companies.create_company(A, 'Private old name', '+994000001', 'private@example.invalid',
++        'Private old description', company_id=ident, actor_id=81)
++    assert str(replay['id']) == str(first['id']) == ident
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'false')
++    legacy = companies.create_company(A, 'Legacy phone dedupe', '+994000001', actor_id=81)
++    assert str(legacy['id']) == ident
++
++
++@pytest.mark.parametrize('scope,allowed', [('none',set()),('self',{'self'}),('department',{'self','peer'}),('all',{'self','peer','other','system'})])
++def test_contact_link_and_unlink_use_only_contact_update_scope(native, scope, allowed):
++    configure(native, 'customers', 'update', scope)
++    target = native['ids']['deals']['other']
++    for label, contact in native['ids']['customers'].items():
++        if scope == 'none':
++            with pytest.raises(CRMAccessError):
++                contacts.set_contact_deal_link(A, contact, target, actor_id=81)
++            continue
++        receipt = contacts.set_contact_deal_link(A, contact, target, actor_id=81)
++        assert bool(receipt) == (label in allowed)
++        if receipt:
++            assert set(receipt) == {'id','deal_id','linked'}
++            assert receipt['linked'] is True
++            assert contacts.set_contact_deal_link(A, contact, target, unlink=True, actor_id=81)['linked'] is False
++    if scope != 'none':
++        assert contacts.set_contact_deal_link(A, native['ids']['customers']['self'], native['ids']['deals']['foreign'], actor_id=81) is None
++
++
++def test_contact_unlink_cannot_remove_another_contacts_relation(native):
++    configure(native, 'customers', 'update', 'self')
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_crm_native_deals SET contact_id=%s::uuid WHERE id=%s::uuid',
++                     (native['ids']['customers']['peer'], native['ids']['deals']['other']))
++    assert contacts.set_contact_deal_link(A, native['ids']['customers']['self'], native['ids']['deals']['other'], unlink=True, actor_id=81) is None
++    with native['factory']() as conn:
++        row = conn.execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid', (native['ids']['deals']['other'],)).fetchone()
++    assert str(row['contact_id']) == native['ids']['customers']['peer']
++
++
++def test_contact_relation_http_rechecks_current_update_and_rejects_extra_deal_fields(native):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock, patch
++    import tenant_crm_native_api as api
++    configure(native, 'customers', 'update', 'self')
++    stale = members.member(A, 81)
++    data = {'action':'link_deal','deal_id':native['ids']['deals']['other']}
++    async def body(): return data
++    request = SimpleNamespace(method='POST',match_info={'id':native['ids']['customers']['self']},
++        query={}, content_type='application/json',headers={'Origin':'https://test.invalid'},json=body)
++    with patch('tenant_crm_sync_outbox.enqueue_change') as enqueue:
++        response=asyncio.run(api.handler(lambda _: stale,'https://test.invalid',MagicMock())(request))
++        assert response.status == 200
++        assert set(json.loads(response.text)['data']) == {'id','deal_id','linked'}
++        enqueue.assert_not_called()
++        data['title']='must not be changed'
++        assert asyncio.run(api.handler(lambda _: stale,'https://test.invalid',MagicMock())(request)).status == 400
++        del data['title']
++        configure(native, 'customers', 'update', 'none')
++        assert asyncio.run(api.handler(lambda _: stale,'https://test.invalid',MagicMock())(request)).status == 403
++
++
++def test_scoped_initial_contact_selection_is_still_an_explicit_blocker(native):
++    configure(native, 'deals', 'create', 'self')
++    with pytest.raises(CRMAccessError, match='scoped_relation_not_configured'):
++        deals.create_deal(A, 'New', 'p', 's', contact_id=native['ids']['customers']['self'], actor_id=81)
++
++
++@pytest.mark.parametrize('scope,allowed', [('none',set()),('self',{'self'}),('department',{'self','peer'}),('all',{'self','peer','other','system'})])
++def test_contact_company_link_uses_only_contact_update_scope(native, scope, allowed):
++    # Every companies cell and the contact C/R/D cells are explicitly denied.
++    configure(native, 'customers', 'update', scope)
++    target = native['ids']['companies']['other']
++    with native['factory']() as conn:
++        original = conn.execute('SELECT * FROM saas_crm_native_companies WHERE id=%s::uuid', (target,)).fetchone()
++    for label, contact in native['ids']['customers'].items():
++        if scope == 'none':
++            with pytest.raises(CRMAccessError):
++                contacts.set_contact_company_link(A, contact, target, actor_id=81)
++            continue
++        with native['factory']() as conn:
++            before = conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone()
++        receipt = contacts.set_contact_company_link(A, contact, target, actor_id=81)
++        assert bool(receipt) == (label in allowed)
++        if receipt:
++            assert receipt == {'id':contact, 'company_id':target, 'linked':True}
++            with native['factory']() as conn:
++                after = conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone()
++            assert str(after['company_id']) == target
++            assert {k:v for k,v in before.items() if k not in {'company_id','updated_at'}} == {
++                k:v for k,v in after.items() if k not in {'company_id','updated_at'}}
++            assert contacts.set_contact_company_link(A, contact, target, unlink=True, actor_id=81) == {
++                'id':contact, 'company_id':target, 'linked':False}
++    with native['factory']() as conn:
++        unchanged = conn.execute('SELECT * FROM saas_crm_native_companies WHERE id=%s::uuid', (target,)).fetchone()
++    assert original == unchanged, 'link/unlink never mutates a company, including updated_at'
++    if scope != 'none':
++        assert contacts.set_contact_company_link(A, native['ids']['customers']['self'],
++            native['ids']['companies']['foreign'], actor_id=81) is None
++
++
++def test_contact_company_unlink_requires_exact_active_target(native):
++    configure(native, 'customers', 'update', 'self')
++    contact = native['ids']['customers']['self']
++    target = native['ids']['companies']['other']
++    assert contacts.set_contact_company_link(A, contact, target, actor_id=81)
++    assert contacts.set_contact_company_link(A, contact, native['ids']['companies']['peer'], unlink=True, actor_id=81) is None
++    assert contacts.set_contact_company_link(A, contact, native['ids']['companies']['foreign'], unlink=True, actor_id=81) is None
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_crm_native_companies SET archived_at=now() WHERE id=%s::uuid',
++            (native['ids']['companies']['peer'],))
++    assert contacts.set_contact_company_link(A, contact, native['ids']['companies']['peer'], actor_id=81) is None
++    with native['factory']() as conn:
++        row = conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone()
++        assert str(row['company_id']) == target
++        conn.execute('UPDATE saas_crm_native_contacts SET archived_at=now() WHERE id=%s::uuid', (contact,))
++    assert contacts.set_contact_company_link(A, contact, target, unlink=True, actor_id=81) is None
++
++
++def test_contact_company_http_narrow_receipt_tenant_and_current_update(native):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock, patch
++    import tenant_crm_native_api as api
++    configure(native, 'customers', 'update', 'self')
++    stale = members.member(A, 81)
++    contact = native['ids']['customers']['self']
++    company = native['ids']['companies']['other']
++    data = {'action':'link_company','company_id':company}
++    async def body(): return data
++    request = SimpleNamespace(method='POST',match_info={'id':contact},query={},
++        content_type='application/json',headers={'Origin':'https://test.invalid'},json=body)
++    handle = api.handler(lambda _: stale,'https://test.invalid',MagicMock())
++    with patch('tenant_crm_sync_outbox.enqueue_change') as enqueue:
++        response = asyncio.run(handle(request))
++        assert response.status == 200
++        assert json.loads(response.text)['data'] == {'id':contact,'company_id':company,'linked':True}
++        enqueue.assert_not_called()
++        data['name'] = 'must not change company'
++        assert asyncio.run(handle(request)).status == 400
++        del data['name']
++        data['company_id'] = 'invalid-uuid'
++        assert asyncio.run(handle(request)).status == 400
++        data['company_id'] = native['ids']['companies']['foreign']
++        assert asyncio.run(handle(request)).status == 404
++        data['company_id'] = company
++        data['action'] = 'unlink_company'
++        response = asyncio.run(handle(request))
++        assert response.status == 200
++        assert json.loads(response.text)['data']['linked'] is False
++        configure(native, 'customers', 'update', 'none')
++        data['action'] = 'link_company'
++        assert asyncio.run(handle(request)).status == 403
++        enqueue.assert_not_called()
++
++
++
++
++@pytest.mark.parametrize('scope,allowed', [('none',set()),('self',{'self'}),('department',{'self','peer'}),('all',{'self','peer','other','system'})])
++def test_company_contact_link_uses_only_company_update_scope(native, scope, allowed):
++    configure(native, 'companies', 'update', scope)
++    target = native['ids']['customers']['other']
++    with native['factory']() as conn:
++        original = conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (target,)).fetchone()
++        company_rows = conn.execute('SELECT * FROM saas_crm_native_companies ORDER BY id').fetchall()
++    for label, company in native['ids']['companies'].items():
++        if scope == 'none':
++            with pytest.raises(CRMAccessError):
++                companies.link_entity(A, company, 'contact', target, actor_id=81)
++            with pytest.raises(CRMAccessError):
++                companies.unlink_entity(A, company, 'contact', target, actor_id=81)
++            continue
++        receipt = companies.link_entity(A, company, 'contact', target, actor_id=81)
++        assert bool(receipt) == (label in allowed)
++        if receipt:
++            assert set(receipt) == {'id'} and str(receipt['id']) == target
++            with native['factory']() as conn:
++                row = conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (target,)).fetchone()
++            assert str(row['company_id']) == company
++            assert {k:v for k,v in original.items() if k not in {'company_id','updated_at'}} == {
++                k:v for k,v in row.items() if k not in {'company_id','updated_at'}}
++            assert companies.unlink_entity(A, company, 'contact', target, actor_id=81)
++    with native['factory']() as conn:
++        assert conn.execute('SELECT * FROM saas_crm_native_companies ORDER BY id').fetchall() == company_rows
++    if scope != 'none':
++        assert companies.link_entity(A, native['ids']['companies']['self'], 'contact',
++            native['ids']['customers']['foreign'], actor_id=81) is None
++        assert companies.unlink_entity(A, native['ids']['companies']['self'], 'contact',
++            native['ids']['customers']['foreign'], actor_id=81) is None
++
++
++def test_company_contact_unlink_requires_exact_relation_and_active_rows(native):
++    configure(native, 'companies', 'update', 'all')
++    company, another = (native['ids']['companies'][key] for key in ('self','peer'))
++    target = native['ids']['customers']['other']
++    assert companies.link_entity(A, company, 'contact', target, actor_id=81)
++    assert companies.unlink_entity(A, another, 'contact', target, actor_id=81) is None
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_crm_native_companies SET archived_at=now() WHERE id=%s::uuid', (another,))
++    assert companies.link_entity(A, another, 'contact', target, actor_id=81) is None
++    with native['factory']() as conn:
++        row = conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid', (target,)).fetchone()
++        assert str(row['company_id']) == company
++        conn.execute('UPDATE saas_crm_native_contacts SET archived_at=now() WHERE id=%s::uuid', (target,))
++    assert companies.link_entity(A, company, 'contact', target, actor_id=81) is None
++    assert companies.unlink_entity(A, company, 'contact', target, actor_id=81) is None
++
++
++def test_company_contact_http_current_scope_tenant_and_narrow_payload(native):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock
++    import tenant_crm_native_company_api as api
++    configure(native, 'companies', 'update', 'self')
++    stale = members.member(A, 81)
++    company, target = native['ids']['companies']['self'], native['ids']['customers']['other']
++    data = {'action':'link_contact','entity_id':target}
++    async def body(): return data
++    request = SimpleNamespace(method='POST',match_info={'id':company},query={},
++        content_type='application/json',headers={'Origin':'https://test.invalid'},json=body)
++    handle = api.handler(lambda _: stale,'https://test.invalid',MagicMock())
++    response = asyncio.run(handle(request))
++    assert response.status == 200
++    assert json.loads(response.text)['data'] == {'id':target}
++    data['display_name'] = 'must not change contact'
++    assert asyncio.run(handle(request)).status == 400
++    del data['display_name']
++    data['entity_id'] = 'invalid-uuid'
++    assert asyncio.run(handle(request)).status == 400
++    data['entity_id'] = native['ids']['customers']['foreign']
++    assert asyncio.run(handle(request)).status == 404
++    data['entity_id'] = target
++    data['action'] = 'unlink_contact'
++    assert asyncio.run(handle(request)).status == 200
++    configure(native, 'companies', 'update', 'none')
++    data['action'] = 'link_contact'
++    assert asyncio.run(handle(request)).status == 403
++    with native['factory']() as conn:
++        assert conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid', (target,)).fetchone()['company_id'] is None
++
++
++def test_company_contact_department_and_membership_changes_revoke_writes(native):
++    configure(native, 'companies', 'update', 'department')
++    company, target = native['ids']['companies']['peer'], native['ids']['customers']['other']
++    assert companies.link_entity(A, company, 'contact', target, actor_id=81)
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET department_id=%s::uuid WHERE tenant_id=%s::uuid AND telegram_id=82',
++            (native['departments'][1], A))
++    assert companies.unlink_entity(A, company, 'contact', target, actor_id=81) is None
++    configure(native, 'companies', 'update', 'all')
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=81', (A,))
++    with pytest.raises(CRMAccessError): companies.unlink_entity(A, company, 'contact', target, actor_id=81)
++    with native['factory']() as conn:
++        assert str(conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid', (target,)).fetchone()['company_id']) == company
++
++
++def test_company_contact_permission_writer_wins_before_relation_mutation(native, monkeypatch):
++    import concurrent.futures
++    import threading
++    from test_contacts_directory_postgres import _observe_sql
++    configure(native, 'companies', 'update', 'self')
++    entered = threading.Event()
++    def before(sql, cursor):
++        if 'SELECT policy_key' in sql and 'FOR SHARE' in sql:
++            entered.set()
++    monkeypatch.setattr(companies, '_connect', _observe_sql(native['factory'], before=before))
++    with native['factory']() as writer, concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
++        writer.execute('''UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,
++          '{81,access_scopes,companies,update}','"none"') WHERE tenant_id=%s::uuid AND policy_key='members' ''', (A,))
++        future = pool.submit(companies.link_entity, A, native['ids']['companies']['self'], 'contact',
++            native['ids']['customers']['other'], actor_id=81)
++        assert entered.wait(5)
++        assert not future.done()
++        writer.commit()
++        with pytest.raises(CRMAccessError): future.result(timeout=5)
++    with native['factory']() as conn:
++        assert conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid',
++            (native['ids']['customers']['other'],)).fetchone()['company_id'] is None
++
++
++def test_company_contact_gate_off_retains_legacy_update_and_delete(native, monkeypatch):
++    configure(native, 'companies', 'update', 'none')
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'false')
++    company, target = native['ids']['companies']['peer'], native['ids']['customers']['other']
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET permissions=%s::jsonb WHERE tenant_id=%s::uuid AND telegram_id=81',
++            (json.dumps(['customers:update']), A))
++    assert companies.link_entity(A, company, 'contact', target, actor_id=81)
++    with pytest.raises(CRMAccessError): companies.unlink_entity(A, company, 'contact', target, actor_id=81)
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET permissions=%s::jsonb WHERE tenant_id=%s::uuid AND telegram_id=81',
++            (json.dumps(['customers:delete']), A))
++    with pytest.raises(CRMAccessError): companies.link_entity(A, company, 'contact', target, actor_id=81)
++    assert companies.unlink_entity(A, company, 'contact', target, actor_id=81)
++
++
++@pytest.mark.parametrize('kind', ['deal', 'company'])
++@pytest.mark.parametrize('unlink', [False, True])
++def test_gate_off_narrow_contact_relations_cannot_bypass_legacy_checks(native, monkeypatch, kind, unlink):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock, patch
++    import tenant_crm_native_api as api
++    configure(native, 'customers', 'update', 'self')
++    stale = members.member(A, 81)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'false')
++    contact = native['ids']['customers']['self']
++    target = native['ids']['deals' if kind == 'deal' else 'companies']['other']
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET permissions=%s::jsonb WHERE tenant_id=%s::uuid AND telegram_id=81',
++            (json.dumps(['customers:update']), A))
++        if kind == 'deal':
++            conn.execute('UPDATE saas_crm_native_deals SET contact_id=%s::uuid WHERE id=%s::uuid', (contact,target))
++        else:
++            conn.execute('UPDATE saas_crm_native_contacts SET company_id=%s::uuid WHERE id=%s::uuid', (target,contact))
++    data = {'action':('unlink_' if unlink else 'link_') + kind, kind+'_id':target}
++    async def body(): return data
++    request = SimpleNamespace(method='POST',match_info={'id':contact},query={},
++        content_type='application/json',headers={'Origin':'https://test.invalid'},json=body)
++    with patch('tenant_crm_sync_outbox.enqueue_change') as enqueue:
++        response = asyncio.run(api.handler(lambda _: stale,'https://test.invalid',MagicMock())(request))
++    assert response.status == 403
++    assert json.loads(response.text)['error'] == 'scoped_relation_unavailable'
++    enqueue.assert_not_called()
++    with native['factory']() as conn:
++        if kind == 'deal':
++            assert str(conn.execute('SELECT contact_id FROM saas_crm_native_deals WHERE id=%s::uuid', (target,)).fetchone()['contact_id']) == contact
++        else:
++            assert str(conn.execute('SELECT company_id FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone()['company_id']) == target
++
++
++@pytest.mark.parametrize('direction', ['to_external','bidirectional'])
++@pytest.mark.parametrize('route', ['contact_deal','contact_company','company_contact'])
++@pytest.mark.parametrize('unlink', [False, True])
++def test_scoped_relations_with_outbound_sync_fail_before_mutation_or_enqueue(native, route, unlink, direction):
++    import asyncio
++    from types import SimpleNamespace
++    from unittest.mock import MagicMock, patch
++    import tenant_crm_native_api as contact_api
++    import tenant_crm_native_company_api as company_api
++    source_company = route == 'company_contact'
++    configure(native, 'companies' if source_company else 'customers', 'update', 'self')
++    contact = native['ids']['customers']['other' if source_company else 'self']
++    company = native['ids']['companies']['self' if source_company else 'other']
++    deal = native['ids']['deals']['other']
++    entity = 'deal' if route == 'contact_deal' else 'contact'
++    with native['factory']() as conn:
++        conn.execute('''INSERT INTO saas_crm_provider_settings
++          (tenant_id,entity_type,provider,mode,primary_provider,sync_direction,allowed_fields)
++          VALUES(%s::uuid,%s,'kommo','selective','kommo',%s,%s::jsonb)''',
++          (A,entity,direction,json.dumps(['title','description'] if entity=='deal' else ['name','phone','email'])))
++        conn.execute('UPDATE saas_crm_native_contacts SET company_id=%s::uuid WHERE id=%s::uuid', (company,contact))
++        conn.execute('UPDATE saas_crm_native_deals SET contact_id=%s::uuid WHERE id=%s::uuid', (contact,deal))
++        before_contact = conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone()
++        before_deal = conn.execute('SELECT * FROM saas_crm_native_deals WHERE id=%s::uuid', (deal,)).fetchone()
++        before_outbox = conn.execute('SELECT * FROM saas_crm_sync_outbox ORDER BY id').fetchall()
++    action = ('unlink_' if unlink else 'link_') + ('contact' if source_company else 'deal' if entity=='deal' else 'company')
++    key = 'entity_id' if source_company else 'deal_id' if entity=='deal' else 'company_id'
++    data = {'action':action, key:contact if source_company else deal if entity=='deal' else company}
++    async def body(): return data
++    request = SimpleNamespace(method='POST',match_info={'id':company if source_company else contact},query={},
++        content_type='application/json',headers={'Origin':'https://test.invalid'},json=body)
++    profile = members.member(A,81)
++    with patch('tenant_crm_sync_outbox.enqueue_change') as enqueue:
++        response = asyncio.run((company_api if source_company else contact_api).handler(lambda _: profile,'https://test.invalid',MagicMock())(request))
++    assert response.status == 409, response.text
++    assert json.loads(response.text)['error'] == 'scoped_relation_sync_not_configured'
++    enqueue.assert_not_called()
++    with native['factory']() as conn:
++        assert conn.execute('SELECT * FROM saas_crm_native_contacts WHERE id=%s::uuid', (contact,)).fetchone() == before_contact
++        assert conn.execute('SELECT * FROM saas_crm_native_deals WHERE id=%s::uuid', (deal,)).fetchone() == before_deal
++        assert conn.execute('SELECT * FROM saas_crm_sync_outbox ORDER BY id').fetchall() == before_outbox
++
++
++@pytest.mark.parametrize('enabled', [False,True])
++def test_company_contact_relation_capabilities_match_mode(native, monkeypatch, enabled):
++    set_scopes(native,81,{'companies':{'view':'self','update':'self','delete':'none'}})
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', str(enabled).lower())
++    with native['factory']() as conn:
++        conn.execute('UPDATE saas_tenant_members SET permissions=%s::jsonb WHERE tenant_id=%s::uuid AND telegram_id=81',
++            (json.dumps(['customers:view','customers:update']), A))
++    row = companies.get_company(A,native['ids']['companies']['self'],actor_id=81)
++    assert row['relation_actions'] == {'link_contact':True,'unlink_contact':enabled}
++    profile = members.member(A,81)
++    page = listing.directory(profile,source='native')
++    assert page['actions']['scoped_relations'] is enabled
++
++
++@pytest.mark.parametrize('tenant,direction,fields', [(B,'to_external',['title']), (A,'off',['title']), (A,'from_external',['title']), (A,'to_external',[])])
++def test_relation_sync_blocker_only_applies_to_active_same_tenant_outbound(native,tenant,direction,fields):
++    configure(native,'customers','update','self')
++    with native['factory']() as conn:
++        conn.execute('''INSERT INTO saas_crm_provider_settings
++          (tenant_id,entity_type,provider,mode,primary_provider,sync_direction,allowed_fields)
++          VALUES(%s::uuid,'deal','kommo','selective','kommo',%s,%s::jsonb)''', (tenant,direction,json.dumps(fields)))
++    assert contacts.set_contact_deal_link(A,native['ids']['customers']['self'],native['ids']['deals']['other'],actor_id=81)
++
++
++def test_opposite_company_contact_edits_share_contact_first_lock_order(native,monkeypatch):
++    import concurrent.futures
++    import threading
++    from test_contacts_directory_postgres import _observe_sql
++    set_scopes(native,81,{kind:{'update':'all'} for kind in KINDS})
++    contact,company=native['ids']['customers']['self'],native['ids']['companies']['self']
++    locked,release,waiting=threading.Event(),threading.Event(),threading.Event()
++    def after_company(sql,cursor):
++        if 'SELECT id FROM saas_crm_native_contacts WHERE' in sql and 'FOR UPDATE' in sql:
++            locked.set()
++            assert release.wait(5)
++    def before_contact(sql,cursor):
++        if 'FROM saas_crm_native_contacts r' in sql and 'FOR UPDATE' in sql:
++            waiting.set()
++    monkeypatch.setattr(companies,'_connect',_observe_sql(native['factory'],after=after_company))
++    monkeypatch.setattr(contacts,'_connect',_observe_sql(native['factory'],before=before_contact))
++    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
++        first=pool.submit(companies.link_entity,A,company,'contact',contact,actor_id=81)
++        assert locked.wait(5)
++        second=pool.submit(contacts.set_contact_company_link,A,contact,company,actor_id=81)
++        try:
++            assert waiting.wait(5)
++            assert not second.done()
++        finally:
++            release.set()
++        assert first.result(timeout=5)
++        assert second.result(timeout=5)
+diff --git a/beintaskbot-main/tests/test_department_api.py b/beintaskbot-main/tests/test_department_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab0031a194c3149b0af7d6f0e083ac12a65b252d
+--- /dev/null
++++ b/beintaskbot-main/tests/test_department_api.py
+@@ -0,0 +1,59 @@
++"""Department commands use the same current owner/context envelope as cards."""
++import json
++from dataclasses import replace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++from tenant_members_api import MemberApiContext, handlers
++
++
++def setup():
++    profile={'tenant_id':'company-a','telegram_id':11,'role':'owner','active':True}
++    operation=Mock(return_value={'id':'department-a','name':'Support','active':True,'version':'v1'})
++    context=MemberApiContext(member=lambda request:profile,telegram_identity=Mock(),telegram_name=Mock(),
++        send_telegram=Mock(),origin='https://fixture.test',list_members=Mock(),upsert_member=Mock(),
++        deactivate_member=Mock(),create_invite=Mock(),request_invite_acceptance=Mock(),
++        list_invite_requests=Mock(),decide_invite_request=Mock(),platform_error=ValueError,
++        upsert_department=operation)
++    return profile,operation,handlers(context)['members']
++
++
++def request(**data):
++    value={'action':'create_department','expected_tenant_id':'company-a','expected_user_id':11,'name':'Support',**data}
++    return Mock(method='POST',headers={'Origin':'https://fixture.test'},json=AsyncMock(return_value=value))
++
++
++@pytest.mark.asyncio
++async def test_department_create_and_update_are_scoped_and_versioned():
++    profile,operation,handle=setup()
++    response=await handle(request())
++    assert response.status==200
++    assert json.loads(response.text)['department']['id']=='department-a'
++    assert operation.call_args.kwargs=={'tenant_id':'company-a','owner_id':11,'name':'Support','department_id':None,'expected_version':None,'active':None}
++    response=await handle(request(action='update_department',department_id='department-a',expected_version='v1'))
++    assert response.status==200
++    assert operation.call_args.kwargs['expected_version']=='v1'
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('changes',[{'action':'update_department'},{'action':'archive_department'},
++    {'action':'update_department','department_id':'a'}, {'expected_tenant_id':'company-b'},
++    {'expected_user_id':22},{'unexpected':True}])
++async def test_invalid_catalog_commands_never_reach_store(changes):
++    profile,operation,handle=setup()
++    response=await handle(request(**changes))
++    assert response.status in {400,409}
++    operation.assert_not_called()
++
++
++@pytest.mark.asyncio
++async def test_catalog_requires_active_owner_and_same_origin():
++    profile,operation,handle=setup()
++    profile['active']=False
++    assert (await handle(request())).status==403
++    profile.update(active=True,role='admin')
++    assert (await handle(request())).status==403
++    profile['role']='owner'
++    forged=request();forged.headers={'Origin':'https://other.test'}
++    assert (await handle(forged)).status==403
++    operation.assert_not_called()
+diff --git a/beintaskbot-main/tests/test_dialog_mutation_source_scopes.py b/beintaskbot-main/tests/test_dialog_mutation_source_scopes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e16a3ed8b4f8861bf05f503c838bd8f3bfd36649
+--- /dev/null
++++ b/beintaskbot-main/tests/test_dialog_mutation_source_scopes.py
+@@ -0,0 +1,164 @@
++"""Real isolated SQL regressions for AI-managed dialog mutations.
++
++Independent AI administration never overrides a configured dialog action scope.
++No provider, external account or real company is contacted.
++"""
++import json
++import uuid
++import pytest
++from test_dialog_source_scopes import scoped, grants, D1, D2, C2
++from test_tenant_support_inbox import database, db, A, B, CA, CB, PROFILE
++from test_tenant_operator_workspace import operator_db, employee
++import tenant_ai_group_coordination as groups
++import tenant_operator_assignment as assignment
++from tenant_linear_policy import TenantLinearError
++
++GROUP = '120363123456@g.us'
++JID = '994501234567@s.whatsapp.net'
++
++
++def rights(db, view, update):
++    grants(db, 33, view, update)
++    db.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{33,ai_agents_manage}','true'::jsonb) WHERE tenant_id=%s::uuid AND policy_key='members'", (A,))
++    db.commit()
++
++
++@pytest.fixture
++def admin(scoped, monkeypatch):
++    db, person = scoped
++    monkeypatch.setattr(groups, '_connect', lambda: db)
++    monkeypatch.setattr(assignment, '_connect', lambda: db)
++    db.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=33", (A,))
++    rights(db, 'department', 'none')
++    return db, person
++
++
++def group(db, channels=(C2,)):
++    for i, channel in enumerate(channels):
++        db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,%s,'group')", (A, channel, GROUP, 54+i))
++    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state) VALUES(%s::uuid,%s,'active')", (A, GROUP))
++    db.commit()
++    return {'conversation_id': GROUP, 'assignments': [], 'expected_revision': 1}
++
++
++def staff(db, channel=C2):
++    raw = {'fromMe': True, 'source': 'linked_phone', 'participantJid': JID}
++    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw) VALUES(%s::uuid,%s::uuid,43,%s,%s,'outgoing','synthetic',%s::jsonb)", (str(uuid.uuid4()), A, 'staff:'+channel, 'connect:'+channel, json.dumps(raw)))
++    db.commit()
++    return {'channel_id': channel, 'jid': JID, 'member_id': 33}
++
++
++def direct(channel=CA, lead=41):
++    return {'provider': 'connect', 'lead_id': lead, 'channel_id': channel, 'conversation_id': 'client',
++            'request_id': str(uuid.uuid4()), 'expected_revision': 0, 'agent_id': None}
++
++
++@pytest.mark.parametrize('scope', ['none', 'self', 'department'])
++def test_hidden_group_cannot_be_stopped_or_reconfigured(admin, scope):
++    db, person = admin
++    rights(db, 'department', scope)
++    data = group(db)
++    with pytest.raises(TenantLinearError) as denied:
++        groups.configure(person, data)
++    assert denied.value.status == 403
++    row = db.execute('SELECT state,revision,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s', (A, GROUP))[0]
++    assert row == {'state': 'active', 'revision': 1, 'assignments': []}
++
++
++@pytest.mark.parametrize('channels', [(CA,), (CA, C2)])
++def test_group_mutation_requires_every_source_not_just_visible_copy(admin, channels):
++    db, person = admin
++    rights(db, 'none', 'department')
++    data = group(db, channels)
++    if C2 in channels:
++        with pytest.raises(TenantLinearError):
++            groups.configure(person, data)
++    else:
++        assert groups.configure(person, data)['state'] == 'paused'
++
++
++def test_group_removal_cannot_drop_hidden_old_assignment(admin):
++    db, person = admin
++    rights(db, 'department', 'department')
++    data = group(db, (CA,))
++    old = [{'channel_id': C2, 'agent_id': str(uuid.UUID(int=999)), 'priority': 0}]
++    db.execute('UPDATE saas_ai_group_coordination SET assignments=%s::jsonb WHERE tenant_id=%s::uuid AND group_jid=%s', (json.dumps(old), A, GROUP))
++    db.commit()
++    with pytest.raises(TenantLinearError):
++        groups.configure(person, data)
++    assert db.execute('SELECT assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s', (A, GROUP))[0]['assignments'] == old
++
++
++def test_all_update_does_not_require_read_and_still_requires_ai_management(admin):
++    db, person = admin
++    rights(db, 'none', 'all')
++    assert groups.configure(person, group(db, (CA, C2)))['state'] == 'paused'
++    db.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{33,ai_agents_manage}','false'::jsonb) WHERE tenant_id=%s::uuid AND policy_key='members'", (A,))
++    db.commit()
++    with pytest.raises(TenantLinearError):
++        groups.configure(person, {'conversation_id': GROUP, 'assignments': [], 'expected_revision': 2})
++
++
++@pytest.mark.parametrize('scope,channel,allowed', [('none', CA, False), ('department', CA, True), ('department', C2, False), ('all', C2, True)])
++def test_staff_identity_mutation_is_source_and_action_scoped(admin, scope, channel, allowed):
++    db, person = admin
++    rights(db, 'none', scope)
++    data = staff(db, channel)
++    if allowed:
++        assert groups.register_employee(person, data) == {'verified': True}
++    else:
++        with pytest.raises(TenantLinearError) as denied:
++            groups.register_employee(person, data)
++        assert denied.value.status == 403
++        assert not db.execute('SELECT * FROM saas_ai_group_staff WHERE tenant_id=%s::uuid', (A,))
++
++
++@pytest.mark.parametrize('scope,channel,lead,allowed', [('none', CA, 41, False), ('department', CA, 41, True), ('department', C2, 43, False), ('all', C2, 43, True)])
++def test_direct_assignment_uses_update_not_view(admin, scope, channel, lead, allowed):
++    db, person = admin
++    rights(db, 'none', scope)
++    if allowed:
++        assert assignment.assign(person, direct(channel, lead))['state'] == 'paused'
++    else:
++        with pytest.raises(TenantLinearError) as denied:
++            assignment.assign(person, direct(channel, lead))
++        assert denied.value.status == 403
++        assert not db.execute('SELECT * FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid', (A,))
++
++
++@pytest.mark.parametrize('mode', ['gate_off', 'omitted_update'])
++def test_legacy_authority_preserved_when_update_scope_is_absent(admin, monkeypatch, mode):
++    db, person = admin
++    if mode == 'gate_off':
++        monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'false')
++    else:
++        db.execute("UPDATE saas_tenant_workflow_policies SET value=value #- '{33,access_scopes,dialogs,update}' WHERE tenant_id=%s::uuid AND policy_key='members'", (A,))
++        db.commit()
++    assert groups.configure(person, group(db))['state'] == 'paused'
++    assert groups.register_employee(person, staff(db)) == {'verified': True}
++    assert assignment.assign(person, direct())['state'] == 'paused'
++
++
++def test_group_state_transition_cannot_modify_other_source_via_allowed_route(admin, monkeypatch):
++    db, person = admin
++    import tenant_ai_agents_store as agents
++    monkeypatch.setattr(agents, '_connect', lambda: db)
++    rights(db, 'none', 'department')
++    group(db, (CA, C2))
++    with pytest.raises(TenantLinearError):
++        agents.set_conversation_state(person, GROUP, 'paused', 'Synthetic test', 'connect', CA)
++    row = db.execute('SELECT state,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s', (A, GROUP))[0]
++    assert row == {'state': 'active', 'revision': 1}
++
++
++def test_self_source_grant_and_current_membership_are_rechecked(admin):
++    db, person = admin
++    rights(db, 'none', 'self')
++    data = group(db, (CA,))
++    db.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s::uuid,%s::uuid,33,11)', (A, CA))
++    db.commit()
++    assert groups.configure(person, data)['state'] == 'paused'
++    db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND source_id=%s::uuid AND employee_id=33', (A, CA))
++    db.commit()
++    with pytest.raises(TenantLinearError):
++        groups.configure(person, {**data, 'expected_revision': 2})
+diff --git a/beintaskbot-main/tests/test_dialog_source_locks_postgres.py b/beintaskbot-main/tests/test_dialog_source_locks_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..27e60f5ec36552d82eea8e0f87fb45e9eb234dcf
+--- /dev/null
++++ b/beintaskbot-main/tests/test_dialog_source_locks_postgres.py
+@@ -0,0 +1,139 @@
++"""Two real localhost connections; simulated callbacks, never a real send."""
++import json
++import threading
++import time
++import uuid
++from concurrent.futures import ThreadPoolExecutor
++from unittest.mock import Mock
++import pytest
++import psycopg
++from psycopg.rows import dict_row
++from test_connect_channel_multiprocess import database
++from test_tenant_support_inbox import db,A,CA
++from test_tenant_operator_workspace import operator_db
++from test_dialog_source_scopes import scoped,grants,D1,D2
++from tenant_linear_policy import TenantLinearError
++import tenant_chat_send_store as sender
++
++
++def factory(db):
++    return lambda:psycopg.connect(db.dsn,row_factory=dict_row,
++        options='-c lock_timeout=4000 -c statement_timeout=6000')
++
++
++def policy_write(conn,view='none',update='none'):
++    # Exact writer order, including first members-policy row insertion.
++    conn.execute('SELECT id FROM saas_tenants WHERE id=%s FOR UPDATE',(A,))
++    conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",(A,json.dumps({'33':{'access_scopes':{'dialogs':{'view':view,'update':update}}}})))
++
++
++def waiting(db,pid):
++    deadline=time.monotonic()+3
++    with factory(db)() as conn:
++        while time.monotonic()<deadline:
++            row=conn.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s',(pid,)).fetchone()
++            if row and row['wait_event_type']=='Lock':return
++            time.sleep(.02)
++    raise AssertionError('Competing transaction did not wait for the grant lock')
++
++
++def reserved(db,person):
++    item=sender.reserve(person,{'lead_id':41,'request_id':str(uuid.uuid4()),'text':'Synthetic only'})
++    _,credentials=sender.mark_sending(item,{'origin':'connect'})
++    return item,credentials
++
++
++def test_first_activation_committed_before_dispatch_blocks_provider(scoped,monkeypatch):
++    db,person=scoped
++    item,credentials=reserved(db,person)
++    connect=factory(db);pids=[]
++    def send_connect():
++        conn=connect();pids.append(conn.info.backend_pid);return conn
++    monkeypatch.setattr(sender,'_connect',send_connect)
++    callback=Mock()
++    with connect() as writer:
++        writer.execute('SELECT id FROM saas_tenants WHERE id=%s FOR UPDATE',(A,))
++        with ThreadPoolExecutor(1) as pool:
++            future=pool.submit(sender.dispatch_guarded,item,credentials,callback)
++            deadline=time.monotonic()+2
++            while not pids and time.monotonic()<deadline:time.sleep(.01)
++            waiting(db,pids[0]);callback.assert_not_called()
++            policy_write(writer);writer.commit()
++            with pytest.raises(TenantLinearError):future.result(timeout=4)
++    callback.assert_not_called()
++
++
++@pytest.mark.parametrize('mutation',['scope','department','binding','inactive'])
++def test_provider_boundary_serializes_revocation_and_releases_on_timeout(scoped,monkeypatch,mutation):
++    db,person=scoped;grants(db,33,'department','department')
++    item,credentials=reserved(db,person);connect=factory(db)
++    monkeypatch.setattr(sender,'_connect',connect)
++    entered=threading.Event();release=threading.Event();calls=[];pids=[]
++    def callback(*_):
++        calls.append(1);entered.set()
++        assert release.wait(3)
++        raise TimeoutError('Synthetic bounded provider timeout')
++    def revoke():
++        with connect() as conn:
++            pids.append(conn.info.backend_pid)
++            if mutation=='scope':policy_write(conn)
++            elif mutation=='department':conn.execute('UPDATE saas_tenant_members SET department_id=%s WHERE tenant_id=%s AND telegram_id=34',(D2,A))
++            elif mutation=='binding':conn.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s AND source_id=%s',(A,CA))
++            else:conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=33',(A,))
++    with ThreadPoolExecutor(2) as pool:
++        send=pool.submit(sender.dispatch_guarded,item,credentials,callback)
++        assert entered.wait(3)
++        write=pool.submit(revoke)
++        deadline=time.monotonic()+2
++        while not pids and time.monotonic()<deadline:time.sleep(.01)
++        try:
++            waiting(db,pids[0]);assert not write.done()
++        finally:release.set()
++        with pytest.raises(TimeoutError):send.result(timeout=4)
++        write.result(timeout=4)
++    assert calls==[1]
++    after=Mock()
++    with pytest.raises(TenantLinearError):sender.dispatch_guarded(item,credentials,after)
++    after.assert_not_called()
++
++
++def notice_item(db,monkeypatch):
++    import tenant_crm_notice_outbox as outbox
++    import tenant_crm_notice_store as notices
++    from tenant_crm_notice_schema import ensure_schema
++    ensure_schema(db)
++    raw={'channelId':CA,'conversationId':'client'}
++    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",(json.dumps(raw),A))
++    event=str(uuid.uuid4())
++    db.execute("INSERT INTO saas_crm_notice_events(id,tenant_id,event,kind,source_key,version,payload) VALUES(%s,%s,'incoming_message','message','m1','synthetic','{\"connection\":\"\"}')",(event,A))
++    db.execute("INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel,status) VALUES(%s,%s,33,'telegram','sending')",(A,event));db.commit()
++    with db.cursor() as cur:row=notices.resource(cur,A,'message','m1')
++    db.commit()
++    monkeypatch.setattr(notices,'eligible',lambda *a,**k:True)
++    monkeypatch.setattr(outbox,'_connect',factory(db))
++    return outbox,dict(tenant_id=A,event_id=event,recipient_id=33,channel='telegram',endpoint_hash='',
++      event='incoming_message',kind='message',source_key='m1',payload={'connection':''},resource=row,send=True)
++
++
++def test_notice_claim_then_first_activation_never_sends(scoped,monkeypatch):
++    db,person=scoped;outbox,item=notice_item(db,monkeypatch)
++    with factory(db)() as conn:policy_write(conn)
++    callback=Mock();assert outbox.dispatch_guarded(item,callback) is None
++    callback.assert_not_called()
++    assert db.execute('SELECT status FROM saas_crm_notice_deliveries WHERE event_id=%s',(item['event_id'],))[0]['status']=='skipped'
++
++
++def test_notice_send_holds_first_activation_until_provider_returns(scoped,monkeypatch):
++    db,person=scoped;outbox,item=notice_item(db,monkeypatch)
++    entered=threading.Event();release=threading.Event();pids=[]
++    def callback():entered.set();assert release.wait(3);return 'synthetic acceptance'
++    def revoke():
++        with factory(db)() as conn:pids.append(conn.info.backend_pid);policy_write(conn)
++    with ThreadPoolExecutor(2) as pool:
++        send=pool.submit(outbox.dispatch_guarded,item,callback);assert entered.wait(3)
++        writer=pool.submit(revoke)
++        deadline=time.monotonic()+2
++        while not pids and time.monotonic()<deadline:time.sleep(.01)
++        try:waiting(db,pids[0]);assert not writer.done()
++        finally:release.set()
++        assert send.result(timeout=4)=='synthetic acceptance';writer.result(timeout=4)
+diff --git a/beintaskbot-main/tests/test_dialog_source_members_ui.cjs b/beintaskbot-main/tests/test_dialog_source_members_ui.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..7604c6a77181c4c25e0d7cab13d13eeada48b2a3
+--- /dev/null
++++ b/beintaskbot-main/tests/test_dialog_source_members_ui.cjs
+@@ -0,0 +1,14 @@
++const assert=require('node:assert/strict');const fs=require('node:fs');const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
++const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant-dialog-source-members.js'),'utf8');
++const source={source_id:'00000000-0000-0000-0000-000000000201',name:'Support',active:true,employee_ids:[34],revision:0};
++const tick=()=>new Promise(r=>setTimeout(r,0));
++function env(){const dom=new JSDOM('<section id="mount"></section>',{url:'https://app.test',runScripts:'outside-only'});const w=dom.window;w.tenantI18n={language:'en'};w.eval(script);return {dom,w,host:w.document.querySelector('section')}}
++function open(e,isCurrent=()=>true){e.w.document.dispatchEvent(new e.w.CustomEvent('tenant-member-card-open',{detail:{member:{telegram_id:33},profile:{role:'owner',tenant_id:'a',telegram_id:11},container:e.host,isCurrent}}))}
++(async()=>{
++ const e=env();let result={sources:[source],preflight:{ready:true}},posts=[],resolvePost;
++ e.w.fetch=async(url,opt)=>{if(opt.method==='POST'){posts.push(JSON.parse(opt.body));await new Promise(r=>resolvePost=r);result={sources:[{...source,employee_ids:[33,34],revision:1}],preflight:{ready:true}};}return {ok:true,json:async()=>({success:true,result})}};
++ open(e);await tick();e.host.querySelector('input').checked=true;e.host.querySelector('button').click();e.host.querySelector('button').click();await tick();assert.equal(posts.length,1,'repeated click is single flight');assert.deepEqual(posts[0].employee_ids,[34,33]);assert.equal(posts[0].expected_revision,0);assert.equal(posts[0].expected_tenant_id,'a');assert.equal(posts[0].expected_user_id,'11');resolvePost();await tick();await tick();assert.match(e.host.textContent,/assignments saved/);e.dom.window.close();
++ const stale=env();let finish,current=true;stale.w.fetch=()=>new Promise(r=>finish=r);open(stale,()=>current);current=false;stale.host.textContent='new company';finish({ok:true,json:async()=>({success:true,result})});await tick();assert.equal(stale.host.textContent,'new company','late response cannot populate a changed card');stale.dom.window.close();
++ const denied=env();denied.w.fetch=async()=>({ok:false,json:async()=>({success:false,error:'Source assignments changed. Refresh.'})});open(denied);await tick();assert.match(denied.host.textContent,/Refresh/);assert.equal(denied.host.querySelector('button').disabled,true);denied.dom.window.close();
++ console.log('PASS: source assignments retain other employees, bind identity/version, prevent repeat sends and discard stale card responses.');
++})().catch(e=>{console.error(e);process.exitCode=1});

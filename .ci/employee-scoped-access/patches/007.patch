@@ -1,0 +1,512 @@
+diff --git a/beintaskbot-main/tenant_web_routes.py b/beintaskbot-main/tenant_web_routes.py
+index 9163585edda26474e4088786642d0805048a6c7d..4679207baf82e7c07c3272bdd6b7cc4497d5a5f4 100644
+--- a/beintaskbot-main/tenant_web_routes.py
++++ b/beintaskbot-main/tenant_web_routes.py
+@@ -143,6 +143,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
+         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
+         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
+         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
++        ('dialogs/sources', operator_handler(member, origin, logger, 'sources'), ('GET','POST')),
+         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
+         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
+         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
+diff --git a/beintaskbot-main/tenant_workflow_store.py b/beintaskbot-main/tenant_workflow_store.py
+index e85defea635a56d40c9f6cf37cdf22958a337262..4cc3c295fb430d8ebbe057e08a2fb97672031a59 100644
+--- a/beintaskbot-main/tenant_workflow_store.py
++++ b/beintaskbot-main/tenant_workflow_store.py
+@@ -114,6 +114,18 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
+                     (str(tenant_id), key, int(owner_id)))
+                 cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE", (str(tenant_id), key))
+                 locked_policies[key] = cur.fetchone()['value']
++            # Matrix rights have their own version and source preflight in the
++            # employee editor. Old/full workflow forms may echo or omit them,
++            # but may neither change them nor erase a newer saved matrix.
++            from tenant_scoped_access import preserve_workflow_access_scopes
++            scoped_member_policies = {}
++            for raw_key, value in list(policies.items()):
++                if str(raw_key or '').strip()[:120] == 'members':
++                    try:
++                        scoped_member_policies[raw_key] = preserve_workflow_access_scopes(
++                            locked_policies.get('members'), value)
++                    except ValueError as exc:
++                        raise TenantPlatformError(str(exc)) from exc
+             # This setting has its own optimistic version contract. The
+             # existing workflow editor may echo it, but cannot bypass that
+             # contract or overwrite a newer language policy on an old form.
+@@ -221,6 +233,7 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
+             # Task admission takes policy row locks in canonical key order.
+             # Stable sorting also preserves last-write wins for aliases that
+             # normalize to the same existing policy key.
++            policies.update(scoped_member_policies)
+             policy_items = sorted(((str(key or "").strip()[:120], value)
+                                    for key, value in policies.items()), key=lambda item: item[0])
+             for policy_key, value in policy_items:
+diff --git a/beintaskbot-main/tests/contacts_directory_fixture.cjs b/beintaskbot-main/tests/contacts_directory_fixture.cjs
+index 3d47a8e4030e7e6dd116a17cb679d109ac31f005..5335ca66dd0e1d764b16db28673075813b8713bf 100644
+--- a/beintaskbot-main/tests/contacts_directory_fixture.cjs
++++ b/beintaskbot-main/tests/contacts_directory_fixture.cjs
+@@ -14,7 +14,7 @@ const settle=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmedi
+ const until=async predicate=>{for(let i=0;i<140;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert(predicate(),'actual contacts app did not settle')};
+ async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));const dom=new JSDOM(html(),{url:'https://fixture.test/app?view='+(config.view||'customers')+'&lang='+(config.language||'en')+(config.query||''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){
+  w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installCompanyEmployeesFixture.toString()+')('+JSON.stringify({role:'owner',modules:{customers:true,deals:true},...config})+')');const f=w.companyEmployeesFixture,base=w.fetch;if(config.permissions)f.profile.member.permissions=config.permissions;if(config.tenantId)f.profile.member.tenant_id=config.tenantId;
+- f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions=clone(actions);f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
++ f.nativeRows=config.nativeRows||[native(),native(contactB,'PRIVATE CONTACT B')];f.kommoRows=[external()];f.sources=[{source:'native',allowed:true,available:true,state:'ready',reason:''},{source:'kommo',allowed:true,available:true,state:'cached',reason:'integration_not_connected',historical:true}];f.actions={...clone(actions),scoped_relations:config.scopedRelations!==false};f.directoryReplies=[];f.directoryFailure=null;f.pendingDirectory=[];f.pendingBodies=[];f.pendingDetails=[];f.holdDirectory=false;f.holdNextDirectory=false;f.holdDetails=false;f.bodyHoldNext=false;f.companyFailure=null;f.dealFailure=null;f.writeFailure=null;f.writeRaw=null;f.holdWrite=false;f.savedWrites=[];f.scrolls=[];w.scrollTo=options=>f.scrolls.push(options);w.crypto.randomUUID=()=> '10000000-0000-4000-8000-000000000701';
+  f.companyRows=config.companyRows||[{id:company,name:'Fixture company'}];f.dealRows=config.dealRows||[];f.meFailure=null;
+  const response=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}),ok=data=>response({success:true,...data}),failure=(status,code)=>response({success:false,error:code,code},status);
+  w.fetch=async(input,options={})=>{const url=new URL(String(input),w.location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;if(url.pathname==='/api/platform/me'&&f.meFailure){f.calls.push({path:url.pathname,url:url.pathname+url.search,method,body});return failure(f.meFailure,'Synthetic profile unavailable')}if(!url.pathname.startsWith('/api/platform/crm/native/contacts')&&!url.pathname.startsWith('/api/platform/crm/native/companies')&&!url.pathname.startsWith('/api/platform/crm/native/deals'))return base(input,options);const call={path:url.pathname,url:url.pathname+url.search,method,body};f.calls.push(call);
+@@ -28,12 +28,12 @@ async function mount(config={}){const errors=[],vc=new VirtualConsole();vc.on('j
+   if(f.holdDirectory||f.holdNextDirectory||chosen?.hold){f.holdNextDirectory=false;return new Promise(resolve=>f.pendingDirectory.push(()=>resolve(response(payload,status))))}return response(payload,status);
+  }
+  if(url.pathname==='/api/platform/crm/native/contacts'&&method==='GET')return ok({data:clone(f.nativeRows)});
+- if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
++ if(url.pathname.startsWith('/api/platform/crm/native/contacts/')&&method==='GET'){const id=url.pathname.split('/').at(-1),row=clone(f.nativeRows.find(item=>item.id===id)||null);if(row)row.actions={...f.actions,...(config.recordActions||{})};const finish=()=>row?ok({data:row}):failure(404,'not_found');if(f.holdDetails)return new Promise(resolve=>f.pendingDetails.push(()=>resolve(finish())));return finish()}
+  if(url.pathname==='/api/platform/crm/native/companies'&&method==='GET')return f.companyFailure?failure(f.companyFailure,'forbidden'):ok({companies:clone(f.companyRows)});
+  if(url.pathname.startsWith('/api/platform/crm/native/deals')&&method==='GET')return f.dealFailure?failure(f.dealFailure,'forbidden'):ok(url.pathname!=='/api/platform/crm/native/deals'?{deal:clone(f.dealRows.find(row=>row.id===url.pathname.split('/').at(-1)))}:url.searchParams.has('options')?{workflows:[],contacts:[],companies:[],members:[]}:{deals:clone(f.dealRows)});
+  if(method==='POST'){
+   f.savedWrites.push(call);const error=f.writeFailure,raw=f.writeRaw;
+-  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:clone(row)})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:clone(row)})};
++  const finish=()=>{if(error&&(!error.target||url.pathname.includes(error.target)))return failure(error.status,error.code||'invalid_contact');if(url.pathname.startsWith('/api/platform/crm/native/companies/'))return ok({data:{id:body.entity_id}});if(url.pathname.startsWith('/api/platform/crm/native/deals/')){const id=url.pathname.split('/').at(-1),row={...f.dealRows.find(item=>item.id===id),...body};f.dealRows=f.dealRows.map(item=>item.id===id?row:item);return ok({deal:clone(row)})}const id=url.pathname==='/api/platform/crm/native/contacts'?body.id:url.pathname.split('/').at(-1);if(['link_deal','unlink_deal'].includes(body.action)){const deal=f.dealRows.find(item=>item.id===body.deal_id);if(!deal)return failure(404,'not_found');deal.contact_id=body.action==='link_deal'?id:null;return ok({data:{id,deal_id:body.deal_id,linked:body.action==='link_deal'}})}if(['link_company','unlink_company'].includes(body.action)){const contact=f.nativeRows.find(item=>item.id===id),company=f.companyRows.find(item=>item.id===body.company_id);if(!contact||!company)return failure(404,'not_found');if(body.action==='unlink_company'&&contact.company_id!==body.company_id)return failure(404,'not_found');contact.company_id=body.action==='link_company'?body.company_id:null;contact.company_name=body.action==='link_company'?company.name:null;return ok({data:{id,company_id:body.company_id,linked:body.action==='link_company'}})}if(body.action==='archive'){f.nativeRows=f.nativeRows.filter(row=>row.id!==id);return ok({data:true})}const old=f.nativeRows.find(row=>row.id===id),row={...(old||native(id)),display_name:body.name,phone:body.phone,email:body.email};f.nativeRows=old?f.nativeRows.map(item=>item.id===id?row:item):[...f.nativeRows,row];return raw!==null?new Response(raw,{status:200,headers:{'Content-Type':'application/json'}}):ok({data:clone(row)})};
+   if(f.holdWrite)return new Promise(resolve=>f.pendingWrites.push(()=>resolve(finish())));return finish();
+  }return base(input,options);
+  };
+diff --git a/beintaskbot-main/tests/contacts_directory_http_browser.cjs b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
+index 5d5b758ec68eb8fd64cd19abed051492f418f8d8..215cfe172c9e08847f7f10bed2bd8578e14ed641 100644
+--- a/beintaskbot-main/tests/contacts_directory_http_browser.cjs
++++ b/beintaskbot-main/tests/contacts_directory_http_browser.cjs
+@@ -488,7 +488,7 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
+         await settled();
+         await open('native:'+newId);
+         await page.locator('#nativeEntityBody').filter({hasText:'Browser isolated edited'}).waitFor();
+-        const archiveReceipt=page.waitForResponse(response=>response.request().method()==='POST' && new URL(response.url()).pathname==='/api/platform/crm/native/contacts/'+newId);
++        const archiveReceipt=page.waitForResponse(response=>response.request().method()==='POST' && new URL(response.url()).pathname==='/api/platform/crm/native/deals/'+relationId);
+         await page.locator('#nativeEntityCard [data-native-card-archive]').click();
+         assert.equal((await archiveReceipt).status(),200);
+         await page.waitForFunction(()=>!document.getElementById('nativeEntityCard').classList.contains('show'));
+diff --git a/beintaskbot-main/tests/employee_scope_matrix_browser.cjs b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..59bf9ab98a1ecfb2cd79b2dc0ac8b0d6b91f4217
+--- /dev/null
++++ b/beintaskbot-main/tests/employee_scope_matrix_browser.cjs
+@@ -0,0 +1,41 @@
++/* Real employee controller/shell/CSS in Chromium; all HTTP data is synthetic. */
++const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
++const {chromium}=require('../.support-test-deps/node_modules/playwright');
++const {nodeHtml,installCompanyEmployeesFixture,docs}=require('./company_employees_entry_fixture.cjs');
++const origin='https://scope-fixture.test';
++const row={tenant_id:'10000000-0000-4000-8000-000000000101',telegram_id:22,display_name:'Synthetic employee',role:'worker',active:true,permissions:['tasks'],explicit_permissions:['tasks'],card_version:'card-v1',department_id:null,department_catalog:[{id:'10000000-0000-4000-8000-000000000501',name:'Support',active:true}],editable_fields:['department_id','access_settings','work_settings'],access_settings:{version:'scope-v1',scoped_access_enabled:true,scope_catalog:{tasks:['create','view','update','delete'],deals:['create','view','update','delete'],customers:['create','view','update','delete'],companies:['create','view','update','delete'],dialogs:['view','update']},scoped_actions:{tasks:{create:'self',view:'department',update:'self',delete:'none'},deals:{view:'all'},customers:{view:null},companies:{view:'none'},dialogs:{view:'self',update:'department'}},legacy_actions:{customers:{view:true}}},work_settings:{version:'work-v1',values:{ai_enabled:true,notifications:{}},defaults:{},services:[],notifications:[{key:'task_assigned',label:'Task',channels:['push']}]}};
++(async()=>{
++ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
++ try{for(const [width,language] of [[360,'ru'],[390,'az'],[768,'en'],[1440,'ru']]){
++  const context=await browser.newContext({viewport:{width,height:860}}),page=await context.newPage(),errors=[];
++  page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>dialog.accept());
++  await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==origin)return route.abort();if(url.pathname==='/app')return route.fulfill({contentType:'text/html',body:nodeHtml()});if(url.pathname.startsWith('/assets/')){const file=path.join(docs,path.basename(url.pathname));if(fs.existsSync(file))return route.fulfill({contentType:file.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(file)})}return route.fulfill({contentType:'application/json',body:'{}'})});
++  await context.addInitScript(installCompanyEmployeesFixture,{role:'owner'});
++  await context.addInitScript(({row})=>{const original=window.fetch;window.companyEmployeesFixture.members=[row];window.fetch=async(input,opt={})=>{const u=new URL(String(input),location.href);if(u.pathname!=='/api/platform/members')return original(input,opt);if((opt.method||'GET')==='GET')return new Response(JSON.stringify({success:true,members:[row]}),{headers:{'Content-Type':'application/json'}});const body=JSON.parse(opt.body);window.companyEmployeesFixture.calls.push({path:u.pathname,method:'POST',body});return new Response(JSON.stringify({success:false,code:'member_card_conflict',fields:{expected_version:'version_conflict'}}),{status:409,headers:{'Content-Type':'application/json'}})}} ,{row});
++  await page.goto(origin+'/app?view=employees&lang='+language);
++  await page.locator('[data-staff-edit="22"]').click();
++  const form=page.locator('#staffEditForm');
++  await form.locator('[name=department_id]').selectOption(row.department_catalog[0].id);
++  await form.locator('[data-staff-pane-tab=rights]').click();
++  assert.equal(await form.locator('[data-access-scope]').count(),18);
++  const matrix=form.locator('.staff-scope-matrix');
++  assert(await matrix.isVisible());
++  for(const selector of ['.staff-scope-matrix','[data-staff-pane=rights]','.staff-modal-actions']){
++   assert.equal(await form.locator(selector).evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,selector+' fits '+width);
++  }
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=view]').inputValue(),'department');
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=update]').inputValue(),'self');
++  await form.locator('[data-access-module=tasks][data-access-scope=delete]').selectOption('department');
++  await form.locator('[type=submit]').click();
++  await page.waitForFunction(()=>window.companyEmployeesFixture.calls.some(c=>c.method==='POST'));
++  const body=await page.evaluate(()=>window.companyEmployeesFixture.calls.find(c=>c.method==='POST').body);
++  assert.equal(body.changes.department_id,row.department_catalog[0].id);assert.deepEqual(body.changes.access_settings.changes,{scopes:{tasks:{delete:'department'}}});
++  assert.equal(await form.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'department','Draft remains after conflict');
++  await form.locator('[data-staff-pane-tab=rights]').focus();await page.keyboard.press('ArrowLeft');assert.equal(await form.locator('[data-staff-pane-tab=details]').getAttribute('aria-selected'),'true');await page.keyboard.press('ArrowRight');
++  const output=process.env.EMPLOYEE_SCOPE_SCREENSHOTS||'/tmp/employee-scoped-matrix-screens';fs.mkdirSync(output,{recursive:true});await page.screenshot({path:path.join(output,`scope-matrix-${width}-${language}.png`)});
++  await form.locator('[data-staff-cancel]').click();assert.equal(await page.locator('#staffMemberModal').evaluate(n=>n.classList.contains('show')),false);await page.locator('[data-staff-edit="22"]').click();assert.equal(await page.locator('[data-access-module=tasks][data-access-scope=delete]').inputValue(),'none','Cancel discards draft');
++  assert.deepEqual(errors,[]);await context.close();
++ }
++ console.log('PASS Chromium scoped matrix 360/RU, 390/AZ, 768/EN, 1440/RU: no overflow, sparse independent save, conflict retention, keyboard tabs and cancel/reopen');
++ }finally{await browser.close()}
++})().catch(error=>{console.error(error.stack);process.exitCode=1});
+diff --git a/beintaskbot-main/tests/test_ai_access_ownership_postgres.py b/beintaskbot-main/tests/test_ai_access_ownership_postgres.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..749fe1262e9d0bed0c8fd13b301238b9678b5b7e
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_access_ownership_postgres.py
+@@ -0,0 +1,114 @@
++"""AI responsibility is additive; existing creator/management authority is kept."""
++import uuid
++
++import psycopg
++from psycopg.rows import dict_row
++import pytest
++
++from test_scoped_access_foundation_postgres import db, tid
++from test_connect_channel_multiprocess import database
++from tenant_scoped_access_schema import migrate_resource_ownership
++import tenant_ai_agents_store as agents
++from tenant_linear_policy import TenantLinearError
++
++
++def test_historical_ai_ownership_uses_unambiguous_owner_not_old_creator(db):
++    with db() as conn:
++        conn.execute('''CREATE TABLE saas_ai_agents(
++            id UUID PRIMARY KEY,tenant_id UUID NOT NULL,created_by BIGINT NOT NULL)''')
++        for number in range(1, 6):
++            conn.execute('INSERT INTO saas_ai_agents VALUES(%s,%s,%s)', (tid(700 + number), tid(number), number * 10 + 3))
++        with conn.cursor() as cur:
++            migrate_resource_ownership(cur, ('saas_ai_agents',))
++    with db() as conn:
++        rows = conn.execute('SELECT * FROM saas_ai_agents ORDER BY tenant_id').fetchall()
++        assert [r['created_by'] for r in rows] == [13, 23, 33, 43, 53]
++        assert [r['access_responsible_id'] for r in rows] == [11, None, None, None, None]
++        assert len(conn.execute("SELECT * FROM saas_access_migration_issues WHERE resource_table='saas_ai_agents'").fetchall()) == 4
++        conn.execute('INSERT INTO saas_ai_agents(id,tenant_id,created_by) VALUES(%s,%s,13)', (tid(800), tid(1)))
++        with conn.cursor() as cur:
++            migrate_resource_ownership(cur, ('saas_ai_agents',))
++        assert conn.execute('SELECT access_responsible_id FROM saas_ai_agents WHERE id=%s', (tid(800),)).fetchone()['access_responsible_id'] is None
++    with pytest.raises(psycopg.errors.ForeignKeyViolation):
++        with db() as conn:
++            conn.execute('UPDATE saas_ai_agents SET access_responsible_id=21 WHERE tenant_id=%s', (tid(1),))
++
++
++def test_new_ai_agent_responsibility_is_its_authorized_creator_and_not_returned(database, monkeypatch):
++    tenant = str(uuid.uuid4())
++    owner, actor, outsider = 81001, 81002, 81003
++    database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s,%s,'Synthetic','active',%s)", (tenant, tenant, owner))
++    for employee, role in [(owner, 'owner'), (actor, 'admin'), (outsider, 'manager')]:
++        database.execute('INSERT INTO saas_tenant_members(tenant_id,telegram_id,role) VALUES(%s,%s,%s)', (tenant, employee, role))
++    database.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members','{\"81002\":{\"ai_agents_manage\":true}}')", (tenant,))
++    database.commit()
++    factory = lambda: psycopg.connect(database.dsn, row_factory=dict_row)
++    monkeypatch.setattr(agents, '_connect', factory)
++    monkeypatch.setattr(agents, 'platform_service_ready', lambda: True)
++    monkeypatch.setattr(agents, 'platform_model_allowed', lambda model: True)
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED', raising=False)
++    profile = {'tenant_id': tenant, 'telegram_id': actor}
++    row = agents.save_agent(profile, {'name': 'Synthetic draft', 'instructions': 'Synthetic only',
++                                      'enabled': False, 'model': 'synthetic-model'})
++    assert 'access_responsible_id' not in row
++    with factory() as conn:
++        stored = conn.execute('SELECT created_by,access_responsible_id,enabled,version FROM saas_ai_agents WHERE tenant_id=%s AND id=%s', (tenant, row['id'])).fetchone()
++        assert stored['created_by'] == stored['access_responsible_id'] == actor
++        assert stored['enabled'] is False
++    changed = agents.save_agent(profile, {'name': 'Renamed synthetic', 'expected_version': stored['version']}, agent_id=row['id'])
++    assert 'access_responsible_id' not in changed
++    assert all('access_responsible_id' not in r for r in agents.list_agents(profile))
++    with factory() as conn:
++        assert conn.execute('SELECT access_responsible_id FROM saas_ai_agents WHERE id=%s', (row['id'],)).fetchone()['access_responsible_id'] == actor
++    with pytest.raises(TenantLinearError):
++        agents.save_agent(profile, {'expected_version': changed['version'], 'access_responsible_id': owner}, agent_id=row['id'])
++    with pytest.raises(TenantLinearError) as forbidden:
++        agents.save_agent({'tenant_id': tenant, 'telegram_id': outsider}, {'name': 'Denied', 'model': 'synthetic-model'})
++    assert forbidden.value.status == 403
++    # Removing the existing AI-management flag still revokes access. The new
++    # responsibility field is metadata, not a replacement authorization grant.
++    with factory() as conn:
++        conn.execute("UPDATE saas_tenant_workflow_policies SET value='{}' WHERE tenant_id=%s AND policy_key='members'", (tenant,))
++    with pytest.raises(TenantLinearError) as revoked:
++        agents.list_agents(profile)
++    assert revoked.value.status == 403
++
++
++@pytest.mark.parametrize('scope', ['none', 'self', 'department'])
++def test_ai_admin_aggregate_lists_cannot_leak_other_dialog_sources(database, monkeypatch, scope):
++    import json
++    import tenant_ai_state as state
++    tenant = str(uuid.uuid4())
++    owner, actor = 82001, 82002
++    database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s,%s,'Synthetic','active',%s)", (tenant, tenant, owner))
++    for employee, role in [(owner, 'owner'), (actor, 'admin')]:
++        database.execute('INSERT INTO saas_tenant_members(tenant_id,telegram_id,role) VALUES(%s,%s,%s)', (tenant, employee, role))
++    settings = {str(actor): {'ai_agents_manage': True, 'access_scopes': {'dialogs': {'view': scope}}}}
++    database.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)", (tenant, json.dumps(settings)))
++    database.commit()
++    factory = lambda: psycopg.connect(database.dsn, row_factory=dict_row)
++    monkeypatch.setattr(agents, '_connect', factory)
++    monkeypatch.setattr(state, '_connect', factory)
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    profile = {'tenant_id': tenant, 'telegram_id': actor, 'role': 'owner'}
++    for reader in [agents.list_handoffs, agents.list_connect_diagnostics, state.snapshot]:
++        with pytest.raises(TenantLinearError) as error:
++            reader(profile)
++        assert error.value.status == 403
++        assert str(error.value) == 'ai_diagnostics_require_unrestricted_dialog_read'
++
++
++def test_cold_ai_schema_repair_does_not_backfill_new_system_documents(database):
++    import tenant_ai_agents_schema as schema
++    tenant, agent_id = str(uuid.uuid4()), str(uuid.uuid4())
++    database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s,%s,'Synthetic','active',83001)", (tenant, tenant))
++    database.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role) VALUES(%s,83001,'owner')", (tenant,))
++    database.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by) VALUES(%s,%s,'Synthetic system-created',83001)", (agent_id, tenant))
++    database.execute('ALTER TABLE saas_ai_agents DROP CONSTRAINT saas_ai_agents_access_owner_fk')
++    database.commit()
++    with psycopg.connect(database.dsn, row_factory=dict_row) as conn:
++        assert not schema._schema_current(conn)
++        schema.ensure_schema(conn)
++        assert schema._schema_current(conn)
++        row = conn.execute('SELECT created_by,access_responsible_id FROM saas_ai_agents WHERE id=%s', (agent_id,)).fetchone()
++        assert row == {'created_by': 83001, 'access_responsible_id': None}
+diff --git a/beintaskbot-main/tests/test_ai_integration_access_preparation.py b/beintaskbot-main/tests/test_ai_integration_access_preparation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..874dadddb2bb4e15ab527a5910b25816b97e9776
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_integration_access_preparation.py
+@@ -0,0 +1,104 @@
++"""Unsupported management matrices stay unavailable; authorization precedes I/O."""
++import json
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++
++from tenant_ai_agents_policy import agent
++from tenant_linear_policy import TenantLinearError
++from tenant_member_access import access_snapshot
++from tenant_scoped_access import validate_access_scopes
++from test_tenant_ai_agents_api_diagnostics import load_handler, run_without_event_loop
++
++
++def test_unsupported_management_matrices_are_not_advertised_or_accepted(monkeypatch):
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    profile = {'tenant_id': 'test', 'telegram_id': 11, 'role': 'owner', 'active': True}
++    snapshot = access_snapshot(profile)
++    for module in ['ai_agents', 'integrations']:
++        assert module not in snapshot['scope_catalog']
++        with pytest.raises(ValueError):
++            validate_access_scopes({module: {'view': 'self'}})
++
++
++@pytest.mark.parametrize('creating', [True, False])
++def test_agent_ownership_is_not_a_browser_editable_field(creating):
++    with pytest.raises(TenantLinearError):
++        agent({'name': 'Synthetic', 'access_responsible_id': 999}, creating=creating)
++
++
++def test_unauthorized_options_never_call_the_external_provider():
++    forbidden = Mock(side_effect=TenantLinearError('Permission revoked', 403))
++    remote = AsyncMock(return_value={'_embedded': {'pipelines': []}})
++    refresh = Mock()
++    handler, _ = load_handler(configuration_options=forbidden, refresh_configuration_catalog=refresh)
++    profile = {'tenant_id': 'verified-tenant', 'telegram_id': 42}
++    response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az', Mock(),
++        'options', request_provider=remote)(SimpleNamespace(method='GET', headers={}, query={})))
++    assert response.status == 403
++    remote.assert_not_called()
++    refresh.assert_not_called()
++
++
++def test_options_authorize_before_provider_and_refresh_revalidates_afterward():
++    events = []
++    def cached(profile):
++        events.append('authorized_cached')
++        return {'pipelines': ['cached']}
++    async def remote(*args):
++        events.append('remote_read')
++        return {'_embedded': {'pipelines': [{'id': 10}]}}
++    def refresh(profile, pipelines):
++        events.append('authorized_refresh')
++        return {'pipelines': pipelines}
++    handler, _ = load_handler(configuration_options=cached, refresh_configuration_catalog=refresh)
++    response = run_without_event_loop(handler(Mock(return_value={'tenant_id': 'verified', 'telegram_id': 42}),
++        'https://crm.pro.az', Mock(), 'options', request_provider=remote)(
++            SimpleNamespace(method='GET', headers={}, query={})))
++    assert response.status == 200
++    assert events == ['authorized_cached', 'remote_read', 'authorized_refresh']
++    assert json.loads(response.text)['result']['pipelines'] == [{'id': 10}]
++
++
++def test_provider_failure_uses_already_authorized_cache():
++    cached = Mock(return_value={'pipelines': ['cached']})
++    remote = AsyncMock(side_effect=RuntimeError('Synthetic provider unavailable'))
++    handler, _ = load_handler(configuration_options=cached)
++    response = run_without_event_loop(handler(Mock(return_value={'tenant_id': 'verified', 'telegram_id': 42}),
++        'https://crm.pro.az', Mock(), 'options', request_provider=remote)(
++            SimpleNamespace(method='GET', headers={}, query={})))
++    assert response.status == 200
++    assert json.loads(response.text)['result']['pipelines'] == ['cached']
++    assert cached.call_count == 1
++
++
++@pytest.mark.parametrize('scope,allowed', [(None, True), ('all', True), ('none', False), ('self', False), ('department', False)])
++def test_aggregate_ai_diagnostics_do_not_bypass_narrow_dialog_scopes(monkeypatch, scope, allowed):
++    import tenant_ai_management_access as access
++    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
++    settings = {'ai_agents_manage': True}
++    if scope is not None:
++        settings['access_scopes'] = {'dialogs': {'view': scope}}
++    current = {'tenant_id': 'test', 'telegram_id': 42, 'active': True, 'role': 'admin',
++               'workflow': {'policies': {'members': {'42': settings}}}}
++    read = Mock(return_value=current)
++    monkeypatch.setattr(access, 'read_access_profile', read)
++    cursor = object()
++    stale = {'tenant_id': 'test', 'telegram_id': 42, 'role': 'owner'}
++    if allowed:
++        access.require_unrestricted_dialog_read(cursor, stale)
++    else:
++        with pytest.raises(TenantLinearError) as error:
++            access.require_unrestricted_dialog_read(cursor, stale)
++        assert error.value.status == 403
++    read.assert_called_once_with(cursor, 'test', 42, lock=True)
++
++
++def test_aggregate_diagnostics_guard_is_inert_until_rollout(monkeypatch):
++    import tenant_ai_management_access as access
++    monkeypatch.delenv('TENANT_SCOPED_ACCESS_ENABLED', raising=False)
++    read = Mock(side_effect=AssertionError('Legacy calls must retain their current protocol'))
++    monkeypatch.setattr(access, 'read_access_profile', read)
++    access.require_unrestricted_dialog_read(object(), {'tenant_id': 'test', 'telegram_id': 42})
++    read.assert_not_called()
+diff --git a/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py b/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..26ee7c6963f7967ceb256884b6903062bcaf3d1b
+--- /dev/null
++++ b/beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py
+@@ -0,0 +1,29 @@
++"""New upstream analyst tools stay owner-only despite independent AI grants."""
++import pytest
++from test_tenant_support_inbox import database,db,A
++from test_tenant_operator_workspace import operator_db
++from test_dialog_source_scopes import scoped,grants
++from tenant_linear_policy import TenantLinearError
++import tenant_ai_business_analytics as analytics
++
++NEW_TOOLS=[
++    ('search_support_cases',{'query':'synthetic'}),
++    ('get_support_case_detail',{'candidate_id':'00000000-0000-0000-0000-000000000999'}),
++    ('search_tasks',{'query':'synthetic','source':'all'}),
++    ('get_task_timeline',{'task_id':'00000000-0000-0000-0000-000000000999','source':'native'}),
++    ('search_knowledge',{'query':'synthetic'}),
++]
++
++
++@pytest.mark.parametrize('view',['none','department','all'])
++@pytest.mark.parametrize('tool,args',NEW_TOOLS)
++def test_new_analyst_tools_deny_scoped_admin_even_with_ai_management(scoped,tool,args,view):
++    connection,person=scoped;grants(connection,33,view,'all')
++    connection.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s AND telegram_id=33",(A,))
++    connection.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{33,ai_agents_manage}','true') WHERE tenant_id=%s AND policy_key='members'",(A,));connection.commit()
++    # The authenticated identity is current-DB checked; cached/client role or
++    # source scope must not turn an employee into the company owner.
++    with pytest.raises(TenantLinearError) as denied:
++        analytics.execute({**person,'role':'owner','permissions':['dialogs','ai_agents_manage']},tool,args)
++    assert denied.value.status==403
++    assert not connection.execute("SELECT 1 FROM saas_tenant_audit_events WHERE tenant_id=%s AND action='ai_business_analytics_tool_read'",(A,))
+diff --git a/beintaskbot-main/tests/test_contacts_directory_postgres.py b/beintaskbot-main/tests/test_contacts_directory_postgres.py
+index 74c9a7e5ed8d452e9aef0bbe4ae02dd9d27a9c1f..13cc6e6ad12fd1e35533532edca5b851cb90b6b9 100644
+--- a/beintaskbot-main/tests/test_contacts_directory_postgres.py
++++ b/beintaskbot-main/tests/test_contacts_directory_postgres.py
+@@ -738,7 +738,7 @@ def test_repeated_real_snapshot_conflicts_fail_unavailable_without_returning_par
+     cookie = f['session'].issue(A, 82)
+     conflicts = []
+     def before(query, _cursor):
+-        if 'SELECT * FROM saas_tenant_members WHERE' in query and 'FOR SHARE' in query:
++        if 'SELECT * FROM saas_tenant_members WHERE' in ' '.join(query.split()) and 'FOR SHARE' in query:
+             # An actual committed row revision after each RR snapshot causes
+             # PostgreSQL 40001 at the production SHARE fence; no exception or
+             # authority function is manufactured by this timing observer.
+@@ -976,10 +976,11 @@ def test_actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_h
+             previous_deal[0].pop('updated_at')
+             current_deal[0].pop('updated_at')
+             assert current_deal == previous_deal, 'Attach/detach preserves every other deal field'
+-            relation_posts = [post for post in f['posts'] if post['path'].endswith(RELATION_DEAL)]
++            relation_posts = [post for post in f['posts'] if post['path'].endswith('/deals/' + RELATION_DEAL)]
+             assert len(relation_posts) == 2
+             created_id = next(post['data']['id'] for post in f['posts'] if post['path'].endswith('/contacts'))
+             assert [post['data']['contact_id'] for post in relation_posts] == [created_id, None]
++            assert all(post['data']['title'] == 'Synthetic contact relation deal' for post in relation_posts)
+         else:
+             assert changed == set(), changed
+             if mode in ('native403_view', 'native403_update'):
+diff --git a/beintaskbot-main/tests/test_contacts_directory_ui.cjs b/beintaskbot-main/tests/test_contacts_directory_ui.cjs
+index d8091b1a169dced14ddb93a540b4882e572ba04e..a31572fca622ff292c15a1136558462f7fd2a98f 100644
+--- a/beintaskbot-main/tests/test_contacts_directory_ui.cjs
++++ b/beintaskbot-main/tests/test_contacts_directory_ui.cjs
+@@ -48,10 +48,28 @@ const submit=b=>b.d.getElementById('nativeContactForm').dispatchEvent(new b.w.Ev
+  }
+  console.log('PASS CRM01 ambiguous creation readback uses existing trim-only normalization and stable UUID; confirmation never creates a duplicate');
+  {
+-  const other='10000000-0000-4000-8000-000000000602',b=await mount({nativeRows:[{...native(),company_id:company,company_name:'Current company'}],companyRows:[{id:company,name:'Current company'},{id:other,name:'Other company'}]});try{b.f.actions.assign=false;b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=b.d.getElementById('nativeContactCompany');assert.deepEqual([...select.options].map(item=>item.value),['',company],'delete without assign permits retaining/unlinking only');assert.equal(select.value,company);assert.match(b.d.getElementById('contactsCompanyPermission').textContent,/do not allow linking/);formInput(b,'nativeContactName','Allowed local update');select.insertAdjacentHTML('beforeend','<option value="'+other+'">Not offered by the UI</option>');select.value=other;submit(b);await settle();assert.equal(writes(b).length,0,'an unavailable link is rejected before the primary save, even if DOM is manipulated');assert.equal(b.d.getElementById('nativeContactName').value,'Allowed local update');}finally{b.close()}
+-  const deal='10000000-0000-4000-8000-000000000801',c=await mount({dealRows:[{id:deal,title:'Existing deal',pipeline_id:'pipeline-existing',stage_id:'stage-existing',contact_id:null,description:'Preserved description'}]});try{c.d.querySelector('[data-contact-open]').click();await until(()=>modal(c)?.querySelector('[data-contact-link-deal]'));modal(c).querySelector('[data-contact-deal-select]').value=deal;modal(c).querySelector('[data-contact-link-deal]').click();await until(()=>c.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(c).length,1);assert.equal(writes(c)[0].body.contact_id,contactA);assert.equal(writes(c)[0].body.pipeline_id,'pipeline-existing');assert.equal(writes(c)[0].body.description,'Preserved description');assert.equal(new URL(writes(c)[0].url,'https://fixture.test').searchParams.get('expected_tenant_id'),tenant);await until(()=>modal(c)?.querySelector('[data-contact-unlink-deal]'));modal(c).querySelector('[data-contact-unlink-deal]').click();await until(()=>c.f.dealRows[0].contact_id===null);assert.equal(writes(c).length,2);assert.equal(writes(c).every(call=>call.path==='/api/platform/crm/native/deals/'+deal),true,'relations reuse the existing scoped deal endpoint and never create a contact');}finally{c.close()}
++  const other='10000000-0000-4000-8000-000000000602',b=await mount({nativeRows:[{...native(),company_id:company,company_name:'Current company'}],companyRows:[{id:company,name:'Current company'},{id:other,name:'Other company'}],recordActions:{update:true,archive:false,assign:false}});try{b.f.actions.assign=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=b.d.getElementById('nativeContactCompany');assert.deepEqual([...select.options].map(item=>item.value),['',company,other],'contact U permits either relation without assign or D');assert.equal(select.value,company);formInput(b,'nativeContactName','Allowed local update');select.value=other;submit(b);await until(()=>b.f.nativeRows[0].company_id===other);await settle();assert.equal(writes(b).length,2);assert.deepEqual(writes(b)[1].body,{action:'link_company',company_id:other});assert.equal(writes(b)[1].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.nativeRows[0].display_name,'Allowed local update');}finally{b.close()}
++  const deal='10000000-0000-4000-8000-000000000801',c=await mount({dealRows:[{id:deal,title:'Existing deal',pipeline_id:'pipeline-existing',stage_id:'stage-existing',contact_id:null,description:'Preserved description'}]});try{c.d.querySelector('[data-contact-open]').click();await until(()=>modal(c)?.querySelector('[data-contact-link-deal]'));modal(c).querySelector('[data-contact-deal-select]').value=deal;modal(c).querySelector('[data-contact-link-deal]').click();await until(()=>c.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(c).length,1);assert.deepEqual(writes(c)[0].body,{action:'link_deal',deal_id:deal});assert.equal(c.f.dealRows[0].pipeline_id,'pipeline-existing');assert.equal(c.f.dealRows[0].description,'Preserved description');assert.equal(new URL(writes(c)[0].url,'https://fixture.test').searchParams.get('expected_tenant_id'),tenant);await until(()=>modal(c)?.querySelector('[data-contact-unlink-deal]'));modal(c).querySelector('[data-contact-unlink-deal]').click();await until(()=>c.f.dealRows[0].contact_id===null);await settle();assert.equal(writes(c).length,2);assert.equal(writes(c).every(call=>call.path==='/api/platform/crm/native/contacts/'+contactA),true,'relations update this contact card only and never create a contact');}finally{c.close()}
+  }
+- console.log('PASS CRM01 company choices honor assign/delete before saving; existing authorized deal attach/detach preserves fields and exact scoped endpoints');
++ {
++  const deal='10000000-0000-4000-8000-000000000809', b=await mount({dealRows:[{id:deal,title:'Visible read-only deal',contact_id:null}],recordActions:{update:true,archive:false}});try{b.f.actions.update_deals=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-open]').click();await until(()=>modal(b)?.querySelector('[data-contact-link-deal]'));modal(b).querySelector('[data-contact-deal-select]').value=deal;modal(b).querySelector('[data-contact-link-deal]').click();await until(()=>b.f.dealRows[0].contact_id===contactA);assert.equal(writes(b)[0].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/deals/'+deal),false,'relation does not read target deal contents');await until(()=>modal(b)?.querySelector('[data-contact-unlink-deal]'));modal(b).querySelector('[data-contact-unlink-deal]').click();await until(()=>b.f.dealRows[0].contact_id===null);await settle();}finally{b.close()}
++  const denied=await mount({recordActions:{update:false},dealRows:[{id:deal,title:'Visible deal',contact_id:null}]});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=deals]'));await settle();assert.equal(modal(denied).querySelector('[data-contact-link-deal]'),null,'global U does not override denied record U');assert.equal(writes(denied).length,0);}finally{denied.close()}
++ }
++ console.log('PASS CRM01 company choices honor contact U without assign/delete; existing authorized deal attach/detach preserves fields and exact scoped endpoints');
++ {
++  const b=await mount({recordActions:{update:true,archive:false,assign:false}});try{b.f.actions.assign=false;b.f.actions.archive=false;b.d.querySelector('[data-contact-open]').click();await until(()=>modal(b)?.querySelector('[data-contact-link-company]'));modal(b).querySelector('[data-contact-company-select]').value=company;modal(b).querySelector('[data-contact-link-company]').click();await until(()=>b.f.nativeRows[0].company_id===company);await settle();assert.deepEqual(writes(b)[0].body,{action:'link_company',company_id:company});assert.equal(writes(b)[0].path,'/api/platform/crm/native/contacts/'+contactA);assert.equal(b.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/companies/'+company),false);await until(()=>modal(b)?.querySelector('[data-contact-unlink-company]'));modal(b).querySelector('[data-contact-unlink-company]').click();await until(()=>b.f.nativeRows[0].company_id===null);await settle();assert.deepEqual(writes(b)[1].body,{action:'unlink_company',company_id:company});assert(writes(b).every(call=>call.path==='/api/platform/crm/native/contacts/'+contactA));}finally{b.close()}
++  for(const mode of ['card','form']){const hidden=await mount({nativeRows:[{...native(),company_id:company}],recordActions:{update:true,archive:false,assign:false}});try{hidden.f.companyFailure=403;hidden.f.actions.archive=false;hidden.f.actions.assign=false;if(mode==='card'){hidden.d.querySelector('[data-contact-open]').click();await until(()=>modal(hidden)?.querySelector('[data-contact-unlink-company]'));assert.equal(modal(hidden).querySelector('[data-contact-link-company]'),null,'company R denial does not expose new targets');modal(hidden).querySelector('[data-contact-unlink-company]').click()}else{hidden.d.querySelector('[data-contact-edit]').click();await until(()=>!hidden.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);const select=hidden.d.getElementById('nativeContactCompany');assert.equal(select.disabled,false);assert.deepEqual([...select.options].map(item=>item.value),['',company]);select.value='';submit(hidden)}await until(()=>hidden.f.nativeRows[0].company_id===null);await settle();const receipt=writes(hidden).at(-1);assert.equal(receipt.path,'/api/platform/crm/native/contacts/'+contactA);assert.deepEqual(receipt.body,{action:'unlink_company',company_id:company});assert.deepEqual(hidden.errors,[])}finally{hidden.close()}}
++  const denied=await mount({nativeRows:[{...native(),company_id:company}],recordActions:{update:false,archive:true,assign:true}});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=companies]'));await settle();assert.equal(modal(denied).querySelector('[data-contact-link-company]'),null);assert.equal(modal(denied).querySelector('[data-contact-unlink-company]'),null);assert.equal(writes(denied).length,0)}finally{denied.close()}
++ }
++ console.log('PASS CRM01 contact company link/unlink uses only record U; denied company R keeps exact existing unlink without exposing targets; D cannot override denied U');
++ {
++  const deal='10000000-0000-4000-8000-000000000891';
++  const denied=await mount({scopedRelations:false,nativeRows:[{...native(),company_id:company}],recordActions:{update:true,archive:false,assign:false,update_deals:false},dealRows:[{id:deal,title:'Legacy deal',contact_id:contactA}]});try{denied.d.querySelector('[data-contact-open]').click();await until(()=>modal(denied)?.querySelector('[data-contact-panel=companies]'));await settle();for(const selector of ['[data-contact-link-company]','[data-contact-unlink-company]','[data-contact-link-deal]','[data-contact-unlink-deal]'])assert.equal(modal(denied).querySelector(selector),null,'gate off contact U cannot bypass legacy authority '+selector);assert.equal(writes(denied).length,0)}finally{denied.close()}
++  const legacy=await mount({scopedRelations:false,dealRows:[{id:deal,title:'Legacy deal',pipeline_id:'p',stage_id:'s',description:'Keep',contact_id:null}]});try{legacy.d.querySelector('[data-contact-open]').click();await until(()=>modal(legacy)?.querySelector('[data-contact-link-deal]'));modal(legacy).querySelector('[data-contact-deal-select]').value=deal;modal(legacy).querySelector('[data-contact-link-deal]').click();await until(()=>legacy.f.dealRows[0].contact_id===contactA);await settle();assert.equal(writes(legacy)[0].path,'/api/platform/crm/native/deals/'+deal);assert.equal(writes(legacy)[0].body.description,'Keep');assert(legacy.f.calls.some(call=>call.method==='GET'&&call.path==='/api/platform/crm/native/deals/'+deal));await until(()=>modal(legacy)?.querySelector('[data-contact-link-company]'));modal(legacy).querySelector('[data-contact-company-select]').value=company;modal(legacy).querySelector('[data-contact-link-company]').click();await until(()=>writes(legacy).length===2);await settle();assert.equal(writes(legacy)[1].path,'/api/platform/crm/native/companies/'+company);assert.deepEqual(writes(legacy)[1].body,{action:'link_contact',entity_id:contactA});assert(writes(legacy).every(call=>!call.path.includes('/contacts/')))}finally{legacy.close()}
++  const unlink=await mount({scopedRelations:false,nativeRows:[{...native(),company_id:company}],recordActions:{update:false,archive:true,assign:false}});try{unlink.d.querySelector('[data-contact-open]').click();await until(()=>modal(unlink)?.querySelector('[data-contact-unlink-company]'));modal(unlink).querySelector('[data-contact-unlink-company]').click();await until(()=>writes(unlink).length===1);await settle();assert.equal(writes(unlink)[0].path,'/api/platform/crm/native/companies/'+company);assert.deepEqual(writes(unlink)[0].body,{action:'unlink_contact',entity_id:contactA})}finally{unlink.close()}
++  const blocked=await mount({dealRows:[{id:deal,title:'Cannot sync relation',contact_id:null}]});try{blocked.f.writeFailure={status:409,code:'scoped_relation_sync_not_configured',target:'contacts'};blocked.d.querySelector('[data-contact-open]').click();await until(()=>modal(blocked)?.querySelector('[data-contact-link-deal]'));modal(blocked).querySelector('[data-contact-deal-select]').value=deal;modal(blocked).querySelector('[data-contact-link-deal]').click();await until(()=>modal(blocked).textContent.includes('Link not changed: safe synchronization'));assert.equal(blocked.f.dealRows[0].contact_id,null);assert.equal(writes(blocked).length,1)}finally{blocked.close()}
++ }
++ console.log('PASS CRM01 gate off retains legacy company/deal routes and guards; contact U cannot bypass old permissions; active outbound blocks scoped links without claiming saved/synced');
+  for(const outcome of ['revoked','update-only','unavailable']){
+   const b=await mount({role:'admin',permissions:['customers','deals','employees:manage']});try{
+    b.d.querySelector('[data-contact-edit]').click();await until(()=>!b.d.getElementById('nativeContactForm').querySelector('[type=submit]').disabled);formInput(b,'nativeContactName','Preserved rejected-write draft');const before=b.f.calls.filter(call=>call.path==='/api/platform/me').length;
+diff --git a/beintaskbot-main/tests/test_crm_native_api.py b/beintaskbot-main/tests/test_crm_native_api.py
+index ddbafc3ecc66bcca9ace572c9891ac8a6235d26f..343110fd747f931af8a75e06772a89e2e184a1a9 100644
+--- a/beintaskbot-main/tests/test_crm_native_api.py
++++ b/beintaskbot-main/tests/test_crm_native_api.py
+@@ -18,13 +18,13 @@ class ContactApiTests(unittest.TestCase):
+         self.assertEqual(response.status, 403)
+ 
+     def test_tenant_scoped_list(self):
+-        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'admin', 'active': True,
++        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'telegram_id': 20, 'role': 'admin', 'active': True,
+                                   'permissions': ['customers'], 'modules': {'customers': True}},
+                         'https://crm.example', mock.MagicMock())
+         with mock.patch.object(api, 'list_contacts', return_value=[{'display_name': 'A'}]) as listing:
+             response = asyncio.run(h(self.request(query={'search': 'A'})))
+         self.assertEqual(response.status, 200)
+-        listing.assert_called_once_with('tenant-a', 'A', 50)
++        listing.assert_called_once_with('tenant-a', 'A', 50, actor_id=20)
+ 
+     def test_invalid_contact_id_does_not_reach_database(self):
+         h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'owner'},
+diff --git a/beintaskbot-main/tests/test_crm_native_companies.py b/beintaskbot-main/tests/test_crm_native_companies.py
+index 23bd5ea869bc6cfaead7fbce065f32aa4d13808f..6e474b96c06e89fc2369b7c72d127173ed6e685f 100644
+--- a/beintaskbot-main/tests/test_crm_native_companies.py
++++ b/beintaskbot-main/tests/test_crm_native_companies.py
+@@ -65,9 +65,9 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
+     handler=company_api.handler(lambda _request:None,'https://crm.test',mock.MagicMock())
+     denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
+     assert denied.status==403
+-    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','role':'manager','active':True,
++    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
+         'permissions':['customers:view'],'modules':{'customers':True}},'https://crm.test',mock.MagicMock())
+     with mock.patch.object(company_api,'list_companies',return_value=[]) as listing:
+         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
+     assert response.status==200
+-    listing.assert_called_once_with('tenant-1','Acme',50)
++    listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)
+diff --git a/beintaskbot-main/tests/test_crm_native_deal_api.py b/beintaskbot-main/tests/test_crm_native_deal_api.py
+index 4c9fcb7d15297ccdf48024f22dc0928090da3bd3..4c99be446759aff3619b5d594fd242631b935398 100644
+--- a/beintaskbot-main/tests/test_crm_native_deal_api.py
++++ b/beintaskbot-main/tests/test_crm_native_deal_api.py
+@@ -10,11 +10,11 @@ class ApiTests(unittest.TestCase):
+         handler=api.handler(lambda _:None,'https://crm.test',mock.MagicMock())
+         denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
+         self.assertEqual(denied.status,403)
+-        handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'manager','active':True,
++        handler=api.handler(lambda _:{'tenant_id':'tenant-a','telegram_id':20,'role':'manager','active':True,
+             'permissions':['deals:view'],'modules':{'deals':True}},'https://crm.test',mock.MagicMock())
+         with mock.patch.object(api,'list_deals',return_value=[]) as listing:
+             response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'abc'})))
+-        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50)
++        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50,actor_id=20)
+ 
+     def test_invalid_id_never_reaches_store(self):
+         handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'owner'},'https://crm.test',mock.MagicMock())
