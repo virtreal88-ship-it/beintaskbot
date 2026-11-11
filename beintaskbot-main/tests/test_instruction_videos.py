@@ -181,7 +181,10 @@ def test_large_blob_metadata_never_returns_bytes_and_file_is_immutable(setup,mon
     class MetadataCursor(Cursor):
         def execute(self,sql,params=None):
             super().execute(sql,params)
-            assert not any(isinstance(v,(bytes,bytearray,memoryview)) for r in self.rows for v in r.values()),'metadata operation fetched a blob'
+            # PostgreSQL catalog metadata includes short bytea fields such as
+            # pg_trigger.tgargs; guard against media payloads, not catalog bytes.
+            assert not any(isinstance(v,(bytes,bytearray,memoryview)) and len(v)>=1024*1024
+                           for r in self.rows for v in r.values()),'metadata operation fetched a blob'
     with monkeypatch.context() as patch:
         patch.setattr(conn,'cursor',lambda:MetadataCursor(conn))
         asset=approve(row,asset);data=args(row,asset);op(row,'video_list');op(row,'video_offer',**data)
