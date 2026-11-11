@@ -16,11 +16,12 @@ The legacy monetary-ledger path retains its 120-second maximum and existing
 reservations; its transcript pricing bounds are unchanged.
 PostgreSQL fencing permits one session per tenant/user and keeps an uncertain
 session blocked until a confirmed provider close. Voice audio and conversation
-turns are not persisted. The Realtime session can call the existing audited,
-owner-only, read-only analytics tools for sources, company risks, bounded task,
-conversation, support-case, and knowledge lookups. Each call rechecks live
-voice authority and owner status before and after reading; arguments and
-results are bounded, and each session allows at most eight calls. No CRM/task
+turns are not persisted. The separate Business Analyst voice mode can call the
+existing audited, owner-only, read-only analytics tools for sources, company
+risks, bounded task, conversation, support-case, and knowledge lookups. Each
+call rechecks live voice authority and owner status before and after reading;
+arguments and results are bounded, and each session allows at most eight calls.
+The selected-dialog voice context does not bind these tools. No CRM/task
 changes, settings changes, or customer-send actions are available.
 
 The legacy shared monetary-ledger route remains closed. Do not change its
