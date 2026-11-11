@@ -671,6 +671,25 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('synthetic-secret',str(failure.exception));self.assertTrue(self.ws.closed)
         self.assertNotIn('synthetic-secret','\n'.join(captured.output))
 
+    async def test_provider_open_logs_only_allowlisted_failure_code(self):
+        async def credential():return 'synthetic-key'
+        class Socket:
+            async def close(self):pass
+        async def connector(*_):return Socket()
+        for code, expected in [('invalid_request_error','invalid_request_error'),
+                               ('synthetic-secret-code','provider_error')]:
+            policy,_=await self.admitted_policy()
+            provider=OpenAIRealtimeProvider(credential,policy)
+            with patch('tenant_operator_realtime_wire._require_live_admission',return_value=None), \
+                 patch('tenant_operator_realtime_wire._open_openai_socket',connector), \
+                 patch.object(_RealtimeWire,'open',side_effect=SafeRealtimeFailure(code)), \
+                 self.assertLogs('tenant_operator_realtime_wire',level='WARNING') as captured:
+                with self.assertRaisesRegex(ValueError,'provider_open_unavailable'):
+                    await provider.open({})
+            log='\n'.join(captured.output)
+            self.assertIn('code='+expected,log)
+            self.assertNotIn('synthetic-secret',log)
+
     async def test_pilot_provider_session_runs_only_with_scoped_policy_and_loopback_peer(self):
         class Authority:
             async def check(self,*_):pass

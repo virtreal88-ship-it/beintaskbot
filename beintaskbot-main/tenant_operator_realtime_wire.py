@@ -602,7 +602,11 @@ class OpenAIRealtimeProvider(_RealtimeWire):
             # content. Emit only a fixed runtime class in production logs.
             reason=type(error).__name__
             if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',reason):reason='UnknownError'
-            _LOG.warning('realtime_provider_open_failed stage=context_or_session reason=%s',reason)
+            code='unavailable'
+            if isinstance(error,SafeRealtimeFailure):
+                candidate=error.diagnostic_code
+                code=candidate if isinstance(candidate,str) and candidate in SAFE_PROVIDER_ERROR_CODES else 'provider_error'
+            _LOG.warning('realtime_provider_open_failed stage=context_or_session reason=%s code=%s',reason,code)
             try:await self.socket.close()
             except Exception:raise ValueError('provider_cleanup_unconfirmed') from None
             raise ValueError('provider_open_unavailable') from None

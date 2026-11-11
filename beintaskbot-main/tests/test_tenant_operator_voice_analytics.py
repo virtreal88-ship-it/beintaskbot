@@ -11,7 +11,7 @@ class AnalyticsVoiceAdapterTests(unittest.IsolatedAsyncioTestCase):
     def test_realtime_definitions_are_only_existing_read_tools(self):
         tools=voice_analytics.realtime_definitions()
         self.assertEqual({tool['name'] for tool in tools},voice_analytics._TOOLS)
-        self.assertTrue(all(tool['type']=='function' and tool['strict'] is False for tool in tools))
+        self.assertTrue(all(tool['type']=='function' and set(tool)=={'type','name','description','parameters'} for tool in tools))
         self.assertTrue(all(tool['parameters']['additionalProperties'] is False for tool in tools))
         self.assertFalse(any(tool['name'] in {'send_message','update_task','run_sql'} for tool in tools))
 
