@@ -11,14 +11,61 @@ class TenantFinanceError(ValueError):
 
 
 def finance_policy(profile: dict, *, write: bool=False) -> TenantPolicy:
+    from tenant_scoped_access import scoped_access_enabled
+    if scoped_access_enabled() and not isinstance(profile.get('permissions'),list):
+        profile={**profile,'permissions':[]}
     policy=TenantPolicy(profile)
     if profile.get('tenant_status','active') not in {'active','onboarding','ready_for_integration'}:
         raise TenantFinanceError('Şirkət kabineti aktiv deyil.',403)
-    if not profile.get('tenant_id') or not positive_id(profile.get('telegram_id')) or profile.get('active') is not True or not policy.allows('finance'):
+    scope=policy.action_scope('finance','view')
+    allowed=policy.legacy_allows('finance') if write or scope is None else scope!='none'
+    if not profile.get('tenant_id') or not positive_id(profile.get('telegram_id')) or profile.get('active') is not True or not allowed:
         raise TenantFinanceError('Maliyyə üçün icazəniz yoxdur.',403)
     if write and not policy.privileged:
         raise TenantFinanceError('Əməliyyat üçün administrator icazəsi lazımdır.',403)
     return policy
+
+
+def finance_scope(policy):
+    scope=policy.action_scope('finance','view')
+    return scope if scope is not None else 'all' if policy.privileged else 'self'
+
+
+def finance_member_allowed(policy,person):
+    if not person or str(person.get('tenant_id'))!=str(policy.profile.get('tenant_id')):
+        return False
+    if policy.has_scoped_access('finance','view'):
+        return policy.allows_resource('finance','view',{**person,
+            'responsible_member_id':person.get('telegram_id'),
+            'responsible_department_id':person.get('department_id')})
+    return policy.privileged or positive_id(person.get('telegram_id'))==positive_id(policy.profile.get('telegram_id'))
+
+
+def finance_member_sql(profile,alias='m'):
+    from tenant_scoped_access_store import resource_scope_sql
+    policy=finance_policy(profile)
+    if policy.has_scoped_access('finance','view'):
+        return resource_scope_sql(profile,'finance','view',alias=alias,responsible_column='telegram_id')
+    # Legacy read behavior is self for non-admins and tenant-wide for admins.
+    sql=f'{alias}.tenant_id=%s::uuid';args=[str(profile['tenant_id'])]
+    if not policy.privileged:
+        sql+=f' AND {alias}.telegram_id=%s';args.append(int(profile['telegram_id']))
+    return sql,args
+
+
+def finance_capabilities(policy):
+    try:
+        finance_policy(policy.profile,write=True)
+        can_write=True
+    except TenantFinanceError:
+        can_write=False
+    try:
+        finance_policy(policy.profile)
+        scope=finance_scope(policy)
+    except TenantFinanceError:
+        scope='none'
+    return {'can_write':can_write,'can_view_all':scope=='all',
+            'can_select_members':scope in {'department','all'},'read_scope':scope}
 
 
 def entry_id(value: object) -> str:

@@ -1,9 +1,10 @@
 /* Owner-only manual Kommo connection. Long-lived tokens are never retained in the page. */
 (() => {
   const $ = id => document.getElementById(id);
-  let profile, generation = 0, busy = false;
+  let accessData, profile, generation = 0, busy = false;
 
   async function api(url, data) {
+    if(data)data=window.tenantSharedIntegrations.command(accessData,'kommo',data,url.endsWith('/disconnect')?'delete':window.tenantSharedIntegrations.connected(accessData,'kommo')?'update':'create');
     const response = await fetch(url, {
       credentials: "same-origin",
       cache: "no-store",
@@ -11,12 +12,18 @@
     });
     const result = await response.json();
     if (!response.ok || !result.success) throw new Error(result.error || "Kommo ayarları yüklənmədi.");
+    if(data)window.tenantSharedIntegrations.record(accessData,'kommo',{status:url.endsWith('/disconnect')?'not_connected':'connected'});
     return result;
   }
 
   function disable(on) {
     busy = on;
-    $("tenantKommoPanel")?.querySelectorAll("button,input").forEach(element => { element.disabled = on; });
+    $("tenantKommoPanel")?.querySelectorAll("button,input").forEach(element => { element.disabled = on;
+      const shared=window.tenantSharedIntegrations;
+      if(shared.scoped(accessData,'kommo')){
+        const action=element.id==='tkDisconnect'?'delete':element.id==='tkLoad'?'view':shared.connected(accessData,'kommo')?'update':'create';
+        element.disabled=on||!shared.can(accessData,'kommo',action);
+      } });
   }
 
   async function perform(work) {
@@ -39,6 +46,7 @@
     $("tkToken").value = "";
     $("tkConfirm").checked = false;
     try {
+      if(window.tenantSharedIntegrations.scoped(accessData,'kommo')&&!window.tenantSharedIntegrations.can(accessData,'kommo','view')) { $('tkStatus').textContent=window.tenantSharedIntegrations.row(accessData,'kommo').status; $('tkDisconnect').hidden=!window.tenantSharedIntegrations.can(accessData,'kommo','delete');disable(false);return; }
       const result = await api("/api/platform/integrations/kommo/test");
       if (current !== generation) return;
       if (result.auth_mode === "oauth") {
@@ -59,6 +67,7 @@
   }
 
   function install(data) {
+    accessData = data;
     const next = data.member;
     const identity = next.tenant_id + ":" + next.telegram_id + ":" + next.role;
     if (profile?.identity === identity) return;
@@ -66,7 +75,7 @@
     profile = { ...next, identity };
     window.tenantViewDemand.clean("#tenantKommoPanel");
     $("tenantKommoPanel")?.remove();
-    if (next.role !== "owner") return;
+    if (window.tenantSharedIntegrations.scoped(data,"kommo") ? !Object.values(window.tenantSharedIntegrations.row(data,"kommo").management_actions).some(Boolean) : next.role !== "owner") return;
     const settings = $("integrationSettingsHost");
     if (!settings) return;
 
@@ -118,7 +127,7 @@
         if (current === generation) await load(current);
       });
     };
-    void load(generation);
+    void load(generation).finally(()=>disable(false));
   }
 
   window.tenantViewDemand.watch({

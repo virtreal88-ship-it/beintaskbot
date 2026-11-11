@@ -17,20 +17,29 @@ def page(session: dict, lead_id: object, cursor: str = '', limit: object = 120) 
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
-            profile = cur.fetchone()
+            from tenant_scoped_access import scoped_access_enabled
+            if scoped_access_enabled():
+                from tenant_scoped_access_store import read_access_profile
+                profile = read_access_profile(cur, tenant, actor, lock=True)
+            else:
+                cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+                  JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+                profile = cur.fetchone()
             if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
                 raise TenantLinearError('İcazə yoxdur.', 403)
             policy = TenantPolicy({**profile, 'tenant_id':tenant, 'workflow':_read_tenant_workflow(cur, tenant)})
             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
-            if not policy.can_access_deal(cur.fetchone()):
+            deal=cur.fetchone()
+            from tenant_dialog_access import scope,require_source,sql_filter
+            if scope(policy) is None and not policy.can_access_deal(deal):
                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
+            from tenant_dialog_access import lead_message_filter
+            source_guard=lead_message_filter(cur,tenant,policy,lead)
             condition = ' AND (COALESCE(happened_at,created_at),external_id)<(%s::timestamptz,%s)' if position else ''
             values = [tenant, lead, *(position or ()), size + 1]
             cur.execute('''SELECT external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,
               COALESCE(happened_at,created_at) AS position_at FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s''' + condition + '''
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND '''+source_guard+condition + '''
               ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT %s''', values)
             rows = cur.fetchall()
         conn.commit()

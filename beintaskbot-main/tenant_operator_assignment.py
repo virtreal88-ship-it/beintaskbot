@@ -36,10 +36,15 @@ def context(cur, profile, data, *, writing=False):
     from tenant_ai_group_coordination import group_jid
     if group_jid(conversation):
         raise TenantLinearError('Для группы используйте назначение основного агента и канала.', 409)
-    tenant, actor, policy = access(cur, profile, 'dialogs')
+    action = 'update' if writing else 'view'
+    tenant, actor, policy = access(cur, profile, 'dialogs', action=action)
+    if policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents'):
+        raise TenantLinearError('ai_shared_assignment_requires_unscoped_management', 403)
     if writing:
+        from tenant_dialog_access import require_independent_ai
+        require_independent_ai(policy,management=True)
         lock_dialog(cur, tenant, 'connect', channel, conversation)
-    route = assert_route(cur, tenant, policy, 'connect', conversation, channel, lead)
+    route = assert_route(cur, tenant, policy, 'connect', conversation, channel, lead, action=action)
     from tenant_connect_identity import conflicted
     identity_conflict=conflicted(cur,tenant,channel,conversation)
     if writing and identity_conflict:

@@ -11,13 +11,14 @@ from tenant_platform_common import (
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 from tenant_workflow_store import _read_tenant_workflow
 from tenant_policy import TenantPolicy
+from tenant_employee_policy import employee_action_allowed, employee_target_allowed, creation_permission_allowed, delegated_permissions_allowed, member_permission_change_allowed
 
 # The employee editor intentionally exposes only these stable product grants.
 # Other stored grants (including known legacy modules) are retained verbatim
 # when an employee card is updated; an older client must never erase them.
 _EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
 _RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
-_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings'}
+_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id'}
 _GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 
 
@@ -44,6 +45,16 @@ def _version(row):
     value = row.get('updated_at')
     return value.isoformat() if hasattr(value, 'isoformat') else str(value or '')
 
+
+def _employee_read_sql(current):
+    scope = TenantPolicy(current).action_scope('employees', 'view')
+    if not employee_action_allowed(current, 'view'):
+        return 'FALSE', []
+    if scope == 'self':
+        return 'm.telegram_id=%s', [int(current['telegram_id'])]
+    if scope == 'department':
+        return ('m.department_id=%s::uuid', [str(current['department_id'])]) if current.get('department_id') else ('FALSE', [])
+    return 'TRUE', []
 
 def _card_access(current, target):
     reasons = {field: 'global_account_identity' for field in _GLOBAL_FIELDS}
@@ -83,7 +94,7 @@ def _card_access(current, target):
                 editable.remove('active')
                 reasons['active'] = 'permission_scope'
     if current.get('role') != 'owner':
-        for field in ('permission_changes', 'work_settings', 'access_settings'):
+        for field in ('permission_changes', 'work_settings', 'access_settings', 'department_id'):
             editable.discard(field)
             reasons[field] = 'owner_protected'
     elif 'permissions' not in editable:
@@ -91,13 +102,21 @@ def _card_access(current, target):
         editable.discard('access_settings')
         reasons['permission_changes'] = 'owner_protected'
         reasons['access_settings'] = 'owner_protected'
+    if not employee_target_allowed(current, target, 'update'):
+        reasons.update({field: 'employee_update_scope' for field in editable})
+        editable.clear()
     return sorted(editable), reasons
 
 
-def _locked_members(cur, tenant_id, owner_id, target_id=None):
+def _locked_members(cur, tenant_id, owner_id, target_id=None, *, operation=None):
     # Match native-task/workflow order: tenant, canonical policy keys, numeric
     # membership IDs. Include inactive targets so protected roles cannot hide.
-    cur.execute('SELECT id,modules FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant_id,))
+    from tenant_scoped_access import scoped_access_enabled
+    # Attenuation depends on company defaults, pipelines and member policies.
+    # Their writers take tenant SHARE, so fence the complete snapshot before
+    # policy/member locks; locking only existing policy rows misses inserts.
+    fence = ' FOR UPDATE' if scoped_access_enabled() else ' FOR SHARE'
+    cur.execute('SELECT id,modules,status,owner_telegram_id FROM saas_tenants WHERE id=%s::uuid' + fence, (tenant_id,))
     company = cur.fetchone()
     if not company:
         raise MemberCardError('member_access_revoked', 403)
@@ -113,10 +132,56 @@ def _locked_members(cur, tenant_id, owner_id, target_id=None):
     current = rows.get(int(owner_id))
     if current:
         workflow = _read_tenant_workflow(cur, tenant_id)
-        current.update(modules=company.get('modules') or {}, workflow=workflow)
-    if not _can_manage_members(current):
+        current.update(modules=company.get('modules') or {}, workflow=workflow,
+                       tenant_status=company.get('status', 'active'), company_owner_id=company.get('owner_telegram_id'))
+    target = rows.get(int(target_id)) if target_id is not None else None
+    allowed = employee_target_allowed(current, target, 'update') if target else (employee_action_allowed(current, 'create') if operation == 'create' else _can_manage_members(current))
+    if not allowed:
         raise MemberCardError('member_access_revoked', 403)
-    return current, rows.get(int(target_id)) if target_id is not None else None
+    return current, target
+
+
+def _creation_department(cur, tenant_id, current, department_id):
+    from tenant_department_store import validate_department
+    scope = TenantPolicy(current).action_scope('employees', 'create')
+    if not employee_action_allowed(current, 'create'):
+        raise MemberCardError('member_access_revoked', 403)
+    if scope == 'department':
+        own = current.get('department_id')
+        if not own or str(department_id or '') != str(own):
+            raise MemberCardError('member_field_read_only', 403, fields={'department_id': 'permission_scope'})
+    return validate_department(cur, tenant_id, department_id)
+
+
+def _creation_grants(current, permissions, *, role=None, recipient_id=0):
+    # Existing legacy clients keep their established subset guard. New scoped
+    # creation must not delegate a broad module grant masked by actor scopes.
+    # Old policy records cannot silently revive authority for a new membership.
+    from tenant_scoped_access import scoped_access_enabled
+    from tenant_policy import policy_values
+    inherited = (policy_values(current.get('workflow') or {}).get('members') or {}).get(str(recipient_id))
+    if current.get('role') != 'owner' and scoped_access_enabled() and recipient_id and inherited:
+        raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'owner_review_required'})
+    if not delegated_permissions_allowed(current, permissions, role=role, recipient_id=recipient_id):
+        raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
+
+
+def employee_creation_options(*, tenant_id, owner_id):
+    """Bounded department options, never employee identities, for C without R."""
+    with _connect() as conn:
+        _require_member_schema(conn)
+        with conn.cursor() as cur:
+            current, _ = _locked_members(cur, tenant_id, owner_id, operation='create')
+            from tenant_department_store import department_catalog
+            scope = TenantPolicy(current).action_scope('employees', 'create')
+            departments = [row for row in department_catalog(cur, tenant_id) if row['active']
+                and (scope != 'department' or row['id'] == str(current.get('department_id')))]
+            if scope == 'department' and not departments:
+                raise MemberCardError('member_access_revoked', 403)
+            return {'scope': scope, 'departments': departments,
+                    'department_required': scope == 'department',
+                    'permission_keys': [grant for grant in sorted(_known_permissions())
+                        if creation_permission_allowed(current, grant)]}
 
 
 def _protected_target(current, target, *, require_active=False):
@@ -194,6 +259,7 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
     result = dict(row)
     result['workflow'] = workflow
     result["tenant_id"] = str(result["tenant_id"])
+    result['department_id'] = str(result['department_id']) if result.get('department_id') else None
     # ``member`` is returned directly by JSON API handlers. PostgreSQL gives
     # timestamps as datetime instances, which must be made JSON-safe here.
     for key in ("created_at", "updated_at", "last_login_at", "account_last_login_at"):
@@ -222,6 +288,7 @@ def _member_payload(row: dict) -> dict:
     """Make a member row safe to return from the platform API."""
     result = dict(row)
     result["tenant_id"] = str(result["tenant_id"])
+    result['department_id'] = str(result['department_id']) if result.get('department_id') else None
     for key in ("created_at", "updated_at", "last_login_at"):
         if result.get(key):
             result[key] = result[key].isoformat()
@@ -245,15 +312,17 @@ def _member_payload(row: dict) -> dict:
 
 
 def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
-    """Return the tenant's employee cards to its owner only."""
-    current = member(tenant_id, owner_id)
-    if not _can_manage_members(current):
-        raise TenantPlatformError("İcazə yoxdur.")
+    """Return only cards in the current actor's independent read scope."""
     with _connect() as conn:
         _require_member_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active, t.modules,
+            from tenant_scoped_access_store import read_access_profile
+            current = read_access_profile(cur, tenant_id, owner_id, lock=True)
+            if not employee_action_allowed(current, 'view'):
+                raise MemberCardError('member_access_revoked', 403)
+            predicate, scope_params = _employee_read_sql(current)
+            cur.execute(f"""
+                SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active, m.department_id, t.modules,
                        m.created_at, m.updated_at, m.last_login_at, au.email, COALESCE(NULLIF(au.phone,''),up.phone,'') AS phone,
                        COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
                        COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
@@ -275,9 +344,9 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                 JOIN saas_tenants t ON t.id=m.tenant_id
                 LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
                 LEFT JOIN saas_user_profiles up ON up.actor_id = m.telegram_id
-                WHERE m.tenant_id = %s::uuid
+                WHERE m.tenant_id = %s::uuid AND ({predicate})
                 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
-            """, (int(owner_id), tenant_id))
+            """, [int(owner_id), tenant_id, *scope_params])
             rows = cur.fetchall()
             ids=[int(row['telegram_id']) for row in rows]
             numbers={member_id:[] for member_id in ids}
@@ -293,10 +362,14 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
             # TenantPolicy also uses per-member workflow settings (for
             # example admin AI-management); include its authoritative source.
             workflow = _read_tenant_workflow(cur, tenant_id)
+            from tenant_department_store import department_catalog
+            departments = department_catalog(cur, tenant_id)
     result=[]
     for row in rows:
         row['workflow'] = workflow
         value=_member_payload(row)
+        # Workflow contains other employees' policy records, never card data.
+        value.pop('workflow', None)
         value['whatsapp_numbers']=numbers.get(int(row['telegram_id']),[])
         value['editable_fields'], value['read_only_reasons'] = _card_access(current, row)
         value['password_assign_available'] = bool(value.pop('_password_assign_eligible', False)
@@ -311,6 +384,7 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
             value['permission_modules'] = sorted(PERMISSION_MODULES)
             from tenant_member_access import access_snapshot
             value['access_settings'] = access_snapshot(row)
+            value['department_catalog'] = departments
         result.append(value)
     return result
 
@@ -398,6 +472,8 @@ def _selected_membership(current, existing, requested_role, permissions, *, targ
             raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
         if existing and existing.get('role') in {'owner', 'admin'}:
             raise MemberCardError('member_field_read_only', 403, fields={'role': 'protected_member'})
+        if existing and not member_permission_change_allowed(current, existing, selected_role, selected_permissions):
+            raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
     return selected_role, selected_permissions
 
 
@@ -428,7 +504,7 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                 or not isinstance(patch['changes'], dict) or not patch['changes']
                 or 'permissions' in changes):
             raise MemberCardError('member_card_invalid', fields={'access_settings': 'invalid'})
-        action_modules = patch['changes'].get('actions', {})
+        action_modules = {**patch['changes'].get('actions', {}), **patch['changes'].get('scopes', {})} if all(isinstance(patch['changes'].get(key, {}), dict) for key in ('actions', 'scopes')) else None
         if isinstance(action_modules, dict) and set(action_modules) & set(changes.get('permission_changes', {})):
             raise MemberCardError('member_card_invalid', fields={'access_settings': 'overlapping_permissions'})
     selected = _normalize_numbers(changes['whatsapp_numbers']) if 'whatsapp_numbers' in changes else None
@@ -436,6 +512,14 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
         with _connect() as conn:
             _require_member_schema(conn)
             with conn.cursor() as cur:
+                from tenant_scoped_access import scoped_access_enabled
+                if scoped_access_enabled() or set(changes) & {'department_id', 'access_settings'}:
+                    # Fence all effective grant inputs before any policy locks.
+                    # Department scope and first scoped-policy activation
+                    # depend on more than an existing policy row. Serialize
+                    # membership moves with all scoped reads and writes before
+                    # taking workflow/member locks, not after acquiring them.
+                    cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR UPDATE', (tenant_id,))
                 if set(changes) & {'work_settings', 'access_settings'}:
                     cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant_id,))
                     cur.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'members','{}'::jsonb,%s) ON CONFLICT DO NOTHING", (tenant_id, int(owner_id)))
@@ -460,11 +544,15 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                         target=telegram_id, strict=True)
                     if 'permissions' not in changes:
                         permissions = list(existing.get('permissions') or [])
-                if set(changes) & {'permission_changes', 'work_settings', 'access_settings'}:
+                if set(changes) & {'permission_changes', 'work_settings', 'access_settings', 'department_id'}:
                     cur.execute('SELECT owner_telegram_id,status FROM saas_tenants WHERE id=%s::uuid', (tenant_id,))
                     company = cur.fetchone() or {}
                     if company.get('owner_telegram_id') != int(owner_id) or company.get('status') != 'active':
                         raise MemberCardError('member_access_revoked', 403)
+                department_id = existing.get('department_id')
+                if 'department_id' in changes:
+                    from tenant_department_store import validate_department
+                    department_id = validate_department(cur, tenant_id, changes['department_id'])
                 if 'permission_changes' in changes:
                     for module, enabled in changes['permission_changes'].items():
                         permissions = [grant for grant in permissions if grant != module and not grant.startswith(module + ':')]
@@ -484,15 +572,25 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                     except (TypeError, ValueError):
                         raise MemberCardError('member_card_invalid',
                                               fields={'access_settings': 'invalid'}) from None
+                    dialog_scopes = patch['changes'].get('scopes', {}).get('dialogs', {})
+                    if any(scope in {'self', 'department'} for scope in dialog_scopes.values()):
+                        from tenant_dialog_access import activation_preflight
+                        preflight = activation_preflight(cur, tenant_id)
+                        if not preflight['ready']:
+                            raise MemberCardError('dialog_source_mapping_required', 409,
+                                fields={'access_settings': 'source_mapping_required'},
+                                message='Сначала распределите источники диалогов между сотрудниками.')
                     permissions = applied['permissions']
                     # Update this setting only. The same transaction may also
                     # change work settings; neither patch replaces the other.
+                    settings_patch = {key: applied[key] for key in ('native_crm_actions', 'access_scopes')
+                                      if key in applied}
                     cur.execute('''UPDATE saas_tenant_workflow_policies
                       SET value=jsonb_set(value,ARRAY[%s::text],
-                        COALESCE(value->%s::text,'{}'::jsonb) || jsonb_build_object('native_crm_actions',%s::jsonb),TRUE),
+                        COALESCE(value->%s::text,'{}'::jsonb) || %s::jsonb,TRUE),
                         updated_by=%s,updated_at=now()
                       WHERE tenant_id=%s::uuid AND policy_key='members' ''',
-                      (str(telegram_id),str(telegram_id),_json(applied['native_crm_actions']),int(owner_id),tenant_id))
+                      (str(telegram_id),str(telegram_id),_json(settings_patch),int(owner_id),tenant_id))
                 if 'work_settings' in changes:
                     from tenant_member_settings import apply_settings_patch
                     apply_settings_patch(cur, tenant_id=tenant_id, owner_id=owner_id, target=existing,
@@ -500,10 +598,10 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                 if selected is not None:
                     _replace_numbers(cur, tenant_id, owner_id, telegram_id, selected)
                 cur.execute('''UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,
-                  active=%s,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
+                  active=%s,department_id=%s::uuid,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
                   WHERE tenant_id=%s::uuid AND telegram_id=%s RETURNING *''',
                   (changes.get('display_name', existing['display_name']).strip(), role, _json(permissions),
-                   changes.get('active', existing['active']), tenant_id, telegram_id))
+                   changes.get('active', existing['active']), department_id, tenant_id, telegram_id))
                 row = cur.fetchone()
                 _audit_member(cur, tenant_id, owner_id, telegram_id, 'employee.card.updated',
                               {'fields': sorted(changes), 'role': role})
@@ -570,7 +668,7 @@ def add_member_whatsapp_number(*, tenant_id: str, owner_id: int, telegram_id: in
 
 def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_name: str = '',
                   role: str = 'worker', permissions: list[str] | None = None,
-                  expected_version=None, changes=None) -> dict:
+                  expected_version=None, changes=None, department_id=None) -> dict:
     """Keep legacy upsert compatible; the new card explicitly selects strict CAS."""
     try: target = int(telegram_id)
     except (TypeError, ValueError): target = 0
@@ -585,11 +683,17 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
     with _connect() as conn:
         _require_member_schema(conn)
         with conn.cursor() as cur:
-            current, existing = _locked_members(cur, tenant_id, owner_id, target)
+            current, existing = _locked_members(cur, tenant_id, owner_id, target, operation='create')
             if existing:
                 _protected_target(current, existing)
+                if department_id is not None:
+                    raise MemberCardError('member_card_invalid', fields={'department_id': 'use_versioned_card'})
+            else:
+                department_id = _creation_department(cur, tenant_id, current, department_id)
             selected_role, selected_permissions = _selected_membership(current, existing, str(role or ''),
                                                                        permissions, target=target)
+            if not existing:
+                _creation_grants(current, selected_permissions, role=selected_role, recipient_id=target)
             if existing:
                 cur.execute('''UPDATE saas_tenant_members SET display_name=%s,
                   role=CASE WHEN role='owner' THEN 'owner' ELSE %s END,
@@ -601,10 +705,10 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
                 # A concurrently created protected membership must not be
                 # overwritten through a previously absent-target snapshot.
                 cur.execute('''INSERT INTO saas_tenant_members
-                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
-                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s)
+                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by,department_id)
+                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s,%s::uuid)
                   ON CONFLICT(tenant_id,telegram_id) DO NOTHING RETURNING *''',
-                  (tenant_id, target, name, selected_role, _json(selected_permissions), int(owner_id)))
+                  (tenant_id, target, name, selected_role, _json(selected_permissions), int(owner_id), department_id))
             row = cur.fetchone()
             if not row:
                 raise MemberCardError('member_card_conflict', 409)
@@ -616,7 +720,7 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
 
 def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str, last_name: str,
                                login: str, password: str, role: str, permissions: list[str],
-                               password_confirm: str, email: str = '', phone: str = '') -> dict:
+                               password_confirm: str, email: str = '', phone: str = '', department_id=None) -> dict:
     """Create a new global account and tenant membership, never merge an account."""
     from tenant_email_auth import _hash_password, _password, _email
     username = re.sub(r'[^a-zA-Z0-9_.-]', '', str(login or '').strip()).casefold()
@@ -644,7 +748,9 @@ def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str
         with _connect() as conn:
             _require_member_schema(conn)
             with conn.cursor() as cur:
-                current, _ = _locked_members(cur, tenant_id, owner_id)
+                current, _ = _locked_members(cur, tenant_id, owner_id, operation='create')
+                department_id = _creation_department(cur, tenant_id, current, department_id)
+                _creation_grants(current, selected_permissions, role=selected_role)
                 if current.get('role') != 'owner' and (selected_role in {'owner', 'admin'}
                         or set(selected_permissions) - set(current.get('permissions') or [])):
                     raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
@@ -658,6 +764,7 @@ def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str
                     raise MemberCardError('member_duplicate', 409, fields=fields)
                 cur.execute("SELECT nextval('saas_auth_actor_seq') AS actor_id")
                 actor = int(cur.fetchone()['actor_id']); uid = uuid.uuid4(); display = (first + ' ' + last).strip()
+                _creation_grants(current, selected_permissions, role=selected_role, recipient_id=actor)
                 cur.execute('''INSERT INTO saas_auth_users
                   (id,actor_id,email,phone,display_name,first_name,last_name,login,password_hash,tenant_id,verified_at,force_password_change)
                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::uuid,now(),TRUE)''',
@@ -665,9 +772,9 @@ def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str
                 cur.execute('''INSERT INTO saas_user_profiles(actor_id,first_name,last_name,phone,login)
                   VALUES(%s,%s,%s,%s,%s)''', (actor, first, last, str(phone or '')[:40], username))
                 cur.execute('''INSERT INTO saas_tenant_members
-                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
-                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s) RETURNING updated_at''',
-                  (tenant_id, actor, display, selected_role, _json(selected_permissions), owner_id))
+                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by,department_id)
+                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s,%s::uuid) RETURNING updated_at''',
+                  (tenant_id, actor, display, selected_role, _json(selected_permissions), owner_id, department_id))
                 version = _version(cur.fetchone())
                 _audit_member(cur, tenant_id, owner_id, actor, 'employee.provisioned',
                               {'role': selected_role, 'login': username, 'has_email': bool(address)})

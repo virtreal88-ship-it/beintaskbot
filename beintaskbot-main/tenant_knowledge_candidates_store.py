@@ -35,6 +35,8 @@ def authorize(cur,profile):
         tenant,actor=_authorize(cur,profile)
     checked,_,policy=access(cur,profile,'dialogs')
     if checked!=tenant: raise TenantLinearError('Нет доступа.',403)
+    if policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents'):
+        raise TenantLinearError('ai_shared_learning_requires_unscoped_management', 403)
     return tenant,actor,policy
 
 
@@ -51,6 +53,8 @@ def route(cur,profile,data):
     ticket_id=identifier(data['ticket_id']) if data.get('ticket_id') else None
     ticket=None
     if ticket_id:
+        from tenant_support_access import require
+        require(cur,profile,ticket_id)
         cur.execute('SELECT id,status,completion_outcome,completion_note FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(tenant,ticket_id,channel,conversation))
         ticket=cur.fetchone()
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)

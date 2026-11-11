@@ -90,6 +90,8 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'knowledge'")
         cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities DROP CONSTRAINT IF EXISTS saas_ai_owner_publish_capabilities_kind_check")
         cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities ADD CONSTRAINT saas_ai_owner_publish_capabilities_kind_check CHECK(kind IN ('knowledge','instruction'))")
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def prepare(cur, cfg, data):

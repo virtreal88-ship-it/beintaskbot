@@ -66,7 +66,7 @@ class Settings(unittest.TestCase):
         self.crypto=Mock();self.crypto.encrypt.return_value=b'encrypted'
         self.owner=Mock(return_value=(TENANT,20))
         self.service=loaders.load('tenant_chat_ai_settings',{'_connect':self.connect,'_fernet':lambda:self.crypto,'authorize':self.owner,'ensure_schema':Mock()}, {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
-        self.service.save.__globals__['authorize']=self.owner
+        self.service.save.__wrapped__.__globals__['authorize']=self.owner
         self.data={**CONFIG,'api_key':'sk-'+'x'*30,'expected_updated_at':'version-1'}
         self.cur.fetchone.side_effect=[CONNECTION,CONNECTION]
 
@@ -110,8 +110,8 @@ class Settings(unittest.TestCase):
         self.crypto.decrypt.return_value=json.dumps({'tenant_id':TENANT,'provider':'chat_ai','api_key':'company-key'}).encode()
         self.cur.fetchone.return_value={'secrets':b'encrypted','metadata':{'enabled':True,'consent':True,'copilot_enabled':True}}
         models=Mock(return_value=['gpt-4.1-mini']);probe=Mock(return_value=True)
-        self.service.available_models.__globals__['provider_models']=models
-        self.service.test_model.__globals__['provider_probe_model']=probe
+        self.service.available_models.__wrapped__.__globals__['provider_models']=models
+        self.service.test_model.__wrapped__.__globals__['provider_probe_model']=probe
         result=self.service.available_models(SESSION)
         self.assertEqual(result,{'models':['gpt-4.1-mini']})
         models.assert_called_once_with('company-key')

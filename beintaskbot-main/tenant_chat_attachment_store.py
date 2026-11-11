@@ -14,10 +14,15 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
     is_connect = message_id.startswith('connect:')
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-              JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid
-              AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
-            member = cur.fetchone()
+            from tenant_scoped_access import scoped_access_enabled
+            if scoped_access_enabled():
+                from tenant_scoped_access_store import read_access_profile
+                member = read_access_profile(cur, tenant, actor, lock=True)
+            else:
+                cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+                  JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid
+                  AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+                member = cur.fetchone()
             # Read-only Connect previews follow the same lifecycle gate as Dialogs.
             status_allowed = bool(member) and (tenant_status_allows_management(member['tenant_status'])
                 if is_connect else member['tenant_status'] == 'active')
@@ -28,7 +33,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
               AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE''', (tenant, lead))
             deal = cur.fetchone()
             policy = TenantPolicy(profile)
-            allowed = policy.allows('dialogs') if is_connect else policy.can_access_deal(deal)
+            selected_scope=policy.action_scope('dialogs','view')
+            allowed = selected_scope!='none' if selected_scope is not None else policy.legacy_allows('dialogs') if is_connect else policy.can_access_deal(deal)
             if not allowed:
                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)
             cur.execute('''SELECT id,external_id,channel,direction,body,media_url,message_type,raw FROM saas_crm_messages
@@ -51,12 +57,16 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                         or kind not in {'image', 'audio', 'voice', 'video', 'document'}
                         or row.get('direction') not in {'incoming', 'outgoing'}):
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
+                from tenant_dialog_access import require_source
+                require_source(cur,tenant,policy,'connect',route['channel_id'],'view')
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
                 if raw.get('conversationId') and raw['conversationId'] != route['conversation_id']:
                     raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)
                 return {'provider': 'connect', 'row': dict(row), 'route': route, 'message_id': reference}
+            from tenant_dialog_access import require_source
+            require_source(cur,tenant,policy,'kommo','','view')
             cur.execute('''SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations
               WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE''', (tenant,))
             connection = cur.fetchone()

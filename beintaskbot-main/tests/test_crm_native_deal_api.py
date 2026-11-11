@@ -10,11 +10,11 @@ class ApiTests(unittest.TestCase):
         handler=api.handler(lambda _:None,'https://crm.test',mock.MagicMock())
         denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
         self.assertEqual(denied.status,403)
-        handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'manager','active':True,
+        handler=api.handler(lambda _:{'tenant_id':'tenant-a','telegram_id':20,'role':'manager','active':True,
             'permissions':['deals:view'],'modules':{'deals':True}},'https://crm.test',mock.MagicMock())
         with mock.patch.object(api,'list_deals',return_value=[]) as listing:
             response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'abc'})))
-        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50)
+        self.assertEqual(response.status,200); listing.assert_called_once_with('tenant-a','abc',50,actor_id=20)
 
     def test_invalid_id_never_reaches_store(self):
         handler=api.handler(lambda _:{'tenant_id':'tenant-a','role':'owner'},'https://crm.test',mock.MagicMock())

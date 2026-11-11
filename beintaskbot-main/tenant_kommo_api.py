@@ -7,6 +7,10 @@ from urllib.parse import quote, urlencode
 
 from tenant_kommo import KommoContext, TenantKommo, callback_domain
 from tenant_integration_store import save_kommo_manual_token, validate_kommo_manual_storage
+from tenant_platform_core import _connect, _ensure_schema
+from tenant_shared_integration_access import operation, guard
+from tenant_scoped_access import scoped_access_enabled
+from tenant_linear_policy import TenantLinearError
 
 
 class KommoManualVerificationUnavailable(Exception):
@@ -39,6 +43,21 @@ def _verify_manual_token(domain: str, token: str, platform_error: type[Exception
     }
 
 
+@operation('kommo_manual', 'connect', data_arg='data')
+def _manual_save(profile, data, domain, token, platform_error):
+    validate_kommo_manual_storage()
+    account = _verify_manual_token(domain, token, platform_error)
+    integration = (save_kommo_manual_token.__wrapped__ if scoped_access_enabled() else save_kommo_manual_token)(
+        tenant_id=profile['tenant_id'], owner_id=int(profile['telegram_id']),
+        account_domain=domain, access_token=token, **({'authorization': data} if scoped_access_enabled() else {}))
+    return account, integration
+
+
+@operation('kommo', 'view')
+def _read_remote(profile, client, path):
+    return asyncio.run(client.request(profile['tenant_id'], 'GET', path))
+
+
 def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
         async def manual_connect(request: web.Request, profile: dict, data: dict) -> web.Response:
             headers = {"Cache-Control": "no-store"}
@@ -61,11 +80,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 token = token.strip()
                 # Check that at-rest encryption is configured before making
                 # any request that sends the owner-provided credential.
-                await asyncio.to_thread(validate_kommo_manual_storage)
-                account = await asyncio.to_thread(_verify_manual_token, domain, token, context.platform_error)
-                integration = await asyncio.to_thread(
-                    save_kommo_manual_token, tenant_id=profile["tenant_id"],
-                    owner_id=int(profile["telegram_id"]), account_domain=domain, access_token=token)
+                account, integration = await asyncio.to_thread(
+                    _manual_save, profile, data, domain, token, context.platform_error)
                 await asyncio.to_thread(
                     context.append_audit, tenant_id=profile["tenant_id"],
                     actor_telegram_id=int(profile["telegram_id"]), action="integration_connected",
@@ -76,6 +92,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             except KommoManualVerificationUnavailable:
                 return web.json_response({"success": False, "error": "Kommo yoxlaması hazırda əlçatan deyil."},
                                          status=503, headers=headers)
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400, headers=headers)
             except (ValueError, TypeError):
@@ -86,20 +104,29 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                                          status=503, headers=headers)
 
         async def request_connection(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+            if scoped_access_enabled():
+                from tenant_request_origin import require_json_post
+                try: require_json_post(request, context.origin)
+                except TenantLinearError as exc:
+                    return web.json_response({'success':False,'error':str(exc)},status=exc.status)
             try:
                 data = await request.json()
             except Exception:
                 data = {}
             if isinstance(data, dict) and data.get("action") == "manual_connect":
                 return await manual_connect(request, profile, data)
+            if profile.get('role') != 'owner':
+                return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
             try:
                 integration = await asyncio.to_thread(
                     context.request_connection, tenant_id=profile["tenant_id"],
                     owner_id=int(profile["telegram_id"]),
                     account_domain=str((data or {}).get("account_domain") or ""))
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             try:
@@ -110,9 +137,14 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             return web.json_response({"success": True, "integration": integration, "oauth_ready": ready})
 
         async def disconnect(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+            if scoped_access_enabled():
+                from tenant_request_origin import require_json_post
+                try: require_json_post(request, context.origin)
+                except TenantLinearError as exc:
+                    return web.json_response({'success':False,'error':str(exc)},status=exc.status)
             try:
                 data = await request.json()
             except Exception:
@@ -120,11 +152,13 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             try:
                 item = await asyncio.to_thread(
                     context.disconnect_integration, tenant_id=profile["tenant_id"],
-                    owner_id=int(profile["telegram_id"]), provider=str((data or {}).get("provider") or ""))
+                    owner_id=int(profile["telegram_id"]), provider=str((data or {}).get("provider") or ""), **({"authorization":data} if scoped_access_enabled() else {}))
                 await asyncio.to_thread(
                     context.append_audit, tenant_id=profile["tenant_id"],
                     actor_telegram_id=int(profile["telegram_id"]), action="integration_disconnected",
                     entity_type="integration", entity_id=item["provider"], payload={})
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             return web.json_response({"success": True, "integration": item})
@@ -133,6 +167,11 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             profile = context.member(request, owner_only=True)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+            if scoped_access_enabled():
+                from tenant_request_origin import require_json_post
+                try: require_json_post(request, context.origin)
+                except TenantLinearError as exc:
+                    return web.json_response({'success':False,'error':str(exc)},status=exc.status)
             try:
                 data = await request.json()
             except Exception:
@@ -142,6 +181,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 state = await asyncio.to_thread(
                     context.begin_oauth, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]),
                     account_domain=str((data or {}).get("account_domain") or ""))
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             return web.json_response({"success": True, "authorize_url": "https://www.kommo.com/oauth?" + urlencode({
@@ -188,6 +229,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 tokens = await asyncio.to_thread(exchange)
                 await asyncio.to_thread(context.save_tokens, tenant_id=tenant_id,
                                         account_domain=domain, token_payload=tokens)
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 context.logger.info("Kommo OAuth callback rejected: %s", exc)
                 raise web.HTTPFound(f"/setup?kommo=error&reason={quote(str(exc)[:220], safe='')}")
@@ -197,11 +240,11 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             raise web.HTTPFound("/setup?kommo=connected")
 
         async def pipelines(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             try:
-                payload = await client.request(profile["tenant_id"], "GET", "leads/pipelines")
+                payload = (await asyncio.to_thread(_read_remote, profile, client, "leads/pipelines") if scoped_access_enabled() else await client.request(profile["tenant_id"], "GET", "leads/pipelines"))
                 rows = []
                 for pipeline in ((payload.get("_embedded") or {}).get("pipelines") or [])[:100]:
                     stages = ((pipeline.get("_embedded") or {}).get("statuses") or [])
@@ -211,20 +254,24 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                                              "name": str(stage.get("name") or "Adsız mərhələ")}
                                             for stage in stages[:100] if int(stage.get("id") or 0)]})
                 return web.json_response({"success": True, "pipelines": [row for row in rows if row["id"]]})
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
 
         async def test(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             try:
-                account = await client.request(profile["tenant_id"], "GET", "account")
+                account = (await asyncio.to_thread(_read_remote, profile, client, "account") if scoped_access_enabled() else await client.request(profile["tenant_id"], "GET", "account"))
                 credentials = await asyncio.to_thread(context.credentials, tenant_id=profile["tenant_id"])
                 auth_mode = "manual" if isinstance(credentials, dict) and credentials.get("auth_mode") == "manual" else "oauth"
                 return web.json_response({"success": True, "message": "Kommo bağlantısı işləyir.", "auth_mode": auth_mode, "account": {
                     "id": account.get("id"), "name": str(account.get("name") or "Kommo hesabı"),
                     "subdomain": str(account.get("subdomain") or "")}})
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
 
@@ -232,6 +279,11 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             profile = context.member(request, owner_only=True)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+            if scoped_access_enabled():
+                from tenant_request_origin import require_json_post
+                try: require_json_post(request, context.origin)
+                except TenantLinearError as exc:
+                    return web.json_response({'success':False,'error':str(exc)},status=exc.status)
             try:
                 data = await request.json()
             except Exception:
@@ -287,6 +339,8 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 tenant = await asyncio.to_thread(context.update_onboarding, tenant_id=profile["tenant_id"],
                     owner_id=int(profile["telegram_id"]), patch={"pipeline": {"selected": selected[:30]}})
                 return web.json_response({"success": True, "tenant": tenant})
+            except TenantLinearError as exc:
+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
 

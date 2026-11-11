@@ -29,6 +29,7 @@ async function harness(){
   if(url==='/api/platform/members'){state.memberReads++;return {ok:true,json:async()=>({success:true,members:state.rows})};}
   return {ok:true,json:async()=>({success:true,status:'disconnected',updated_at:'v1',settings:{},members:state.rows})};
  };
+ w.eval(fs.readFileSync(require("node:path").join(__dirname,"../docs/tenant-shared-integration-settings.js"),"utf8"));
  w.eval(source);watcher.activate({member:{tenant_id:'A',telegram_id:1,role:'owner'}});
  w.document.getElementById('tlLoad').click();await flush();
  return {w,state,watcher,root:id=>w.document.querySelector(`[data-tl-employee="${id}"]`)};

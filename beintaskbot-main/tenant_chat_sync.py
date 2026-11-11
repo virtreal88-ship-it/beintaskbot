@@ -18,6 +18,8 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
         deal = await asyncio.to_thread(get_deal, tenant_id=tenant, kommo_lead_id=lead_id)
         if not current or current.get('tenant_status') != 'active' or not TenantPolicy(current).can_access_deal(deal):
             raise TenantPlatformError('Çat tarixçəsi üçün icazəniz yoxdur.')
+        if TenantPolicy(current).action_scope('dialogs','view') not in (None,'all'):
+            raise TenantPlatformError('Источник переписки требует отдельной проверки прав.')
         return current, deal
 
     await authorize()

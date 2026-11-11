@@ -156,6 +156,8 @@ def _publication_schema(cur):
     _training_policy_schema(cur)
     cur.execute("ALTER TABLE saas_ai_administrator_publication_grants ADD COLUMN IF NOT EXISTS policy_id UUID NULL")
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_publication_one_live_material ON saas_ai_administrator_publication_grants(tenant_id,kind,object_id) WHERE state IN ('granted','consumed')")
+    from tenant_ai_unused_archive import install_existing
+    install_existing(cur)
 
 
 def _publication_object(cur,tenant,kind,key,*,lock=True):
@@ -439,6 +441,8 @@ def _training_policy_schema(cur):
     cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_scope_kind_check CHECK (scope_kind IN ('agent_channel','company'))")
     cur.execute("ALTER TABLE saas_ai_training_policies DROP CONSTRAINT IF EXISTS saas_ai_training_policies_company_bounds_check")
     cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_company_bounds_check CHECK ((scope_kind='agent_channel' AND agent_id IS NOT NULL AND channel_id IS NOT NULL AND max_operations BETWEEN 1 AND 1000 AND max_per_hour BETWEEN 1 AND 100 AND expires_at IS NOT NULL) OR (scope_kind='company' AND agent_id IS NULL AND channel_id IS NULL AND max_operations IS NULL AND max_per_hour IS NULL AND expires_at IS NULL))")
+    from tenant_ai_unused_archive import install_existing
+    install_existing(cur)
 
 
 def training_policy_create(cur,profile,data):

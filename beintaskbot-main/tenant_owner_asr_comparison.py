@@ -57,6 +57,8 @@ def schema(conn):
           parameters JSONB NOT NULL DEFAULT '{}'::jsonb,result JSONB,code TEXT NOT NULL DEFAULT '',dispatched_at TIMESTAMPTZ,
           PRIMARY KEY(tenant_id,scope_hash,model),
           FOREIGN KEY(tenant_id,scope_hash) REFERENCES saas_owner_asr_comparisons(tenant_id,scope_hash))''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
     conn.commit()
 
 

@@ -61,3 +61,29 @@
 
 /* Secondary actions must remain readable in both color schemes. */
 #staffMemberModal .outline{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+
+/* Real server-backed CRUD scopes. On phones each section is a labeled 2×2 card. */
+#staffMemberModal .staff-scope-matrix{border:1px solid var(--line);border-radius:10px;overflow:hidden;min-width:0}
+#staffMemberModal .staff-scope-heading,#staffMemberModal .staff-scope-row{display:grid;grid-template-columns:minmax(110px,1.2fr) repeat(4,minmax(0,1fr));gap:10px;padding:12px}
+#staffMemberModal .staff-scope-heading{font-size:12px;font-weight:650;background:var(--paper)}
+#staffMemberModal .staff-scope-row{align-items:start;border-top:1px solid var(--line)}
+#staffMemberModal .staff-scope-row>strong{font-size:13px;overflow-wrap:anywhere;align-self:center}
+#staffMemberModal .staff-scope-row>div{min-width:0}
+#staffMemberModal .staff-scope-row select{padding:7px 5px;font-size:12px;min-height:38px}
+#staffMemberModal .staff-scope-caption{display:none}
+#staffMemberModal .staff-scope-legacy{display:block;color:var(--muted);font-size:10px;margin-top:4px}
+#staffMemberModal .staff-scope-unavailable{text-align:center;color:var(--muted);padding:8px 0}
+#staffMemberModal [data-department-create][hidden]{display:none}
+#staffMemberModal [data-department-create]{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+#staffMemberModal [data-department-status]{grid-column:1/-1;font-size:12px;font-weight:400}
+#staffMemberModal [data-department-add]{justify-self:start;width:fit-content}
+#staffMemberModal .staff-department>button{align-self:flex-start}
+@media(max-width:600px){
+ #staffMemberModal .staff-scope-heading{display:none}
+ #staffMemberModal .staff-scope-row{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+ #staffMemberModal .staff-scope-row:first-of-type{border-top:0}
+ #staffMemberModal .staff-scope-row>strong{grid-column:1/-1;padding-bottom:2px}
+ #staffMemberModal .staff-scope-caption{display:block;font-size:12px;font-weight:550}
+ #staffMemberModal .staff-scope-row select{font-size:13px;min-height:42px}
+ #staffMemberModal .staff-scope-unavailable{text-align:left;padding:0;display:flex;flex-direction:column;gap:8px}
+}

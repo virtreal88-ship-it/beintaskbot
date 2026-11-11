@@ -351,3 +351,23 @@ def test_reply_selection_version_invalidates_old_cached_request_hash():
     legacy=hashlib.sha256(json.dumps({'mode':'reply','prompt':''},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     assert _hash(command)!=legacy
     assert _hash(command)==_hash({**command,'request_id':'different'})
+
+
+@pytest.mark.parametrize('enabled',[False,True])
+def test_finish_imports_and_rechecks_independent_ai_grant(monkeypatch,enabled):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true' if enabled else 'false')
+    tenant=str(uuid.uuid4());actor=22
+    conn=MagicMock();conn.__enter__.return_value=conn
+    cur=conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.side_effect=[{'config_version':'version'},{'updated_at':'version'}]
+    policy=SimpleNamespace(has_scoped_access=lambda *_:enabled,allows=lambda *_:False,can_use_chat_ai=lambda:True)
+    monkeypatch.setattr(copilot,'_connect',lambda:conn)
+    monkeypatch.setattr(copilot,'ensure_schema',Mock())
+    monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,policy)))
+    monkeypatch.setattr(copilot,'assert_route',Mock())
+    monkeypatch.setattr(copilot,'_assigned_context',Mock(return_value={}))
+    monkeypatch.setattr(copilot,'_agent_binding',lambda _:'binding')
+    monkeypatch.setattr('tenant_episode_media.revalidate_sources',Mock())
+    command={**request(),'_agent_binding':'binding'}
+    copilot._finish(tenant,command,actor,{'answer':'synthetic'},[],'question','answer')
+    assert any(call.args[1][0]=='completed' for call in cur.execute.call_args_list if 'UPDATE saas_chat_ai_runs' in call.args[0])

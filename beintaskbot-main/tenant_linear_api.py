@@ -10,7 +10,9 @@ def linear_handler(member_from_request, canonical_origin, logger):
         headers = {'Cache-Control': 'no-store'}
         try:
             profile = member_from_request(request)
-            owner(profile)
+            from tenant_scoped_access import scoped_access_enabled
+            if not scoped_access_enabled(): owner(profile)
+            elif not profile: raise TenantLinearError('İcazə yoxdur.',403)
             if request.method == 'GET':
                 query = request.rel_url.query
                 result = await asyncio.to_thread(choices, profile, query.get('team_id', ''), query.get('after')) if query.get('catalog') == '1' else await asyncio.to_thread(read, profile)

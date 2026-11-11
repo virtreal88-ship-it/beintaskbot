@@ -17,15 +17,22 @@ def positive(value):
 
 def authorize(cur, session, lead):
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), positive(session['telegram_id'])
-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
-    member = cur.fetchone()
+    from tenant_scoped_access import scoped_access_enabled
+    if scoped_access_enabled():
+        from tenant_scoped_access_store import read_access_profile
+        member = read_access_profile(cur, tenant, actor, lock=True)
+    else:
+        cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+          JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
+        member = cur.fetchone()
     if not member or member['active'] is not True or member['tenant_status'] != 'active':
         raise TenantLinearError('İcazə yoxdur.', 403)
     policy = TenantPolicy({**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
     if not policy.privileged or not policy.allows('deals') or not policy.can_access_deal(cur.fetchone()):
         raise TenantLinearError('Yalnız icazəli administrator yoxlaya bilər.', 403)
+    from tenant_dialog_access import require_lead
+    require_lead(cur,tenant,policy,lead)
     return tenant, actor
 
 

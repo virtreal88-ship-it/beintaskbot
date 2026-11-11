@@ -1,14 +1,14 @@
 """Same-origin review API and separate deliberately public approved-news API."""
 import asyncio
 from aiohttp import web
-from tenant_news import listing, command, published
+from tenant_news import listing, command, published, member_published
 from tenant_linear_policy import TenantLinearError
 from tenant_news_ai_settings import read as read_ai, save as save_ai
 
 
 def news_handler(member_from_request, canonical_origin, logger, *, public=False, ai=False):
     async def handle(request):
-        headers = {'Cache-Control': 'no-store'}
+        headers = {'Cache-Control': 'no-store', **({} if public else {'Vary': 'Cookie'})}
         try:
             if public:
                 result = await asyncio.to_thread(published, request.match_info['company'], after=request.rel_url.query.get('after'))
@@ -17,7 +17,10 @@ def news_handler(member_from_request, canonical_origin, logger, *, public=False,
                 if not profile:
                     raise TenantLinearError('İcazə yoxdur.', 403)
                 if request.method == 'GET':
-                    result = await asyncio.to_thread(read_ai, profile) if ai else await asyncio.to_thread(listing, profile, status=request.rel_url.query.get('status', 'pending'), after=request.rel_url.query.get('after'))
+                    if not ai and request.rel_url.query.get('feed') == 'published':
+                        result = await asyncio.to_thread(member_published, profile, after=request.rel_url.query.get('after'))
+                    else:
+                        result = await asyncio.to_thread(read_ai, profile) if ai else await asyncio.to_thread(listing, profile, status=request.rel_url.query.get('status', 'pending'), after=request.rel_url.query.get('after'))
                 else:
                     if request.content_type != 'application/json' or request.headers.get('Origin', '').rstrip('/') != canonical_origin.rstrip('/'):
                         raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.', 403)

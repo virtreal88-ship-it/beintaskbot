@@ -170,7 +170,7 @@ class Storage(unittest.TestCase):
         service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
             'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
             {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
-        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
+        service.save.__wrapped__.__globals__['authorize']=Mock(return_value=(TENANT,20))
         service.save(SESSION,{**CONFIG,'api_key':'','expected_updated_at':'version-1'})
         saved=json.loads(cur.execute.call_args.args[1][2])
         self.assertEqual(saved['model'],'text-model')
@@ -283,7 +283,7 @@ class AssignedAgentCompanyAccessSettingsTests(unittest.TestCase):
         service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
             'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
             {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
-        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
+        service.save.__wrapped__.__globals__['authorize']=Mock(return_value=(TENANT,20))
         fields=('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
         data={k:v for k,v in CONFIG.items() if k not in fields}
         service.save(SESSION,{**data,'preserve_models':True,'api_key':'','expected_updated_at':'version-1'})

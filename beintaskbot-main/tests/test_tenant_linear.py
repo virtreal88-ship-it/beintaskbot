@@ -53,7 +53,7 @@ class StorageTests(unittest.TestCase):
         self.conn.commit.assert_called_once()
 
     def test_encryption_failure_stops_before_provider(self):
-        self.service.command.__globals__['_fernet'].side_effect = RuntimeError('configuration')
+        self.service.command.__wrapped__.__globals__['_fernet'].side_effect = RuntimeError('configuration')
         with self.assertRaises(RuntimeError): self.service.command(PROFILE, {'action': 'connect', 'api_key': 'key'})
         self.verify.assert_not_called(); self.connect.assert_not_called()
 
@@ -87,7 +87,7 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(TenantLinearError): self.service.credential(PROFILE)
 
     def test_foreign_status_or_project_fails_before_write(self):
-        self.service.command.__globals__['choices'] = Mock(return_value={'team': {
+        self.service.command.__wrapped__.__globals__['choices'] = Mock(return_value={'team': {
             'states': {'nodes': []}, 'projects': {'nodes': []}}})
         with self.assertRaises(TenantLinearError):
             self.service.command(PROFILE, {'action': 'settings', 'settings': {'team_id': ID, 'done_state_ids': [ID]}})

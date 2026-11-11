@@ -76,6 +76,8 @@ def schema(conn):
         cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_pilot_one_waiting_customer_idx
           ON saas_ai_pilot_followups(tenant_id,channel_id,conversation_id)
           WHERE awaiting_customer=TRUE AND state='linked' ''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def _owner(cur,profile):

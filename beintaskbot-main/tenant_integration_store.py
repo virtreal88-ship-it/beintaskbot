@@ -11,6 +11,11 @@ from tenant_platform_core import (
     TenantPlatformError, _connect, _ensure_schema, _fernet, _json, _kommo_domain,
 )
 
+from tenant_shared_integration_access import operation, admitted, project_status
+from tenant_scoped_access import scoped_access_enabled
+from tenant_scoped_access_store import read_access_profile
+from tenant_linear_policy import TenantLinearError
+
 def list_integrations(*, tenant_id: str, telegram_id: int) -> list[dict]:
     if not member(tenant_id, telegram_id):
         raise TenantPlatformError("İcazə yoxdur.")
@@ -44,12 +49,20 @@ def list_integrations(*, tenant_id: str, telegram_id: int) -> list[dict]:
                 and selected.get("metadata", {}).get("auth_mode") == "manual"):
             selected["metadata"] = {**selected.get("metadata", {}), "auth_mode": "manual"}
         result.append(selected)
+    if scoped_access_enabled():
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                current = read_access_profile(cur, tenant_id, telegram_id, lock=True)
+                if not current:
+                    raise TenantLinearError('integration_access_denied', 403)
+                return project_status(cur, current, result)
     return sorted(result, key=lambda item: str(item.get("provider") or ""))
 
-def disconnect_integration(*, tenant_id: str, owner_id: int, provider: str) -> dict:
+@operation(lambda v: str(v['provider'] or '').strip().casefold(), 'delete', data_arg='authorization')
+def disconnect_integration(*, tenant_id: str, owner_id: int, provider: str, authorization=None) -> dict:
     """Revoke the local connection state without exposing stored credentials."""
     current = member(tenant_id, owner_id)
-    if not current or current.get("role") != "owner":
+    if not admitted({"tenant_id":tenant_id,"telegram_id":owner_id}, str(provider or "").strip().casefold()) and (not current or current.get("role") != "owner"):
         raise TenantPlatformError("İcazə yoxdur.")
     provider = str(provider or "").strip().casefold()
     if provider not in {"kommo", "kommo_manual", "beinsystems", "waba", "telegram", "push"}:
@@ -108,11 +121,12 @@ def validate_kommo_manual_storage() -> None:
     _fernet()
 
 
+@operation('kommo_manual', 'connect', data_arg='authorization')
 def save_kommo_manual_token(*, tenant_id: str, owner_id: int, account_domain: str,
-                            access_token: str) -> dict:
+                            access_token: str, authorization=None) -> dict:
     """Store an owner-provided Kommo long-lived token in a separate tenant row."""
     current = member(tenant_id, owner_id)
-    if not current or current.get("role") != "owner":
+    if not admitted({"tenant_id":tenant_id,"telegram_id":owner_id}, "kommo_manual") and (not current or current.get("role") != "owner"):
         raise TenantPlatformError("İcazə yoxdur.")
     domain = _kommo_domain(account_domain)
     if not isinstance(access_token, str):
@@ -268,7 +282,7 @@ def kommo_credentials(*, tenant_id: str) -> dict:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT provider, account_domain, status, metadata, secrets
+                SELECT provider, account_domain, status, metadata, secrets, connected_at
                 FROM saas_tenant_integrations
                 WHERE tenant_id = %s::uuid AND provider IN ('kommo', 'kommo_manual')
             """, (tenant_id,))
@@ -291,11 +305,14 @@ def kommo_credentials(*, tenant_id: str) -> dict:
         raise TenantPlatformError("Kommo bağlantı məlumatı oxunmadı. Yenidən qoşulun.") from exc
     if not isinstance(tokens, dict):
         raise TenantPlatformError("Kommo bağlantı məlumatı tam deyil. Yenidən qoşulun.")
+    # Source metadata comes from the same row snapshot as these tokens. It is
+    # server-only read evidence, not a new credential or connection setting.
     if mode == "manual":
         if tokens.get("tenant_id") != tenant_id or tokens.get("provider") != "kommo_manual" or not tokens.get("access_token"):
             raise TenantPlatformError("Kommo bağlantı məlumatı tam deyil. Yenidən qoşulun.")
         return {
             "account_domain": str(row["account_domain"]),
+            "provider": row["provider"], "connected_at": row.get("connected_at"),
             "access_token": str(tokens["access_token"]),
             "refresh_token": "",
             "token_expires_at": "",
@@ -306,6 +323,7 @@ def kommo_credentials(*, tenant_id: str) -> dict:
     metadata = row["metadata"] if isinstance(row.get("metadata"), dict) else {}
     return {
         "account_domain": str(row["account_domain"]),
+        "provider": row["provider"], "connected_at": row.get("connected_at"),
         "access_token": str(tokens["access_token"]),
         "refresh_token": str(tokens["refresh_token"]),
         "token_expires_at": str(metadata.get("token_expires_at") or ""),

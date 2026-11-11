@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 from tenant_platform import _connect
 from tenant_crm_notice_schema import ensure_schema
-from tenant_crm_notice_store import profiles, resource, connection_id, connect_dialog_route
+from tenant_crm_notice_store import profiles, resource, connection_id, connect_dialog_route, source_eligible
 from tenant_crm_notice_policy import eligible, task_route, timestamp
 from tenant_policy import TenantPolicy
 
@@ -80,7 +80,7 @@ def claim(channel: str) -> dict | None:
                           'text':latest.get('body') or '', 'message_type':latest.get('message_type') or ''}
             allowed = bool(member and item['payload'].get('connection') == connection_id(cur, tenant)
                            and fresh(item['event'], row, item['payload']) and connect_route_ok
-                           and eligible(member, item['event'], row, channel))
+                           and source_eligible(cur,member, item['event'], row, channel))
             if channel == 'push':
                 allowed = bool(allowed and item['device_active'] is True and item['subscription'] and item['owner_telegram_id'] == item['recipient_id'])
             cur.execute('''UPDATE saas_crm_notice_deliveries SET status=%s,updated_at=now()
@@ -108,3 +108,43 @@ def finish(item: dict, status: str, message_id: int | None = None) -> None:
                   WHERE tenant_id=%s::uuid AND telegram_id=%s AND endpoint_hash=%s''',
                   (str(item['tenant_id']), item['recipient_id'], item['endpoint_hash']))
         conn.commit()
+
+
+def dispatch_guarded(item, callback):
+    """Hold the current dialog grant through provider acceptance, never retry.
+
+    The callback is the already prepared delivery, not a second queue claim.
+    This also covers first activation of scoped rights after the claim.
+    """
+    from tenant_scoped_access import scoped_access_enabled
+    if item.get('event') != 'incoming_message' or not scoped_access_enabled():
+        return callback()
+    from tenant_scoped_access_store import read_access_profile
+    tenant, actor = str(item['tenant_id']), int(item['recipient_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            current = read_access_profile(cur, tenant, actor, lock=True)
+            member = next((m for m in profiles(cur, tenant) if m['telegram_id'] == actor), None) if current else None
+            row = resource(cur, tenant, item['kind'], item['source_key'])
+            original = item.get('resource') or {}
+            allowed = bool(member and row and str(row.get('channel') or '') == str(original.get('channel') or '')
+                and row.get('kommo_lead_id') == original.get('kommo_lead_id')
+                and item['payload'].get('connection') == connection_id(cur, tenant)
+                and fresh(item['event'],row,item['payload'])
+                and source_eligible(cur,member,item['event'],row,item['channel']))
+            if allowed and str(row.get('channel') or '').startswith('connect:'):
+                allowed = bool(connect_dialog_route(row) and connect_dialog_route(row) == connect_dialog_route(original))
+            cur.execute('''SELECT status FROM saas_crm_notice_deliveries WHERE tenant_id=%s::uuid
+              AND event_id=%s::uuid AND recipient_id=%s AND channel=%s AND endpoint_hash=%s FOR UPDATE''',key(item))
+            allowed = allowed and (cur.fetchone() or {}).get('status') == 'sending'
+            if not allowed:
+                cur.execute('''UPDATE saas_crm_notice_deliveries SET status='skipped',updated_at=now()
+                  WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s AND channel=%s
+                    AND endpoint_hash=%s AND status='sending' ''',key(item))
+                conn.commit()
+                return None
+            if not TenantPolicy(current).can_access_deal((item.get('resource') or {}).get('deal')):
+                item['resource'] = {**item['resource'], 'deal':None}
+            result = callback()
+        conn.commit()
+    return result

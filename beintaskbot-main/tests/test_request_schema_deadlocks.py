@@ -177,6 +177,10 @@ def test_optional_simulation_is_prepared_before_the_ingest_business_transaction(
     import json
     import tenant_ai_simulation_schema as simulation_schema
     f=flow;db=f['db'];monkeypatch.setenv('AI_SIMULATION_ENABLED','true')
+    # A previous database's process hint must not suppress this DB's bootstrap.
+    monkeypatch.setattr(simulation_schema,'_ready',True)
+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present'] is None
+    db.commit()
     monkeypatch.setattr(connect,'_verify_signature',lambda *_:True)
     secret=connect._fernet().encrypt(json.dumps({'webhook_secret':'test-secret'}).encode())
     db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()

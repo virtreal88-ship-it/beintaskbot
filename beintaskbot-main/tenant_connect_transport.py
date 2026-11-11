@@ -305,8 +305,10 @@ def _schema(conn) -> None:
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
 
 
+from tenant_shared_integration_access import operation, admitted
+
 def _owner(profile: dict) -> None:
-    if not profile or profile.get('role') not in {'owner', 'admin'}:
+    if not admitted(profile, 'connect') and (not profile or profile.get('role') not in {'owner', 'admin'}):
         raise TenantPlatformError('Connect bağlantısını yalnız administrator idarə edə bilər.')
 
 
@@ -363,6 +365,7 @@ def _request(key: str, method: str, path: str, payload: dict | None = None, *,
     return data if isinstance(data, dict) else {}
 
 
+@operation('connect', 'view', legacy_member_read=True)
 def status(profile: dict) -> dict:
     tenant = str(profile['tenant_id'])
     with _connect() as conn:
@@ -399,6 +402,7 @@ def _diagnostic_error(value) -> str:
     return 'Çatdırılma uğursuz oldu'
 
 
+@operation('connect', 'view')
 def diagnostics(profile: dict) -> dict:
     """Read tenant-owned Connect diagnostics without changing remote state."""
     _owner(profile)
@@ -534,6 +538,7 @@ def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirme
     return {'disabledWebhookIds': disabled, 'preservedWebhookId': current_id}
 
 
+@operation('connect', 'connect', data_arg='payload')
 def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     _owner(profile)
     with _tenant_connect_lock(str(profile['tenant_id'])):
@@ -633,10 +638,11 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
             _request(old_key, 'PATCH', '/v1/webhooks/' + old_id, {'active': False})
         except Exception:
             pass
-    return status(profile)
+    return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
 
 
-def channels(profile: dict, api_key: str) -> list[dict]:
+@operation('connect', lambda v: 'connect' if v['api_key'] else 'view', data_arg='authorization')
+def channels(profile: dict, api_key: str, *, authorization=None) -> list[dict]:
     _owner(profile)
     key = str(api_key or '').strip()
     if not key:
@@ -658,7 +664,8 @@ def channels(profile: dict, api_key: str) -> list[dict]:
             for row in rows if isinstance(row, dict) and row.get('id')]
 
 
-def disconnect(profile: dict) -> dict:
+@operation('connect', 'delete', data_arg='authorization')
+def disconnect(profile: dict, *, authorization=None) -> dict:
     _owner(profile)
     raise TenantPlatformError('Hər WhatsApp nömrəsini ayrıca ayırın; şirkət bağlantısı və webhook saxlanılır.')
 
@@ -680,7 +687,8 @@ def _stored_connect_credentials(profile: dict) -> dict:
     return credentials
 
 
-def disconnect_channel(profile: dict, channel_id: str) -> dict:
+@operation('connect', 'delete', data_arg='authorization')
+def disconnect_channel(profile: dict, channel_id: str, *, authorization=None) -> dict:
     _owner(profile)
     with _tenant_connect_lock(str(profile['tenant_id'])):
         return _disconnect_channel_locked(profile, channel_id)
@@ -705,11 +713,12 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
                 cur.execute('''UPDATE saas_connect_channels SET active=FALSE,status='disconnected',updated_at=now()
                                WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''', (tenant, channel_id))
             conn.commit()
-    return status(profile)
+    return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
 
 
+@operation('connect', lambda v: 'update' if v['reconnect'] else 'view', data_arg='authorization')
 def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
-                   callback_url: str = '') -> dict:
+                   callback_url: str = '', authorization=None) -> dict:
     _owner(profile)
     if not re.fullmatch(r'[0-9a-fA-F-]{36}', str(channel_id or '')):
         raise TenantPlatformError('WhatsApp kanal ID-si düzgün deyil.')
@@ -721,7 +730,7 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
                 raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
     credentials = _stored_connect_credentials(profile)
     if reconnect:
-        configure(profile, {'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
+        configure(profile, {**(authorization or {}), 'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
     current = _request(str(credentials['api_key']), 'GET', '/v1/channels/' + channel_id + '/status')
     result = {'id': channel_id, 'status': str(current.get('status') or 'unknown'),
               'phone': str(current.get('phone') or '')}
@@ -1541,7 +1550,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
-                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
+                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
             saved=cur.fetchone()
             if author != 'AI Agent' and saved:
                 from tenant_ai_agent_connect import mark_operator_reply

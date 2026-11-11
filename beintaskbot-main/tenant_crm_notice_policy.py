@@ -52,7 +52,7 @@ def task_owner(profile: dict, task: dict) -> bool:
                for item in personal.pipeline_scope())
 
 
-def eligible(profile: dict, event: str, row: dict, channel: str) -> bool:
+def eligible(profile: dict, event: str, row: dict, channel: str, *, source_allowed=None) -> bool:
     if (event not in EVENTS or profile.get('active') is not True or profile.get('tenant_status') != 'active'
             or str(profile.get('tenant_id')) != str(row.get('tenant_id'))):
         return False
@@ -63,6 +63,10 @@ def eligible(profile: dict, event: str, row: dict, channel: str) -> bool:
         policy.allows('dialogs') if is_connect_message else
         (not deal.get('deleted_at') and policy.can_access_deal(deal)))
     if event == 'incoming_message':
+        # This legacy worker has no employee-source membership snapshot. Never
+        # infer source access from a deal or an AI permission for scoped users.
+        dialog_scope=policy.action_scope('dialogs','view')
+        if dialog_scope is not None:allowed=dialog_scope!='none' and (dialog_scope=='all' or source_allowed is True)
         allowed = allowed and row.get('direction') == 'incoming'
         if not is_connect_message:
             allowed = allowed and positive_id((row.get('deal') or {}).get('status_id')) != 142

@@ -8,7 +8,7 @@ import uuid
 from urllib.parse import urlencode
 
 from tenant_chat_send_policy import command as text_command
-from tenant_chat_send_store import authority, finish, mark_sending, reserve
+from tenant_chat_send_store import dispatch_guarded, authority, finish, mark_sending, reserve
 from tenant_connect_transport import ConnectPreflightError, _request
 from tenant_customer_voice import validate_recording
 from tenant_linear_policy import TenantLinearError
@@ -209,7 +209,7 @@ async def run(session, command, content, logger):
                                                                       'channel_id':channel,'conversation_id':conversation})
         route = {**route,'author_id':item['key'][1],'crm_conversation_id':command['lead_id']}
         started = True
-        receipt = await asyncio.to_thread(_submit, route, command['request_id'], command['file']['mime'], content)
+        receipt = await asyncio.to_thread(dispatch_guarded, item, route, _submit, command['request_id'], command['file']['mime'], content)
         if receipt['provider_accepted']:
             await asyncio.to_thread(record_acceptance, session, {**item, 'lead_id': command['lead_id']}, receipt)
         else:

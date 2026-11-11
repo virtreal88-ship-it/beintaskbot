@@ -52,7 +52,38 @@ class TenantPolicy:
     def privileged(self) -> bool:
         return self.profile.get('role') in {'owner', 'admin'}
 
+    def action_scope(self, module: str, action: str):
+        from tenant_scoped_access import configured_action_scope, ACTIVE_TENANT_STATUSES
+        scope = configured_action_scope(self, module, action)
+        if scope is None:
+            return None
+        if self.profile.get('active') is False or self.profile.get('tenant_status', 'active') not in ACTIVE_TENANT_STATUSES:
+            return 'none'
+        return 'all' if self.profile.get('role') == 'owner' else scope
+
+    def has_scoped_access(self, module: str, action=None) -> bool:
+        from tenant_scoped_access import CRUD_ACTIONS
+        return (self.action_scope(module, action) is not None if action else
+                any(self.action_scope(module, item) is not None for item in CRUD_ACTIONS))
+
+    def allows_resource(self, module: str, action: str, resource: dict) -> bool:
+        from tenant_scoped_access import allows_owned_resource, profile_actor, resource_metadata
+        actor = profile_actor(self.profile)
+        scope = self.action_scope(module, action)
+        if scope is None:
+            legacy_module = 'customers' if module in {'companies', 'contacts'} else module
+            return (allows_owned_resource(actor, resource_metadata(resource), 'all')
+                    and self.legacy_allows_action(legacy_module, action))
+        return allows_owned_resource(actor, resource_metadata(resource), scope)
+
     def allows(self, module: str) -> bool:
+        # Coarse callers cannot establish row/source scope. A module using the
+        # matrix must go through resource-aware routes, never a legacy shortcut.
+        if self.profile.get('role') != 'owner' and self.has_scoped_access(module):
+            return False
+        return self.legacy_allows(module)
+
+    def legacy_allows(self, module: str) -> bool:
         if self.profile.get('active') is False:
             return False
         if self.profile.get('role') == 'owner':
@@ -63,9 +94,9 @@ class TenantPolicy:
         if module in {'dialogs','support'}:
             if self.profile.get('role') == 'master':
                 return False
-            return module in set(self.profile.get('permissions') or []) or self.allows('ai_agents')
+            return module in set(self.profile.get('permissions') or []) or self.legacy_allows('ai_agents')
         if module == 'night_report':
-            return self.profile.get('role') != 'master' and ('night_report' in set(self.profile.get('permissions') or []) or self.allows('ai_agents'))
+            return self.profile.get('role') != 'master' and ('night_report' in set(self.profile.get('permissions') or []) or self.legacy_allows('ai_agents'))
         if module == 'ai_agents':
             return self.profile.get('role') == 'admin' and self.member_settings.get('ai_agents_manage') is True
         if self.profile.get('role') == 'master' and module != 'hot_orders':
@@ -81,6 +112,14 @@ class TenantPolicy:
         return module in permissions
 
     def allows_action(self, module: str, action: str) -> bool:
+        if module == 'employees' and action == 'manage' and self.profile.get('role') != 'owner' and self.has_scoped_access(module):
+            return False
+        scope = self.action_scope(module, action)
+        if scope is not None:
+            return scope != 'none'
+        return self.legacy_allows_action('customers' if module in {'companies', 'contacts'} else module, action)
+
+    def legacy_allows_action(self, module: str, action: str) -> bool:
         """Check a granular grant, while preserving legacy module grants.
 
         Existing module permissions continue to authorize their historical
@@ -92,6 +131,8 @@ class TenantPolicy:
             return False
         if self.profile.get('role') == 'owner':
             return True
+        if module == 'ai_agents' and action in {'view', 'create', 'update'}:
+            return self.legacy_allows('ai_agents')
         # Native CRM CRUD overrides are independent of legacy module grants.
         # In particular, changing native delete must not revoke Kommo access or
         # convert a broad membership grant. Explicit false wins over :manage.
@@ -104,7 +145,7 @@ class TenantPolicy:
         permissions = set(self.profile.get('permissions') or [])
         action_grants = {f'{module}:{item}' for item in allowed_actions}
         if module in permissions and not (permissions & action_grants):
-            return self.allows(module)  # legacy module grant
+            return self.legacy_allows(module)  # legacy module grant
         return f'{module}:{action}' in permissions or f'{module}:manage' in permissions
 
     def pipeline_scope(self) -> list[dict]:
@@ -204,7 +245,20 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         from tenant_member_access import page_capabilities, action_capabilities
-        return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+        modules = {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']}
+        finance_scope = self.action_scope('finance', 'view')
+        if finance_scope is not None:
+            modules['finance'] = finance_scope != 'none'
+        if self.has_scoped_access('support'):
+            support_view=self.action_scope('support','view')
+            modules['support'] = support_view != 'none' if support_view is not None else self.legacy_allows('support')
+        from tenant_employee_policy import employee_action_allowed
+        from tenant_scoped_access import scoped_access_enabled
+        capabilities = {'can_create_employees': employee_action_allowed(self.profile, 'create'),
+                'employee_creation_scoped': scoped_access_enabled(),
+                'can_view_employees': employee_action_allowed(self.profile, 'view'),
+                'can_update_employees': employee_action_allowed(self.profile, 'update'),
+                'modules': modules,
                 'pages': page_capabilities(self.profile),
                 'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
@@ -214,6 +268,17 @@ class TenantPolicy:
                 'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
+        if scoped_access_enabled():
+            from tenant_finance_policy import finance_capabilities
+            capabilities['finance'] = finance_capabilities(self)
+            capabilities['support'] = {action: (self.action_scope('support',action)!='none'
+                if self.action_scope('support',action) is not None else self.legacy_allows('support'))
+                for action in ('view','create','update')}
+        from tenant_ai_scoped_access import capabilities as ai_document_capabilities
+        document_access = ai_document_capabilities(self)
+        if document_access is not None:
+            capabilities['ai_documents'] = document_access
+        return capabilities
 
     def deal_board(self) -> list[dict]:
         """Display metadata only for pipelines/stages this membership may read."""
@@ -293,6 +358,9 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
         if 'notifications' in item:
             validate_notification_preferences(item['notifications'])
+        if 'access_scopes' in item:
+            from tenant_scoped_access import validate_access_scopes
+            validate_access_scopes(item['access_scopes'])
         if 'native_crm_actions' in item:
             from tenant_member_access import validate_native_crm_actions
             validate_native_crm_actions(item['native_crm_actions'])

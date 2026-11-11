@@ -19,6 +19,11 @@ def create_schema(conn):
             REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE RESTRICT,
           FOREIGN KEY(tenant_id,assigned_to) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
           FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+        # Responsibility is separate from the assigned executor. This is only
+        # additive preparation; support authorization remains on its existing
+        # policy until every case, consultation and background path is scoped.
+        from tenant_scoped_access_schema import migrate_resource_ownership
+        migrate_resource_ownership(cur, ('saas_support_tickets',))
         cur.execute('CREATE INDEX IF NOT EXISTS saas_support_queue_idx ON saas_support_tickets(tenant_id,status,assigned_to,created_at)')
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_outcome TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_note TEXT NOT NULL DEFAULT ''")

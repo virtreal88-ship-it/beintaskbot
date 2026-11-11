@@ -9,20 +9,32 @@ from tenant_chat_ai_policy import fingerprint, audio, media_identity
 
 def access(cur, session, lead_id):
     tenant, user = identifier(session['tenant_id']), int(session['telegram_id'])
-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
-    person = cur.fetchone()
+    from tenant_scoped_access import scoped_access_enabled
+    if scoped_access_enabled():
+        from tenant_scoped_access_store import read_access_profile
+        person = read_access_profile(cur, tenant, user, lock=True)
+    else:
+        cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
+          JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
+        person = cur.fetchone()
+        if person:
+            person = {**person, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
     if not person or person['active'] is not True or person['tenant_status'] != 'active':
         raise TenantLinearError('İcazə yoxdur.', 403)
-    policy = TenantPolicy({**person, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
+    policy = TenantPolicy(person)
     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
     if not policy.can_use_chat_ai() or not policy.can_access_deal(cur.fetchone()):
         raise TenantLinearError('Bu çatın AI funksiyalarına icazə yoxdur.', 403)
+    from tenant_dialog_access import require_lead
+    require_lead(cur,tenant,policy,lead_id)
     cur.execute("SELECT secrets,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai' FOR SHARE", (tenant,))
     connection = cur.fetchone()
     if not connection or not connection['secrets'] or connection['metadata'].get('enabled') is not True or connection['metadata'].get('consent') is not True:
         raise TenantLinearError('Şirkətin çat AI ayarlarını aktiv edin.', 409)
-    return tenant, user, connection
+    from tenant_dialog_access import lead_message_filter,scope
+    if scope(policy) is None:return tenant,user,connection
+    return tenant,user,{**connection,'_dialog_scoped':True,
+      '_dialog_message_filter':lead_message_filter(cur,tenant,policy,lead_id)}
 
 
 def reserve(session, command):
@@ -37,24 +49,25 @@ def reserve(session, command):
             if existing:
                 if existing['requested_by'] != user or existing['input_hash'] != fingerprint(command):
                     raise TenantLinearError('Sorğu kodu başqa əməliyyata aiddir.', 409)
-                if existing['status'] == 'completed' and existing['result'] and existing['config_version'] == str(connection['updated_at']):
+                if existing['status'] == 'completed' and existing['result'] and existing['config_version'] == str(connection['updated_at']) and not connection.get('_dialog_scoped'):
                     return {'cached_result': existing['result']}
                 error = TenantLinearError('Əvvəlki sorğunun nəticəsi hazır deyil və ya naməlumdur. Avtomatik təkrarlanmır.', 409)
                 error.keep_request = True
                 raise error
+            source_guard=connection.get('_dialog_message_filter','TRUE')
             config = connection['metadata']
             if command['mode'] == 'transcribe':
                 if config.get('audio_enabled') is not True:
                     raise TenantLinearError('Səs transkripsiyası aktiv deyil.', 409)
                 cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s''', (tenant, command['lead_id'], command['message_id']))
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s AND '''+source_guard, (tenant, command['lead_id'], command['message_id']))
                 row = cur.fetchone()
                 if not row or not audio(row):
                     raise TenantLinearError('Səs mesajı tapılmadı.', 404)
                 rows = [row]
             else:
                 cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND '''+source_guard+'''
                   ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 30''', (tenant, command['lead_id']))
                 rows = list(reversed(cur.fetchall()))
                 if not rows:
@@ -91,7 +104,7 @@ def reserve(session, command):
             cur.execute("DELETE FROM saas_chat_transcripts WHERE (tenant_id,lead_id,media_hash) IN (SELECT tenant_id,lead_id,media_hash FROM saas_chat_transcripts WHERE tenant_id=%s::uuid AND created_at<now()-interval '90 days' LIMIT 100)", (tenant,))
         conn.commit()
     return {'tenant_id': tenant, 'user_id': user, 'config_version': str(connection['updated_at']),
-            'command': command, 'config': config, 'api_key': secret['api_key'], 'rows': rows,
+            '_dialog_message_filter':source_guard,'command': command, 'config': config, 'api_key': secret['api_key'], 'rows': rows,
             'pending_audio': pending, 'transcripts': transcripts}
 
 
@@ -100,7 +113,7 @@ def validate(item):
         ensure_schema(conn)
         with conn.cursor() as cur:
             _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
-            if str(connection['updated_at']) != item['config_version']:
+            if str(connection['updated_at']) != item['config_version'] or connection.get('_dialog_message_filter','TRUE')!=item.get('_dialog_message_filter','TRUE'):
                 raise TenantLinearError('AI ayarları dəyişib.', 409)
 
 
@@ -109,7 +122,7 @@ def cache_transcript(item, row, text):
         ensure_schema(conn)
         with conn.cursor() as cur:
             _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
-            if str(connection['updated_at']) != item['config_version']:
+            if str(connection['updated_at']) != item['config_version'] or connection.get('_dialog_message_filter','TRUE')!=item.get('_dialog_message_filter','TRUE'):
                 raise TenantLinearError('AI ayarları dəyişib.', 409)
             cur.execute('''INSERT INTO saas_chat_transcripts(tenant_id,lead_id,media_hash,transcript)
               VALUES(%s::uuid,%s,%s,%s) ON CONFLICT(tenant_id,lead_id,media_hash) DO UPDATE
@@ -125,7 +138,8 @@ def finish(item, result):
             if result is not None:
                 try:
                     _, _, connection = access(cur, {'tenant_id': item['tenant_id'], 'telegram_id': item['user_id']}, item['command']['lead_id'])
-                    status = 'completed' if str(connection['updated_at']) == item['config_version'] else 'skipped'
+                    status = 'completed' if (str(connection['updated_at']) == item['config_version']
+                        and connection.get('_dialog_message_filter','TRUE') == item.get('_dialog_message_filter','TRUE')) else 'skipped'
                 except TenantLinearError:
                     status = 'skipped'
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",

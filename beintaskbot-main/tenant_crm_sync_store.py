@@ -177,7 +177,7 @@ class SyncPageStore:
         self.conn.commit()
         return matches
 
-    def save_page(self, snapshots: list[dict], *, done: bool) -> None:
+    def save_page(self, snapshots: list[dict], *, done: bool, observation=None) -> None:
         tenant, resource = str(self.row['tenant_id']), self.row['resource']
         deleted = resource == 'leads' and self.row.get('phase') == 'deleted'
         rows = ([(tenant, int(item['kommo_lead_id']), item['deleted_at']) for item in snapshots]
@@ -185,6 +185,10 @@ class SyncPageStore:
         switch_phase = done and resource == 'leads' and not deleted
         done = done and not switch_phase
         with self.conn.cursor() as cur:
+            if observation is not None:
+                from tenant_crm_import_provenance import validate_observation
+                validate_observation(cur, tenant, resource,
+                    [item['raw'] for item in snapshots], observation)
             # Also fences an enqueue after reauthorization while this GET ran.
             cur.execute('''SELECT run_id FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s
                 FOR UPDATE''', (tenant, resource))
@@ -209,11 +213,11 @@ class SyncPageStore:
                         saas_crm_deals.deleted_at<=EXCLUDED.deleted_at)''', rows)
             elif rows and resource == 'contacts':
                 from tenant_crm_sync_import import import_contacts
-                import_contacts(cur,tenant,rows)
+                import_contacts(cur,tenant,rows,observation=observation)
             elif rows and resource == 'leads':
                 from tenant_crm_sync_import import import_deals
                 raw_rows=[item['raw'] for item in snapshots if item.get('raw')]
-                if raw_rows:import_deals(cur,tenant,raw_rows)
+                if raw_rows:import_deals(cur,tenant,raw_rows,observation=observation)
                 # CRM refresh must not erase chat previews or their timestamps.
                 cur.executemany('''INSERT INTO saas_crm_deals
                     (tenant_id,kommo_lead_id,pipeline_id,status_id,stage_name,name,contact_name,phone,

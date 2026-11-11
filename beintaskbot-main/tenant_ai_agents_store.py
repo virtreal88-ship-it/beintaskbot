@@ -22,7 +22,7 @@ def _support_case_extraction_runtime_enabled(tenant_id=None):
     return runtime_flag('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED')
 
 
-def _authorize(cur, profile):
+def _authorize(cur, profile, *, action=None, agent_id=None):
     if not isinstance(profile, dict):
         raise TenantLinearError('İcazə yoxdur.', 403)
     tenant_id = identifier(profile.get('tenant_id'))
@@ -30,6 +30,13 @@ def _authorize(cur, profile):
         actor = int(profile.get('telegram_id'))
     except (TypeError, ValueError):
         raise TenantLinearError('İcazə yoxdur.', 403) from None
+    from tenant_ai_scoped_access import context, authorize
+    if action is None:
+        context(cur, profile)  # Unconverted shared operations stay closed.
+    else:
+        scoped = authorize(cur, profile, action, agent_id)
+        if scoped is not None:
+            return scoped
     cur.execute('''SELECT m.role,m.active,t.status,t.onboarding
       FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
       WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant_id, actor))
@@ -308,13 +315,23 @@ def list_agents(profile):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, _ = _authorize(cur, profile)
-            cur.execute('''SELECT a.id,a.tenant_id,a.name,a.instructions,a.enabled,a.mode,a.language,a.style,a.delay_seconds,
+            tenant, _ = _authorize(cur, profile, action='view')
+            from tenant_ai_scoped_access import context, allowed
+            state = context(cur, profile, 'view')
+            cur.execute('''SELECT a.id,a.tenant_id,a.access_responsible_id,a.name,a.instructions,a.enabled,a.mode,a.language,a.style,a.delay_seconds,
               a.schedule,a.scopes,a.model,a.safety,a.response_policy,a.role,a.expert_policy,a.version,a.created_at,a.updated_at,
               (SELECT count(*) FROM saas_ai_conversation_state cs WHERE cs.tenant_id=a.tenant_id AND cs.agent_id=a.id) AS assigned_dialog_count
               FROM saas_ai_agents a
-              WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''', (tenant,))
-            rows = [_row(row) for row in cur.fetchall()]
+              WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''' + (' FOR SHARE OF a' if state is not None else ''), (tenant,))
+            candidates = cur.fetchall()
+            rows = []
+            for row in candidates:
+                if state is not None and not allowed(cur, state, row):
+                    continue
+                from tenant_ai_scoped_access import project_document
+                item = project_document(cur, profile, _row(row))
+                item.pop('access_responsible_id', None)
+                rows.append(item)
     return rows
 
 
@@ -328,6 +345,10 @@ def configuration_options(profile):
         ensure_schema(conn)
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
+            from tenant_ai_scoped_access import document_profile, configuration_options as scoped_options
+            current = document_profile(cur, profile)
+            if current is not None:
+                return scoped_options(cur, current)
             tenant, _ = _authorize(cur, profile)
             cur.execute("SELECT pipeline_id,name FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name,pipeline_id",(tenant,))
             pipelines=[dict(r) for r in cur.fetchall()]
@@ -418,7 +439,13 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
+            tenant, actor = _authorize(cur, profile, action='create' if creating else 'update', agent_id=agent_id)
+            from tenant_ai_scoped_access import require_references, require_runtime_source_boundary, mutation_receipt
+            require_runtime_source_boundary(cur, profile, patch)
+            require_references(cur, profile, patch)
+            from tenant_ai_scoped_access import document_profile
+            if creating and patch.get('enabled') and document_profile(cur, profile) is not None:
+                raise TenantLinearError('ai_create_disabled_then_update', 403)
             if creating and patch.get('mode')!='automatic':
                 patch['response_policy']['auto_case_dispatch_enabled']=False
             if creating and patch.get('response_policy') and (patch['response_policy'].get('auto_case_dispatch_enabled') or patch['response_policy'].get('developer_routing')=='primary_reserve'):
@@ -436,7 +463,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                             (tenant, actor, patch['setup_key']))
                 existing = _row(cur.fetchone())
                 if existing:
-                    return existing
+                    from tenant_ai_scoped_access import authorize
+                    authorize(cur, profile, 'create', existing['id'])
+                    require_references(cur, profile, existing)
+                    return mutation_receipt(cur, profile, existing)
                 # The original version of the night-operator wizard did not
                 # send a setup key.  Match only one *identical*, disabled,
                 # employee-owned draft and attach the key to it.  This makes
@@ -454,6 +484,8 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                              _json(patch['scopes']), patch['model'], _json(patch['safety'])))
                 legacy = cur.fetchall()
                 if len(legacy) == 1:
+                    from tenant_ai_scoped_access import authorize
+                    authorize(cur, profile, 'create', legacy[0]['id'])
                     cur.execute('''UPDATE saas_ai_agents SET setup_key=%s
                       WHERE tenant_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
                       RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
@@ -462,8 +494,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                     recovered = _row(cur.fetchone())
                     if recovered:
                         _audit(cur, tenant, actor, 'ai_agent_setup_recovered', 'ai_agent', recovered['id'])
+                        receipt = mutation_receipt(cur, profile, recovered)
                         if connection is None: conn.commit()
-                        return recovered
+                        return receipt
             if 'model' in patch:
                 cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 integration = cur.fetchone() or {}
@@ -519,11 +552,11 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 agent_uuid = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
-                  delay_seconds,schedule,scopes,model,safety,response_policy,created_by,setup_key,role,expert_policy) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s::jsonb)
+                  delay_seconds,schedule,scopes,model,safety,response_policy,created_by,setup_key,role,expert_policy,access_responsible_id) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s::jsonb,%s)
                   RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,response_policy,role,expert_policy,version,created_at,updated_at''',
                   (agent_uuid, tenant, patch['name'], patch['instructions'], patch['enabled'], patch['mode'], patch['language'], patch['style'],
                    patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), _json(patch['response_policy']), actor,
-                   patch.get('setup_key'),patch['role'],_json(patch['expert_policy'])))
+                   patch.get('setup_key'),patch['role'],_json(patch['expert_policy']),actor))
                 result = _row(cur.fetchone())
                 cur.execute('''INSERT INTO saas_ai_agent_history_identities(tenant_id,id,display_name)
                   VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT(tenant_id,id) DO UPDATE SET display_name=EXCLUDED.display_name,
@@ -538,8 +571,12 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                     raise TenantLinearError('Agent tapılmadı.', 404)
                 if previous['version'] != data['expected_version']:
                     raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
+                require_runtime_source_boundary(cur, profile, previous)
+                require_references(cur, profile, previous)
                 merged = {key: previous.get(key) for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model','safety','response_policy','role','expert_policy')}
                 merged.update(patch)
+                require_references(cur, profile, merged)
+                require_runtime_source_boundary(cur, profile, merged)
                 from tenant_ai_expert_policy import validate_binding
                 validate_binding(cur,tenant,agent_uuid,merged,previous)
                 # The recipient binding is server-owned; it lives in the
@@ -594,7 +631,14 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
             cur.execute("SELECT to_regclass('saas_connect_conversations') IS NOT NULL AS available")
             if (cur.fetchone() or {}).get('available'):
                 from tenant_ai_agent_connect import reconcile_tenant_connect_assignments
-                reconcile_tenant_connect_assignments(cur, tenant)
+                from tenant_ai_scoped_access import document_profile
+                if document_profile(cur, profile) is None:
+                    reconcile_tenant_connect_assignments(cur, tenant)
+                else:
+                    scoped_config = patch if creating else merged
+                    channels = [row['channel_id'] for row in scoped_config.get('scopes') or [] if row.get('provider') == 'connect']
+                    reconcile_tenant_connect_assignments(cur, tenant, channel_ids=channels)
+            result = mutation_receipt(cur, profile, result)
         if connection is None: conn.commit()
     return result
 
@@ -1389,10 +1433,13 @@ def list_triggers(profile,agent_id):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,_=_authorize(cur,profile)
+            tenant,_=_authorize(cur,profile,action='view',agent_id=agent)
             cur.execute('''SELECT id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at
               FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid ORDER BY created_at,id''',(tenant,agent))
             rows=cur.fetchall()
+            from tenant_ai_scoped_access import context
+            if context(cur, profile, 'view') is not None:
+                rows = [{key: row[key] for key in ('id','agent_id','name','trigger_type','enabled','version','created_at','updated_at') if key in row} for row in rows]
     result=[]
     for row in rows:
         item=dict(row);item['id']=str(item['id']);item['agent_id']=str(item['agent_id'])
@@ -1410,7 +1457,9 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None,connection=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=_authorize(cur,profile)
+            tenant,actor=_authorize(cur,profile,action='update',agent_id=agent)
+            from tenant_ai_scoped_access import require_trigger_write, mutation_receipt
+            require_trigger_write(cur, profile, agent, patch)
             cur.execute("SELECT role,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,agent))
             principal=cur.fetchone()
             if not principal:raise TenantLinearError('Agent tapılmadı.',404)
@@ -1468,7 +1517,9 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None,connection=None):
                 previous=cur.fetchone()
                 if not previous:raise TenantLinearError('Trigger tapılmadı.',404)
                 if previous['version']!=data['expected_version']:raise TenantLinearError('Trigger dəyişib. Səhifəni yeniləyin.',409)
+                require_trigger_write(cur, profile, agent, previous)
                 merged={key:previous[key] for key in ('name','trigger_type','condition','actions','enabled')};merged.update(patch)
+                require_trigger_write(cur, profile, agent, merged)
                 if merged['enabled'] and any(action in merged['actions'] for action in ('create_task','update_phone','move_stage')):
                     cur.execute('SELECT crm_actions_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
                     if (cur.fetchone() or {}).get('crm_actions_enabled') is not True:raise TenantLinearError('AI CRM əməliyyatları söndürülüb.',409)
@@ -1482,7 +1533,9 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None,connection=None):
                   (merged['name'],merged['trigger_type'],_json(merged['condition']),_json(merged['actions']),merged['enabled'],tenant,agent,trigger_uuid))
                 result=dict(cur.fetchone())
                 _audit(cur,tenant,actor,'ai_agent_trigger_updated','ai_agent_trigger',trigger_uuid,{'version':previous['version']+1})
+            result = mutation_receipt(cur, profile, result)
         if connection is None: conn.commit()
+    if 'agent_id' not in result: return result
     result['id']=str(result['id']);result['agent_id']=str(result['agent_id'])
     for key in ('created_at','updated_at'):
         if result.get(key):result[key]=result[key].isoformat()
@@ -1494,7 +1547,20 @@ def delete_trigger(profile,agent_id,trigger_id):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=_authorize(cur,profile)
+            tenant,actor=_authorize(cur,profile,action='update',agent_id=agent)
+            from tenant_ai_scoped_access import require_trigger_write, document_profile
+            previous = {}
+            if document_profile(cur, profile) is not None:
+                # Parent-agent authorization alone does not authorize removing
+                # a shared CRM/helper automation. Lock its persisted contract
+                # through validation and deletion so a concurrent edit cannot
+                # replace a safe handoff with a privileged action in between.
+                cur.execute('''SELECT actions,condition FROM saas_ai_agent_triggers
+                  WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND id=%s::uuid FOR UPDATE''',
+                  (tenant,agent,trigger))
+                previous = cur.fetchone()
+                if not previous:raise TenantLinearError('Trigger tapılmadı.',404)
+            require_trigger_write(cur, profile, agent, previous)
             cur.execute('DELETE FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND id=%s::uuid RETURNING id',(tenant,agent,trigger))
             if not cur.fetchone():raise TenantLinearError('Trigger tapılmadı.',404)
             _audit(cur,tenant,actor,'ai_agent_trigger_deleted','ai_agent_trigger',trigger)
@@ -1652,15 +1718,27 @@ def _assert_resume_allowed(cur, tenant, provider, conversation, channel_id):
     return row
 
 
-def _conversation_authorize(cur, profile, provider, conversation, channel_id=''):
-    # Preserve existing configuration authority; ordinary operators get only their routes.
+def _conversation_authorize(cur, profile, provider, conversation, channel_id='', *, action='view'):
+    # AI configuration authority does not bypass an explicit dialog source scope.
+    from tenant_operator_access import access, assert_route
+    from tenant_scoped_access import scoped_access_enabled
+    from tenant_dialog_access import require_independent_ai
     try:
-        return _authorize(cur,profile)
+        verified=_authorize(cur,profile)
     except TenantLinearError as error:
         if error.status != 403: raise
-    from tenant_operator_access import access, assert_route
-    tenant,actor,policy=access(cur,profile,'dialogs')
-    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''))
+        verified=None
+    if verified is not None:
+        if scoped_access_enabled():
+            from tenant_scoped_access_store import read_access_profile
+            from tenant_policy import TenantPolicy
+            policy=TenantPolicy(read_access_profile(cur,verified[0],verified[1],lock=True) or {})
+            if policy.has_scoped_access('dialogs'):
+                assert_route(cur,verified[0],policy,provider,conversation,str(channel_id or ''),action=action)
+        return verified
+    tenant,actor,policy=access(cur,profile,'dialogs',action=action)
+    require_independent_ai(policy,management=True)
+    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''),action=action)
     return tenant,actor
 
 
@@ -1678,7 +1756,7 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
             connect_schema(conn)
             conn.commit()  # Finish DDL before acquiring group/dialogue locks.
         with conn.cursor() as cur:
-            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
+            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id,action='update')
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             lock_dialog(cur, tenant, provider, resolved_channel, conversation)
             if provider=='connect':
@@ -1786,6 +1864,13 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                         'resume_allowed':False,'resume_block_reason':'legacy_channel_ambiguous','tracked':True}
             from tenant_ai_group_coordination import group_jid,view as group_view
             group_snapshot=group_view(cur,tenant,conversation) if provider=='connect' and group_jid(conversation) else None
+            if group_snapshot:
+                from tenant_scoped_access import scoped_access_enabled
+                if scoped_access_enabled():
+                    from tenant_scoped_access_store import read_access_profile
+                    from tenant_policy import TenantPolicy
+                    from tenant_dialog_access import filter_group
+                    filter_group(cur,tenant,TenantPolicy(read_access_profile(cur,tenant,int(profile['telegram_id']),lock=True) or {}),group_snapshot)
             # The route was verified above against tenant-owned Connect data.
             # Diagnostics below intentionally expose only metadata and safe
             # state/error codes; message bodies and external secrets never
@@ -1889,6 +1974,8 @@ def read_conversation_for_lead(profile, lead_id):
                     AND c.connect_channel_id::text=j.channel_id)))
               ORDER BY j.provider,j.updated_at DESC LIMIT 2""", (tenant, lead))
             rows = cur.fetchall()
+            if len(rows)==1:
+                _conversation_authorize(cur,profile,rows[0]['provider'],rows[0]['conversation_id'],rows[0].get('channel_id') or '')
     if len(rows) != 1:
         return None
     row = rows[0]
@@ -1920,6 +2007,8 @@ def list_handoffs(profile,limit=50):
         from tenant_connect_transport import _schema as ensure_connect_schema
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
+            from tenant_ai_management_access import require_unrestricted_dialog_read
+            require_unrestricted_dialog_read(cur, profile)
             tenant,_=_authorize(cur,profile)
             cur.execute('''SELECT cs.provider,cs.conversation_id,cs.state,cs.reason,cs.updated_at,
                 COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,cs.last_inbound_message_id,cs.last_agent_message_id,
@@ -1971,6 +2060,8 @@ def list_connect_diagnostics(profile, limit=50):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_ai_management_access import require_unrestricted_dialog_read
+            require_unrestricted_dialog_read(cur, profile)
             tenant, _ = _authorize(cur, profile)
             return read_connect_diagnostics(cur, tenant, limit)
 

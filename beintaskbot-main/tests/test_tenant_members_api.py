@@ -54,6 +54,24 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.api["invite_requests"](self.request("GET"))).status, 403)
         self.listing.assert_not_called(); self.create.assert_not_called(); self.requests.assert_not_called()
 
+    async def test_scoped_update_without_read_returns_receipt_not_failed_readback(self):
+        from test_employee_card_scopes import actor
+        self.member.return_value = actor('none', 'all')
+        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
+            response = await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.payload(response), {'success': True, 'applied': True})
+        self.deactivate.assert_called_once_with(tenant_id='a', owner_id=2, telegram_id=3)
+        self.listing.assert_not_called()
+
+    async def test_scoped_read_does_not_admit_update(self):
+        from test_employee_card_scopes import actor
+        self.member.return_value = actor('all', 'none')
+        with patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'}):
+            self.assertEqual((await self.api['members'](self.request('GET'))).status, 200)
+            self.assertEqual((await self.api['members'](self.request(data={'action': 'deactivate', 'telegram_id': 3}))).status, 403)
+        self.deactivate.assert_not_called()
+
     async def test_member_list_upsert_and_deactivate(self):
         result = self.payload(await self.api["members"](self.request("GET")))
         self.assertEqual(result["members"], [{"telegram_id": 22}])

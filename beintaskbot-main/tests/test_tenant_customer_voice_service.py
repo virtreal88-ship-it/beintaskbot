@@ -52,6 +52,7 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.item = {'key': (TENANT, 20, REQUEST), 'command': COMMAND, 'connection': ['connect', CHANNEL, JID]}
         self.receipt = _checked_receipt(RECEIPT, ROUTE, REQUEST)
+        patch('tenant_customer_voice_service.dispatch_guarded',side_effect=lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs)).start()
         self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
         self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
         self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()

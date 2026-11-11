@@ -55,7 +55,8 @@ def model_management_handler(member_from_request, canonical_origin, logger, *, p
                 if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id'])
                         or str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
                     raise TenantLinearError('Кабинет изменился. Обновите страницу.', 409)
-                result = await asyncio.to_thread(test_model, profile, data.get('model'))
+                from tenant_scoped_access import scoped_access_enabled
+                result = await asyncio.to_thread(test_model, profile, data.get('model'), **({'authorization':data} if scoped_access_enabled() else {}))
             else:
                 if request.method != 'GET':
                     raise TenantLinearError('Метод не поддерживается.', 405)

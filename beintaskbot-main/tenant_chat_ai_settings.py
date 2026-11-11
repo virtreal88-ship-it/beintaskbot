@@ -7,10 +7,13 @@ from tenant_chat_ai_policy import configuration
 from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model
 from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError, identifier
+from tenant_shared_integration_access import operation, admitted, principal
 
 
 def authorize(cur, session):
-    """Allow active company owners and admins to manage company Chat AI."""
+    """Allow current scoped management or the unchanged legacy owner/admin path."""
+    from tenant_shared_integration_access import admitted, principal
+    if admitted(session, 'chat_ai'): return principal(session)
     if not isinstance(session, dict):
         raise TenantLinearError('İcazə yoxdur.', 403)
     tenant = identifier(session.get('tenant_id'))
@@ -63,6 +66,7 @@ def public(row, tenant_id=None):
     return result
 
 
+@operation('chat_ai', 'view')
 def read(session):
     with _connect() as conn:
         ensure_schema(conn)
@@ -91,19 +95,22 @@ def _company_key(session):
     return tenant, metadata, secret['api_key']
 
 
+@operation('chat_ai', 'view')
 def available_models(session):
     """Explicit owner/admin check; only IDs are returned and no tokens are generated."""
     _tenant, _metadata, key = _company_key(session)
     return {'models': provider_models(key)}
 
 
+@operation('chat_ai', 'view')
 def realtime_model_availability(session,model):
     """Use only the authorized company's saved key; never return the key."""
     _tenant, _metadata, key = _company_key(session)
     return check_realtime_model(key,model)
 
 
-def test_model(session, model):
+@operation('chat_ai', 'update', data_arg='authorization')
+def test_model(session, model, *, authorization=None):
     """Explicit owner/admin, context-free minimal test of the selected Copilot model."""
     model = str(model or '').strip()
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
@@ -115,12 +122,24 @@ def test_model(session, model):
     return {'model': model, 'available': True}
 
 
+@operation('chat_ai', lambda v: 'delete' if v['data'].get('remove_key') is True else 'connect' if v['data'].get('api_key') else 'update', data_arg='data')
 def save(session, data):
-    preserve_models = data.get('preserve_models') is True
+    from tenant_scoped_access import scoped_access_enabled
+    preserve_settings = data.get('preserve_settings') is True
+    if scoped_access_enabled() and data.get('remove_key') is True:
+        preserve_settings = True
+    if preserve_settings:
+        allowed_fields = {'preserve_settings','preserve_models','api_key','remove_key',
+                          'expected_updated_at','expected_tenant_id','expected_user_id','confirm_company_impact'}
+        if set(data) - allowed_fields or (data.get('remove_key') is True and data.get('api_key')):
+            raise TenantLinearError('integration_key_only_request_invalid',400)
+        if not data.get('api_key') and data.get('remove_key') is not True:
+            raise TenantLinearError('integration_key_only_request_invalid',400)
+    preserve_models = preserve_settings or data.get('preserve_models') is True
     model_fields = ('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
     if preserve_models and any(field in data for field in model_fields):
         raise TenantLinearError('Модели задаются у агента.',400)
-    config = configuration(data, models_required=not preserve_models)
+    config = {} if preserve_settings else configuration(data, models_required=not preserve_models)
     key = data.get('api_key', '')
     if not isinstance(key, str) or (key and (not 20 <= len(key) <= 500 or any(c.isspace() for c in key))):
         raise TenantLinearError('API açarı düzgün deyil.')
@@ -136,6 +155,10 @@ def save(session, data):
             # Older settings clients do not submit the Copilot subsection.
             # Preserve its values so legacy Chat AI edits cannot couple models.
             old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
+            if preserve_settings:
+                config = dict(old_metadata)
+                if data.get('remove_key') is True:
+                    config['enabled'] = False
             if preserve_models:
                 for field in model_fields:
                     config[field] = old_metadata.get(field, False if field=='video_enabled' else '')
@@ -183,7 +206,7 @@ def save(session, data):
                 encrypted = None
             elif key:
                 encrypted = _fernet().encrypt(json.dumps({'tenant_id': tenant, 'provider': 'chat_ai', 'api_key': key}).encode())
-            if config['enabled'] and not encrypted:
+            if config.get('enabled') and not encrypted:
                 raise TenantLinearError('Şirkətin API açarını daxil edin.')
             cur.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata)
               VALUES(%s::uuid,'chat_ai','configured',%s,%s::jsonb) ON CONFLICT(tenant_id,provider) DO UPDATE

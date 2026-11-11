@@ -1,10 +1,12 @@
 """Authorized full Telegram text and neutral push. No retry loop."""
 import asyncio
 from tenant_crm_notice_store import observe
-from tenant_crm_notice_outbox import claim, finish
-from tenant_notice_transport import attempt
+from tenant_crm_notice_outbox import claim, finish, dispatch_guarded
+from tenant_notice_transport import attempt, DeliveryResult
 from tenant_notice_text import message_parts
 from tenant_push_worker import send_push
+
+DELIVERY_TIMEOUT = 35
 
 LABELS = {'new_lead': 'Yeni sövdələşmə', 'incoming_message': 'Yeni mesaj',
           'task_assigned': 'Yeni tapşırıq', 'task_overdue': 'Gecikmiş tapşırıq'}
@@ -37,8 +39,23 @@ async def deliver(bot, private_key: str, claims: dict, logger) -> None:
             item = await asyncio.to_thread(claim, channel)
             if item is None: break
             if not item['send']: continue
-            result = await attempt(item, channel, bot, text=message, parts=message_parts,
-                                   push_sender=send_push, private_key=private_key, claims=claims)
+            loop = asyncio.get_running_loop()
+            async def bounded_attempt():
+                from tenant_scoped_access import scoped_access_enabled
+                if not scoped_access_enabled() or item.get('event') != 'incoming_message':
+                    return await attempt(item, channel, bot, text=message, parts=message_parts,
+                        push_sender=send_push, private_key=private_key, claims=claims)
+                try:
+                    return await asyncio.wait_for(attempt(item, channel, bot, text=message, parts=message_parts,
+                        push_sender=send_push, private_key=private_key, claims=claims),timeout=DELIVERY_TIMEOUT)
+                except TimeoutError:
+                    return DeliveryResult('unknown')
+            def send_current():
+                # Keep provider I/O on its owning event loop while the worker
+                # thread retains the current grant locks until it finishes.
+                return asyncio.run_coroutine_threadsafe(bounded_attempt(), loop).result()
+            result = await asyncio.to_thread(dispatch_guarded, item, send_current)
+            if result is None: continue
             if result.status != 'delivered':
                 logger.warning('Tenant CRM notice result=%s channel=%s', result.status, channel)
             await asyncio.to_thread(finish, item, result.status, result.message_id)

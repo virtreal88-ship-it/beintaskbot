@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const {mount,settle,edit}=require('./employee_card_fixture.cjs');
+(async()=>{
+ const row={editable_fields:['access_settings'],access_settings:{version:'v1',scoped_access_enabled:true,scope_catalog:{support:['view','create','update']},scoped_actions:{support:{view:'department',create:'self',update:'none'}},legacy_actions:{},actions:{},pages:{}}};
+ const b=await mount({role:'owner',row});const form=edit(b);await settle();
+ const matrix=b.w.document.querySelector('[data-scope-row="support"]');assert.ok(matrix);
+ assert.equal(matrix.querySelectorAll('select').length,3);
+ assert.equal(matrix.querySelector('[data-access-scope=delete]'),null);
+ assert.equal(matrix.querySelector('[data-access-scope=view]').value,'department');b.w.close();
+ const ticket={id:'00000000-0000-4000-8000-000000000101',contact_name:'Synthetic case',channel_id:'channel',conversation_id:'client',status:'waiting',description:'Read only',reason:'request',created_at:'2026-01-01T00:00:00Z'};
+ const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section>',{url:'https://local.invalid/app',runScripts:'outside-only'}),w=dom.window;
+ w.HTMLElement.prototype.scrollIntoView=function(){};w.tenantOperator={hasRight:right=>right==='support'};
+ w.fetch=async url=>({ok:true,json:async()=>url==='/api/platform/me'?{member:{tenant_id:'tenant',telegram_id:31,role:'admin'},capabilities:{modules:{support:true}}}:{success:true,result:url.includes('?')?{tickets:[ticket],members:[],channels:[]}:{ticket,messages:[],capabilities:{update:false}}}});
+ for(const file of ['tenant-operator-i18n.js','tenant-support-inbox.js'])w.eval(fs.readFileSync(path.join(__dirname,'../docs',file),'utf8'));
+ await settle();w.document.querySelector('[data-support-id]').click();await settle();
+ for(const id of ['supportSave','supportTake','supportResolve','supportDescription','supportEditStatus'])assert.equal(w.document.getElementById(id).disabled,true,id);
+ w.close();console.log('PASS: support C/R/U editor and read-only document controls.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

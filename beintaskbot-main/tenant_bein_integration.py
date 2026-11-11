@@ -9,12 +9,14 @@ from tenant_bein_crm import BeinCrm
 from tenant_crm_provider import CrmProviderError
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
 
+from tenant_shared_integration_access import operation, admitted
+
 PROVIDER = "beinsystems"
 CRM_PROVIDERS = ("kommo", PROVIDER)
 
 
 def _owner(profile: dict | None) -> tuple[str, int]:
-    if not profile or profile.get("role") != "owner" or not profile.get("active", True):
+    if not admitted(profile, PROVIDER) and (not profile or profile.get("role") != "owner" or not profile.get("active", True)):
         raise TenantPlatformError("İcazə yoxdur.")
     return str(profile.get("tenant_id") or ""), int(profile.get("telegram_id") or 0)
 
@@ -39,6 +41,7 @@ def _public(row: dict | None) -> dict:
     }
 
 
+@operation(PROVIDER, 'view')
 def status(profile: dict | None) -> dict:
     tenant, _ = _owner(profile)
     with _connect() as conn:
@@ -78,8 +81,10 @@ def credential(tenant_id: str) -> BeinCrm:
         raise TenantPlatformError(str(exc)) from exc
 
 
+@operation(PROVIDER, 'connect', data_arg='authorization',
+           required_actions=lambda values: ('update',) if values['primary'] else ())
 def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str = "",
-         primary: bool = False) -> dict:
+         primary: bool = False, authorization=None) -> dict:
     tenant, actor = _owner(profile)
     # Validate before touching the currently working connection. Encryption is
     # also performed before the transaction so a missing key cannot corrupt it.
@@ -99,11 +104,11 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
-                        (tenant, actor))
-            current = cur.fetchone()
-            if not current or current.get("role") != "owner" or not current.get("active"):
-                raise TenantPlatformError("İcazə yoxdur.")
+            if not admitted(profile, PROVIDER):
+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
+                current = cur.fetchone()
+                if not current or current.get("role") != "owner" or not current.get("active"):
+                    raise TenantPlatformError("İcazə yoxdur.")
             cur.execute("""INSERT INTO saas_tenant_integrations
                 (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
                 VALUES (%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
@@ -129,7 +134,8 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
     return _public(row)
 
 
-def set_primary(profile: dict | None, provider: str) -> dict:
+@operation(PROVIDER, 'update', data_arg='authorization')
+def set_primary(profile: dict | None, provider: str, *, authorization=None) -> dict:
     tenant, actor = _owner(profile)
     selected = str(provider or "").casefold()
     if selected not in CRM_PROVIDERS:
@@ -137,11 +143,11 @@ def set_primary(profile: dict | None, provider: str) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
-                        (tenant, actor))
-            current = cur.fetchone()
-            if not current or current.get("role") != "owner" or not current.get("active"):
-                raise TenantPlatformError("İcazə yoxdur.")
+            if not admitted(profile, PROVIDER):
+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
+                current = cur.fetchone()
+                if not current or current.get("role") != "owner" or not current.get("active"):
+                    raise TenantPlatformError("İcazə yoxdur.")
             cur.execute("SELECT status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=%s",
                         (tenant, selected))
             integration = cur.fetchone()

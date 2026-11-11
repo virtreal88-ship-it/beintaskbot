@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime,timezone
 from tenant_crm_identity import record_link,CRMIdentityConflict
 from tenant_crm_sync_data import phone as kommo_phone
+from tenant_crm_import_provenance import register_inserted, validate_observation
 
 def _when(value):
     try:
@@ -45,7 +46,7 @@ def _link_by_internal(cur,tenant,entity,internal):
       AND provider='kommo' AND entity_type=%s AND internal_id=%s::uuid FOR UPDATE''',(tenant,entity,internal))
     return cur.fetchone()
 
-def _contact(cur,tenant,external,raw,fields,base_time):
+def _contact(cur,tenant,external,raw,fields,base_time,observation=None):
     name=str(raw.get('name') or '').strip()[:180]; phone=kommo_phone(raw); email=_email(raw)
     link=_link_by_external(cur,tenant,'contact',external)
     internal=str(link['internal_id']) if link else ''
@@ -72,6 +73,7 @@ def _contact(cur,tenant,external,raw,fields,base_time):
         _record_conflict(cur,tenant,'contact',external,'both_sides_changed',str(local['id']));
         record_link(cur,tenant_id=tenant,provider='kommo',entity_type='contact',internal_id=str(local['id']),external_id=str(external),sync_state='conflict')
         return None
+    inserted = not local
     if not local:
         if 'name' not in fields or not name:
             _record_conflict(cur,tenant,'contact',external,'name_required_for_new_contact');return None
@@ -88,20 +90,26 @@ def _contact(cur,tenant,external,raw,fields,base_time):
     try:record_link(cur,tenant_id=tenant,provider='kommo',entity_type='contact',internal_id=internal,external_id=str(external),sync_state='synced',origin_id=f"kommo:{external}:{raw.get('updated_at','')}")
     except CRMIdentityConflict:
         _record_conflict(cur,tenant,'contact',external,'identity_mapping_conflict',internal);return None
+    if inserted:
+        register_inserted(cur, observation, 'contact', internal, external)
     cur.execute("UPDATE saas_crm_sync_conflicts SET resolved_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND entity_type='contact' AND external_id=%s",(tenant,str(external)))
     return internal
 
-def import_contacts(cur,tenant,rows):
+def import_contacts(cur,tenant,rows,*,observation=None):
+    if observation is not None:
+        validate_observation(cur, tenant, 'contacts', rows, observation)
     policy=_policy(cur,tenant,'contact')
     if not policy:return 0
     fields=set(policy.get('allowed_fields') or []); base=policy.get('enabled_since'); base=base.replace(microsecond=0) if isinstance(base,datetime) else base; saved=0
     for raw in rows:
         external=str(raw.get('id') or ''); updated=_when(raw.get('updated_at'))
         if not external or not external.isdigit() or not updated or (base and updated<base):continue
-        if _contact(cur,tenant,external,raw,fields,base):saved+=1
+        if _contact(cur,tenant,external,raw,fields,base,observation):saved+=1
     return saved
 
-def import_deals(cur,tenant,rows):
+def import_deals(cur,tenant,rows,*,observation=None):
+    if observation is not None:
+        validate_observation(cur, tenant, 'leads', rows, observation)
     policy=_policy(cur,tenant,'deal')
     if not policy:return 0
     fields=set(policy.get('allowed_fields') or []);base=policy.get('enabled_since');base=base.replace(microsecond=0) if isinstance(base,datetime) else base;saved=0
@@ -119,6 +127,7 @@ def import_deals(cur,tenant,rows):
         external_pipeline=str(raw.get('pipeline_id') or '');external_stage=str(raw.get('status_id') or '')
         pipeline=_mapped_id(cur,tenant,'pipeline',external_pipeline)
         stage=_mapped_id(cur,tenant,'stage',external_stage)
+        inserted = not internal
         if not internal:
             if not title or not pipeline or not stage or not {'title','pipeline_id','stage_id'}<=fields:
                 _record_conflict(cur,tenant,'deal',external,'required_fields_unavailable');continue
@@ -156,5 +165,7 @@ def import_deals(cur,tenant,rows):
         except CRMIdentityConflict:
             _record_conflict(cur,tenant,'deal',external,'identity_mapping_conflict',internal);continue
         cur.execute("UPDATE saas_crm_sync_conflicts SET resolved_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND entity_type='deal' AND external_id=%s",(tenant,external))
+        if inserted:
+            register_inserted(cur, observation, 'deal', internal, external)
         saved+=1
     return saved

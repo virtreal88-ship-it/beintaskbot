@@ -65,6 +65,8 @@ def schema(conn):
           PRIMARY KEY(tenant_id,id),
           FOREIGN KEY(tenant_id,asset_id) REFERENCES saas_instruction_videos(tenant_id,id),
           CHECK(status IN ('offered','virtual_sent','unknown','superseded')))''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 def validate_file(body):
     stream=io.BytesIO(body) if isinstance(body,bytes) else body

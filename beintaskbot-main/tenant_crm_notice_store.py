@@ -80,10 +80,10 @@ def plan(cur, tenant: str, kind: str, key: str, row: dict, event: str, version: 
     if not cur.fetchone(): return
     for member in members:
         recipient = member['telegram_id']
-        if 'telegram' in channels and eligible(member, event, row, 'telegram'):
+        if 'telegram' in channels and source_eligible(cur,member, event, row, 'telegram'):
             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel)
               VALUES(%s::uuid,%s::uuid,%s,'telegram') ON CONFLICT DO NOTHING''', (tenant, event_id, recipient))
-        if 'push' in channels and eligible(member, event, row, 'push'):
+        if 'push' in channels and source_eligible(cur,member, event, row, 'push'):
             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel,endpoint_hash)
               SELECT %s::uuid,%s::uuid,b.telegram_id,'push',b.endpoint_hash
               FROM saas_member_push_devices b JOIN saas_push_devices p USING(endpoint_hash)
@@ -180,3 +180,24 @@ def observe() -> int:
             cur.execute("UPDATE saas_crm_notice_scan SET positions=%s::jsonb,next_scan=now()+interval '1 minute' WHERE tenant_id=%s::uuid", (json.dumps(positions), tenant))
         conn.commit()
     return count
+
+
+def source_eligible(cur,member,event,row,channel):
+    """Exact source check at both enqueue and current-recipient claim."""
+    from tenant_policy import TenantPolicy
+    from tenant_dialog_access import scope,require_source
+    from tenant_linear_policy import TenantLinearError
+    from tenant_scoped_access import scoped_access_enabled
+    if event!='incoming_message' or not scoped_access_enabled():
+        return eligible(member,event,row,channel)
+    from tenant_scoped_access_store import read_access_profile
+    current=read_access_profile(cur,member['tenant_id'],member['telegram_id'],lock=True)
+    if not current:return False
+    member={**member,**current};policy=TenantPolicy(member)
+    if scope(policy) is None:return eligible(member,event,row,channel)
+    source=str(row.get('channel') or '')
+    try:
+        require_source(cur,str(member['tenant_id']),policy,
+          'connect' if source.startswith('connect:') else 'kommo',source.removeprefix('connect:'))
+    except TenantLinearError:return False
+    return eligible(member,event,row,channel,source_allowed=True)

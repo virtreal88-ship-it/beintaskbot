@@ -108,6 +108,8 @@ def schema(conn):
             c.execute("ALTER TABLE saas_ai_instructor_artifacts ADD CONSTRAINT saas_ai_instructor_artifacts_kind_check CHECK(kind IN ('screenshot','recording','source_recording','subtitle','scenario'))")
         elif not check:
             c.execute("ALTER TABLE saas_ai_instructor_artifacts ADD CONSTRAINT saas_ai_instructor_artifacts_kind_check CHECK(kind IN ('screenshot','recording','source_recording','subtitle','scenario'))")
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def _connection_dict(row):

@@ -1,7 +1,7 @@
 /* Synthetic HTTP boundary for the real /app controller. No access-policy replacement. */
 const fs=require('node:fs'),path=require('node:path');
 const root=path.join(__dirname,'..'),docs=path.join(root,'docs');
-const assets=['tenant-operator-i18n.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-members-ui.js'];
+const assets=['tenant-operator-i18n.js','tenant-crm-sync-history.js','tenant-request-coordinator.js','tenant-view-demand.js','tenant-workspace.js','tenant-members-ui.js'];
 function appHtml(inline=false){return fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b([^>]*)src="([^"]+)"[^>]*><\/script>/gi,(tag,attributes,url)=>{const name=path.basename(url);return assets.includes(name)?inline?'<script>'+fs.readFileSync(path.join(docs,name),'utf8').replace(/<\/script/gi,'<\\/script')+'</script>':tag:'';});}
 function installNativeTaskFixture(config={}){
   const tenant='00000000-0000-0000-0000-000000000101',dealA='00000000-0000-0000-0000-000000000201',dealB='00000000-0000-0000-0000-000000000202',taskId='00000000-0000-0000-0000-000000000301';

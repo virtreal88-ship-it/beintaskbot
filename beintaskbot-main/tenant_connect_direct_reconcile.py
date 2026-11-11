@@ -40,6 +40,8 @@ def ensure_schema(conn):
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_direct_merge_requests(
           tenant_id UUID NOT NULL,request_id UUID NOT NULL,operation TEXT NOT NULL,pair_id TEXT NOT NULL,result JSONB NOT NULL,
           PRIMARY KEY(tenant_id,request_id))''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 def _candidates(cur, tenant, channel=''):
     from tenant_connect_identity import inventory

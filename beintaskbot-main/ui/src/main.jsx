@@ -1210,7 +1210,7 @@ function IntegrationMarketplace() {
         connected: !!me.member?.telegram_id,
         label: "connected",
       };
-      if (["owner", "admin"].includes(me.member?.role)) {
+      if (!(me.integrations || []).some(row => row.management_actions) && ["owner", "admin"].includes(me.member?.role)) {
         const checks = await Promise.allSettled([
           api("/api/platform/linear/settings"),
           api("/api/platform/chat/ai/settings"),
@@ -1269,8 +1269,8 @@ function IntegrationMarketplace() {
   useEffect(() => {
     if (
       !selected ||
-      tab !== "settings" ||
-      (selected.id === "connect" && !owner)
+      (tab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
+      (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
     )
       return;
     const detail = {
@@ -1642,7 +1642,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body p={{ base: "5", md: "6" }} overflowY="auto">
-                    {tab === "connection" && (
+                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box><Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box
@@ -1832,7 +1832,7 @@ function IntegrationMarketplace() {
                         )}
                       </Stack>
                     )}
-                    {tab === "settings" && (
+                    {tab === "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id) && (
                       <>
                         {selected.id === "connect" ? (
                           owner ? (

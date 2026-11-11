@@ -11,6 +11,8 @@ _lock = Lock()
 # Read PostgreSQL catalogs on every call: readiness belongs to this database,
 # search_path and transaction, never to a process-local Boolean.
 _SCHEMA_COLUMNS = {
+    'saas_access_schema_migrations': ['migration_key', 'applied_at'],
+    'saas_ai_scoped_archives': ['tenant_id', 'id', 'archived_by', 'archived_at'],
     'saas_ai_agent_action_runs': (
         'action_key action_type agent_id created_at event_fingerprint id payload result state '
         'tenant_id updated_at '
@@ -48,7 +50,7 @@ _SCHEMA_COLUMNS = {
         'trigger_type updated_at version '
     ).split(),
     'saas_ai_agents': (
-        'archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
+        'access_responsible_id archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
         'enabled expert_policy id instructions language mode model name response_policy role '
         'safety schedule scopes setup_key style tenant_id updated_at version '
     ).split(),
@@ -204,7 +206,7 @@ _SCHEMA_COLUMNS = {
         'created_at event_key message_id tenant_id ticket_id '
     ).split(),
     'saas_support_tickets': (
-        'assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
+        'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
         'channel_id completion_note completion_outcome conversation_id created_at created_by '
         'description history_scope id knowledge_candidate_requested next_steps reason '
         'resolved_at source status suggestions summary summary_agent_binding '
@@ -219,6 +221,8 @@ _SCHEMA_COLUMNS = {
     ).split(),
 }
 _SCHEMA_INDEXES = [
+    'saas_ai_agents_access_owner_idx',
+    'saas_support_tickets_access_owner_idx',
     'saas_ai_accepted_run_idx',
     'saas_ai_agent_drafts_pending_idx',
     'saas_ai_agent_jobs_ready_idx',
@@ -273,6 +277,16 @@ def _schema_current(conn):
         cur.execute("""SELECT
           EXISTS(SELECT 1 FROM saas_ai_scope_migrations WHERE version=1)
           AND EXISTS(SELECT 1 FROM saas_ai_compat_migrations WHERE version=1)
+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
+            WHERE migration_key='historical-access-owner-v1:saas_ai_agents')
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_ai_agents'::regclass AND conname='saas_ai_agents_access_owner_fk'
+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
+          AND EXISTS(SELECT 1 FROM saas_access_schema_migrations
+            WHERE migration_key='historical-access-owner-v1:saas_support_tickets')
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_tickets_access_owner_fk'
+              AND confrelid='saas_tenant_members'::regclass AND contype='f' AND convalidated)
           AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_settings
             WHERE operating_mode='test' OR
               (support_case_extraction_enabled AND support_case_extraction_mode='off'))
@@ -315,7 +329,9 @@ def _schema_current(conn):
               WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name
                 AND c.convalidated AND position(expected.value in pg_get_constraintdef(c.oid))>0)) AS ready""",
             (json.dumps(history_fks),))
-        return (cur.fetchone() or {}).get('ready') is True
+        base_ready = (cur.fetchone() or {}).get('ready') is True
+        from tenant_ai_unused_archive import fences_ready
+        return base_ready and fences_ready(cur)
 
 
 def _ensure_platform_schema(conn):
@@ -425,6 +441,8 @@ def ensure_schema(conn):
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               UNIQUE(tenant_id,id),
               FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+            from tenant_scoped_access_schema import migrate_resource_ownership
+            migrate_resource_ownership(cur, ('saas_ai_agents',))
             cur.execute('ALTER TABLE saas_ai_agents DROP CONSTRAINT IF EXISTS saas_ai_agents_mode_check')
             cur.execute("ALTER TABLE saas_ai_agents ADD CONSTRAINT saas_ai_agents_mode_check CHECK(mode IN ('manual','automatic'))")
             # This is deliberately additive: existing agents receive the
@@ -675,6 +693,8 @@ def ensure_schema(conn):
         create_group_schema(conn)
         from tenant_ai_agent_deletion_schema import create_schema as create_deletion_schema
         create_deletion_schema(conn)
+        from tenant_ai_unused_archive import create_schema as create_unused_archive_schema
+        create_unused_archive_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_compat_migrations(
               version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())''')

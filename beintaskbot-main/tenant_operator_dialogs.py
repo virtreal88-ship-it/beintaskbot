@@ -394,6 +394,13 @@ def projection(policy):
                 part+=' AND d.status_id=ANY(%s::bigint[])';params.append(item['status_ids'])
             scope.append('('+part+')')
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
+    if policy.action_scope('dialogs','view') is not None:
+        kommo_scope='TRUE';params=[]
+    from tenant_dialog_access import sql_filter
+    dialog_filter=sql_filter(policy)
+    from tenant_support_access import sql_filter as support_filter
+    ticket_filter=support_filter(policy,'st')
+    handoff_filter=support_filter(policy,'ht')
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
@@ -428,7 +435,7 @@ def projection(policy):
           SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
             AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE st.tenant_id=c.tenant_id
+      LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE ('''+ticket_filter+''') AND st.tenant_id=c.tenant_id
         AND st.channel_id=c.connect_channel_id AND st.status<>'resolved'
         AND (st.conversation_id=c.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
           WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id
@@ -438,7 +445,7 @@ def projection(policy):
       LEFT JOIN LATERAL(SELECT CASE WHEN he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%' THEN 'manual' ELSE 'ai_handoff' END AS source,ht.reason,ht.created_at,he.event_key,hm.display_name AS assigned_name
         FROM saas_support_tickets ht JOIN saas_support_events he ON he.tenant_id=ht.tenant_id AND he.ticket_id=ht.id
         LEFT JOIN saas_tenant_members hm ON hm.tenant_id=ht.tenant_id AND hm.telegram_id=ht.assigned_to
-        WHERE ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
+        WHERE ('''+handoff_filter+''') AND ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
           AND (he.event_key LIKE 'handoff:%%' OR he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%')
         ORDER BY ht.created_at DESC,he.event_key DESC LIMIT 1) h ON TRUE
       LEFT JOIN LATERAL(SELECT COALESCE(NULLIF(sc.manual_display_name,''),NULLIF(sc.contact_name,''),NULLIF(sc.display_name,'')) AS customer_name
@@ -479,7 +486,7 @@ def projection(policy):
         OR (agent_mode='automatic' AND NOT COALESCE(company_auto_send_enabled,FALSE))
         OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
         OR NOT COALESCE(connected,FALSE) THEN 'blocked'
-      ELSE 'active' END AS display_state FROM routes) '''
+      ELSE 'active' END AS display_state FROM routes WHERE '''+dialog_filter+''') '''
     return sql,params
 
 
@@ -705,6 +712,21 @@ def _unread_counts(cur,tenant,telegram_id,rows):
     return sum(counts.values())
 
 
+
+def _scoped_ai_documents(policy):
+    return policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents')
+
+
+def _hide_shared_ai(dialog):
+    for key in list(dialog):
+        if key.startswith(('agent_', 'company_', 'latest_job_', 'group_')) or key in {
+                'handoff_event_id', 'reason', 'display_reason', 'resume_block_reason'}:
+            dialog.pop(key, None)
+    dialog.update(controls_allowed=False, control_block_reason='ai_management_restricted',
+                  available_actions=[], resume_allowed=False, ai_availability='restricted',
+                  agent_status='restricted', agent_status_reason='ai_management_restricted')
+    return dialog
+
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False):
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -714,6 +736,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
+            restricted_ai = _scoped_ai_documents(policy)
+            if restricted_ai and (agent or state):
+                raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
             sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
@@ -735,10 +760,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             snapshot=cur.fetchone()
             count=int(snapshot['attention_count']);channels=snapshot['channels'];agents=snapshot['agents'];rows=snapshot['dialogs']
             from tenant_operator_list_snapshot import ListSnapshot
-            enrichment=ListSnapshot(cur,tenant,rows)
+            enrichment=None if restricted_ai else ListSnapshot(cur,tenant,rows)
             from tenant_ai_group_coordination import group_jid
             rows=[decorate(r) for r in rows]
             for r in rows:
+                if restricted_ai:
+                    continue
                 if r['provider']=='connect' and group_jid(r['conversation_id']):
                     apply_group_view(cur,tenant,r,snapshot=enrichment)
                     r['group_assignment_preview']=enrichment.group_options(r)
@@ -754,6 +781,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     r['agent_status']='needs_assignment' if r['agent_assignment'].get('agents') else 'no_agent'
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
+            from tenant_dialog_access import apply_capabilities
+            for r in rows:apply_capabilities(cur,tenant,policy,r)
+            if restricted_ai:
+                rows=[_hide_shared_ai(r) for r in rows]
+                agents=[]
+                count=None
             unread_total=_unread_counts(cur,tenant,int(profile['telegram_id']),rows)
             if search:
                 query_text='%'+str(search)[:200]+'%'
@@ -771,6 +804,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
     return {'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
+            'ai_management_restricted':restricted_ai,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,
             'next_offset':None if all_rows else offset+50 if len(rows)>50 else None}
 
@@ -861,6 +895,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
             dialog=decorate(row)
+            restricted_ai = _scoped_ai_documents(policy)
             # This server-produced binding is emitted only after the requested
             # route passes assert_route and the canonical route is visible.
             # Historical cases keep their original route and material scope.
@@ -868,7 +903,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                            'canonical_route':{key:dialog[key] for key in requested_route}}
             if provider=='connect':_attach_verified_phone(cur,tenant,dialog)
             from tenant_ai_group_coordination import group_jid, view as group_view
-            if provider=='connect' and group_jid(conversation):
+            if not restricted_ai and provider=='connect' and group_jid(conversation):
                 apply_group_view(cur,tenant,dialog)
                 from tenant_operator_assignment import group_options_in_transaction
                 dialog['group_assignment_preview']=group_options_in_transaction(cur,tenant,channel,conversation)
@@ -897,7 +932,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     dialog['group_coordination']['agents']=primary
                 except TenantLinearError:
                     dialog['group_coordination']['can_configure']=False
-            if provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
+            if not restricted_ai and provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
                 if dialog.get('unambiguous') and dialog.get('controls_allowed'):
                     from tenant_operator_assignment import options_in_transaction
                     dialog['agent_assignment']=options_in_transaction(cur,profile,{
@@ -913,18 +948,21 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     dialog['controls_allowed']=False;dialog['control_block_reason']='untracked_dialog'
             anchor_at=None;anchor_row={}
             if anchor and not before:
+                from tenant_dialog_access import sql_filter
                 # Resolve anchor only within the authorized route / exact tenant group.
                 cur.execute('''SELECT m.id,m.external_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
                   WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
-                      AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text)))''',
+                      AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text))) AND '''+sql_filter(policy,"CASE WHEN m.channel LIKE 'connect:%%' THEN 'connect' ELSE 'kommo' END","substring(m.channel from 9)"),
                   (tenant,identifier(anchor),history_leads,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
                 if not anchor_row:
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
-                messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at)
+                from tenant_dialog_access import allowed_channels
+                messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at,
+                  channel_ids=allowed_channels(cur,tenant,policy))
             else:
                 args=[tenant,history_leads,row['history_channel']];clause=''
                 if anchor_at:
@@ -985,6 +1023,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if provider == 'connect':
                 from tenant_connect_identity import conflicted
                 dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
+            from tenant_dialog_access import apply_capabilities
+            apply_capabilities(cur,tenant,policy,dialog)
+            if restricted_ai:_hide_shared_ai(dialog)
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.
@@ -1021,8 +1062,8 @@ def save_display_name(profile, payload):
         from tenant_connect_transport import _schema as ensure_connect_schema
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,policy=access(cur,profile,'dialogs')
-            selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead_id)
+            tenant,actor,policy=access(cur,profile,'dialogs',action='update')
+            selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead_id,action='update')
             if kind == 'conversation':
                 cur.execute('''UPDATE saas_connect_conversations SET manual_display_name=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s

@@ -366,7 +366,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             capabilities = context.capabilities(profile)
             members = await asyncio.to_thread(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
-            ) if capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'}) else []
+            ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []
             account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
         except Exception:
             context.logger.exception("Platform session lookup failed")

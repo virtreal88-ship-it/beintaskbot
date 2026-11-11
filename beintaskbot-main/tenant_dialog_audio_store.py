@@ -45,6 +45,8 @@ def schema(conn):
         cur.execute('CREATE INDEX IF NOT EXISTS dialog_audio_source ON saas_dialog_audio_attempts(tenant_id,channel_id,external_id,state)')
         cur.execute('CREATE INDEX IF NOT EXISTS dialog_audio_selection ON saas_dialog_audio_attempts(tenant_id,selection_row_id,selection_version)')
         cur.execute('CREATE INDEX IF NOT EXISTS dialog_audio_upload ON saas_dialog_audio_attempts(tenant_id,upload_sha256,state)')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
     conn.commit()
 
 

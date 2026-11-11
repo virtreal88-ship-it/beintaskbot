@@ -237,7 +237,7 @@ def _authorize_published_catalog(cur, profile):
         raise TenantLinearError('No access', 403) from None
     cur.execute('''SELECT m.active,t.status
       FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
-      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s''', (tenant, actor))
+      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
     row = cur.fetchone()
     if not row or not row.get('active') or row.get('status') != 'active':
         raise TenantLinearError('No access', 403)

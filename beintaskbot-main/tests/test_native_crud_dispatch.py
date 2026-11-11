@@ -70,7 +70,7 @@ def test_existing_item_archive_keeps_delete_authorization(module, prefix, archiv
     with patch.object(module, archive_name, return_value=True) as archive:
         response = invoke(module, prefix + ':delete', {'action': 'archive'}, IDENT)
     assert response.status == 200
-    archive.assert_called_once_with('company-a', IDENT)
+    archive.assert_called_once_with('company-a', IDENT, actor_id=20)
     with patch.object(module, archive_name) as archive:
         response = invoke(module, prefix + ':update', {'action': 'archive'}, IDENT)
     assert response.status == 403
@@ -119,7 +119,7 @@ def test_explicit_update_allows_relations_without_legacy_assign_or_delete(action
     operation = 'unlink_entity' if action.startswith('unlink') else 'link_entity'
     with patch.object(companies, operation, return_value=True) as mutate:
         assert invoke_relation(profile, action).status == 200
-    mutate.assert_called_once_with('company-a', IDENT, action.split('_')[1], IDENT)
+    mutate.assert_called_once_with('company-a', IDENT, action.split('_')[1], IDENT, actor_id=20)
 
 
 @pytest.mark.parametrize('action', ['link_contact', 'link_deal'])
@@ -177,3 +177,17 @@ def test_company_relation_owner_and_inactive_contract(role, active, status):
     with patch.object(companies, 'link_entity', return_value=True) as mutate:
         assert invoke_relation(profile, 'link_deal').status == status
     assert mutate.call_count == (1 if status == 200 else 0)
+
+
+def test_scoped_unlink_contact_denies_delete_only_permission(monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    with patch.object(companies, 'unlink_entity') as mutate:
+        assert invoke_relation(relation_profile(['customers:delete']), 'unlink_contact').status == 403
+    mutate.assert_not_called()
+
+
+def test_scoped_company_contact_unlink_allows_update_without_delete(monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    with patch.object(companies, 'unlink_entity', return_value=True) as mutate:
+        assert invoke_relation(relation_profile(['customers:update']), 'unlink_contact').status == 200
+    mutate.assert_called_once_with('company-a', IDENT, 'contact', IDENT, actor_id=20)

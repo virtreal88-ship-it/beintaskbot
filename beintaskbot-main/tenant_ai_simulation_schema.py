@@ -1,23 +1,97 @@
 """Additive schema for the isolated AI Simulation queue and virtual ledger."""
 from threading import Lock
-from tenant_platform import _ensure_schema
 
+# Compatibility hint only. Readiness belongs to the current database/transaction.
 _ready = False
 _lock = Lock()
 
 
+_SCHEMA_COLUMNS = {
+    'saas_crm_messages': ['tenant_id', 'id'],
+    'saas_ai_simulation_configs': (
+        'tenant_id enabled state emergency_stop agent_id channel_ids conversation_ids '
+        'starts_at ends_at token_budget message_limit max_parallel max_calls_per_event '
+        'max_output_tokens version updated_by updated_at'
+    ).split(),
+    'saas_ai_simulation_queue': (
+        'id tenant_id channel_id conversation_id lead_id source_message_id source_event_id '
+        'event_fingerprint state attempts lease_token lease_until provider_started_at '
+        'error_code available_at created_at completed_at recheck_of_run_id recheck_request_key'
+    ).split(),
+    'saas_ai_simulation_runs': (
+        'id tenant_id queue_id channel_id conversation_id source_message_id primary_agent_id '
+        'outcome virtual_reply virtual_stop_reason virtual_triggers knowledge_refs '
+        'expert_results events context_snapshot total_tokens created_at'
+    ).split(),
+    'saas_ai_simulation_dialog_state': (
+        'tenant_id channel_id conversation_id session_started_at revision last_queue_id '
+        'virtual_state updated_at'
+    ).split(),
+    'saas_ai_simulation_usage': (
+        'tenant_id queue_id call_no agent_id call_kind reserved_tokens actual_tokens '
+        'state created_at completed_at'
+    ).split(),
+    'saas_ai_dashboard_issue_reviews': (
+        'tenant_id run_id issue_key status updated_by updated_at history'
+    ).split(),
+}
+_SCHEMA_INDEXES = (
+    'saas_crm_messages_tenant_id_idx',
+    'saas_ai_simulation_queue_due_idx',
+    'saas_ai_simulation_runs_tenant_id_idx',
+    'saas_ai_simulation_queue_live_event_idx',
+    'saas_ai_simulation_queue_recheck_idempotency_idx',
+    'saas_ai_simulation_runs_tenant_idx',
+    'saas_ai_dashboard_learning_review_idx',
+)
+
+
+def _schema_current(conn):
+    from tenant_schema_preflight import ready
+    with conn.cursor() as cur:
+        if not ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
+            return False
+        cur.execute("""SELECT
+          EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_ai_simulation_queue'::regclass
+              AND conname='saas_ai_simulation_queue_recheck_run_fk'
+              AND contype='f' AND convalidated
+              AND confrelid='saas_ai_simulation_runs'::regclass)
+          AND NOT EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_ai_simulation_queue'::regclass AND contype='u'
+              AND pg_get_constraintdef(oid)='UNIQUE (tenant_id, channel_id, conversation_id, source_message_id)')
+          AND NOT EXISTS (
+            SELECT 1 FROM (VALUES
+              ('saas_ai_simulation_configs','saas_ai_simulation_configs_state_check','paused'),
+              ('saas_ai_dashboard_issue_reviews','saas_ai_dashboard_issue_reviews_status_check','deferred'),
+              ('saas_ai_dashboard_issue_reviews','saas_ai_dashboard_issue_reviews_status_check','fixing'),
+              ('saas_ai_dashboard_issue_reviews','saas_ai_dashboard_issue_reviews_status_check','recheck_pending')
+            ) AS expected(relation, name, value)
+            WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
+              WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name
+                AND c.contype='c' AND c.convalidated
+                AND position(expected.value in pg_get_constraintdef(c.oid))>0)) AS ready""")
+        return (cur.fetchone() or {}).get('ready') is True
+
+
 def ensure_schema(conn):
     global _ready
-    _ensure_schema(conn)
+    # The core initializer certifies its platform prerequisites without a warm
+    # request entering the legacy platform bootstrap (which commits).
     from tenant_ai_agents_schema import ensure_schema as ensure_agents_schema
     ensure_agents_schema(conn)
-    if _ready:
+    if _schema_current(conn):
         return
     with _lock:
-        if _ready:
+        # Serialize missing optional-schema work with the core migrations, then
+        # recheck after another worker commits. Never cache an uncommitted result.
+        from tenant_schema_preflight import lock_schema
+        with conn.cursor() as cur:
+            lock_schema(cur)
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-simulation-schema',))
+        if _schema_current(conn):
             return
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-simulation-schema',))
             # CRM message IDs are globally unique today; the composite index
             # makes tenant ownership an explicit FK invariant for simulation.
             cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS saas_crm_messages_tenant_id_idx ON saas_crm_messages(tenant_id,id)')
@@ -158,4 +232,6 @@ def ensure_schema(conn):
             cur.execute("ALTER TABLE saas_ai_dashboard_issue_reviews DROP CONSTRAINT IF EXISTS saas_ai_dashboard_issue_reviews_status_check")
             cur.execute("ALTER TABLE saas_ai_dashboard_issue_reviews ADD CONSTRAINT saas_ai_dashboard_issue_reviews_status_check CHECK(status IN ('new','in_review','confirmed','dismissed','fixed','deferred','fixing','recheck_pending'))")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_dashboard_learning_review_idx ON saas_ai_dashboard_issue_reviews(tenant_id,issue_key) WHERE left(issue_key,9)='learning:'")
+        from tenant_ai_unused_archive import install_schema_references
+        install_schema_references(conn)
         _ready = True

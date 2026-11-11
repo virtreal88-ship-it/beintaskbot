@@ -12,6 +12,8 @@ from tenant_ai_agents_store import _audit
 
 def admin(cur, profile):
     tenant, actor, policy = access(cur, profile, 'dialogs')
+    if policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents'):
+        raise TenantLinearError('ai_shared_recovery_requires_unscoped_management', 403)
     if policy.profile.get('role') not in {'owner', 'admin'} or not policy.allows('ai_agents_manage'):
         raise TenantLinearError('Восстановление доступно администратору с правом управления AI.', 403)
     return tenant, actor, policy

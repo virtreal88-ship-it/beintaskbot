@@ -4,7 +4,7 @@ Synthetic tenants only. Statement counts are not production latency claims.
 """
 import importlib.util
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
@@ -27,7 +27,7 @@ def normalize(value):
         return [normalize(item) for item in value]
     if isinstance(value, str) and len(value) > 19 and value[4] == '-' and value[10] == 'T':
         try:
-            return datetime.fromisoformat(value.replace('Z', '+00:00')).isoformat()
+            return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone.utc).isoformat()
         except ValueError:
             pass
     return value

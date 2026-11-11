@@ -4,9 +4,15 @@ const ai=fs.readFileSync(path.join(root,'docs/tenant-chat-ai.js'),'utf8');
 const settings=fs.readFileSync(path.join(root,'docs/tenant-chat-ai-settings.js'),'utf8');
 const app=fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8');
 const workflow=fs.readFileSync(path.join(root,'docs/tenant-workflow.js'),'utf8');
+const members=fs.readFileSync(path.join(root,'docs/tenant-members-ui.js'),'utf8');
 new vm.Script(ai);new vm.Script(settings);
 assert(app.includes('/assets/tenant-chat-ai.js')&&app.includes('/assets/tenant-chat-ai-settings.js'));
-assert(workflow.includes("check('ai_enabled'")&&workflow.includes("'deal_completion_requires_admin','ai_enabled'"));
+// Employee AI flags moved to versioned, authorized employee-card work settings.
+assert(!workflow.includes("check('ai_enabled'"));
+assert(workflow.includes('Şirkət → Əməkdaşlar'));
+assert(members.includes("permitted(row,'work_settings')")&&members.includes('row.work_settings?.version'));
+assert(members.includes("flags=['ai_enabled','ai_agents_manage'"));
+assert(members.includes("row.role!=='owner'||!['ai_enabled','ai_agents_manage'].includes(key)"), 'Owner AI access cannot be removed through employee flags');
 assert(ai.includes('expected_tenant_id')&&ai.includes('expected_user_id')&&ai.includes('current!==epoch'));
 assert(ai.includes('crypto.randomUUID()')&&ai.includes('execute(pending)')&&ai.includes('sessionStorage'));
 assert(ai.includes('tc-ai-spinner')&&ai.includes('missing_audio')&&ai.includes('text.value=result.text'));

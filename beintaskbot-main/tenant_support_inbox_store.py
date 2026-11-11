@@ -9,11 +9,15 @@ from tenant_operator_access import authorize as _authorize
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_platform import _connect
 
+from tenant_support_access import policy_access, predicate, require, require_create, mutation_result
+
 STATUSES = {'new', 'waiting', 'in_progress', 'resolved'}
 
 
 def public(row):
     row=dict(row)
+    # Internal responsibility is not an editable/displayed employee field yet.
+    row.pop('access_responsible_id', None)
     if 'ai_state' in row:
         effective=_decorate_conversation_state({**row,'provider':'connect','state':row.get('ai_state') or 'active'})
         row['ai_state']=effective['display_state'] if row.get('agent_id') or row.get('ai_state') in {'human','paused'} else 'unmanaged'
@@ -23,6 +27,25 @@ def public(row):
             row['resume_block_reason']='legacy_channel_ambiguous'
     return {key: value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value
             for key, value in dict(row).items()}
+
+
+def _scoped_ai_documents(policy):
+    return policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents')
+
+
+def _ticket_public(row, policy):
+    # Ticket access is not authority over the shared agent assignment/config.
+    # Match the dialog projection's conservative boundary until agent-aware
+    # shared metadata has its own separately authorized projection.
+    result = public(row)
+    if _scoped_ai_documents(policy):
+        for key in list(result):
+            if key.startswith(('agent_', 'company_', 'latest_job_')) or key in {
+                    'ai_reason', 'summary_agent_binding', 'summary_run_id'}:
+                result.pop(key, None)
+        result.update(summary_available=False, summary_current=False,
+                      controls_allowed=False, resume_allowed=False)
+    return result
 
 
 def route(cur, tenant, channel, conversation, lead_id=None):
@@ -57,6 +80,19 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
     from tenant_ai_agent_access import tenant_status_allows_management
     if not tenant_status_allows_management(company.get('status')):
         raise TenantLinearError('Компания архивирована или приостановлена.', 403)
+    # Employee-triggered handoffs share this writer with the support form.
+    # Service jobs have actor=None and retain their existing service authority.
+    scoped_actor = None
+    from tenant_scoped_access import scoped_access_enabled
+    if actor is not None and scoped_access_enabled():
+        from tenant_scoped_access_store import read_access_profile
+        from tenant_policy import TenantPolicy
+        current = read_access_profile(cur,tenant,actor,lock=True)
+        if not current: raise TenantLinearError('Нет доступа.',403)
+        current_policy = TenantPolicy(current)
+        if current_policy.has_scoped_access('support'):
+            scoped_actor = {'tenant_id':tenant,'telegram_id':actor}
+            require_create(cur,scoped_actor)
     selected = route(cur, tenant, channel, conversation, lead_id)
     channel, conversation = str(selected['connect_channel_id']), selected['conversation_id']
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('support:' + tenant + ':' + channel + ':' + conversation,))
@@ -64,11 +100,13 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
     if not event_key or len(event_key) > 500:
         raise TenantLinearError('Некорректный код события.')
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('support-event:'+tenant+':'+event_key,))
-    cur.execute('SELECT e.ticket_id,t.channel_id,t.conversation_id FROM saas_support_events e JOIN saas_support_tickets t ON t.tenant_id=e.tenant_id AND t.id=e.ticket_id WHERE e.tenant_id=%s::uuid AND e.event_key=%s', (tenant, event_key))
+    cur.execute('SELECT e.ticket_id,t.channel_id,t.conversation_id,t.created_by FROM saas_support_events e JOIN saas_support_tickets t ON t.tenant_id=e.tenant_id AND t.id=e.ticket_id WHERE e.tenant_id=%s::uuid AND e.event_key=%s', (tenant, event_key))
     previous = cur.fetchone()
     if previous:
         if str(previous['channel_id']) != channel or previous['conversation_id'] != conversation:
             raise TenantLinearError('Код события уже использован для другого диалога.',409)
+        if scoped_actor and previous.get('created_by') != actor:
+            require(cur,scoped_actor,previous['ticket_id'],'update',lock=True)
         return {'id': str(previous['ticket_id']), 'created': False}
     if not description:
         cur.execute('''SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
@@ -79,16 +117,18 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
         description = str(latest.get('body') or '')[:240]
     ticket_id = str(uuid.uuid4())
     scope_kind = 'selected' if bounded_episode or message_ids is not None else 'snapshot'
-    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by,history_scope)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s)
+    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by,history_scope,access_responsible_id)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s)
       ON CONFLICT(tenant_id,channel_id,conversation_id)
       WHERE status<>'resolved' AND completion_outcome<>'test_stopped' DO UPDATE
         SET source=CASE WHEN EXCLUDED.source='ai_handoff' THEN 'ai_handoff' ELSE saas_support_tickets.source END,
         reason=CASE WHEN EXCLUDED.source='ai_handoff' THEN EXCLUDED.reason ELSE saas_support_tickets.reason END,
         status=CASE WHEN EXCLUDED.source='ai_handoff' AND saas_support_tickets.status='new' THEN 'waiting' ELSE saas_support_tickets.status END
       RETURNING id''', (tenant,ticket_id,channel,conversation,source,str(reason or 'Требуется помощь сотрудника')[:1000],
-        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor,scope_kind))
+        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor,scope_kind,actor))
     result_id = str(cur.fetchone()['id'])
+    if scoped_actor and result_id != ticket_id:
+        require(cur,scoped_actor,result_id,'update',lock=True)
     if result_id == ticket_id and not bounded_episode:
         from tenant_support_case_context import SNAPSHOT_LIMIT, _selection
         if message_ids is None:
@@ -308,8 +348,9 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
-            where, args = ['t.tenant_id=%s::uuid'], [tenant]
+            tenant, actor, policy = policy_access(cur, profile)
+            scope_sql, scope_args = predicate(policy)
+            where, args = ['t.tenant_id=%s::uuid', scope_sql], [tenant, *scope_args]
             if status == 'unresolved':
                 where.append("t.status<>'resolved'")
             elif status != 'all':
@@ -325,13 +366,25 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             cur.execute(_SELECT + ' WHERE ' + ' AND '.join(where) + ''' ORDER BY
               (t.status<>'resolved') DESC,(t.source='ai_handoff') DESC,(t.status='waiting') DESC,t.created_at,t.id LIMIT 51 OFFSET %s''', (*args,offset))
             rows = cur.fetchall()
-            members = eligible_members(cur, tenant)
-            cur.execute("SELECT count(*) AS total FROM saas_support_tickets WHERE tenant_id=%s::uuid AND status<>'resolved'",(tenant,))
+            # Assignee options are mutation context, not a support-read grant
+            # to enumerate the company roster. Only expose them when this page
+            # contains a currently editable document.
+            editable = True
+            if policy.has_scoped_access('support'):
+                from tenant_scoped_access_store import owned_resource_metadata
+                editable = any(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
+                    policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,row,lock=True))
+                    for row in rows[:50])
+            members = eligible_members(cur, tenant) if editable else []
+            cur.execute("SELECT count(*) AS total FROM saas_support_tickets t WHERE t.tenant_id=%s::uuid AND t.status<>'resolved' AND " + scope_sql,(tenant,*scope_args))
             unresolved_count=int(cur.fetchone()['total'])
-            cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
+            if policy.action_scope('support','view') is None:
+                cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
+            else:
+                cur.execute('SELECT ch.connect_channel_id::text AS id,ch.name FROM saas_connect_channels ch WHERE ch.tenant_id=%s::uuid AND EXISTS(SELECT 1 FROM saas_support_tickets t WHERE t.tenant_id=ch.tenant_id AND t.channel_id=ch.connect_channel_id AND '+scope_sql+') ORDER BY ch.name',(tenant,*scope_args))
             channels=[dict(row) for row in cur.fetchall()]
             safe_rows=[_attach_verified_contact_identity(cur,tenant,row) for row in rows[:50]]
-    return {'tickets': [public(row) for row in safe_rows], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
+    return {'tickets': [_ticket_public(row,policy) for row in safe_rows], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
             'next_offset': offset+50 if len(rows)>50 else None}
 
 
@@ -340,7 +393,7 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
+            tenant, actor, policy = require(cur, profile, ticket_id)
             cur.execute(_SELECT + ' WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid', (tenant,ticket_id))
             ticket = cur.fetchone()
             if not ticket:
@@ -363,26 +416,28 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             # Keep internal raw/URLs out of the case browser projection.
             fields = ('id','external_id','direction','author_name','body','message_type','happened_at','created_at')
             rows = [{key: row.get(key) for key in fields} for row in rows]
-            try:
-                from tenant_dialog_ai_context import resolve, binding
-                from tenant_support_case_context import fingerprint
-                current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
-                ticket['agent_id'] = str(current['agent_id'])
-                cur.execute('SELECT name,enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant, current['agent_id']))
-                agent = cur.fetchone() or {}
-                ticket['agent_name'] = agent.get('name') or ''
-                ticket['agent_enabled'] = bool(agent.get('enabled'))
-                ticket['summary_available'] = bool(agent.get('enabled') and ticket.get('company_enabled')
-                                                   and not ticket.get('company_emergency_stop')
-                                                   and str(current.get('model') or '').strip())
-                ticket['summary_current'] = bool(ticket.get('summary_agent_binding')) and (
-                    ticket.get('summary_agent_binding') == binding(current)
-                    and ticket.get('summary_scope_hash') == fingerprint(cur, material_scope))
-            except TenantLinearError:
-                ticket['agent_id'] = None
-                ticket['agent_name'] = ''
-                ticket['summary_available'] = False
-                ticket['summary_current'] = False
+            restricted_ai = _scoped_ai_documents(policy)
+            if not restricted_ai:
+                try:
+                    from tenant_dialog_ai_context import resolve, binding
+                    from tenant_support_case_context import fingerprint
+                    current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
+                    ticket['agent_id'] = str(current['agent_id'])
+                    cur.execute('SELECT name,enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant, current['agent_id']))
+                    agent = cur.fetchone() or {}
+                    ticket['agent_name'] = agent.get('name') or ''
+                    ticket['agent_enabled'] = bool(agent.get('enabled'))
+                    ticket['summary_available'] = bool(agent.get('enabled') and ticket.get('company_enabled')
+                                                       and not ticket.get('company_emergency_stop')
+                                                       and str(current.get('model') or '').strip())
+                    ticket['summary_current'] = bool(ticket.get('summary_agent_binding')) and (
+                        ticket.get('summary_agent_binding') == binding(current)
+                        and ticket.get('summary_scope_hash') == fingerprint(cur, material_scope))
+                except TenantLinearError:
+                    ticket['agent_id'] = None
+                    ticket['agent_name'] = ''
+                    ticket['summary_available'] = False
+                    ticket['summary_current'] = False
             cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at
               FROM saas_support_ticket_messages cm JOIN saas_crm_messages m
                 ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
@@ -412,17 +467,26 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
                 from tenant_media_evidence import annotate_rows
                 annotate_rows(cur,tenant,[focus_message])
                 focus_message.pop('raw',None);focus_message.pop('body',None);focus_message.pop('channel',None)
-            cur.execute('''SELECT e.id,e.status,e.result,e.error_code,e.created_at,a.name AS expert_name,r.model
-              FROM saas_ai_expert_tasks e JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=e.expert_agent_id
-              JOIN saas_ai_agent_runs r ON r.tenant_id=e.tenant_id AND r.id=e.id
-              WHERE e.tenant_id=%s::uuid AND e.provider='connect' AND e.channel_id=%s AND e.conversation_id=%s
-              ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
-            expert_results=[public(row) for row in cur.fetchall()]
-    result={'expert_results':expert_results,'ticket':public(ticket),'summary_history':summary_history,
+            expert_results=[]
+            if not restricted_ai:
+                cur.execute('''SELECT e.id,e.status,e.result,e.error_code,e.created_at,a.name AS expert_name,r.model
+                  FROM saas_ai_expert_tasks e JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=e.expert_agent_id
+                  JOIN saas_ai_agent_runs r ON r.tenant_id=e.tenant_id AND r.id=e.id
+                  WHERE e.tenant_id=%s::uuid AND e.provider='connect' AND e.channel_id=%s AND e.conversation_id=%s
+                  ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
+                expert_results=[public(row) for row in cur.fetchall()]
+            else:
+                summary_history=[{key:value for key,value in item.items()
+                    if key not in {'run_id','agent_binding'}} for item in summary_history]
+            from tenant_scoped_access_store import owned_resource_metadata
+            can_update=(policy.legacy_allows('support') if policy.action_scope('support','update') is None else
+                policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,ticket,lock=True)))
+    result={'expert_results':expert_results,'ticket':_ticket_public(ticket,policy),'summary_history':summary_history,
             'summary_pending_request':summary_pending_request,'messages':[public(row) for row in reversed(rows[:50])],
             'attached_media':attached_media,'scope':scope_metadata,
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
+    if policy.has_scoped_access('support'):result['capabilities']={'update':can_update}
     if notification_id is not None:result['notification_context']=notification_context
     return result
 
@@ -442,7 +506,7 @@ def _available_case_materials(profile,ticket_id,before,*,media_only):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,_,policy=access(cur,profile,'support')
+            tenant,_,policy=require(cur,profile,ticket_id)
             if policy.profile.get('role')!='owner' or not policy.allows('dialogs'):
                 raise TenantLinearError('Только владелец с доступом к диалогам может просматривать материалы.',403)
             ticket_id=identifier(ticket_id)
@@ -491,7 +555,7 @@ def _attach_case_materials(profile,ticket_id,message_ids,*,media_only):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,policy=access(cur,profile,'support')
+            tenant,actor,policy=require(cur,profile,ticket_id,'update',lock=True)
             if policy.profile.get('role')!='owner' or not policy.allows('dialogs'):
                 raise TenantLinearError('Только владелец с доступом к диалогам может привязать вложение.',403)
             ticket_id=identifier(ticket_id)
@@ -539,7 +603,7 @@ def create(profile, data):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
+            tenant, actor, policy = require_create(cur, profile)
             from tenant_dialog_consultations import access as dialogs_access,developer_target
             access_tenant,_dialog_actor,dialogs_policy=dialogs_access(cur,profile,'dialogs')
             if str(access_tenant)!=str(tenant):raise TenantLinearError('Диалог вне выбранной компании.',403)
@@ -567,10 +631,12 @@ def create(profile, data):
                 _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],{'developer_assignment':False})
         conn.commit()
     summarize_created(tenant,receipt)
-    result=detail(profile,receipt['id'])
+    result=mutation_result(profile,receipt['id'])
     # This response acknowledges this exact idempotent request, including a
     # new explicit request that attached to an already open dialog case.
     result['ticket']['create_request_id']=request_id
+    if result.get('readable') is False:
+        result['create_receipt']={'tenant_id':tenant,'actor_id':actor,'request_id':request_id}
     return result
 
 
@@ -582,7 +648,7 @@ def update(profile, ticket_id, data):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
+            tenant, actor, policy = policy_access(cur, profile, 'update')
             ticket_id = identifier(ticket_id)
             cur.execute('SELECT channel_id::text,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,ticket_id))
             source_case=cur.fetchone()
@@ -590,6 +656,7 @@ def update(profile, ticket_id, data):
             lock_dialog(cur,tenant,'connect',source_case['channel_id'],source_case['conversation_id'])
             cur.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,ticket_id))
             cur.fetchone()
+            require(cur,profile,ticket_id,'update',lock=True)
             if ('assigned_developer_channel_id' in data) != ('assigned_developer_conversation_id' in data):
                 raise TenantLinearError('Выберите чат разработчика целиком.')
             if 'assigned_developer_channel_id' in data and data['assigned_developer_channel_id'] is not None:
@@ -631,7 +698,7 @@ def update(profile, ticket_id, data):
             if not cur.fetchone(): raise TenantLinearError('Обращение не найдено.',404)
             _audit(cur,tenant,actor,'support_update','support_ticket',ticket_id,data)
         conn.commit()
-    return detail(profile,ticket_id)
+    return mutation_result(profile,ticket_id)
 
 
 def complete(profile, data):
@@ -657,7 +724,7 @@ def complete(profile, data):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=_authorize(cur,profile)
+            tenant,actor,policy=policy_access(cur,profile,'update')
             selected=route(cur,tenant,channel,conversation)
             if int(selected.get('lead_id') or 0)!=lead_id:
                 raise TenantLinearError('Диалог изменился. Обновите его.',409)
@@ -670,6 +737,7 @@ def complete(profile, data):
                 if int(previous['actor_id'])!=actor or previous['input_hash']!=digest or str(previous['channel_id'])!=channel or previous['conversation_id']!=conversation:
                     raise TenantLinearError('Код завершения уже использован для другого обращения.',409)
                 ticket_id=str(previous['ticket_id'])
+                require(cur,profile,ticket_id,'update',lock=True)
             else:
                 cur.execute('''SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
                   AND status<>'resolved' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE''',(tenant,channel,conversation))
@@ -677,9 +745,11 @@ def complete(profile, data):
                 if ticket:
                     ticket_id=str(ticket['id'])
                 else:
+                    require_create(cur,profile)
                     receipt=create_in_transaction(cur,tenant,channel,conversation,'Завершено сотрудником','completion:'+request_id,
                         actor=actor,description=note[:1000],source='manual',lead_id=lead_id)
                     ticket_id=str(receipt['id'])
+                require(cur,profile,ticket_id,'update',lock=True)
                 cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
                   completion_outcome=%s,completion_note=%s,knowledge_candidate_requested=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND id=%s::uuid''',(outcome,note,propose,tenant,ticket_id))
@@ -687,7 +757,7 @@ def complete(profile, data):
                   VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::uuid)''',(tenant,request_id,actor,channel,conversation,digest,ticket_id))
                 _audit(cur,tenant,actor,'support_complete','support_ticket',ticket_id,{'outcome':outcome,'knowledge_candidate_requested':propose})
         conn.commit()
-    return detail(profile,ticket_id)
+    return mutation_result(profile,ticket_id)
 
 
 def handoff_recorded(cur, job):

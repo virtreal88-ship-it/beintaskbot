@@ -159,7 +159,7 @@ class OutboxTests(unittest.TestCase):
         self.p=member();self.row=task()
         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
             'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
-            'connect_dialog_route':connect_dialog_route},
+            'connect_dialog_route':connect_dialog_route,'source_eligible':lambda cur,*args:eligible(*args)},
             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
@@ -229,7 +229,7 @@ class OutboxTests(unittest.TestCase):
 class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_complete_text_and_one_delivery_attempt(self):
         worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
-            'send_push':Mock()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()}, {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
         row=task();row['deal'].update(contact_name='Client',phone='+994123')
         item={'resource':row,'event':'task_assigned','send':True,'recipient_id':20,'tenant_name':'Company'}
         self.assertIn('Call client',worker.message(item));self.assertIn('+994123',worker.message(item))
@@ -237,3 +237,21 @@ class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
         await worker.deliver(bot,'',{},Mock())
         bot.send_message.assert_awaited_once()
         self.assertEqual(worker.finish.call_args.args[1],'unknown')
+
+
+class ScopedNoticeDeadline(unittest.IsolatedAsyncioTestCase):
+    async def test_scoped_provider_timeout_is_unknown_without_retry(self):
+        import asyncio
+        from unittest.mock import patch
+        worker=load('tenant_crm_notice_worker',{'observe':Mock(),'claim':Mock(),'finish':Mock(),
+            'send_push':Mock(),'dispatch_guarded':lambda item,callback:callback()},
+            {'tenant_crm_notice_store','tenant_crm_notice_outbox','tenant_push_worker'})
+        worker.deliver.__globals__['DELIVERY_TIMEOUT']=.01
+        item={'resource':{'body':'synthetic'},'event':'incoming_message','send':True,'recipient_id':20}
+        worker.claim.side_effect=[item,None]
+        async def slow(**kwargs):await asyncio.sleep(5)
+        bot=AsyncMock();bot.send_message.side_effect=slow
+        with patch.dict('os.environ',{'TENANT_SCOPED_ACCESS_ENABLED':'true'}):
+            await asyncio.wait_for(worker.deliver(bot,'',{},Mock()),timeout=2)
+        bot.send_message.assert_awaited_once()
+        assert worker.finish.call_args.args[1]=='unknown'

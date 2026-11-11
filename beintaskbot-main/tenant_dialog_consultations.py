@@ -20,7 +20,10 @@ from tenant_consultation_schema import require_schema,schema_ready
 def schema(conn):
     """Explicit startup/bootstrap API; request paths only verify readiness."""
     with conn.cursor() as cur:
-        if schema_ready(cur):return
+        if schema_ready(cur):
+            from tenant_ai_unused_archive import install_existing
+            install_existing(cur)
+            return
         if schema_ready(cur,include_followup=False,include_public_identity=False):
             # The deployed #467 foundation needs only these additive columns.
             # Release each relation lock before touching another table; old
@@ -29,6 +32,8 @@ def schema(conn):
             conn.commit()
             cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
             conn.commit()
+            from tenant_ai_unused_archive import install_existing
+            install_existing(cur)
             require_schema(conn)
             return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_developer_markers(
@@ -81,6 +86,8 @@ def schema(conn):
         cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS source_external_id TEXT NOT NULL DEFAULT ''")
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_dialog_consultation_pending_idx ON saas_dialog_consultation_replies(tenant_id,created_at) WHERE handled_at IS NULL')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
     conn.commit()
     require_schema(conn)
 
@@ -109,9 +116,13 @@ def route(cur,tenant,policy,channel,conversation,*,manual=False):
 
 def _case_access(cur,profile,case_id,channel,conversation,*,sending=False):
     """Retain the legacy case send gate; reads keep support + source visibility."""
-    tenant,actor,policy=access(cur,profile,'support')
-    if not policy.allows('dialogs') or (sending and policy.profile.get('role')!='owner'):
+    from tenant_support_access import require
+    tenant,actor,policy=require(cur,profile,case_id,'update' if sending else 'view',lock=sending)
+    from tenant_dialog_access import scope,require_source
+    permitted=scope(policy,'view')!='none' if scope(policy,'view') is not None else policy.legacy_allows('dialogs')
+    if not permitted or (sending and policy.profile.get('role')!='owner'):
         raise TenantLinearError('Только владелец с доступом к обращению и диалогу может отправить запрос.',403)
+    require_source(cur,tenant,policy,'connect',channel,'view')
     from tenant_support_case_context import load_scope
     case=load_scope(cur,tenant,identifier(case_id),channel,conversation)
     if sending and case['status']=='resolved':raise TenantLinearError('Обращение уже закрыто.',409)

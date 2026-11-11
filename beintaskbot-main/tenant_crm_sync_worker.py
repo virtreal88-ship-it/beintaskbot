@@ -49,7 +49,10 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
     snapshots = deleted_page(items) if deleted else ([{'raw':item} for item in items] if resource=='contacts' else normalize_page(resource, items, stage_names))
     # A full page always probes another page, regardless of HAL links. Never
     # follow a provider-supplied URL (host and credentials stay server-owned).
-    await store_call(store.save_page, snapshots, done=len(items) < PAGE_SIZE)
+    from tenant_crm_import_provenance import ObservedKommoPage
+    evidence = ({'observation': payload.observation}
+                if isinstance(payload, ObservedKommoPage) and not deleted else {})
+    await store_call(store.save_page, snapshots, done=len(items) < PAGE_SIZE, **evidence)
 
 
 def page_catalog(payload: dict) -> list[dict]:

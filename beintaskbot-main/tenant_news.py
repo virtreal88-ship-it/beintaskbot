@@ -47,6 +47,36 @@ def listing(session: dict, *, status: str = 'pending', after: str | None = None)
         'after': cursor(rows[29], 'created_at') if len(rows) > 30 else None}
 
 
+
+def member_published(session: dict, *, after: str | None = None) -> dict:
+    """Published content for every active company member, independent of Linear.
+
+    This deliberately excludes review data, AI classifications, Telegram queue
+    status and raw source content. Review/publication keeps using access().
+    """
+    if not session:
+        raise TenantLinearError('İcazə yoxdur.', 403)
+    tenant, user = identifier(session['tenant_id']), int(session['telegram_id'])
+    point = position(after)
+    with _connect() as conn:
+        ensure_observer_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT m.active,t.status AS tenant_status FROM saas_tenant_members m
+              JOIN saas_tenants t ON t.id=m.tenant_id
+              WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
+            member = cur.fetchone()
+            if not member or member['active'] is not True or member['tenant_status'] != 'active':
+                raise TenantLinearError('İcazə yoxdur.', 403)
+            condition = ' AND (published_at,id)<(%s,%s::uuid)' if point else ''
+            cur.execute("SELECT * FROM saas_linear_news WHERE tenant_id=%s::uuid AND status='published'"
+                " AND published_at>=now()-interval '90 days'" + condition +
+                ' ORDER BY published_at DESC,id DESC LIMIT 31', (tenant, *(point or ())))
+            rows = cur.fetchall()
+    return {'tenant_id': tenant, 'user_id': user,
+            'news': [{key: value for key, value in public(row).items()
+                      if key not in {'status', 'created_at', 'updated_at'}} for row in rows[:30]],
+            'after': cursor(rows[29], 'published_at') if len(rows) > 30 else None}
+
 def command(session: dict, data: dict) -> dict:
     action = data.get('action')
     if action not in {'publish', 'reject', 'create_publish'}:

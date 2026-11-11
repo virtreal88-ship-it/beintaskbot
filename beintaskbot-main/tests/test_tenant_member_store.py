@@ -24,7 +24,7 @@ class Cursor:
         if 'AS ready' in query: return {'ready': True}
         if 'SELECT id,modules' in query: return {'id':'tenant-a','modules':{'tasks':True}}
         if 'INSERT INTO saas_tenant_members' in query:
-            _, person, name, role, permissions, _ = params
+            _, person, name, role, permissions, _, department = params
         elif 'UPDATE saas_tenant_members SET display_name' in query:
             name, role, permissions, _, person = params
         else: raise AssertionError(query)

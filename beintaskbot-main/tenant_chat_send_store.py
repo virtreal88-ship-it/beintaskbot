@@ -11,22 +11,27 @@ from tenant_connect_transport import connect_route
 
 def authority(cur, session, lead_id):
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
-    profile = cur.fetchone()
+    from tenant_scoped_access_store import read_access_profile
+    profile=read_access_profile(cur,tenant,actor,lock=True)
     if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
         raise TenantLinearError('İcazə yoxdur.', 403)
-    profile = {**profile, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
+    profile = {**profile, 'tenant_id': tenant}
     policy = TenantPolicy(profile)
     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
     deal = cur.fetchone()
-    if not policy.allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
+    from tenant_dialog_access import require_source,scope
+    if scope(policy,'update') is None and not policy.legacy_allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
     connect = connect_route(cur, tenant, lead_id)
     if connect:
+        require_source(cur,tenant,policy,'connect',connect['channel_id'],'update')
         return profile, ['connect', connect['channel_id'], connect['conversation_id']], {'provider': 'connect', 'route': connect}
-    if not policy.allows('deals') or not policy.can_access_deal(deal):
+    cur.execute('SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND lead_id=%s',(tenant,lead_id))
+    if cur.fetchone():
+        raise TenantLinearError('Исходный Connect-канал недоступен; отправка через другой канал запрещена.',409)
+    if scope(policy,'update') is None and (not policy.allows('deals') or not policy.can_access_deal(deal)):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
+    require_source(cur,tenant,policy,'kommo','','update')
     cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
     integration = cur.fetchone()
     if not integration or integration['status'] != 'connected' or not integration['secrets']:
@@ -224,3 +229,25 @@ def read_quoted_receipt(session,lead_id,request_id=None):
             if quote and quote!=route.get('quoted_external_message_id'):raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
             return {'key':(profile['tenant_id'],profile['telegram_id'],row['request_id']),'command':command,'connection':connection,
                 'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id']}}
+
+
+def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
+    """Final authority and source locks span the single provider operation.
+
+    Scope revocation, employee deactivation, department reassignment and source
+    unbinding serialize against this boundary. An operation already accepted
+    by the provider cannot be recalled; receipts retain that ordering.
+    """
+    from tenant_scoped_access import scoped_access_enabled
+    if not scoped_access_enabled():return callback(expected_credentials,*args,**kwargs)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            profile,connection,integration=authority(cur,
+              {'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            if connection!=item['connection']:
+                raise TenantLinearError('Источник диалога изменился.',409)
+            if connection[0]=='connect':
+                current=integration['route']
+                if any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id')):
+                    raise TenantLinearError('Источник диалога изменился.',409)
+            return callback(expected_credentials,*args,**kwargs)

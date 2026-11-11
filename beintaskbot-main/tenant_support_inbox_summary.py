@@ -12,6 +12,7 @@ from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import generate
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_support_inbox_store import route, detail
+from tenant_support_access import require, policy_access, mutation_result
 from tenant_dialog_ai_context import resolve as assigned_context, binding as agent_binding
 from tenant_assigned_agent_prompt import assigned_guidance
 from tenant_support_case_context import load_scope, summary_messages, fingerprint, metadata as scope_metadata
@@ -46,7 +47,7 @@ def reserve(tenant, ticket_id, profile=None, retry=False, command=None):
                 owner = cur.fetchone()
                 if not owner: raise TenantLinearError('Нет ответственного за компанию.',403)
                 profile = {'tenant_id':tenant,'telegram_id':owner['telegram_id']}
-            tenant, actor = _authorize(cur,profile)
+            tenant, actor, _ = require(cur,profile,ticket_id,'update')
             cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant,ticket_id))
             ticket = cur.fetchone()
             if not ticket: raise TenantLinearError('Обращение не найдено.',404)
@@ -159,7 +160,7 @@ def reserve(tenant, ticket_id, profile=None, retry=False, command=None):
 
 
 def _assert_current(cur, item):
-    _authorize(cur, item['profile'])
+    require(cur,item['profile'],item['ticket_id'],'update',lock=True)
     current = assigned_context(cur, item['tenant'], {'channel_id': item['scope']['channel_id'], 'conversation_id': item['scope']['conversation_id']})
     if agent_binding(current) != item['agent_binding']:
         raise TenantLinearError('Назначение или настройки агента изменились.', 409)
@@ -293,7 +294,7 @@ def summarize(tenant, ticket_id, profile=None, retry=False, command=None):
 def regenerate(profile, ticket_id, data=None):
     ticket_id=identifier(ticket_id)
     # Verify access even when the summary has already completed.
-    detail(profile,ticket_id)
+    mutation_result(profile,ticket_id)
     if (not isinstance(data,dict) or set(data)-{'request_id','confirm_ai_cost','expected_summary_hash','language'}
             or data.get('confirm_ai_cost') is not True
             or not isinstance(data.get('expected_summary_hash'),str)
@@ -302,10 +303,10 @@ def regenerate(profile, ticket_id, data=None):
     command={**data,'request_id':identifier(data.get('request_id')),
              'language':language(data.get('language'),optional=True)}
     summarize(str(profile['tenant_id']),ticket_id,profile,retry=True,command=command)
-    result=detail(profile,ticket_id)
+    result=mutation_result(profile,ticket_id)
     from tenant_support_summary_history import request_status
     with _connect() as conn:
         with conn.cursor() as cur:
-            tenant,_=_authorize(cur,profile)
+            tenant,_,_=require(cur,profile,ticket_id,'update')
             result['summary_request']=request_status(cur,tenant,ticket_id,command['request_id'])
     return result

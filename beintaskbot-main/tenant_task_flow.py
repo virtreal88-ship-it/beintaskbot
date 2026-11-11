@@ -10,8 +10,10 @@ from psycopg.errors import SerializationFailure
 
 from tenant_platform_core import _connect
 from tenant_policy import TenantPolicy
+from tenant_scoped_access import scoped_access_enabled, ACTIVE_TENANT_STATUSES
 from tenant_workflow_store import _read_tenant_workflow
 from tenant_crm_queries import task_filters
+from tenant_native_task_access import read_where, capabilities as task_capabilities
 
 
 class TaskFlowError(ValueError):
@@ -26,7 +28,8 @@ def public(value):
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, dict):
-        return {key: public(item) for key, item in value.items()}
+        return {key: public(item) for key, item in value.items()
+                if key not in {'access_responsible_id','access_responsible_department_id'}}
     if isinstance(value, (list, tuple)):
         return [public(item) for item in value]
     return value
@@ -88,15 +91,15 @@ def _require_schema(conn):
 
 def _profiles(cur, tenant, actor, *, everyone=False):
     # Match current task/member writers; do not lock pipelines after memberships.
-    cur.execute('SELECT id,modules,onboarding FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
+    cur.execute('SELECT id,modules,onboarding,status FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
     company = cur.fetchone()
-    if not company:
+    if not company or company.get('status','active') not in ACTIVE_TENANT_STATUSES:
         raise TaskFlowError('task_forbidden', 403)
     cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
       WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
       ORDER BY policy_key FOR SHARE''', (tenant, ['members', 'modules']))
     cur.fetchall()
-    cur.execute('''SELECT tenant_id,telegram_id,display_name,role,permissions,active
+    cur.execute('''SELECT tenant_id,telegram_id,display_name,role,permissions,active,department_id
       FROM saas_tenant_members WHERE tenant_id=%s::uuid'''+('' if everyone else ' AND telegram_id=%s')+
       ' ORDER BY telegram_id FOR SHARE', (tenant,) if everyone else (tenant, actor))
     members = cur.fetchall()
@@ -104,6 +107,7 @@ def _profiles(cur, tenant, actor, *, everyone=False):
     profiles = {int(row['telegram_id']): {**dict(row), 'tenant_id': tenant,
         'permissions': row['permissions'] if isinstance(row['permissions'], list) else [],
         'modules': company.get('modules') or {}, 'onboarding': company.get('onboarding') or {},
+        'tenant_status': company.get('status','active'),
         'workflow': workflow} for row in members}
     profile = profiles.get(actor)
     if not profile or profile.get('active') is not True:
@@ -147,37 +151,22 @@ def execution_profiles(profile, executor_id=None):
 
 def authority_key(profile):
     return json.dumps({key: profile.get(key) for key in (
-        'tenant_id', 'telegram_id', 'role', 'permissions', 'active', 'modules', 'onboarding', 'workflow')},
+        'tenant_id', 'telegram_id', 'role', 'permissions', 'active', 'department_id', 'modules', 'onboarding', 'workflow')},
         sort_keys=True, default=str)
 
 
 def _sources(policy):
-    native = policy.allows_action('tasks', 'view')
+    native = policy.profile.get('active') is not False if scoped_access_enabled() else policy.allows_action('tasks','view')
     external = policy.allows('tasks')
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
-        complete=policy.allows_action('tasks', 'update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
+        complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
         dict(source='kommo', view=external, create=external, update=False,
             complete=external, archive=False, sync=external and policy.privileged)]
 
 
 def _native_where(profile):
-    policy = TenantPolicy(profile)
-    clause = 't.tenant_id=%s::uuid AND t.archived_at IS NULL'
-    args = [profile['tenant_id']]
-    if not policy.privileged:
-        clause += ' AND (t.responsible_id=%s OR t.created_by=%s)'
-        args.extend([profile['telegram_id'], profile['telegram_id']])
-        if profile.get('role') == 'manager':
-            parts = []
-            for item in policy.pipeline_scope():
-                part = 'd.pipeline_id=%s'; args.append(str(item['pipeline_id']))
-                if item['status_ids']:
-                    part += ' AND d.stage_id=ANY(%s::text[])'
-                    args.append([str(value) for value in item['status_ids']])
-                parts.append('('+part+')')
-            clause += ' AND ('+' OR '.join(parts)+')' if parts else ' AND FALSE'
-    return clause, args
+    return read_where(profile)
 
 
 def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None):
@@ -194,11 +183,13 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             args.extend([needle, needle])
         sql = '''SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
           t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
-          t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id
+          t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
+          t.tenant_id,t.access_responsible_id,owner.department_id AS access_responsible_department_id
           FROM saas_crm_native_tasks t
           JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
           LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=t.tenant_id AND c.id=t.contact_id
           LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
+          LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
           WHERE '''+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
     else:
         where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).task_scope())
@@ -220,6 +211,8 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             row.update(id=str(row['kommo_task_id']), status='completed' if row['completed'] else 'open')
             row['kommo_task_id'] = str(row['kommo_task_id'])
             row['kommo_lead_id'] = str(row['kommo_lead_id']) if row.get('kommo_lead_id') else None
+        if source == 'native':
+            row['capabilities'] = task_capabilities(TenantPolicy(profile), row, profile['telegram_id'])
         row['source'] = source
         result.append(public(row))
     return result
@@ -274,7 +267,7 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None):
         selected = source or ('native' if sources[0]['view'] else 'kommo')
         if not next(item for item in sources if item['source'] == selected)['view']:
             raise TaskFlowError('task_forbidden', 403)
-        scope = ('tenant' if policy.privileged else 'personal') if selected == 'native' else (
+        scope = (policy.action_scope('tasks','view') or ('tenant' if policy.privileged else 'personal')) if selected == 'native' else (
             'tenant' if policy.task_scope()['kind'] == 'all' else policy.task_scope()['kind'])
         result = dict(source=selected, sources=sources, scope=scope, limit=100 if selected == 'native' else 200)
         if request_id:

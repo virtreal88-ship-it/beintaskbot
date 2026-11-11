@@ -43,6 +43,8 @@ def ensure_schema(conn):
         cur.execute('''INSERT INTO saas_ai_administrator_draft_versions(tenant_id,draft_id,version,title,body,target,created_by,created_at)
           SELECT tenant_id,id,version,title,body,target,created_by,updated_at FROM saas_ai_administrator_drafts
           ON CONFLICT(tenant_id,draft_id,version) DO NOTHING''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def definitions():

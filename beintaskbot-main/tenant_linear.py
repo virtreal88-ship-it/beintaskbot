@@ -1,11 +1,16 @@
 """Tenant Linear connection/config storage. Legacy integration stays independent."""
 import json
 from tenant_platform import _connect, _ensure_schema, _fernet
-from tenant_linear_policy import owner, settings, identifier, TenantLinearError
+from tenant_linear_policy import owner as legacy_owner, settings, identifier, TenantLinearError
+from tenant_shared_integration_access import operation, admitted, principal, current_role
+
+def owner(profile):
+    return principal(profile) if admitted(profile, 'linear') else legacy_owner(profile)
 from tenant_linear_provider import verify, catalog, team_catalog
 
 
 def authorize(cur, tenant, user):
+    if admitted({'tenant_id':tenant, 'telegram_id':user}, 'linear'): return
     cur.execute('SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE', (tenant, user))
     row = cur.fetchone()
     if not row or row['role'] != 'owner' or not row['active']:
@@ -19,6 +24,7 @@ def public(row):
             'updated_at': str(row.get('updated_at') or ''), 'runtime_enabled': row.get('status') == 'connected' and bool(metadata.get('settings', {}).get('workflow', {}).get('enabled'))}
 
 
+@operation('linear', 'view')
 def read(profile):
     tenant, user = owner(profile)
     with _connect() as conn:
@@ -53,6 +59,7 @@ def credential(profile):
         raise TenantLinearError('Linear təhlükəsizlik ayarlarını yoxlayın.', 503) from None
 
 
+@operation('linear', 'view')
 def choices(profile, team_id='', after=None):
     key = credential(profile)
     if team_id:
@@ -67,20 +74,35 @@ def choices(profile, team_id='', after=None):
     return {'teams': catalog(key, after)}
 
 
+@operation('linear', lambda v: {'connect':'connect','settings':'update','disconnect':'delete'}.get(v['data'].get('action'), 'invalid'), data_arg='data')
 def command(profile, data):
     tenant, user = owner(profile)
     action = data.get('action')
     encrypted = None
     config = None
     if action == 'connect':
+        if admitted(profile, 'linear') and current_role(profile, 'linear') != 'owner':
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='linear'", (tenant,))
+                    old = ((cur.fetchone() or {}).get('metadata') or {}).get('settings') or {}
+                    if old.get('members') or (old.get('news') or {}).get('enabled') or (old.get('workflow') or {}).get('enabled'):
+                        raise TenantLinearError('Only the company owner can replace a Linear connection with employee or runtime rules.',403)
         cipher = _fernet()  # Missing key fails before contacting provider or storing anything.
         key = data.get('api_key')
         verify(key)
         encrypted = cipher.encrypt(json.dumps({'tenant_id': tenant, 'provider': 'linear', 'api_key': key.strip()}).encode())
     elif action == 'settings':
         config = settings(data.get('settings'))
+        if admitted(profile, 'linear') and current_role(profile, 'linear') != 'owner':
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='linear'", (tenant,))
+                    old = settings(((cur.fetchone() or {}).get('metadata') or {}).get('settings') or {})
+                    if any(config.get(key) != old.get(key) for key in ('members','news','workflow')):
+                        raise TenantLinearError('Linear member bindings and publication/runtime rules remain owner-only.',403)
         if config['team_id']:
-            team = choices(profile, config['team_id'])['team']
+            team = (choices.__wrapped__ if admitted(profile, 'linear') else choices)(profile, config['team_id'])['team']
             states = {s['id'] for s in team['states']['nodes'] if s['type'] == 'completed'}
             projects = {p['id'] for p in team['projects']['nodes']}
             if not set(config['done_state_ids']) <= states or not set(config['news']['projects']) <= projects:

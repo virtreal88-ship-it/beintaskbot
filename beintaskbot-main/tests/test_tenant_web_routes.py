@@ -31,7 +31,7 @@ EXPECTED_API += tuple((method,path) for path,methods in [
  ('/api/instructions/shared/{token}/assets/{asset_id}',('GET',))] for method in methods)
 EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowledge-pilot-admin.js","/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-ai-teams.js","/assets/tenant-ai-teams.css","/assets/tenant-knowledge-center.js","/assets/tenant-knowledge-center.css","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
 
-EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js']
+EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js', '/assets/tenant-shared-integration-settings.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.css']
 
@@ -39,8 +39,8 @@ EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-ins
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
 EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-alert-detail.css']
 EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
-EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
-EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js']
+EXPECTED_ASSETS += ['/assets/tenant-dialog-source-members.js','/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
+EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js','/assets/tenant-crm-save-receipt.js','/assets/tenant-crm-sync-history.js']
 EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
@@ -84,7 +84,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge/deduplication', ('GET','POST')),
     ('administrator/approvals', ('GET','POST')),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
-    ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
+    ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
     ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
@@ -103,6 +103,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('channels', ('GET',)), ('state', ('GET',)), ('state/technical', ('GET',)),
     ('reliability', ('GET',)), ('handoffs', ('GET',)), ('diagnostics', ('GET',)), ('agents/{agent_id}', ('PATCH','DELETE')),
     ('agents/{agent_id}/delete-preview', ('GET',)),
+    ('agents/{agent_id}/archive-unused', ('POST',)),
     ('agents/{agent_id}/triggers', ('GET','POST')),
     ('agents/{agent_id}/triggers/{trigger_id}', ('PATCH','DELETE')),
     ('conversations/{conversation_id}/state', ('GET',)),

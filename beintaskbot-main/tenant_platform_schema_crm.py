@@ -3,10 +3,16 @@
 from tenant_crm_deletion_schema import migrate_crm_deletions
 from tenant_crm_identity_schema import migrate_crm_identity_schema
 from tenant_crm_native_schema import migrate_native_contacts
+from tenant_crm_relation_schema import migrate_relation_schema
+from tenant_crm_scalar_schema import migrate_scalar_schema
+from tenant_crm_sync_history_schema import migrate_history_indexes
 
 def migrate_crm_schema(cur) -> None:
     migrate_crm_identity_schema(cur)
     migrate_native_contacts(cur)
+    migrate_relation_schema(cur)
+    migrate_scalar_schema(cur)
+    migrate_history_indexes(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,
@@ -64,3 +70,6 @@ def migrate_crm_schema(cur) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_project_idx ON crm_linear_news(project_key, done_at DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_expiry_idx ON crm_linear_news(expires_at)")
     migrate_crm_deletions(cur)
+
+    from tenant_scoped_access_schema import migrate_scoped_access_schema
+    migrate_scoped_access_schema(cur)

@@ -68,7 +68,8 @@ def _authority(cur,profile,data,*,require_ai=False):
     from tenant_ai_group_coordination import group_jid
     if group_jid(conversation):
         from tenant_connect_group_history import page
-        normalized=page(cur,tenant,conversation,selected_row_id=str(selection['id']),limit=1)
+        from tenant_dialog_access import allowed_channels
+        normalized=page(cur,tenant,conversation,selected_row_id=str(selection['id']),limit=1,channel_ids=allowed_channels(cur,tenant,policy))
         if not normalized or str(normalized[0]['id'])!=str(selection['id']):
             raise AudioError('source_outside_view','Обновите выбранное сообщение.',403)
         copies=[copy for copy in normalized[0].get('sources',[]) if str(copy.get('channel_id'))==vc and int(copy.get('lead_id') or 0)==int(view['lead_id'])]

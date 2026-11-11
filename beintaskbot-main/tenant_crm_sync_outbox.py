@@ -28,6 +28,8 @@ def enqueue_change(tenant_id,entity_type,internal_id):
     return int(queued)
 
 def claim():
+    from tenant_crm_writer_fence import claim_not_started
+    from tenant_scoped_access import scoped_access_enabled
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -37,7 +39,11 @@ def claim():
             row=cur.fetchone()
             if not row:conn.commit();return None
             row=dict(row)
-            if row['state']=='processing' and row['provider']=='kommo':
+            cur.execute('SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(row['id'],))
+            prior=cur.fetchone()
+            unsent=claim_not_started(prior,row['attempts'])
+            first=not prior and row['state']=='pending' and row['attempts']==0
+            if row['state']=='processing' and row['provider']=='kommo' and not unsent:
                 # Kommo does not document idempotency keys for create. A lost
                 # response is ambiguous, so never repeat a possible create.
                 cur.execute('''SELECT 1 FROM saas_crm_entity_links WHERE tenant_id=%s::uuid AND provider=%s
@@ -46,6 +52,16 @@ def claim():
                     cur.execute("UPDATE saas_crm_sync_outbox SET state='unknown',error_code='kommo_create_outcome_unknown',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],));conn.commit();return None
             cur.execute("UPDATE saas_crm_sync_outbox SET state='processing',attempts=attempts+1,lease_until=now()+interval '3 minutes',updated_at=now() WHERE id=%s RETURNING *",(row['id'],))
             row=dict(cur.fetchone())
+            if unsent or (first and scoped_access_enabled()):
+                # Only a fresh claim or an exactly matched unsent predecessor
+                # proves no send. Never relabel a duplicate's active sender.
+                # The outbox row lock serializes this with _send admission.
+                cur.execute("""INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome,claim_attempt)
+                  VALUES(%s::uuid,'not_started',%s) ON CONFLICT(event_id) DO UPDATE
+                  SET outcome='not_started',claim_attempt=EXCLUDED.claim_attempt,updated_at=clock_timestamp()
+                  WHERE saas_crm_legacy_delivery_attempts.outcome='not_started'
+                    AND saas_crm_legacy_delivery_attempts.claim_attempt=%s""",
+                  (row['id'],row['attempts'],row['attempts']-1))
         conn.commit()
     return row
 
@@ -164,11 +180,75 @@ async def _conflicts(row,local,link,request,client):
     return bool(not synced or not external or external>synced)
 
 async def _send(row,policy,request,bein_credential):
+    from tenant_crm_writer_fence import card_key, claim_not_started
+    from tenant_scoped_access import scoped_access_enabled
+    key=card_key(row['tenant_id'],row['entity_type'],row['internal_id'])
+    # A dedicated session owns the fence across every await and local commit.
+    # Nonblocking admission avoids blocking the async loop behind another send.
+    with _connect() as fence:
+        _ensure_schema(fence)
+        with fence.cursor() as cur:
+            cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked',(key,))
+            if not cur.fetchone()['locked']: return 'busy','legacy_card_busy'
+            fence.commit()
+            tracked=False
+            try:
+                cur.execute('SELECT state,attempts FROM saas_crm_sync_outbox WHERE id=%s::uuid FOR UPDATE',(row['id'],))
+                current=cur.fetchone()
+                if not current or current['state']!='processing' or current['attempts']!=row['attempts']:
+                    return 'stale','legacy_claim_changed'
+                cur.execute('SELECT outcome,claim_attempt FROM saas_crm_legacy_delivery_attempts WHERE event_id=%s::uuid',(row['id'],))
+                prior=cur.fetchone()
+                if prior and prior['outcome'] in ('sending','unknown'):
+                    return 'unknown','legacy_outcome_unknown'
+                tracked=scoped_access_enabled() or bool(prior)
+                if tracked and ((not prior and int(row['attempts'])>1)
+                    or (prior and prior['outcome']=='not_started' and not claim_not_started(prior,row['attempts']))):
+                    # Historical retries have no durable proof the old request ended.
+                    cur.execute("""INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome,claim_attempt)
+                      VALUES(%s::uuid,'unknown',%s) ON CONFLICT(event_id) DO UPDATE
+                      SET outcome='unknown',claim_attempt=EXCLUDED.claim_attempt,updated_at=clock_timestamp()""",
+                      (row['id'],row['attempts']))
+                    fence.commit()
+                    return 'unknown','legacy_historical_attempt_unverified'
+                if tracked:
+                    cur.execute("""INSERT INTO saas_crm_legacy_delivery_attempts(event_id,outcome,claim_attempt)
+                      VALUES(%s::uuid,'sending',%s) ON CONFLICT(event_id) DO UPDATE
+                      SET outcome='sending',claim_attempt=EXCLUDED.claim_attempt,updated_at=clock_timestamp()""",
+                      (row['id'],row['attempts']))
+                fence.commit()  # Possible-send evidence survives process death.
+                result=await _send_unfenced(row,policy,request,bein_credential)
+                if result[0]!='synced':
+                    cur.execute("UPDATE saas_crm_sync_outbox SET state=%s,error_code=%s,lease_until=NULL WHERE id=%s::uuid AND state='processing' AND attempts=%s",
+                                (result[0],result[1],row['id'],row['attempts']))
+                if tracked:
+                    cur.execute("UPDATE saas_crm_legacy_delivery_attempts SET outcome='completed',updated_at=clock_timestamp() WHERE event_id=%s::uuid",(row['id'],))
+                fence.commit()
+                return result
+            except BaseException:
+                if tracked:
+                    fence.rollback()
+                    cur.execute("UPDATE saas_crm_legacy_delivery_attempts SET outcome='unknown',updated_at=clock_timestamp() WHERE event_id=%s::uuid",(row['id'],))
+                    fence.commit()
+                raise
+            finally:
+                fence.rollback()
+                cur.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,))
+                fence.commit()
+
+
+async def _send_unfenced(row,policy,request,bein_credential):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             current=_current_policy(cur,row);local=_local(cur,row);link=_linked(cur,row)
             if not current or not local:return 'disabled','policy_or_record_changed'
+            from tenant_crm_scalar_store import legacy_superseded
+            if legacy_superseded(cur,row):
+                # Scoped values can survive later service/legacy edits. Protect
+                # this card regardless of event age or rollout rollback.
+                # Cards without scoped provenance retain the legacy path.
+                return 'conflict','legacy_scoped_revision_conflict'
             if row['provider']=='kommo':body=_kommo_body(cur,row,local,current);path='contacts' if row['entity_type']=='contact' else 'leads'
             else:
                 cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='beinsystems' AND status='connected'",(row['tenant_id'],))
@@ -215,7 +295,9 @@ def _mark_link_conflict(row):
             cur.execute("UPDATE saas_crm_entity_links SET sync_state='conflict',last_error_code='both_sides_changed',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND entity_type=%s AND internal_id=%s::uuid",(row['tenant_id'],row['provider'],row['entity_type'],row['internal_id']))
         conn.commit()
 
-async def run_batch(request,bein_credential,logger):
+async def run_batch(request,bein_credential,logger,*,bound_request=None):
+    from tenant_crm_scalar_delivery import run_batch as run_scalar_batch
+    await run_scalar_batch(_connect,bound_request,logger)
     for _ in range(5):
         row=await asyncio.to_thread(claim)
         if not row:break
@@ -223,10 +305,10 @@ async def run_batch(request,bein_credential,logger):
             with _connect() as conn:
                 _ensure_schema(conn)
                 with conn.cursor() as cur:policy=_current_policy(cur,row)
-            if not policy:
-                await asyncio.to_thread(finish,row,'disabled','policy_disabled');continue
+            # Even a disabled policy must pass the fence: an older ambiguous
+            # attempt cannot lose its provenance merely because policy changed.
             state,error=await _send(row,policy,request,bein_credential)
-            if state!='synced':await asyncio.to_thread(finish,row,state,error)
+            if state not in ('synced','busy','stale'):await asyncio.to_thread(finish,row,state,error)
         except ValueError as exc:
             await asyncio.to_thread(finish,row,'conflict',str(exc))
         except Exception as exc:

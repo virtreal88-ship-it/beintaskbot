@@ -32,6 +32,8 @@ def ensure_schema(conn):
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_config_rollbacks(
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id), approval_id UUID PRIMARY KEY, draft_id UUID NOT NULL,
           agent_id UUID NOT NULL, channel_id UUID NOT NULL, before_patch JSONB NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def _guard(cur, profile, *, scoped_training_policy_id=None):
@@ -233,7 +235,14 @@ def validate_config_proposal(cur,cfg,data):
         raise TenantLinearError('Invalid agent configuration proposal.',400)
     agent_id=str(uuid.UUID(str(data['agent_id']))); channel_id=str(uuid.UUID(str(data['channel_id'])))
     if agent_id!=cfg['AI_LEARNING_MCP_AGENT_ID'] or channel_id!=cfg['AI_LEARNING_MCP_CHANNEL_ID']: raise TenantLinearError('Configuration outside OAuth scope.',403)
-    cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(cfg['AI_LEARNING_MCP_TENANT_ID'],agent_id)); previous=cur.fetchone()
+    # Validation is shared by proposal creation and approved application. Take
+    # fresh membership/policy fences before the configuration mutex, and take
+    # that mutex before the first parent-agent row lock. Acquiring it only in
+    # save_agent is too late: an archive can hold the mutex while this caller
+    # holds the agent row, creating a lock-order cycle.
+    tenant,_=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
+    cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(tenant,agent_id)); previous=cur.fetchone()
     if not previous or previous['version']!=data['expected_agent_version']: raise TenantLinearError('Agent changed; review again.',409)
     from tenant_ai_agent_connect import scope_matches
     if not scope_matches(previous['scopes'],channel_id,is_group=False): raise TenantLinearError('Channel outside agent scope.',403)

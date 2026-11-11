@@ -146,7 +146,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # Use the tenant's existing Kommo adapter, not a browser
                     # supplied account.  This keeps the pick-list current and
                     # prevents saved agent scopes from narrowing it.
-                    if request_provider is not None and request.query.get('cached') != '1':
+                    # Revalidate current management authority before making
+                    # even a read-only provider request. A verified browser
+                    # session alone is not an AI management grant.
+                    result = await asyncio.to_thread(configuration_options, profile)
+                    if request_provider is not None and not result.get('scoped') and request.query.get('cached') != '1':
                         try:
                             remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
                         except Exception:
@@ -154,14 +158,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                             # the last tenant-owned catalog usable while Kommo
                             # is disconnected or temporarily unavailable.
                             logger.warning('AI Agents pipeline catalog unavailable; using cached tenant configuration')
-                            result = await asyncio.to_thread(configuration_options, profile)
                         else:
                             result = await asyncio.to_thread(
                                 refresh_configuration_catalog, profile,
                                 ((remote.get('_embedded') or {}).get('pipelines') or []),
                             )
-                    else:
-                        result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
                 elif resource == 'triggers':
@@ -262,6 +263,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(save_agent, profile, payload)
                 elif resource == 'agent' and method == 'PATCH':
                     result = await asyncio.to_thread(save_agent, profile, payload, agent_id=request.match_info['agent_id'])
+                elif resource == 'agent_archive_unused' and method == 'POST':
+                    from tenant_ai_unused_archive import archive_unused_agent
+                    result = await asyncio.to_thread(archive_unused_agent, profile, request.match_info['agent_id'], expected_version=payload.get('expected_version'))
                 elif resource == 'agent' and method == 'DELETE':
                     result = await asyncio.to_thread(
                         permanently_delete_agent, profile, request.match_info['agent_id'],

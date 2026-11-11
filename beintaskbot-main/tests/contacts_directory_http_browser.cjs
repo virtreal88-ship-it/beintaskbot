@@ -490,7 +490,9 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
         await page.locator('#nativeEntityBody').filter({hasText:'Browser isolated edited'}).waitFor();
         const archiveReceipt=page.waitForResponse(response=>response.request().method()==='POST' && new URL(response.url()).pathname==='/api/platform/crm/native/contacts/'+newId);
         await page.locator('#nativeEntityCard [data-native-card-archive]').click();
-        assert.equal((await archiveReceipt).status(),200);
+        const archived=await archiveReceipt;
+        assert.equal(archived.status(),200);
+        assert.deepEqual(archived.request().postDataJSON(),{action:'archive'});
         await page.waitForFunction(()=>!document.getElementById('nativeEntityCard').classList.contains('show'));
         await settled();
         assert.equal(await row('native:'+newId).count(),0);

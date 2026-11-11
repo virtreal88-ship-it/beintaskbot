@@ -241,3 +241,6 @@ def migrate_identity_schema(cur) -> None:
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS saas_invite_request_tenant_idx ON saas_tenant_invite_requests(tenant_id, status, created_at DESC)")
+
+    from tenant_scoped_access_schema import migrate_department_schema
+    migrate_department_schema(cur)

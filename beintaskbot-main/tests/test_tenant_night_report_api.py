@@ -64,10 +64,18 @@ def test_safe_errors(error,status):
     assert json.loads(response.text)['success'] is False
 
 
-def test_report_ui_is_app_only_and_preserves_pilot():
-    import subprocess
-    changed=subprocess.check_output(['git','diff','--name-only','77d5312a','--','docs/index.html','docs/tenant-webapp.html'],cwd=ROOT,text=True)
-    assert changed==''
+def test_report_ui_is_app_only_and_has_no_pilot_dependencies():
+    # Assert the actual route/asset boundary. A whole-tree git diff against the
+    # original feature branch base also flags unrelated later pilot work and
+    # cannot establish whether this report depends on or rewrites the pilot.
+    page=(ROOT/'docs/tenant-night-report.html').read_text(encoding='utf-8-sig')
+    assert 'id="nightReport"' in page
+    assert 'src="/assets/tenant-night-report.js"' in page
+    assert 'href="/assets/tenant-night-report.css"' in page
+    assert '/webapp' not in page and 'tenant-webapp' not in page
+    pilot=(ROOT/'docs/index.html').read_text(encoding='utf-8-sig')
+    assert 'nightReportNav' not in pilot and '/assets/tenant-night-report.js' not in pilot
+    assert '/app/night-report' not in pilot
     app=(ROOT/'docs/tenant-app.html').read_text(encoding='utf-8-sig')
     assert app.count('id="nightReportNav"') == 1
     assert 'href="/app/night-report"' in app

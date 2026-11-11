@@ -83,7 +83,7 @@ class Storage(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.policy=Mock();self.policy.can_access_deal.return_value=True
+        self.policy=Mock();self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
         self.module=loaders.load('tenant_chat_attachment_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(return_value={}),
             '_fernet':Mock(),'TenantPolicy':lambda _:self.policy},{'tenant_platform','tenant_policy'})
         self.cur.fetchone.side_effect=[{**SESSION,'active':True,'tenant_status':'active'}, {'tenant_id':TENANT},ROW,ITEM['connection']]

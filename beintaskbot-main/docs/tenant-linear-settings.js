@@ -2,15 +2,17 @@
 (() => {
   const $=id=>document.getElementById(id);
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let profile, snapshot, generation=0, busy=false, catalogComplete=true, employeeRows=[];
+  let accessData, profile, snapshot, generation=0, busy=false, catalogComplete=true, employeeRows=[];
+  const protectedSettings = () => window.tenantSharedIntegrations.scoped(accessData,'linear') && profile?.role!=='owner';
   async function api(params='',data) {
     const response=await fetch('/api/platform/linear/settings'+params,{credentials:'same-origin',cache:'no-store',
       ...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});
     const result=await response.json();
     if(!response.ok||!result.success)throw new Error(result.error||'Ayarlar yüklənmədi.');
+    if(data)window.tenantSharedIntegrations.record(accessData,'linear',result);
     return result;
   }
-  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on||input.dataset.tlReadonly==='true'||!!input.closest('[data-tl-blocked="true"]'));if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;}
+  function disable(on){busy=on;$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>input.disabled=on||input.dataset.tlReadonly==='true'||!!input.closest('[data-tl-blocked="true"]'));if($('tlSave'))$('tlSave').disabled=on||!catalogComplete;const shared=window.tenantSharedIntegrations;if(shared.scoped(accessData,'linear'))$('tenantLinearPanel')?.querySelectorAll('button,input,select').forEach(input=>{const action=input.id==='tlLoad'||input.id==='tlMore'?'view':input.id==='tlDisconnect'?'delete':input.id==='tlConnect'||input.id==='tlKey'?(shared.connected(accessData,'linear')?'update':'create'):'update';input.disabled=input.disabled||!shared.can(accessData,'linear',action)||(protectedSettings()&&!!input.closest('[data-tl-owner-settings]'));});}
   async function perform(work){if(busy)return;const current=generation;disable(true);$('tlMessage').textContent='Yüklənir…';
     try{await work(current);if(current===generation)$('tlMessage').textContent='Hazırdır.';}
     catch(error){if(current===generation)$('tlMessage').textContent=error.message;}
@@ -91,38 +93,42 @@
     }catch(error){if(valid()){root.dataset.tlBlocked='true';message.textContent=(committed?'Saxlanıldı, amma yeni ayarlar yüklənmədi. ':error.message+' ')+'Davam etmək üçün ayarları yenidən yükləyin.';}}
     finally{if(current===generation&&profile?.identity===identity)disable(false);}
   }
-  function install(data){const next=data.member;
+  function install(data){accessData=data;const next=data.member;
     const identity=next.tenant_id+':'+next.telegram_id+':'+next.role;
     if(profile?.identity===identity)return;
     generation++;profile={...next,identity};snapshot=null;busy=false;catalogComplete=true;$('tenantLinearPanel')?.remove();
-    if(next.role!=='owner')return;
+    if(window.tenantSharedIntegrations.scoped(data,'linear')?!Object.values(window.tenantSharedIntegrations.row(data,'linear').management_actions).some(Boolean):next.role!=='owner')return;
     $('view-settings').insertAdjacentHTML('beforeend',`<article class="panel" id="tenantLinearPanel" style="margin-top:16px">
       <h2>Linear və xəbərlər</h2><p>Şirkətə məxsus bağlantı, görünüş və iş qaydaları. Xəbərlər ayrıca yoxlanılır və təsdiqlənir. Köhnə kabinet dəyişmir.</p>
       <button class="outline" id="tlLoad">Ayarları yüklə</button><div id="tlBody" hidden>
       <p id="tlStatus"></p><label>Linear API açarı<input id="tlKey" type="password" autocomplete="new-password" placeholder="Yeni açar (saxlanmış açar göstərilmir)"></label>
       <button class="outline" id="tlConnect">Yoxla və qoş</button> <button class="outline danger" id="tlDisconnect">Bağlantını ayır</button>
       <label>Komanda<select id="tlTeam"><option value="">Seçin</option></select></label><button class="outline" id="tlMore" hidden>Daha çox komanda</button>
-      <div id="tlStates"></div><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
+      <div id="tlStates"></div><div data-tl-owner-settings><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
       <label style="display:flex"><input id="tlNewsEnabled" type="checkbox" style="width:auto">Tamamlanmış əsas tapşırıqlardan xəbər qaralamaları hazırla</label>
       <p>Fon sinxronizasiyasını da aktiv edin və layihələri / tamamlanmış statusları seçin. «Xəbərlər» səhifəsində yoxlayıb dərc edin. AI emalı ayrıca «Xəbərlər üçün AI» ayarlarında aktiv edilir; onsuz mənbə fraqmenti saxlanılır.</p>
       <label>Əvvəlki kanal qeydi (göndəriş üçün ayrıca «Telegram xəbər kanalı» bölməsində yoxlayın)<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
       <p>Yalnız əsas tapşırıqlar, 90 günlük saxlama və dərcdən əvvəl əl ilə təsdiq. Kanalın yazılması mesaj göndərmir. Account/Operator mövcud Linear dəyərləridir; yeni parametr yaradılmır.</p>
-      <button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
+      </div><p data-tl-owner-notice hidden>Əməkdaş, xəbər və iş qaydalarını yalnız şirkət sahibi dəyişə bilər. Saxlanmış qaydalar qorunur; komanda dəyişikliyi onlarla uyğun olmalıdır.</p><button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
+    $('tenantLinearPanel').querySelector('[data-tl-owner-settings]').hidden=protectedSettings();
+    $('tenantLinearPanel').querySelector('[data-tl-owner-notice]').hidden=!protectedSettings();
     $('tlLoad').onclick=()=>perform(load);
     $('tlConnect').onclick=()=>perform(async current=>{requireSavedEmployeeControls();const key=$('tlKey').value;$('tlKey').value='';await write('connect',{api_key:key});if(current===generation)await load(current);});
     $('tlDisconnect').onclick=()=>{if(confirm('Linear bağlantısı ayrılsın?'))perform(async current=>{await write('disconnect');if(current===generation)await load(current);});};
     $('tlTeam').onchange=()=>perform(teamChoices);
     $('tlMore').onclick=()=>perform(current=>teams(current,$('tlMore').dataset.cursor));
+    disable(false);
     $('tlSave').onclick=()=>perform(async current=>{const config={team_id:$('tlTeam').value,
       done_state_ids:[...$('tlStates').querySelectorAll('input:checked')].map(i=>i.value),
-      workflow:window.TenantLinearRules.read(),
-      members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
+      workflow:protectedSettings()?snapshot.settings?.workflow:window.TenantLinearRules.read(),
+      members:protectedSettings()?snapshot.settings?.members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
         Object.fromEntries([...row.querySelectorAll('[data-field]')].map(i=>[i.dataset.field,i.multiple?[...i.selectedOptions].map(o=>o.value):i.type==='checkbox'?i.checked:i.value]))])),
-      news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
+      news:protectedSettings()?snapshot.settings?.news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
       await write('settings',{settings:config});if(current===generation)await load(current);});
+    if(window.tenantSharedIntegrations.scoped(data,'linear'))void perform(load);
   }
   async function write(action,extra={}){requireSavedEmployeeControls();if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
-    return api('',{action,...extra,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id,expected_updated_at:snapshot.updated_at});}
+    return api('',window.tenantSharedIntegrations.command(accessData,'linear',{action,...extra,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id,expected_updated_at:snapshot.updated_at},action==='disconnect'?'delete':action==='connect'?(window.tenantSharedIntegrations.connected(accessData,'linear')?'update':'create'):'update'));}
   async function teams(current,after){const result=await api('?catalog=1'+(after?'&after='+encodeURIComponent(after):''));if(current!==generation)return;
     result.teams.nodes.forEach(team=>{if(![...$('tlTeam').options].some(option=>option.value===team.id))$('tlTeam').insertAdjacentHTML('beforeend',`<option value="${esc(team.id)}">${esc(team.name)}</option>`);});
     $('tlMore').hidden=!result.teams.pageInfo.hasNextPage;$('tlMore').dataset.cursor=result.teams.pageInfo.endCursor||'';}
@@ -137,7 +143,7 @@
     catalogComplete=!(result.team.states.pageInfo.hasNextPage||result.team.projects.pageInfo.hasNextPage||result.team.members.pageInfo.hasNextPage);
     if(!catalogComplete)$('tlProjects').insertAdjacentHTML('beforeend','<p>İlk 50 seçim göstərilir. Ayarları itirməmək üçün saxlama dayandırılıb: böyük kataloq üçün genişləndirilmiş səhifələmə tələb olunur.</p>');
   }
-  async function load(current){const [result, employees]=await Promise.all([api(),memberApi()]);if(current!==generation)return;employeeRows=employees.members||[];snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
+  async function load(current){if(window.tenantSharedIntegrations.scoped(accessData,'linear')&&!window.tenantSharedIntegrations.can(accessData,'linear','view')){snapshot={updated_at:window.tenantSharedIntegrations.row(accessData,'linear').updated_at||''};$('tlBody').hidden=false;for(const node of $('tlBody').children)node.hidden=!['tlStatus','tlConnect','tlDisconnect'].includes(node.id)&&!node.querySelector?.('#tlKey');disable(false);return;}const [result, employees]=await Promise.all([api(),profile.role==='owner'?memberApi():Promise.resolve({members:[]})]);if(current!==generation)return;employeeRows=employees.members||[];snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
     $('tlStatus').textContent=result.status==='connected'?(result.runtime_enabled?'Linear tapşırıqları aktivdir':'Linear qoşulub · iş qaydalarını aktiv edin'):'Linear qoşulmayıb';
     const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';$('tlNewsEnabled').checked=config.news?.enabled===true;
     $('tlMembers').innerHTML='<h3>Əməkdaşların Linear qaydaları</h3>'+result.members.map(member=>{

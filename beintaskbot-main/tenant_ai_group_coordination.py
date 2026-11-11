@@ -491,6 +491,50 @@ def reserve_delivery(tenant, channel, conversation, run_id):
             return bool(cur.fetchone())
 
 
+def _mutation_policy(cur, profile):
+    """Fence current action grants before legacy AI authorization takes locks."""
+    from tenant_scoped_access import scoped_access_enabled
+    if not scoped_access_enabled():
+        return None
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    if not isinstance(profile, dict):
+        raise TenantLinearError('Нет доступа.', 403)
+    current = read_access_profile(cur, profile.get('tenant_id'), profile.get('telegram_id'), lock=True)
+    if not current:
+        raise TenantLinearError('Нет доступа.', 403)
+    policy = TenantPolicy(current)
+    if policy.action_scope('dialogs', 'update') == 'none':
+        raise TenantLinearError('Изменение диалогов не разрешено.', 403)
+    return policy
+
+
+def _require_group_mutation(cur, tenant, policy, conversation, assignments):
+    """Shared group state and pending work affect every represented source.
+
+    Narrow rights must cover all current routes, assignments and work items,
+    including the previous assignment being removed. Unbound legacy work is
+    not attributed to a permitted channel by guesswork.
+    """
+    if policy is None or policy.action_scope('dialogs', 'update') in (None, 'all'):
+        return
+    from tenant_dialog_access import require_source
+    cur.execute('''SELECT connect_channel_id::text AS channel_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY connect_channel_id FOR SHARE''',
+      (tenant, conversation))
+    channels = {row['channel_id'] for row in cur.fetchall()}
+    old = read(cur, tenant, conversation).get('assignments') or []
+    channels.update(str(slot.get('channel_id') or '') for slot in [*old, *assignments])
+    cur.execute('''SELECT channel_id FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid
+      AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')
+      ORDER BY channel_id,agent_id,revision FOR SHARE''', (tenant, conversation))
+    channels.update(str(row['channel_id'] or '') for row in cur.fetchall())
+    if not channels:
+        raise TenantLinearError('Нет проверенного источника группы.', 403)
+    for channel in sorted(channels):
+        require_source(cur, tenant, policy, 'connect', channel, 'update')
+
+
 def configure(profile, data):
     from tenant_ai_agents_store import _authorize, _audit
     from tenant_ai_agents_schema import ensure_schema
@@ -521,8 +565,10 @@ def configure(profile, data):
                 cur.execute("SET LOCAL lock_timeout = '1500ms'")
                 cur.execute("SET LOCAL statement_timeout = '5000ms'")
         with conn.cursor() as cur:
+            policy = _mutation_policy(cur, profile)
             tenant, actor = _authorize(cur, profile)
             lock_group(cur, tenant, conversation)
+            _require_group_mutation(cur, tenant, policy, conversation, normalized)
             if resolution is not None:
                 from tenant_operator_legacy import admin
                 from tenant_ai_dialog_scope import lock_dialog
@@ -718,6 +764,9 @@ def configure(profile, data):
 
 def transition(cur, tenant, conversation, state, reason, actor):
     from tenant_ai_agents_store import _assert_resume_allowed
+    policy = _mutation_policy(cur, {'tenant_id': tenant, 'telegram_id': actor})
+    lock_group(cur, tenant, conversation)
+    _require_group_mutation(cur, tenant, policy, conversation, [])
     if state != 'active':
         stop(cur, tenant, conversation, state, reason, actor)
         return
@@ -824,7 +873,11 @@ def register_employee(profile,data):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            policy=_mutation_policy(cur,profile)
             tenant,actor=_authorize(cur,profile)
+            if policy is not None:
+                from tenant_dialog_access import require_source
+                require_source(cur,tenant,policy,'connect',channel,'update')
             cur.execute('''SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s
               AND direction='outgoing' AND raw->>'fromMe'='true' AND raw->>'source'='linked_phone'
               AND raw->>'participantJid'=%s AND COALESCE(raw->>'authorshipUncertain','false')<>'true'

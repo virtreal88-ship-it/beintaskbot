@@ -23,6 +23,8 @@ def schema(cur):
         REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id))''')
     cur.execute('''CREATE INDEX IF NOT EXISTS saas_connect_dialog_links_canonical
       ON saas_connect_dialog_links(tenant_id,channel_id,canonical_id) WHERE active''')
+    from tenant_ai_unused_archive import install_existing
+    install_existing(cur)
 
 
 def available(cur):

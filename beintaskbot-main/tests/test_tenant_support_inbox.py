@@ -809,6 +809,90 @@ def test_last_message_time_includes_outbound_messages(db):
     assert store.listing(PROFILE)['tickets'][0]['last_message_at'].startswith('2099-01-01')
 
 
+@pytest.fixture
+def cold_simulation_db(db):
+    # A second, entirely isolated PostgreSQL/WASM database, with the mandatory
+    # core schema committed but no optional simulation tables.
+    other=Database()
+    try:
+        schema.ensure_schema(other);other.commit()
+        assert other.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present'] is None
+        other.commit()
+        yield other
+    finally:
+        other.rollback()
+        other.process.stdin.close();other.process.wait(timeout=10)
+
+
+def test_simulation_ready_hint_from_other_database_cannot_skip_bootstrap(db,cold_simulation_db,monkeypatch):
+    monkeypatch.setattr(simulation_schema,'_ready',False)
+    simulation_schema.ensure_schema(db);db.commit()
+    monkeypatch.setattr(simulation_schema,'_ready',True)
+    db=cold_simulation_db
+    simulation_schema.ensure_schema(db)
+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present']
+    from tenant_ai_unused_archive import fences_ready
+    with db.cursor() as cur:assert fences_ready(cur)
+    db.commit()
+
+
+def test_simulation_rolled_back_bootstrap_cannot_poison_next_attempt(cold_simulation_db,monkeypatch):
+    db=cold_simulation_db
+    monkeypatch.setattr(simulation_schema,'_ready',False)
+    simulation_schema.ensure_schema(db)
+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present']
+    db.rollback()
+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present'] is None
+    db.commit()
+    # The old implementation left _ready=True despite rolling back every table.
+    assert simulation_schema._ready is True
+    simulation_schema.ensure_schema(db)
+    assert db.execute("SELECT to_regclass('saas_ai_simulation_configs') AS present")[0]['present']
+    db.commit()
+
+
+@pytest.mark.parametrize('warm_hint',[False,True])
+def test_simulation_warm_schema_is_read_only_and_preserves_caller_transaction(db,monkeypatch,warm_hint):
+    simulation_schema.ensure_schema(db);db.commit()
+    monkeypatch.setattr(simulation_schema,'_ready',warm_hint)
+    monkeypatch.setattr(platform_schema,'_schema_ready',False)
+    original_query=db.query;statements=[]
+    def observe(sql,params=()):
+        statements.append(sql.lstrip().split(None,1)[0].upper())
+        return original_query(sql,params)
+    db.execute("UPDATE saas_connect_conversations SET contact_name='simulation-uncommitted' WHERE tenant_id=%s::uuid AND lead_id=41",(A,))
+    monkeypatch.setattr(db,'query',observe)
+    simulation_schema.ensure_schema(db)
+    assert not set(statements)&{'ALTER','CREATE','DROP','DO','COMMIT'},statements
+    assert not db.execute("SELECT mode FROM pg_locks WHERE pid=pg_backend_pid() AND (mode='AccessExclusiveLock' OR locktype='advisory')")
+    db.rollback()
+    assert db.execute('SELECT contact_name FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND lead_id=41',(A,))[0]['contact_name']=='Client'
+    db.commit()
+
+
+@pytest.mark.parametrize('missing', ['context_snapshot','review_status','recheck_fk','live_index'])
+def test_simulation_readiness_rechecks_existing_schema_and_rollback(db,monkeypatch,missing):
+    simulation_schema.ensure_schema(db);db.commit()
+    mutations={
+        'context_snapshot':'ALTER TABLE saas_ai_simulation_runs DROP COLUMN context_snapshot',
+        'review_status':'ALTER TABLE saas_ai_dashboard_issue_reviews DROP CONSTRAINT saas_ai_dashboard_issue_reviews_status_check',
+        'recheck_fk':'ALTER TABLE saas_ai_simulation_queue DROP CONSTRAINT saas_ai_simulation_queue_recheck_run_fk',
+        'live_index':'DROP INDEX saas_ai_simulation_queue_live_event_idx',
+    }
+    db.execute(mutations[missing]);db.commit()
+    monkeypatch.setattr(simulation_schema,'_ready',True)
+    try:
+        assert not simulation_schema._schema_current(db)
+        simulation_schema.ensure_schema(db)
+        assert simulation_schema._schema_current(db)
+        db.rollback()
+        assert not simulation_schema._schema_current(db)
+        simulation_schema.ensure_schema(db);db.commit()
+        assert simulation_schema._schema_current(db)
+    finally:
+        db.rollback();simulation_schema.ensure_schema(db);db.commit()
+
+
 def seed_simulation(db, *, enabled=True, channel=CA, conversation='client', lead_id=41, group=False):
     simulation_schema._ready=False
     simulation_schema.ensure_schema(db)

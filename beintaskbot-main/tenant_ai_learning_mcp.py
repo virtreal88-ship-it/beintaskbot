@@ -112,6 +112,8 @@ def ensure_mcp_schema(conn):
         # A legacy token without a connection id remains usable for its old
         # scopes, but cannot prepare a component review (fail closed).
         cur.execute("ALTER TABLE saas_ai_learning_mcp_codes ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'ai_learning.read'")
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def _hash(value): return hashlib.sha256(str(value).encode()).hexdigest()

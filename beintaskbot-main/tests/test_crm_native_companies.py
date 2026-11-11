@@ -65,9 +65,9 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
     handler=company_api.handler(lambda _request:None,'https://crm.test',mock.MagicMock())
     denied=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={})))
     assert denied.status==403
-    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','role':'manager','active':True,
+    handler=company_api.handler(lambda _request:{'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
         'permissions':['customers:view'],'modules':{'customers':True}},'https://crm.test',mock.MagicMock())
     with mock.patch.object(company_api,'list_companies',return_value=[]) as listing:
         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
     assert response.status==200
-    listing.assert_called_once_with('tenant-1','Acme',50)
+    listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)

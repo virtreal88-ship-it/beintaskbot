@@ -5,18 +5,18 @@ from tenant_platform import _read_tenant_workflow
 from tenant_policy import TenantPolicy
 
 
-def access(cur, profile, permission='dialogs'):
+def access(cur, profile, permission='dialogs',action='view'):
     if not isinstance(profile,dict): raise TenantLinearError('Нет доступа.',403)
     tenant=identifier(profile.get('tenant_id'))
     try: actor=int(profile.get('telegram_id'))
     except (TypeError,ValueError): raise TenantLinearError('Нет доступа.',403) from None
-    cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules,t.onboarding FROM saas_tenant_members m
-      JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''',(tenant,actor))
-    row=cur.fetchone()
+    from tenant_scoped_access_store import read_access_profile
+    row=read_access_profile(cur,tenant,actor,lock=True)
     if not row or row.get('active') is not True or not tenant_status_allows_management(row.get('tenant_status')):
         raise TenantLinearError('Нет доступа к активной компании.',403)
-    policy=TenantPolicy({**row,'tenant_id':tenant,'workflow':_read_tenant_workflow(cur,tenant)})
-    if not policy.allows(permission): raise TenantLinearError('Владелец должен выдать доступ к этому разделу.',403)
+    policy=TenantPolicy({**row,'tenant_id':tenant})
+    scoped=policy.action_scope(permission,action)
+    if not (scoped!='none' if scoped is not None else policy.legacy_allows(permission)): raise TenantLinearError('Владелец должен выдать доступ к этому разделу.',403)
     return tenant,actor,policy
 
 
@@ -25,7 +25,7 @@ def authorize(cur,profile,permission='support'):
     return tenant,actor
 
 
-def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False):
+def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False,action='view'):
     if provider=='connect':
         cur.execute('''SELECT c.* FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid
           AND (%s::bigint IS NULL OR c.lead_id=%s::bigint)
@@ -54,6 +54,8 @@ def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=N
                   (tenant,str(original['connect_channel_id']),target))
                 rows=cur.fetchall()
         if len(rows)!=1: raise TenantLinearError('Диалог недоступен в этой компании или требуется выбрать канал.',404)
+        from tenant_dialog_access import require_source
+        require_source(cur,tenant,policy,'connect',str(rows[0]['connect_channel_id']),action)
         return dict(rows[0])
     if provider!='kommo': raise TenantLinearError('Некорректный источник.')
     cur.execute('''SELECT d.* FROM saas_crm_deals d WHERE d.tenant_id=%s::uuid AND d.deleted_at IS NULL
@@ -61,6 +63,8 @@ def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=N
         SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=d.tenant_id AND j.provider='kommo'
           AND j.lead_id=d.kommo_lead_id AND j.conversation_id=%s)))''',(tenant,lead_id,lead_id,lead_id,conversation))
     rows=cur.fetchall()
-    if len(rows)!=1 or (policy.profile.get('role')!='owner' and not policy.can_access_deal(rows[0])):
+    from tenant_dialog_access import require_source,scope
+    if len(rows)!=1 or (scope(policy,action) is None and policy.profile.get('role')!='owner' and not policy.can_access_deal(rows[0])):
         raise TenantLinearError('Переписка недоступна по вашим правам.',404)
+    require_source(cur,tenant,policy,'kommo',channel,action)
     return dict(rows[0])

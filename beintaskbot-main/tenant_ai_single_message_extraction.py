@@ -47,6 +47,8 @@ def ensure_schema(conn):
             cur.execute('ALTER TABLE saas_ai_single_message_extraction_consents ADD COLUMN IF NOT EXISTS '+column+' '+definition)
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS single_photo_retry_once ON saas_ai_single_message_extraction_consents(tenant_id,retry_of) WHERE action='approve' AND fragment_id IS NOT NULL AND retry_of IS NOT NULL")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS single_photo_retry_request ON saas_ai_single_message_extraction_consents(tenant_id,retry_request_id,action) WHERE retry_request_id IS NOT NULL")
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def _parse_args(data):

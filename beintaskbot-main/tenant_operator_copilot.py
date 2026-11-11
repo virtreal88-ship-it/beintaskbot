@@ -519,6 +519,8 @@ def run(profile, data, *, consultation_reply_id=None, developer_question=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor, policy = access(cur, profile, 'dialogs')
+            from tenant_dialog_access import require_independent_ai
+            require_independent_ai(policy)
             route = assert_route(cur, tenant, policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
             if int(route.get('lead_id') or 0) != command['lead_id']:
                 raise TenantLinearError('Диалог изменился. Обновите его.', 409)
@@ -721,6 +723,8 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
             status = 'unknown'
             if result is not None:
                 current_tenant, current_actor, current_policy = access(cur, {'tenant_id': tenant, 'telegram_id': actor}, 'dialogs')
+                from tenant_dialog_access import require_independent_ai
+                require_independent_ai(current_policy)
                 assert_route(cur, current_tenant, current_policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
                 if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)

@@ -1,9 +1,13 @@
-"""Tenant-scoped native contact CRUD. No Kommo requests or external side effects."""
+"""Tenant-scoped native contact CRUD with atomic scoped scalar sync receipts."""
 from __future__ import annotations
 import uuid
 import re
 
 from tenant_platform_core import _connect, _ensure_schema
+from tenant_policy import TenantPolicy
+from tenant_scoped_access import scoped_access_enabled
+from tenant_crm_scalar_store import lock_admission, queue_edit, managed
+from tenant_crm_native_access import current_access, scoped_sql, authorize_create, locked_resource, action_columns, public_row, CRMAccessError, require_local_relation
 
 
 def _valid_id(value):
@@ -22,81 +26,186 @@ def _fields(name, phone='', email=''):
     return name, phone, email
 
 
-def create_contact(tenant_id: str, name: str, phone: str = '', email: str = '', *, contact_id=None):
+def create_contact(tenant_id: str, name: str, phone: str = '', email: str = '', *, contact_id=None, actor_id=None):
     name, phone, email = _fields(name, phone, email)
     ident = _valid_id(contact_id) if contact_id is not None else str(uuid.uuid4())
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_admission(cur, tenant_id, actor_id)
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'create')
+            authorize_create(cur, profile, 'customers', tenant_id, actor_id)
             cur.execute("""INSERT INTO saas_crm_native_contacts
-                (id, tenant_id, display_name, phone, email)
-                VALUES (%s::uuid,%s::uuid,%s,%s,%s)
+                (id, tenant_id, display_name, phone, email, access_responsible_id)
+                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s)
                 ON CONFLICT (id) DO NOTHING RETURNING id, display_name, phone, email""",
-                (ident, tenant_id, name, phone, email))
+                (ident, tenant_id, name, phone, email, actor_id))
             row = cur.fetchone()
             if row is None:
-                cur.execute("""SELECT id, display_name, phone, email
-                    FROM saas_crm_native_contacts WHERE id=%s::uuid AND tenant_id=%s::uuid
-                    AND archived_at IS NULL""", (ident, tenant_id))
-                row = cur.fetchone()
-                if row is None or (row['display_name'], row['phone'], row['email']) != (name, phone, email):
+                # An idempotent create must not read a record outside this
+                # action's scope, even when the caller knows its UUID/fields.
+                row = locked_resource(cur, profile, 'customers', 'create',
+                    'saas_crm_native_contacts', tenant_id, ident)
+                if (row is None or (profile is not None and TenantPolicy(profile).has_scoped_access('customers')
+                        and str(row.get('access_responsible_id')) != str(actor_id))
+                        or (row['display_name'], row['phone'], row['email']) != (name, phone, email)):
                     raise ValueError('contact id conflict')
+            sync = queue_edit(cur, tenant_id, actor_id, profile, 'contact', row, None, action='create')
+            if sync is not None: row = {**row, 'sync': sync}
         conn.commit()
-    return row
+    return public_row(row)
 
 
-def get_contact(tenant_id: str, contact_id: str):
+def get_contact(tenant_id: str, contact_id: str, *, actor_id=None):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'view')
+            where, params = scoped_sql(profile, 'customers', 'view', 'c')
+            columns, action_params = action_columns(profile, 'customers', 'c')
+            cur.execute(f"""SELECT c.id, c.display_name, c.phone, c.email, c.company_id,
+                co.name AS company_name, c.created_at, c.updated_at {columns}
                 FROM saas_crm_native_contacts c
                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
-                WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL""", (tenant_id, _valid_id(contact_id)))
-            return cur.fetchone()
+                WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL
+                AND ({where})""", [*action_params, tenant_id, _valid_id(contact_id), *params])
+            return public_row(cur.fetchone())
 
 
-def list_contacts(tenant_id: str, search: str = '', limit: int = 50):
+def list_contacts(tenant_id: str, search: str = '', limit: int = 50, *, actor_id=None):
     query = '%' + str(search or '').strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'view')
+            where, params = scoped_sql(profile, 'customers', 'view', 'c')
+            columns, action_params = action_columns(profile, 'customers', 'c')
+            cur.execute(f"""SELECT c.id, c.display_name, c.phone, c.email, c.company_id,
+                co.name AS company_name, c.created_at, c.updated_at {columns}
                 FROM saas_crm_native_contacts c
                 LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
-                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL
+                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({where})
                 AND (c.display_name ILIKE %s ESCAPE '\\' OR c.phone ILIKE %s ESCAPE '\\' OR c.email ILIKE %s ESCAPE '\\')
                 ORDER BY c.updated_at DESC, c.id LIMIT %s""",
-                (tenant_id, query, query, query, max(1, min(int(limit), 100))))
-            return cur.fetchall()
+                [*action_params, tenant_id, *params, query, query, query, max(1, min(int(limit), 100))])
+            return [public_row(row) for row in cur.fetchall()]
 
 
-def update_contact(tenant_id: str, contact_id: str, name: str, phone: str = '', email: str = ''):
+def update_contact(tenant_id: str, contact_id: str, name: str, phone: str = '', email: str = '', *, actor_id=None):
     name, phone, email = _fields(name, phone, email)
+    ident = _valid_id(contact_id)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""UPDATE saas_crm_native_contacts
-                SET display_name=%s, phone=%s, email=%s, updated_at=now()
+            from tenant_crm_writer_fence import lock_card
+            from tenant_scoped_access import scoped_access_enabled
+            if actor_id is not None and scoped_access_enabled():
+                lock_card(cur, tenant_id, 'contact', ident)
+            lock_admission(cur, tenant_id, actor_id)
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
+            previous = None
+            if actor_id is not None:
+                previous = locked_resource(cur, profile, 'customers', 'update',
+                    'saas_crm_native_contacts', tenant_id, ident)
+                if not previous: return None
+            if (previous and managed(profile, 'contact')
+                    and (previous['display_name'], previous['phone'], previous['email']) == (name, phone, email)):
+                row = {key:previous[key] for key in ('id','display_name','phone','email')}
+                row['sync'] = queue_edit(cur, tenant_id, actor_id, profile, 'contact', row, previous)
+                conn.commit()
+                return row
+            stamp_sql = 'clock_timestamp()' if managed(profile, 'contact') else 'now()'
+            cur.execute(f"""UPDATE saas_crm_native_contacts
+                SET display_name=%s, phone=%s, email=%s, updated_at={stamp_sql}
                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
                 RETURNING id, display_name, phone, email""",
-                (name, phone, email, tenant_id, _valid_id(contact_id)))
+                (name, phone, email, tenant_id, ident))
             row = cur.fetchone()
+            if row:
+                sync = queue_edit(cur, tenant_id, actor_id, profile, 'contact', row, previous)
+                if sync is not None: row = {**row, 'sync': sync}
         conn.commit()
     return row
 
 
-def archive_contact(tenant_id: str, contact_id: str):
+def archive_contact(tenant_id: str, contact_id: str, *, actor_id=None):
+    ident = _valid_id(contact_id)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'delete')
+            if actor_id is not None and not locked_resource(cur, profile, 'customers', 'delete',
+                    'saas_crm_native_contacts', tenant_id, ident):
+                return False
             cur.execute("""UPDATE saas_crm_native_contacts
                 SET archived_at=now(), updated_at=now()
                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
-                RETURNING id""", (tenant_id, _valid_id(contact_id)))
+                RETURNING id""", (tenant_id, ident))
             row = cur.fetchone()
         conn.commit()
     return row is not None
+
+
+def set_contact_deal_link(tenant_id, contact_id, deal_id, *, unlink=False, actor_id):
+    """Edit a contact card's deal relation using only that contact's U scope.
+
+    No deal contents, fields or authority are returned through this route.
+    Unlink is conditional on the exact current contact, so it cannot remove
+    somebody else's link by presenting an unrelated editable contact.
+    """
+    if not scoped_access_enabled():
+        raise CRMAccessError('scoped_relation_unavailable', 403)
+    contact = _valid_id(contact_id)
+    deal = _valid_id(deal_id)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
+            if not locked_resource(cur, profile, 'customers', 'update',
+                    'saas_crm_native_contacts', tenant_id, contact):
+                return None
+            cur.execute("""SELECT id,contact_id FROM saas_crm_native_deals
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE""",
+                (tenant_id, deal))
+            target = cur.fetchone()
+            if not target or (unlink and str(target['contact_id'] or '') != contact):
+                return None
+            require_local_relation(cur, tenant_id, 'deal')
+            cur.execute("""UPDATE saas_crm_native_deals SET contact_id=%s::uuid,updated_at=clock_timestamp()
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL""",
+                (None if unlink else contact, tenant_id, deal))
+        conn.commit()
+    return {'id': contact, 'deal_id': deal, 'linked': not unlink}
+
+
+
+def set_contact_company_link(tenant_id, contact_id, company_id, *, unlink=False, actor_id):
+    """Change only an authorized contact's company relation, never company data."""
+    if not scoped_access_enabled():
+        raise CRMAccessError('scoped_relation_unavailable', 403)
+    contact = _valid_id(contact_id)
+    company = _valid_id(company_id)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile = current_access(cur, tenant_id, actor_id, 'customers', 'update')
+            row = locked_resource(cur, profile, 'customers', 'update',
+                'saas_crm_native_contacts', tenant_id, contact)
+            if not row or (unlink and str(row.get('company_id') or '') != company):
+                return None
+            # A target's membership and active state are required, not its R/U/D.
+            # Do not fetch or expose target contents or mutate any company field.
+            cur.execute("""SELECT id FROM saas_crm_native_companies
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE""",
+                (tenant_id, company))
+            if not cur.fetchone():
+                return None
+            require_local_relation(cur, tenant_id, 'contact')
+            cur.execute("""UPDATE saas_crm_native_contacts SET company_id=%s::uuid,updated_at=clock_timestamp()
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL""",
+                (None if unlink else company, tenant_id, contact))
+        conn.commit()
+    return {'id': contact, 'company_id': company, 'linked': not unlink}
 
 
 def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_id: str,

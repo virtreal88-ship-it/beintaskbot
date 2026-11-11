@@ -79,14 +79,19 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         # escape before the HTTP-thread wrapper can swallow its own failures.
         prefix=ast.FunctionDef(name='main',args=main.args,body=main.body[:http+1],decorator_list=[])
         program=ast.fix_missing_locations(ast.Module(body=[prefix],type_ignores=[]));events=[]
-        namespace={'start_http_thread':lambda *_args:events.append('http'),'start_webhook_server':None,'logger':None}
+        logger=SimpleNamespace(info=lambda message,*args:events.append(('log',message,args)))
+        namespace={'start_http_thread':lambda *_args:events.append('http'),'start_webhook_server':None,'logger':logger}
         exec(compile(program,'bot-main-startup-prefix','exec'),namespace)
         import tenant_ai_agent_startup as startup
         with patch.object(startup,'prepare_database',side_effect=_InvalidMigration):
             with self.assertRaises(_InvalidMigration):namespace['main']()
         self.assertEqual(events,[])
-        with patch.object(startup,'prepare_database',side_effect=lambda:events.append('prepared')):namespace['main']()
-        self.assertEqual(events,['prepared','http'])
+        for environment,enabled in (({},False),({'TENANT_SCOPED_ACCESS_ENABLED':'true'},True)):
+            with self.subTest(enabled=enabled),patch.dict('os.environ',environment,clear=True):
+                events.clear()
+                with patch.object(startup,'prepare_database',side_effect=lambda:events.append('prepared')):namespace['main']()
+                self.assertEqual(events,['prepared',('log','Scoped access rollout enabled=%s',(enabled,)),'http'])
+                self.assertIs(type(events[1][2][0]),bool)
 
     def test_direct_http_entry_checks_readiness_before_constructing_listener(self):
         module=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text())

@@ -18,13 +18,13 @@ class ContactApiTests(unittest.TestCase):
         self.assertEqual(response.status, 403)
 
     def test_tenant_scoped_list(self):
-        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'admin', 'active': True,
+        h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'telegram_id': 20, 'role': 'admin', 'active': True,
                                   'permissions': ['customers'], 'modules': {'customers': True}},
                         'https://crm.example', mock.MagicMock())
         with mock.patch.object(api, 'list_contacts', return_value=[{'display_name': 'A'}]) as listing:
             response = asyncio.run(h(self.request(query={'search': 'A'})))
         self.assertEqual(response.status, 200)
-        listing.assert_called_once_with('tenant-a', 'A', 50)
+        listing.assert_called_once_with('tenant-a', 'A', 50, actor_id=20)
 
     def test_invalid_contact_id_does_not_reach_database(self):
         h = api.handler(lambda _: {'tenant_id': 'tenant-a', 'role': 'owner'},

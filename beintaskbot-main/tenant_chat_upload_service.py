@@ -1,6 +1,6 @@
 """Reserve file hash, upload, re-route/re-authorize, checkpoint and send once."""
 import asyncio
-from tenant_chat_send_store import reserve, upload_credentials, mark_sending, finish
+from tenant_chat_send_store import dispatch_guarded, reserve, upload_credentials, mark_sending, finish
 from tenant_chat_send_policy import resolve_route
 from tenant_chat_upload_provider import upload
 from tenant_chat_send_provider import send
@@ -12,6 +12,9 @@ async def run(session, command, content, request, wait_slot, logger):
     item = await asyncio.to_thread(reserve, session, command)
     if 'cached_result' in item:
         return item['cached_result']
+    if item.get('connection',[None])[0]=='connect':
+        await asyncio.to_thread(finish,item,'blocked')
+        raise TenantLinearError('Отправка файлов через этот Connect-маршрут ещё не поддерживается.',409)
     started = False
     try:
         tenant = item['key'][0]
@@ -24,10 +27,10 @@ async def run(session, command, content, request, wait_slot, logger):
             route = await resolve_route(tenant, command['lead_id'], request)
             live = await request(tenant, 'GET', f"leads/{command['lead_id']}")
         profile, credentials = await asyncio.to_thread(mark_sending, item, {**route, 'attachment': attachment})
-        if int(live.get('id') or 0) != command['lead_id'] or not TenantPolicy(profile).can_access_deal({**live,'tenant_id':tenant}):
+        if int(live.get('id') or 0) != command['lead_id'] or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({**live,'tenant_id':tenant})):
             raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
         started = True
-        message_id = await asyncio.to_thread(send, credentials, route, command['text'], wait_slot, attachment=attachment)
+        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, command['text'], wait_slot, attachment=attachment)
         await asyncio.to_thread(finish, item, 'accepted', message_id)
         return {'state': 'accepted', 'message_id': message_id, 'origin': route['origin']}
     except Exception as error:

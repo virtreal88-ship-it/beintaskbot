@@ -107,6 +107,7 @@
   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
   const afterLayout=callback=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(callback):Promise.resolve().then(callback);
+  const canCreateSupport=()=>capabilities.support?.create??hasRight('support');
   const hasRight=right=>!!member&&member.active!==false&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
   function closeCopilotPanel(fromHistory=false){
     const panel=$('operatorCopilot');if(!panel)return;
@@ -174,10 +175,10 @@
   const manualCaseCopy=key=>({ru:{intro:'Создать обращение по этому диалогу? Разработчика можно спросить отдельно.',pending:'Предыдущий запрос ещё не подтверждён. Можно проверить тот же запрос.',check:'Проверить сохранённый запрос',mismatch:'Сервер не подтвердил точное обращение. Создание приостановлено; проверьте обращение в CRM.',storage:'Не удалось сохранить запрос в этом браузере. Обращение не создавалось.',cancel:'Закрыть'},az:{intro:'Bu dialoq üzrə müraciət yaradılsın? Tərtibatçı ilə ayrıca məsləhətləşmək olar.',pending:'Əvvəlki sorğu hələ təsdiqlənməyib. Eyni sorğunu yoxlamaq olar.',check:'Saxlanmış sorğunu yoxla',mismatch:'Server dəqiq müraciəti təsdiqləmədi. Yaratma dayandırılıb; CRM-də müraciəti yoxlayın.',storage:'Sorğunu bu brauzerdə saxlamaq olmadı. Müraciət yaradılmadı.',cancel:'Bağla'},en:{intro:'Create a case for this conversation? You can consult a developer separately.',pending:'The previous request is unconfirmed. Check the same request.',check:'Check saved request',mismatch:'The server did not confirm the exact case. Creation is on hold; check the case in CRM.',storage:'Could not save this request in the browser. No case was created.',cancel:'Close'}}[i18n.language]||{})[key]||key;
   const manualCaseFlights=new Set();
   async function openManualCaseCreate(source,button,isCurrent){
-    if(button.disabled||$('operatorCreateCaseModal')||!hasRight('support')||!hasRight('dialogs'))return;
+    if(button.disabled||$('operatorCreateCaseModal')||!canCreateSupport()||!hasRight('dialogs'))return;
     button.disabled=true;
     const owner=identity(member),key='tenant.operator.manual-case.'+owner+'.'+String(source.lead_id);
-    const same=()=>owner===identity(member)&&hasRight('support')&&hasRight('dialogs')&&isCurrent();
+    const same=()=>owner===identity(member)&&canCreateSupport()&&hasRight('dialogs')&&isCurrent();
     try{
       let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error(manualCaseCopy('mismatch'));}
       let route={...source};
@@ -205,7 +206,8 @@
         paintSaved();posting=true;manualCaseFlights.add(key);submit.disabled=true;cancel.disabled=true;
         try{
           const created=await api('support-tickets','POST',saved.payload),ticket=created.ticket,payload=saved.payload;
-          if(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
+          const writeOnly=created.readable===false&&ticket?.id&&ticket.create_request_id===payload.request_id&&created.create_receipt?.request_id===payload.request_id&&String(created.create_receipt.tenant_id)===String(payload.expected_tenant_id)&&String(created.create_receipt.actor_id)===String(payload.expected_user_id);
+          if(!writeOnly&&(!ticket?.id||String(ticket.tenant_id)!==String(payload.expected_tenant_id)||ticket.create_request_id!==payload.request_id||String(ticket.lead_id)!==String(payload.lead_id)||ticket.channel_id!==payload.channel_id||ticket.conversation_id!==payload.conversation_id||(payload.developer_confirmed===true&&(ticket.assigned_developer_channel_id!==payload.assigned_developer_channel_id||ticket.assigned_developer_conversation_id!==payload.assigned_developer_conversation_id)))){saved.hold=true;sessionStorage.setItem(key,JSON.stringify(saved));throw Error(manualCaseCopy('mismatch'));}
           sessionStorage.removeItem(key);dispose();if(same()){button.textContent=t('ticketSaved');button.setAttribute('aria-label',t('ticketSaved'));button.title=t('ticketSaved');document.dispatchEvent(new CustomEvent('tenant-support-changed'));}
         }catch(error){if(modal.isConnected){status.textContent=error.message+' '+manualCaseCopy(saved.hold?'mismatch':'pending');}}
         finally{posting=false;manualCaseFlights.delete(key);if(modal.isConnected){submit.disabled=!!saved?.hold;cancel.disabled=false;if(!card.contains(document.activeElement))cancel.focus();}}
@@ -855,7 +857,7 @@
     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
-    if(route.provider==='connect'&&hasRight('support')){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
+    if(route.provider==='connect'&&canCreateSupport()){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=t('createTicketCompact');create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}
     const diagnostics=document.createElement('button');diagnostics.type='button';diagnostics.textContent=t('diagnostics');diagnostics.dataset.operatorDiagnostics='true';diagnostics.onclick=()=>{menu.open=false;openDialogDiagnostics(route);};appendMenu(diagnostics);
     const trainingButton=$('operatorTraining'),caseAllowed=hasRight('dialogs')&&hasRight('support');trainingButton.disabled=route.provider!=='connect'||!route.agent_id||!caseAllowed;trainingButton.title=!route.agent_id?trainingText('noAgent'):trainingButton.disabled?trainingText('noAccess'):trainingText('button');trainingButton.onclick=()=>openTraining(route,same);
     if(route.provider==='connect'){
@@ -864,7 +866,7 @@
     const sendDraftKey=contextKey('draft',route),sendAllowed=route.can_send&&hasRight('dialogs');$('sendChat').disabled=!sendAllowed;$('chatText').disabled=!sendAllowed;
     let copilotMode=interactionState?.copilotMode||'chat',copilotBusy=false,copilotAnswer='',editingCopilotTemplateId=interactionState?.templateId||'';
     const copilotPanel=$('operatorCopilot'),copilotStatus=$('operatorCopilotStatus'),copilotResult=$('operatorCopilotResult'),copilotAsk=$('operatorCopilotAsk'),copilotInsert=$('operatorCopilotInsert');
-    const dialogAiAssigned=route.provider==='connect'&&!!route.agent_id;
+    const dialogAiAssigned=route.provider==='connect'&&!!route.agent_id&&route.can_use_copilot!==false;
     for(const node of [$('operatorAIReply'),$('operatorCopilotToggle'),$('operatorCopilotVoiceToggle'),copilotAsk,...host.querySelectorAll('[data-copilot-mode]')]){node.disabled=!dialogAiAssigned;if(!dialogAiAssigned)node.title=trainingText('noAgent');}
     if(!dialogAiAssigned)$('operatorAIReplyStatus').textContent=trainingText('noAgent');
     const templateSection=$('operatorCopilotTemplates'),templateList=$('operatorCopilotTemplateList'),templateForm=$('operatorCopilotTemplateForm'),templateName=$('operatorCopilotTemplateName'),templateQuestion=$('operatorCopilotTemplateQuestion'),templateStatus=$('operatorCopilotTemplateStatus');

@@ -177,7 +177,9 @@
   function placeIntegrationPanels(provider, hostId) {
     const host = document.getElementById(hostId);
     if (!host) return false;
-    const ids = integrationPanels[provider] || [];
+    const scoped = window.tenantSharedIntegrations?.scoped(window.tenantProfileSnapshot, provider);
+    if (scoped && ['connect','beinsystems'].includes(provider)) return true;
+    const ids = (scoped && provider === 'openai') ? ['tcAiPanel'] : integrationPanels[provider] || [];
     const panels = ids.map(id => document.getElementById(id)).filter(Boolean);
     if (!panels.length) return false;
     host.replaceChildren(...panels);

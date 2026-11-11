@@ -10,6 +10,7 @@ from tenant_platform_core import _connect
 from tenant_policy import TenantPolicy
 from tenant_workflow_store import _read_tenant_workflow
 from tenant_crm_request_context import native_policy_profile
+from tenant_crm_native_access import scoped_sql, action_columns, public_row
 
 
 class ContactsDirectoryError(ValueError):
@@ -31,25 +32,11 @@ def _require_schema(conn):
 
 
 def _current_policy(cur, tenant, actor):
-    # Same order as current task/member/workflow writers. These are read
-    # fences, held only until the selected directory snapshot is complete.
-    cur.execute('SELECT id,modules,onboarding FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
-    company = cur.fetchone()
-    if not company:
+    from tenant_scoped_access_store import read_access_profile
+    profile = read_access_profile(cur, tenant, actor, lock=True)
+    if profile is None:
         raise ContactsDirectoryError('contacts_forbidden', 403)
-    cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
-      WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
-      ORDER BY policy_key FOR SHARE''', (tenant, ['members', 'modules']))
-    cur.fetchall()
-    cur.execute('''SELECT * FROM saas_tenant_members WHERE tenant_id=%s::uuid
-      AND telegram_id=%s FOR SHARE''', (tenant, actor))
-    member = cur.fetchone()
-    if not member or member.get('active') is not True:
-        raise ContactsDirectoryError('contacts_forbidden', 403)
-    member = native_policy_profile(dict(member))
-    return TenantPolicy({**dict(member), 'tenant_id': tenant,
-        'modules': company.get('modules') or {}, 'onboarding': company.get('onboarding') or {},
-        'workflow': _read_tenant_workflow(cur, tenant)})
+    return TenantPolicy(native_policy_profile(profile))
 
 
 def _positive_json(expression):
@@ -200,13 +187,15 @@ def _directory_snapshot(profile, *, source=None, search='', limit=50, offset=0, 
                 if row_key:
                     base += ' WHERE key=%s'; args.append(str(row_key))
             else:
-                base = '''SELECT 'native:'||c.id::text AS key,'native_contact'::text AS kind,
+                native_where, native_args = scoped_sql(policy.profile, 'customers', 'view', 'c')
+                columns, column_args = action_columns(policy.profile, 'customers', 'c')
+                base = f'''SELECT 'native:'||c.id::text AS key,'native_contact'::text AS kind,
                   'native'::text AS source,c.id,c.display_name,c.phone,c.email,c.company_id,
-                  co.name AS company_name,c.created_at,c.updated_at,c.updated_at AS sort_at
+                  co.name AS company_name,c.created_at,c.updated_at,c.updated_at AS sort_at {columns}
                   FROM saas_crm_native_contacts c LEFT JOIN saas_crm_native_companies co
                     ON co.tenant_id=c.tenant_id AND co.id=c.company_id
-                  WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL'''
-                args.append(tenant)
+                  WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({native_where})'''
+                args.extend([*column_args, tenant, *native_args])
             search_columns = ['display_name', 'phone'] + (['email'] if selected == 'native' else ['lead_name', 'stage_name'])
             search_sql = 'TRUE' if lookup else '(' + ' OR '.join(f"{name} ILIKE %s ESCAPE '\\'" for name in search_columns) + ')'
             if not lookup:
@@ -229,9 +218,16 @@ def _directory_snapshot(profile, *, source=None, search='', limit=50, offset=0, 
             actions = {action: policy.allows_action('customers', grant) for action, grant in (
                 ('view', 'view'), ('create', 'create'), ('update', 'update'), ('archive', 'delete'), ('assign', 'assign'))}
             actions['update_deals'] = policy.allows_action('deals', 'update')
+            from tenant_scoped_access import scoped_access_enabled
+            actions['scoped_relations'] = scoped_access_enabled()
             readonly = {key: key == 'view' for key in actions}
-            for entry in result['data']:
-                entry['actions'] = actions if entry['source'] == 'native' else readonly
+            for index, entry in enumerate(result['data']):
+                if entry['source'] == 'native':
+                    entry = public_row(entry)
+                    entry['actions'] = {**actions, **entry.get('actions', {})}
+                    result['data'][index] = entry
+                else:
+                    entry['actions'] = readonly
             external_available = external_allowed and (result['connected'] or result['has_external_cache'])
             sources = [
                 {'source': 'native', 'allowed': native_allowed, 'available': native_allowed,

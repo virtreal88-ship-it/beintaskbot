@@ -12,14 +12,14 @@
     data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
     Object.fromEntries(Object.entries(data?.capabilities || {}).filter(([key]) => !['deal_board', 'notification_events'].includes(key))),
     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])),
-    binding(data)?.can_review_news === true]));
+    binding(data)?.can_review_news === true, (data?.integrations || []).map(row => [row.provider, row.management_actions, row.status_only])]));
   const snapshot = data => JSON.stringify([data?.member, data?.integrations]);
   const employees = item => item.host === 'staffManagement';
   // Employee drafts do not depend on integration health or news-review bindings.
   // Keep their security scope explicit, and their data freshness separate.
   const employeeIdentity = data => JSON.stringify(stable([data?.member?.tenant_id, data?.member?.telegram_id,
     data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
-    data?.capabilities?.can_manage_employees, data?.capabilities?.pages?.employees,
+    data?.capabilities?.can_manage_employees, data?.capabilities?.can_view_employees, data?.capabilities?.can_update_employees, data?.capabilities?.can_create_employees, data?.member?.department_id, data?.capabilities?.pages?.employees,
     data?.capabilities?.actions?.employees,
     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]))]));
   const memberData = member => member && Object.fromEntries(Object.entries(member).filter(([key]) =>
@@ -29,7 +29,9 @@
   const freshness = (item, data) => employees(item) ? JSON.stringify(stable([
     memberData(data?.member), Array.isArray(data?.members) ? data.members.map(memberData) : undefined
   ])) : snapshot(data);
-  const newsAvailable = data => !!(data?.member?.active && data?.capabilities?.modules?.linear && (
+  const newsAvailable = data => !!(data?.member?.active === true && data.member.tenant_id && data.member.telegram_id
+    && (data.member.tenant_status || 'active') === 'active' && data?.capabilities?.pages?.news !== false);
+  const newsReviewAvailable = data => !!(newsAvailable(data) && data?.capabilities?.modules?.linear && (
     data.member.role === 'owner' || binding(data)?.can_review_news === true));
   const protectedSelector = '#view-news,#tnModal,#chakra-settings-root,#chakra-notification-settings-root,#chakra-integrations-root,' +
     '#integrationMarketplaceDialog,#tenantLinearPanel,#tenantKommoPanel,#tcAiPanel,#tnAiPanel,#tnChannelPanel';
@@ -125,7 +127,7 @@
         .finally(() => { bootstrap = null; });
     }
   }
-  window.tenantViewDemand = {watch, newsAvailable, clean: selector => {
+  window.tenantViewDemand = {watch, newsAvailable, newsReviewAvailable, clean: selector => {
     for (const item of subscriptions) if (item.editable === selector) item.dirty = false;
   }};
 })();

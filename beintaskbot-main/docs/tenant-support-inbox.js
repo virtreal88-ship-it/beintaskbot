@@ -164,6 +164,7 @@
       try{const fresh=await api('/'+encodeURIComponent(ticket.id));if(selected!==ticket.id||!detailData||detailData.ticket.id!==ticket.id)return;rememberMessages(fresh.messages);appendMaterialMessages();detailData.scope=fresh.scope;if(fresh.scope&&$('supportScope'))$('supportScope').textContent=t('caseScopePinned')+' · '+fresh.scope.message_count+' '+t('caseScopeMessages')+' · '+fresh.scope.media_count+' '+t('caseScopeFiles');}catch(error){if(selected===ticket.id)notice(error.message);}
     });
     renderConsultations(ticket);
+    if(result.capabilities?.update===false){for(const id of ['supportSave','supportTake','supportResolve','supportSummary','supportSummaryNewRequest','supportDescription','supportSuggestions','supportNextSteps','supportEditStatus','supportEditAssignee']){const control=$(id);if(control)control.disabled=true;}}
     const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'history';selectCaseTab(['history','details','developer'].includes(tab)?tab:'history');
   }
 
@@ -349,7 +350,7 @@
     install();if(!$('supportDetail'))return;
     directTicketKey=key;const replyId=query.get('consultation_reply_id');if(replyId&&!notificationId){void openNotification({ticketId:id,replyId});return;}void open(id,focus,true,false,notificationId?{keepError:true,notificationId}:{});
   }
-  async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){await open(id);notice(error.message);}}}
+  async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;if(result.readable===false){closeTicketModal();await load();return;}renderDetail(result);await load();}catch(error){if(version===epoch){await open(id);notice(error.message);}}}
   const mutate=(id,data)=>action(id,'','PATCH',data);
   document.addEventListener('tenant-chat-open',event=>{
     const lead=event.detail.lead_id,version=epoch;if(!member||!allowed())return;

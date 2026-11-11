@@ -3,10 +3,11 @@ import asyncio
 from datetime import date, datetime
 from uuid import UUID
 from aiohttp import web
-from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact
+from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact, set_contact_deal_link, set_contact_company_link
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
+from tenant_crm_native_access import CRMAccessError
 from tenant_crm_contact_listing import directory, ContactsDirectoryError
 from tenant_crm_request_context import require_expected_context as _expected_identity, CRMContextError, native_policy_profile
 
@@ -47,6 +48,7 @@ def handler(member_from_request, origin, logger):
         profile = native_policy_profile(profile)
         policy=TenantPolicy(profile)
         tenant_id = str(profile['tenant_id'])
+        actor = profile.get('telegram_id') or 0
         contact_id = request.match_info.get('id')
         if contact_id:
             try:
@@ -66,10 +68,10 @@ def handler(member_from_request, origin, logger):
                 if not policy.allows_action('customers','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if contact_id:
-                    result = await asyncio.to_thread(get_contact, tenant_id, contact_id)
+                    result = await asyncio.to_thread(get_contact, tenant_id, contact_id, actor_id=actor)
                 else:
                     result = await asyncio.to_thread(list_contacts, tenant_id,
-                        request.query.get('search', ''), 50)
+                        request.query.get('search', ''), 50, actor_id=actor)
                 if contact_id and result is None:
                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
             else:
@@ -85,24 +87,36 @@ def handler(member_from_request, origin, logger):
                         raise ValueError('unknown fields')
                     result = await asyncio.to_thread(create_contact, tenant_id,
                         body.get('name'), body.get('phone', ''), body.get('email', ''),
-                        contact_id=body.get('id'))
+                        contact_id=body.get('id'), actor_id=actor)
                 elif request.method == 'POST' and contact_id and body.get('action') == 'update':
                     if set(body) - {'action', 'name', 'phone', 'email'} or 'name' not in body:
                         raise ValueError('invalid fields')
                     result = await asyncio.to_thread(update_contact, tenant_id, contact_id,
-                        body['name'], body.get('phone', ''), body.get('email', ''))
+                        body['name'], body.get('phone', ''), body.get('email', ''), actor_id=actor)
+                elif request.method == 'POST' and contact_id and body.get('action') in {'link_deal', 'unlink_deal'}:
+                    if set(body) != {'action', 'deal_id'}:
+                        raise ValueError('invalid relation fields')
+                    result = await asyncio.to_thread(set_contact_deal_link, tenant_id, contact_id,
+                        body['deal_id'], unlink=body['action'] == 'unlink_deal', actor_id=actor)
+                elif request.method == 'POST' and contact_id and body.get('action') in {'link_company', 'unlink_company'}:
+                    if set(body) != {'action', 'company_id'}:
+                        raise ValueError('invalid relation fields')
+                    result = await asyncio.to_thread(set_contact_company_link, tenant_id, contact_id,
+                        body['company_id'], unlink=body['action'] == 'unlink_company', actor_id=actor)
                 elif request.method == 'POST' and contact_id and body.get('action') == 'archive':
                     if body != {'action': 'archive'}:
                         raise ValueError('invalid archive action')
-                    result = await asyncio.to_thread(archive_contact, tenant_id, contact_id)
+                    result = await asyncio.to_thread(archive_contact, tenant_id, contact_id, actor_id=actor)
                 else:
                     return web.json_response({'success': False, 'error': 'method_not_allowed'}, status=405)
                 if result is None or result is False:
                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
-                if request.method=='POST' and (not contact_id or body.get('action')=='update'):
+                if request.method=='POST' and (not contact_id or body.get('action') == 'update'):
                     try:
                         from tenant_crm_sync_outbox import enqueue_change
-                        await asyncio.to_thread(enqueue_change,tenant_id,'contact',str(result['id']))
+                        if (result.get('sync') or {}).get('mode') != 'scoped_scalar':
+                            await asyncio.to_thread(enqueue_change,tenant_id,
+                                'contact', str(result['id']))
                     except Exception:
                         logger.warning('CRM contact sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success': True, 'data': _jsonable(result)},
@@ -110,6 +124,9 @@ def handler(member_from_request, origin, logger):
         except (ContactsDirectoryError, CRMContextError) as exc:
             return web.json_response({'success': False, 'error': exc.code, 'code': exc.code},
                                      status=exc.status, headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
+        except CRMAccessError as exc:
+            return web.json_response({'success': False, 'error': exc.code}, status=exc.status,
+                                     headers={'Cache-Control': 'no-store'})
         except TenantLinearError:
             return web.json_response({'success': False, 'error': 'invalid_origin'}, status=403,
                                      headers={'Cache-Control': 'no-store'})

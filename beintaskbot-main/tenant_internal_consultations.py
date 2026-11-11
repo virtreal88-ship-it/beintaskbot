@@ -9,6 +9,8 @@ from tenant_ai_agents_store import _audit
 from tenant_linear_policy import TenantLinearError
 from tenant_consultation_schema import schema_ready,require_schema
 
+from tenant_support_access import require, policy_access
+
 STATUSES={'queued_after_hours','waiting_specialist','answered','confirmed_bug','workaround','deployed_fix','closed'}
 
 def schema(conn):
@@ -68,14 +70,21 @@ def create(profile,data):
     with _connect() as conn:
         require_schema(conn,'internal')
         with conn.cursor() as cur:
-            tenant,actor=authorize(cur,profile)
-            cur.execute('''SELECT channel_id,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,data.get('case_id')));case=cur.fetchone()
+            tenant,actor,_=require(cur,profile,data.get('case_id'),'update',lock=True)
+            cur.execute('''SELECT channel_id,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,data.get('case_id')));case=cur.fetchone()
             if not case: raise TenantLinearError('consultation_case_unavailable',404)
             key=str(data.get('request_key') or '')[:180]
             if not key: raise TenantLinearError('consultation_request_invalid',400)
             recipient=_recipient(cur,tenant,data.get('recipient_id'))
-            cur.execute('SELECT id,status FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND request_key=%s FOR UPDATE',(tenant,key));old=cur.fetchone()
-            if old: return {'id':str(old['id']),'status':old['status'],'created':False}
+            cur.execute('SELECT id,status,case_id,created_by,recipient_id,reason,evidence FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND request_key=%s FOR UPDATE',(tenant,key));old=cur.fetchone()
+            if old:
+                if (str(old.get('case_id')) != str(data.get('case_id'))
+                        or old.get('created_by') != actor
+                        or old.get('recipient_id') != recipient['telegram_id']
+                        or old.get('reason') != str(data.get('reason') or '')[:1000]
+                        or old.get('evidence') != (data.get('evidence') if isinstance(data.get('evidence'),dict) else {})):
+                    raise TenantLinearError('consultation_case_changed',409)
+                return {'id':str(old['id']),'status':old['status'],'created':False}
             status='waiting_specialist' if _hours() else 'queued_after_hours'; ident=uuid.uuid4()
             evidence=data.get('evidence') if isinstance(data.get('evidence'),dict) else {}
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,recipient_id,created_by)
@@ -191,7 +200,7 @@ def listing(profile,case_id):
     with _connect() as conn:
         require_schema(conn,'internal')
         with conn.cursor() as cur:
-            tenant,_=authorize(cur,profile)
+            tenant,_,_=require(cur,profile,case_id)
             cur.execute('''SELECT c.id,c.case_id,c.reason,c.evidence,c.status,c.delivery_state,c.created_at,c.answered_at,c.response,c.response_kind,
               c.recipient_id,COALESCE(m.display_name,c.recipient_id::text) AS recipient_name
               FROM saas_internal_consultations c LEFT JOIN saas_tenant_members m ON m.tenant_id=c.tenant_id AND m.telegram_id=c.recipient_id
@@ -204,9 +213,22 @@ def reply(profile,consultation_id,data):
         from tenant_dialog_consultations import require_schema as unified_schema,record_manual_reply
         unified_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=authorize(cur,profile)
+            from tenant_scoped_access import scoped_access_enabled
+            if scoped_access_enabled():tenant,actor,_=policy_access(cur,profile,'update')
+            else:tenant,actor=authorize(cur,profile)
+            # Discover the immutable relation without a row lock, then take
+            # the same case -> consultation order as create/idempotent replay.
+            cur.execute('SELECT case_id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,consultation_id))
+            link=cur.fetchone()
+            if not link: raise TenantLinearError('consultation_unavailable',404)
+            if link.get('case_id'):
+                if scoped_access_enabled():require(cur,profile,link['case_id'],'update',lock=True)
+                cur.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,link['case_id']))
+                if not cur.fetchone():raise TenantLinearError('consultation_case_unavailable',404)
             cur.execute('SELECT * FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,consultation_id));row=cur.fetchone()
             if not row: raise TenantLinearError('consultation_unavailable',404)
+            if str(row.get('case_id')) != str(link.get('case_id')):
+                raise TenantLinearError('consultation_case_changed',409)
             cur.execute('SELECT role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',(tenant,actor));member=cur.fetchone()
             if row.get('recipient_id') is None:
                 if not member or (member.get('role') not in {'owner','admin'} and 'support' not in (member.get('permissions') or [])):

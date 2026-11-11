@@ -53,11 +53,17 @@ def _eligible(cur, tenant, actor, policy):
     CTE inlining lets the unread count use the existing personal/read_at index;
     pagination never returns the employee's full notification history.
     """
+    from tenant_dialog_access import scope,sql_filter
+    dialog_scope=scope(policy)
+    def module_allowed(module):
+        if module=='support' and policy.action_scope('support','view') is not None:
+            return policy.action_scope('support','view')!='none'
+        return dialog_scope!='none' if module=='dialogs' and dialog_scope is not None else policy.legacy_allows(module) if module=='dialogs' else policy.allows(module)
     modules = ('tasks', 'deals', 'customers', 'dialogs', 'support', 'hot_orders',
                'linear', 'finance', 'employees', 'settings', 'integrations',
                'ai_agents', 'night_report')
     module_case = 'CASE p.module ' + ' '.join(
-        "WHEN '" + module + "' THEN " + ('TRUE' if policy.allows(module) else 'FALSE')
+        "WHEN '" + module + "' THEN " + ('TRUE' if module_allowed(module) else 'FALSE')
         for module in modules) + " WHEN 'account' THEN TRUE WHEN 'approvals' THEN " + (
         'TRUE' if policy.privileged and any(policy.allows(m) for m in ('tasks', 'deals', 'hot_orders')) else 'FALSE') + ' ELSE FALSE END'
     cur.execute("""SELECT to_regclass('saas_dialog_consultation_replies') IS NOT NULL AS replies,
@@ -80,8 +86,8 @@ def _eligible(cur, tenant, actor, policy):
             AND v.connect_channel_id=c.channel_id AND v.conversation_id=c.conversation_id
           LEFT JOIN saas_connect_channels ch ON ch.tenant_id=v.tenant_id AND ch.connect_channel_id=v.connect_channel_id'''
         consult_columns = 'r.id::text AS reply_id,c.id::text AS consultation_id,c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,v.lead_id AS source_lead,c.case_id::text AS case_id'
-        consult_guard = ('TRUE' if policy.allows('dialogs') else 'FALSE') + ''' AND r.id IS NOT NULL AND v.lead_id IS NOT NULL AND ch.active=TRUE'''
-        consult_guard += ' AND (c.case_id IS NULL OR ' + ('TRUE' if policy.allows('support') else 'FALSE') + ')'
+        consult_guard = ('TRUE' if module_allowed('dialogs') else 'FALSE') + ' AND '+sql_filter(policy,"'connect'",'c.channel_id::text')+''' AND r.id IS NOT NULL AND v.lead_id IS NOT NULL AND ch.active=TRUE'''
+        consult_guard += ' AND (c.case_id IS NULL OR ' + ('TRUE' if module_allowed('support') else 'FALSE') + ')'
         if ready.get('links'):
             consult_guard += ''' AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
               WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.channel_id AND dl.source_id=c.conversation_id AND dl.active)'''
@@ -168,6 +174,8 @@ def _eligible(cur, tenant, actor, policy):
       WHERE cv.tenant_id=p.tenant_id AND cv.lead_id::text=p.target_lead
         AND cv.connect_channel_id::text=p.target_channel AND p.target_conversation<>'' AND cc.active=TRUE
         AND encode(convert_to(cv.conversation_id,'UTF8'),'hex')=''' + _parameter_bytes('p.target_conversation') + ')'
+    if dialog_scope is not None:
+        dialog_guard='('+dialog_guard+') AND '+sql_filter(policy,"'connect'",'p.target_channel')
     deal_scope, deal_args = [], []
     if policy.profile.get('role') == 'owner':
         deal_scope.append('TRUE')
@@ -179,6 +187,15 @@ def _eligible(cur, tenant, actor, policy):
             deal_scope.append('(' + clause + ')')
     deal_guard = '''p.target_deal='' OR EXISTS(SELECT 1 FROM saas_crm_deals d
       WHERE d.tenant_id=p.tenant_id AND d.kommo_lead_id::text=p.target_deal AND d.deleted_at IS NULL AND (''' + (' OR '.join(deal_scope) or 'FALSE') + '))'
+    support_guard, support_args = 'TRUE', []
+    if policy.action_scope('support','view') is not None:
+        from tenant_support_access import predicate
+        support_sql, support_args = predicate(policy,alias='scope_ticket')
+        support_guard = ("(p.module<>'support' AND COALESCE(p.case_id,'')='') OR EXISTS("
+            "SELECT 1 FROM saas_support_tickets scope_ticket WHERE scope_ticket.tenant_id=p.tenant_id "
+            "AND scope_ticket.id::text=COALESCE(NULLIF(p.case_target_id,''),NULLIF(p.case_id,''),NULLIF(p.target_ticket,'')) AND "
+            + support_sql + ")") if ready.get('tickets') else "p.module<>'support' AND COALESCE(p.case_id,'')=''"
+        if not ready.get('tickets'): support_args=[]
     sql = 'WITH '+(', '.join(proof_ctes)+', ' if proof_ctes else '')+'''personal AS NOT MATERIALIZED (
       SELECT n.*,''' + consult_columns + ',' + case_columns + ',' + approval_column + ''',
         split_part(n.event_key,':',1)='dialog_consultation' AS is_reply,
@@ -208,14 +225,14 @@ def _eligible(cur, tenant, actor, policy):
         WHEN event_key ~ '^(ai_handoff|new_lead):' THEN 'deals'
         ELSE 'account' END AS module FROM personal
     ), eligible AS NOT MATERIALIZED (
-      SELECT p.* FROM classified p WHERE CASE WHEN p.is_reply THEN p.reply_allowed ELSE
+      SELECT p.* FROM classified p WHERE (CASE WHEN p.is_reply THEN p.reply_allowed ELSE
         (p.target_url='' OR p.target_url ~ '^/app([?][^#[:cntrl:]]*)?$') AND (''' + module_case + ''')
         AND (p.target_state='case' OR (
         (p.target_view<>'support' OR (''' + ticket_guard + '''))
         AND (p.target_view<>'dialogs' OR (''' + dialog_guard + '''))
-        AND (p.target_view NOT IN ('deals','customers') OR (''' + deal_guard + ''')))) END
+        AND (p.target_view NOT IN ('deals','customers') OR (''' + deal_guard + ''')))) END) AND (''' + support_guard + ''')
     ) '''
-    return sql, [*proof_params, tenant, actor, *deal_args]
+    return sql, [*proof_params, tenant, actor, *deal_args, *support_args]
 
 
 def _cursor(value, status):

@@ -14,6 +14,9 @@ class Policy:
     def __init__(self, profile):
         self.profile = profile
 
+    def action_scope(self, module, action):
+        return None
+
     def allows(self, permission):
         return permission in self.profile.get("permissions", [])
 

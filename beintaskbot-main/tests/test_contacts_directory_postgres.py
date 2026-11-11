@@ -738,7 +738,7 @@ def test_repeated_real_snapshot_conflicts_fail_unavailable_without_returning_par
     cookie = f['session'].issue(A, 82)
     conflicts = []
     def before(query, _cursor):
-        if 'SELECT * FROM saas_tenant_members WHERE' in query and 'FOR SHARE' in query:
+        if 'SELECT * FROM saas_tenant_members WHERE' in ' '.join(query.split()) and 'FOR SHARE' in query:
             # An actual committed row revision after each RR snapshot causes
             # PostgreSQL 40001 at the production SHARE fence; no exception or
             # authority function is manufactured by this timing observer.
@@ -976,10 +976,11 @@ def test_actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_h
             previous_deal[0].pop('updated_at')
             current_deal[0].pop('updated_at')
             assert current_deal == previous_deal, 'Attach/detach preserves every other deal field'
-            relation_posts = [post for post in f['posts'] if post['path'].endswith(RELATION_DEAL)]
+            relation_posts = [post for post in f['posts'] if post['path'].endswith('/deals/' + RELATION_DEAL)]
             assert len(relation_posts) == 2
             created_id = next(post['data']['id'] for post in f['posts'] if post['path'].endswith('/contacts'))
             assert [post['data']['contact_id'] for post in relation_posts] == [created_id, None]
+            assert all(post['data']['title'] == 'Synthetic contact relation deal' for post in relation_posts)
         else:
             assert changed == set(), changed
             if mode in ('native403_view', 'native403_update'):

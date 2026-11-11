@@ -114,6 +114,18 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                     (str(tenant_id), key, int(owner_id)))
                 cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE", (str(tenant_id), key))
                 locked_policies[key] = cur.fetchone()['value']
+            # Matrix rights have their own version and source preflight in the
+            # employee editor. Old/full workflow forms may echo or omit them,
+            # but may neither change them nor erase a newer saved matrix.
+            from tenant_scoped_access import preserve_workflow_access_scopes
+            scoped_member_policies = {}
+            for raw_key, value in list(policies.items()):
+                if str(raw_key or '').strip()[:120] == 'members':
+                    try:
+                        scoped_member_policies[raw_key] = preserve_workflow_access_scopes(
+                            locked_policies.get('members'), value)
+                    except ValueError as exc:
+                        raise TenantPlatformError(str(exc)) from exc
             # This setting has its own optimistic version contract. The
             # existing workflow editor may echo it, but cannot bypass that
             # contract or overwrite a newer language policy on an old form.
@@ -221,6 +233,7 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
             # Task admission takes policy row locks in canonical key order.
             # Stable sorting also preserves last-write wins for aliases that
             # normalize to the same existing policy key.
+            policies.update(scoped_member_policies)
             policy_items = sorted(((str(key or "").strip()[:120], value)
                                    for key, value in policies.items()), key=lambda item: item[0])
             for policy_key, value in policy_items:

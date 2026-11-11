@@ -27,6 +27,8 @@ def ensure_schema(conn):
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_observation_drafts(
           observation_id UUID PRIMARY KEY REFERENCES saas_ai_administrator_observations(id) ON DELETE CASCADE,
           tenant_id UUID NOT NULL, draft_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    from tenant_ai_unused_archive import install_schema_references
+    install_schema_references(conn)
 
 
 def enqueue(cur, tenant_id, source, payload, checkpoint=''):

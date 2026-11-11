@@ -146,7 +146,11 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_ai_management_access import require_unrestricted_dialog_read
+            require_unrestricted_dialog_read(cur, profile)
             tenant, _, policy = access(cur, profile, 'dialogs')
+            from tenant_dialog_access import require_independent_ai
+            require_independent_ai(policy,management=True)
             if technical:
                 # Deliberately check the DB role/manage grant, never profile.role.
                 _authorize(cur, profile)

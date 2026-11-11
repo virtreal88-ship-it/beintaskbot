@@ -1,7 +1,7 @@
 """Prepare, check source and authority, checkpoint, send once, record receipt."""
 import asyncio
 from tenant_chat_send_policy import command, resolve_route
-from tenant_chat_send_store import reserve, mark_sending, finish, quoted_status_credentials, record_quoted_delivery, accept_quoted_lookup
+from tenant_chat_send_store import dispatch_guarded, reserve, mark_sending, finish, quoted_status_credentials, record_quoted_delivery, accept_quoted_lookup
 from tenant_chat_send_provider import send
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
@@ -38,13 +38,13 @@ async def run(session, data, request, wait_slot, logger):
                 route = await resolve_route(tenant, lead_id, request)
                 live = await request(tenant, 'GET', f'leads/{lead_id}')
             profile, credentials = await asyncio.to_thread(mark_sending, item, route)
-            if int(live.get('id') or 0) != lead_id or not TenantPolicy(profile).can_access_deal({
-                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
+            if int(live.get('id') or 0) != lead_id or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({
+                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id})):
                 raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
         external_started = True
-        message_id = await asyncio.to_thread(send_connect, credentials, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
+        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send_connect, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, item['command']['text'], wait_slot)
         if is_connect and not scoped_quote:
-            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
+            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, author=profile.get('display_name') or str(profile['telegram_id']), actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
         await asyncio.to_thread(finish, item, 'accepted', message_id)
         return {'state':'accepted','message_id':message_id,'origin':route['origin'],**(await _quoted_status(item,message_id) if scoped_quote else {})}
     except TenantLinearError:
@@ -68,7 +68,7 @@ async def _quoted_status(item,message_id):
         status=await asyncio.to_thread(quoted_delivery_status,credentials,message_id,item['command']['request_id'],item['quote'])
         if status.get('message_id'):
             if status.get('provider_accepted'):
-                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],actor=item['key'][1],quoted_message_id=item['quote'])
+                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],author=(item.get('profile') or {}).get('display_name') or str(item['key'][1]),actor=item['key'][1],quoted_message_id=item['quote'])
             await asyncio.to_thread(record_quoted_delivery,item,status['message_id'],status)
         return status
     except Exception:

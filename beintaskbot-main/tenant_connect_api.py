@@ -33,9 +33,9 @@ def settings_handler(member_from_request, origin: str, logger):
                 if not isinstance(data, dict):
                     raise TenantPlatformError('Sorğu düzgün deyil.')
                 if data.get('action') == 'disconnect':
-                    result = await asyncio.to_thread(disconnect, profile)
+                    result = await asyncio.to_thread(disconnect, profile, authorization=data)
                 elif data.get('action') == 'disconnect_channel':
-                    result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''))
+                    result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''), authorization=data)
                 elif data.get('action') == 'retire_channel':
                     if set(data)!={'action','channel_id','confirm'}:
                         raise TenantLinearError('channel_retirement_request_invalid',400)
@@ -52,10 +52,10 @@ def settings_handler(member_from_request, origin: str, logger):
                     result = await asyncio.to_thread(
                         channel_status, profile, str(data.get('channel_id') or ''),
                         reconnect=data.get('action') == 'reconnect_channel',
-                        callback_url=origin.rstrip('/') + '/api/platform/connect/webhook',
+                        callback_url=origin.rstrip('/') + '/api/platform/connect/webhook', authorization=data,
                     )
                 elif data.get('action') == 'channels':
-                    result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''))}
+                    result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''), authorization=data)}
                 else:
                     result = await asyncio.to_thread(configure, profile, data, origin.rstrip('/') + '/api/platform/connect/webhook')
             return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})

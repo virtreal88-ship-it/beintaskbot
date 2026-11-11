@@ -16863,7 +16863,8 @@ async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
         await run_sync_batch(_tenant_kommo_request, logger)
         from tenant_crm_sync_outbox import run_batch as run_crm_sync_outbox
         from tenant_bein_integration import credential as bein_crm_credential
-        await run_crm_sync_outbox(_tenant_kommo_request,bein_crm_credential,logger)
+        await run_crm_sync_outbox(_tenant_kommo_request,bein_crm_credential,logger,
+            bound_request=_tenant_kommo_service.request_bound)
     except Exception:
         logger.error('Tenant CRM background sync unavailable')
 
@@ -18683,6 +18684,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     from tenant_member_password_assign import assign_member_password
     from tenant_member_email_assign import assign_member_email
     from tenant_member_profile_assign import assign_member_profile
+    from tenant_department_store import upsert_department
+    from tenant_member_store import employee_creation_options
     member_api = tenant_member_handlers(MemberApiContext(
         member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
         telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
@@ -18692,6 +18695,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         assign_member_password=assign_member_password,
         assign_member_email=assign_member_email,
         assign_member_profile=assign_member_profile,
+        upsert_department=upsert_department,
+        employee_creation_options=employee_creation_options,
         deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
         request_invite_acceptance=request_tenant_invite_acceptance,
         list_invite_requests=list_tenant_invite_requests,
@@ -18734,12 +18739,18 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/crm/native/companies', native_companies_api)
     app_web.router.add_get('/api/platform/crm/native/companies/{id}', native_companies_api)
     app_web.router.add_post('/api/platform/crm/native/companies/{id}', native_companies_api)
+    from tenant_crm_sync_history_api import handler as crm_sync_history_handler
+    for collection, entity in (('contacts','contact'),('deals','deal'),('companies','company')):
+        app_web.router.add_get('/api/platform/crm/native/'+collection+'/{id}/sync-history',
+            crm_sync_history_handler(_tenant_member_from_request, logger, entity=entity))
     from tenant_crm_native_deal_api import handler as native_crm_deals_handler
     native_deals_api = native_crm_deals_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/crm/native/deals', native_deals_api)
     app_web.router.add_post('/api/platform/crm/native/deals', native_deals_api)
     app_web.router.add_get('/api/platform/crm/native/deals/{id}', native_deals_api)
     app_web.router.add_post('/api/platform/crm/native/deals/{id}', native_deals_api)
+    app_web.router.add_post('/api/platform/crm/native/deals/{id}/company-link',
+        native_crm_deals_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, company_relation=True))
     from tenant_crm_native_task_api import handler as native_crm_tasks_handler
     native_tasks_api = native_crm_tasks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/crm/native/tasks', native_tasks_api)
@@ -19790,6 +19801,8 @@ def main():
     # A failure must escape before either listener or scheduler is created,
     # including deployments where background AI processing is disabled.
     _prepare_database_with_retry(prepare_database)
+    from tenant_scoped_access import scoped_access_enabled
+    logger.info("Scoped access rollout enabled=%s", scoped_access_enabled())
     start_http_thread(start_webhook_server, logger)
     async def post_init(application: Application) -> None:
         remove_retired_employee_access()

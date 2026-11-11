@@ -45,7 +45,9 @@ class IncrementalStorageTests(unittest.TestCase):
     store = base.StorageTests.store
     current = base.StorageTests.current
     def test_new_connection_discards_old_account_watermark(self):
-        self.cur.fetchone.side_effect = [{'account_domain':'new.kommo.com','connected_at':'new'},
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'connected','account_domain':'new.kommo.com','connected_at':'new'}]
+        self.cur.fetchone.side_effect = [
             {**self.row,'status':'done','watermark':9999999999,'last_full_sync':9999999999},
             {'resource':'leads','status':'queued'}]
         self.module.enqueue('company-a','leads')
@@ -62,7 +64,9 @@ class IncrementalStorageTests(unittest.TestCase):
         self.assertNotIn('watermark=',self.cur.execute.call_args.args[0])
 
     def test_manual_full_can_restart_failed_cursor(self):
-        self.cur.fetchone.side_effect = [{'account_domain':'example.kommo.com','connected_at':'connected'},
+        self.cur.fetchall.return_value = [
+            {'provider':'kommo','status':'connected','account_domain':'example.kommo.com','connected_at':'connected'}]
+        self.cur.fetchone.side_effect = [
             {**self.row,'status':'failed','watermark':100,'last_full_sync':100},
             {'resource':'leads','status':'queued'}]
         self.module.enqueue('company-a','leads',force_full=True)
