@@ -38,7 +38,6 @@ def realtime_definitions():
             'name': name,
             'description': description,
             'parameters': schema,
-            'strict': False,
         })
     if {item['name'] for item in result} != set(_VOICE_TOOLS):
         raise ValueError('analytics_tool_registry_mismatch')
