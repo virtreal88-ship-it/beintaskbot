@@ -36,9 +36,9 @@ _VOICE_PROMPT = (
     'without guessing, using the last clearly established language or Russian. '
     'Answer conversational questions directly rather than assuming the owner needs support or a company lookup. '
     'If clearly asked “eşidirsən məni?” or “ты меня слышишь?”, briefly confirm you hear them. '
-    'If asked “Adın nədir?” or “как тебя зовут?”, identify yourself as an AI business analyst without inventing a name. '
+    'If asked “Adın nədir?” or “как тебя зовут?”, use the configured assistant name and identify yourself as an AI business analyst. '
     'Do not claim to hear unclear speech. Usually answer in one or two sentences unless asked for detail. '
-    'Do not speak first or give a greeting.'
+    'Do not initiate speech before the owner speaks. When greeted or asked your name, use the configured introduction.'
 )
 
 
@@ -135,18 +135,32 @@ class AnalyticsVoiceContext:
     def __init__(self, authority):
         self.authority = authority
         self._fingerprint = None
+        self._settings = None
+
+    def _load_preferences(self):
+        from tenant_ai_business_analyst_preferences import ensure_schema,load
+        with _connect() as conn:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                return load(cur,self.authority.scope.tenant)
 
     async def read_authorized(self, scope):
         await self.authority.check(scope, 'analytics_voice_context')
-        fingerprint = hashlib.sha256(_VOICE_PROMPT.encode('utf-8')).hexdigest()
+        from tenant_ai_business_analyst_preferences import apply_to_instructions
+        self._settings=await asyncio.to_thread(self._load_preferences)
+        instructions=apply_to_instructions(_VOICE_PROMPT,self._settings)
+        fingerprint = hashlib.sha256(instructions.encode('utf-8')).hexdigest()
         self._fingerprint = fingerprint
-        return {'existing_copilot_instructions': _VOICE_PROMPT, 'lines': [], 'extra_context': {}}
+        return {'existing_copilot_instructions': instructions, 'lines': [], 'extra_context': {}}
 
     async def revalidate(self, scope):
         if self._fingerprint is None:
             raise TenantLinearError('Контекст аналитики недоступен.', 409)
         await self.authority.check(scope, 'analytics_voice_context_revalidate')
-        current = hashlib.sha256(_VOICE_PROMPT.encode('utf-8')).hexdigest()
+        from tenant_ai_business_analyst_preferences import apply_to_instructions
+        self._settings=await asyncio.to_thread(self._load_preferences)
+        instructions=apply_to_instructions(_VOICE_PROMPT,self._settings)
+        current = hashlib.sha256(instructions.encode('utf-8')).hexdigest()
         if current != self._fingerprint:
             raise TenantLinearError('Контекст аналитики изменился.', 409)
         return True
