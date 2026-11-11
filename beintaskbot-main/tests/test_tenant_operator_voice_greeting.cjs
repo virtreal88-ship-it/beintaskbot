@@ -3,6 +3,19 @@ const test=require('node:test');
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const mountVoice=require('../docs/tenant-copilot-voice-controller.js');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('analyst can mount beside a nested dialog screen without duplicating its own screen',async()=>{
+ const dom=new JSDOM('<main id="dialogs"></main>',{url:'https://crm.pro.az/'});
+ const doc=dom.window.document,mountScreen=require('../docs/tenant-operator-copilot-voice.js');
+ const options={language:'ru',preflight:async()=>({available:true}),isCurrent:()=>true};
+ const dialog=mountScreen(doc.querySelector('#dialogs'),options);
+ const analyst=mountScreen(doc.body,options);
+ try{
+  assert.ok(dialog);assert.ok(analyst,'a nested dialog screen must not block the analyst');
+  assert.equal(mountScreen(doc.body,options),null,'the same host must not mount twice');
+  await analyst.disposeVoice();
+  assert.ok(dialog.isConnected,'disposing analyst leaves the dialog screen intact');
+ }finally{await dialog.disposeVoice();dom.window.close();}
+});
 function pcm(ms,voiced=false){const samples=new Int16Array(ms*24);if(voiced)for(let i=0;i<samples.length;i++)samples[i]=Math.round(2000*Math.sin(i*.2));return new Uint8Array(samples.buffer);}
 async function setup({greeting=false,deferredPlayback=false,language='ru',duplex=false}={}){
  const dom=new JSDOM('<button data-voice-orb type="button" disabled></button><div id="voice"></div>');const root=dom.window.document.querySelector('#voice');
