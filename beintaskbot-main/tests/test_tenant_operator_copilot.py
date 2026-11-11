@@ -360,7 +360,7 @@ def test_finish_imports_and_rechecks_independent_ai_grant(monkeypatch,enabled):
     conn=MagicMock();conn.__enter__.return_value=conn
     cur=conn.cursor.return_value.__enter__.return_value
     cur.fetchone.side_effect=[{'config_version':'version'},{'updated_at':'version'}]
-    policy=SimpleNamespace(has_scoped_access=lambda *_:enabled,allows=lambda *_:False,can_use_chat_ai=lambda:True)
+    policy=SimpleNamespace(profile={'role':'worker'},has_scoped_access=lambda *_:enabled,allows=lambda *_:False,can_use_chat_ai=lambda:True)
     monkeypatch.setattr(copilot,'_connect',lambda:conn)
     monkeypatch.setattr(copilot,'ensure_schema',Mock())
     monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,policy)))

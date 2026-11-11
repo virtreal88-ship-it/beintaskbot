@@ -38,8 +38,8 @@ def _ticket_public(row, policy):
     # Match the dialog projection's conservative boundary until agent-aware
     # shared metadata has its own separately authorized projection.
     result = public(row)
-    result['has_assigned_agent'] = bool(result.get('agent_id'))
     if _scoped_ai_documents(policy):
+        result['has_assigned_agent'] = bool(result.get('agent_id'))
         for key in list(result):
             if key.startswith(('agent_', 'company_', 'latest_job_')) or key in {
                     'ai_reason', 'summary_agent_binding', 'summary_run_id'}:
