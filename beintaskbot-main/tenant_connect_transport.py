@@ -28,7 +28,7 @@ from tenant_connect_direct_identity import (
 )
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
-CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed')
+CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
 
 
 class ConnectWebhookError(TenantPlatformError):
@@ -804,6 +804,9 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
 
 
 def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
+    if event.get('type') == 'channel.connection.updated':
+        from tenant_connect_health import ingest as ingest_health
+        return ingest_health(raw, signature, event)
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
     event_type = str(event.get('type') or '')
     if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):

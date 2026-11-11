@@ -1,0 +1,68 @@
+name: Connect connection-health alerts
+on:
+  push:
+    branches:
+      - 'fix/connect-health-owner-alerts-20261111'
+  pull_request:
+    paths:
+      - '.github/workflows/connect-health-alerts.yml'
+      - 'beintaskbot-main/tenant_connect_health.py'
+      - 'beintaskbot-main/tenant_connect_health_rollout.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/bot.py'
+      - 'beintaskbot-main/tests/test_connect_health*.py'
+      - 'beintaskbot-main/tests/fixtures/connect-health-signed.json'
+      - 'beintaskbot-main/tests/test_tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/tests/test_startup_transaction_budget_postgres.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  health-alerts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      CONNECT_HEALTH_ALERTS_ENABLED: 'false'
+      CONNECT_HEALTH_ALERT_TENANT_IDS: ''
+      PYTHONPATH: .:tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+      - name: Policy, transaction, signature, isolation and lifecycle regressions
+        run: >-
+          python -m pytest -q
+          tests/test_connect_health.py
+          tests/test_connect_health_pglite.py
+          tests/test_connect_health_postgres.py
+          tests/test_connect_webhook_executor.py
+          tests/test_tenant_ai_agent_startup.py
+          tests/test_startup_transaction_budget_postgres.py
+          tests/test_tenant_notification_worker.py
+          tests/test_connect_webhook_deactivation.py
+          tests/test_tenant_connect_diagnostics.py

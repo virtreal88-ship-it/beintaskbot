@@ -35,6 +35,7 @@ def prepare_database() -> None:
     from tenant_ai_administrator_approvals import ensure_schema as ensure_approvals_schema
     from tenant_ai_administrator_observations import ensure_schema as ensure_observations_schema
     from tenant_ai_administrator_apply import ensure_schema as ensure_apply_schema
+    from tenant_connect_health import prepare_database as prepare_connect_health
 
     _fernet()
     # This is a dedicated, non-pooled startup connection. Closing it releases
@@ -63,6 +64,7 @@ def prepare_database() -> None:
         ensure_approvals_schema(conn)
         ensure_observations_schema(conn)
         ensure_apply_schema(conn)
+        prepare_connect_health(conn)
         conn.commit()
         from tenant_dialog_consultations import require_schema
         require_schema(conn)
@@ -79,9 +81,11 @@ def require_database_ready() -> None:
     """Direct HTTP/worker entry points verify committed shape without repair."""
     from tenant_platform_core import _connect
     from tenant_ai_agents_schema import _schema_current
+    from tenant_connect_health import require_schema as require_connect_health
     from tenant_dialog_consultations import require_schema
     with _connect() as conn:
         if not _schema_current(conn):raise RuntimeError('Tenant startup schema preparation is required.')
+        require_connect_health(conn)
         require_schema(conn)
 
 

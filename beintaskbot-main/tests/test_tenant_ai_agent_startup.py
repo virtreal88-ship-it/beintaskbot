@@ -50,6 +50,7 @@ class TenantAiAgentStartupTests(unittest.TestCase):
             return run
         modules={'tenant_platform_core':SimpleNamespace(_connect=Connection,_fernet=lambda:None),
           'tenant_ai_agents_schema':SimpleNamespace(ensure_schema=migrate('core')),
+          'tenant_connect_health':SimpleNamespace(prepare_database=migrate('connect_health')),
           'tenant_dialog_consultations':SimpleNamespace(schema=migrate('unified'),require_schema=lambda _conn:events.append('verified'))}
         for module,name in [('tenant_chat_ai_schema','chat'),('tenant_ai_simulation_schema','simulation'),
           ('tenant_ai_administrator_drafts','drafts'),('tenant_ai_administrator_approvals','approvals'),
