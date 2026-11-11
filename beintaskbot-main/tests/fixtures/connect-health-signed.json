@@ -1,0 +1,34 @@
+{
+  "testOnly": true,
+  "secret": "test-only-connection-contract-secret",
+  "receiptTime": "2026-11-11T13:00:00.000Z",
+  "providerDateTime": "2026-11-11T10:00:00.000Z",
+  "rawBody": "{\"id\":\"4e0cdec9-aae8-540c-87a4-ad7568b3614e\",\"type\":\"channel.connection.updated\",\"occurred_at\":\"2026-11-11T13:00:00.000Z\",\"data\":{\"id\":\"146b3b6a73c095871a7648dc4fd972359b6eed49b00d9611b66cc43463ab50e6\",\"tenantId\":\"00000000-0000-4000-8000-000000000001\",\"channelId\":\"00000000-0000-4000-8000-000000000002\",\"status\":\"disconnected\",\"observedAt\":\"2026-11-11T13:00:00.000Z\",\"source\":\"provider_connection_event\"}}",
+  "signature": "sha256=418acfdbf3df15d3fd8075b3c334e33981978ee9257f7ea4bcbfcce6c5453818",
+  "headers": {
+    "content-type": "application/json",
+    "x-connect-event-id": "4e0cdec9-aae8-540c-87a4-ad7568b3614e",
+    "x-connect-signature-256": "sha256=418acfdbf3df15d3fd8075b3c334e33981978ee9257f7ea4bcbfcce6c5453818"
+  },
+  "expectedData": {
+    "id": "146b3b6a73c095871a7648dc4fd972359b6eed49b00d9611b66cc43463ab50e6",
+    "tenantId": "00000000-0000-4000-8000-000000000001",
+    "channelId": "00000000-0000-4000-8000-000000000002",
+    "status": "disconnected",
+    "observedAt": "2026-11-11T13:00:00.000Z",
+    "source": "provider_connection_event"
+  },
+  "expectedEnvelopeId": "4e0cdec9-aae8-540c-87a4-ad7568b3614e",
+  "retry": {
+    "rawBody": "{\"id\":\"4e0cdec9-aae8-540c-87a4-ad7568b3614e\",\"type\":\"channel.connection.updated\",\"occurred_at\":\"2026-11-11T13:00:00.000Z\",\"data\":{\"id\":\"146b3b6a73c095871a7648dc4fd972359b6eed49b00d9611b66cc43463ab50e6\",\"tenantId\":\"00000000-0000-4000-8000-000000000001\",\"channelId\":\"00000000-0000-4000-8000-000000000002\",\"status\":\"disconnected\",\"observedAt\":\"2026-11-11T13:00:00.000Z\",\"source\":\"provider_connection_event\"}}",
+    "headers": {
+      "content-type": "application/json",
+      "x-connect-event-id": "4e0cdec9-aae8-540c-87a4-ad7568b3614e",
+      "x-connect-signature-256": "sha256=418acfdbf3df15d3fd8075b3c334e33981978ee9257f7ea4bcbfcce6c5453818"
+    }
+  },
+  "expectedDeliveryStatuses": [
+    "failed",
+    "delivered"
+  ]
+}

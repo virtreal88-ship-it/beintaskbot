@@ -67,6 +67,7 @@ def install_bootstrap(monkeypatch, dsn, migrate):
     modules = {
         'tenant_platform_core': SimpleNamespace(_connect=connect, _fernet=lambda: None),
         'tenant_ai_agents_schema': SimpleNamespace(ensure_schema=migrate),
+        'tenant_connect_health': SimpleNamespace(prepare_database=lambda conn: None),
         'tenant_dialog_consultations': SimpleNamespace(schema=lambda conn: None, require_schema=verify),
     }
     for name in ('tenant_chat_ai_schema', 'tenant_ai_simulation_schema',
