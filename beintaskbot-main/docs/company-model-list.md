@@ -29,3 +29,6 @@ response body is discarded. The result reports the HTTP status and whether
 `api.voices.read` was verified. It always reports recorded-voice creation access
 as `not_checked`: this read-only operation does not test `api.voices.write` or
 create a consent or voice resource.
+
+The owner can run this check from Company AI settings. It does not save or alter
+the assistant's voice, model, instructions, or company settings.
