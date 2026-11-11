@@ -12,6 +12,8 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.service=loaders.load('tenant_chat_ai_api',{'read':self.read,'save':self.save,'run':self.run,
             'available_models':Mock(return_value={'models':['gpt-4.1-mini']}),
             'test_model':Mock(return_value={'model':'gpt-4.1-mini','available':True}),
+            'recorded_voice_read_access':Mock(return_value={'http_status':200,'api_voices_read_verified':True,'recorded_voice_creation_access':'not_checked'}),
+            'safe_failure_code':Mock(return_value='provider_timeout'),
             'web':SimpleNamespace(json_response=lambda body,**kwargs:{'body':body,**kwargs})},
             {'aiohttp','tenant_chat_ai_settings','tenant_chat_ai_service'})
         self.logger=Mock();self.handle=self.service.handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
@@ -45,6 +47,37 @@ class Api(unittest.IsolatedAsyncioTestCase):
             json=AsyncMock(return_value={**query,'model':'gpt-4.1-mini'}))
         result=await probe(request)
         self.assertTrue(result['body']['available']);self.service.test_model.assert_called_once_with(SESSION,'gpt-4.1-mini')
+
+    async def test_recorded_voice_access_check_is_identity_bound_and_read_only(self):
+        handle=self.service.recorded_voice_access_handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
+        payload={'expected_tenant_id':TENANT,'expected_user_id':'20'}
+        request=SimpleNamespace(method='POST',content_type='application/json',
+            headers={'Origin':'https://crm.pro.az'},json=AsyncMock(return_value=payload))
+        result=await handle(request)
+        self.assertEqual(result['body']['http_status'],200)
+        self.assertEqual(result['headers']['Cache-Control'],'no-store')
+        self.service.recorded_voice_read_access.assert_called_once_with(SESSION)
+        for changes,origin in (({'expected_tenant_id':'other'},'https://crm.pro.az'),
+                               ({'expected_user_id':'21'},'https://crm.pro.az'),
+                               ({'extra':'ignored'},'https://crm.pro.az'),
+                               ({},'https://other.invalid')):
+            request=SimpleNamespace(method='POST',content_type='application/json',headers={'Origin':origin},
+                json=AsyncMock(return_value={**payload,**changes}))
+            await handle(request)
+        self.service.recorded_voice_read_access.assert_called_once_with(SESSION)
+
+    async def test_recorded_voice_access_failure_does_not_expose_provider_details(self):
+        self.service.recorded_voice_read_access.side_effect=RuntimeError('sk-company-secret provider body')
+        handle=self.service.recorded_voice_access_handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
+        request=SimpleNamespace(method='POST',content_type='application/json',
+            headers={'Origin':'https://crm.pro.az'},
+            json=AsyncMock(return_value={'expected_tenant_id':TENANT,'expected_user_id':'20'}))
+        result=await handle(request)
+        self.assertEqual(result['status'],503)
+        self.assertNotIn('company-secret',str(result))
+        self.assertNotIn('provider body',str(self.logger.warning.call_args))
+        self.assertEqual(self.logger.warning.call_args.args[0],
+                         'OpenAI recorded voice read check unavailable code=%s')
 
     async def test_owner_settings_path_not_chat_command(self):
         self.handle=self.service.handler(lambda request:SESSION,'https://crm.pro.az',self.logger,settings=True)
@@ -121,6 +154,19 @@ class Settings(unittest.TestCase):
         with self.assertRaises(TenantLinearError):self.service.test_model(SESSION,'bad model id')
         probe.assert_called_once()
 
+    def test_recorded_voice_read_check_uses_saved_company_key_and_owner_guard(self):
+        import json
+        from unittest.mock import Mock
+        self.crypto.decrypt.return_value=json.dumps({'tenant_id':TENANT,'provider':'chat_ai','api_key':'company-key'}).encode()
+        self.cur.fetchone.return_value={'secrets':b'encrypted','metadata':{'enabled':True,'consent':True}}
+        check=Mock(return_value={'http_status':200,'api_voices_read_verified':True,'recorded_voice_creation_access':'not_checked'})
+        self.service.recorded_voice_read_access.__globals__['provider_voice_consent_read_access']=check
+        result=self.service.recorded_voice_read_access(SESSION)
+        self.owner.assert_called_once_with(self.cur,SESSION,owner_only=True)
+        check.assert_called_once_with('company-key')
+        self.assertTrue(result['api_voices_read_verified'])
+        self.assertNotIn('company-key',str(result))
+
 
 class Provider(unittest.TestCase):
     def setUp(self):
@@ -148,6 +194,26 @@ class Provider(unittest.TestCase):
             self.assertTrue(probe_model('company-key','gpt-4.1-mini'))
         self.assertEqual(generate.call_args.args[:4],('company-key','gpt-4.1-mini','summary',[]))
         self.assertEqual(generate.call_args.kwargs['max_output_tokens'],16)
+
+    def test_recorded_voice_access_probe_is_get_only_and_does_not_read_response_body(self):
+        from unittest.mock import patch
+        from tenant_chat_ai_provider import check_voice_consent_phrase_read_access
+        response=Mock(status_code=200);response.text='private phrase response'
+        with patch('tenant_chat_ai_provider.requests.get',return_value=response) as get:
+            result=check_voice_consent_phrase_read_access('company-key')
+        self.assertEqual(result,{'http_status':200,'api_voices_read_verified':True,
+                                 'recorded_voice_creation_access':'not_checked'})
+        self.assertEqual(get.call_args.args[0],'https://api.openai.com/v1/audio/consent_phrases')
+        self.assertEqual(get.call_args.kwargs['headers'],{'Authorization':'Bearer company-key'})
+        self.assertEqual(get.call_args.kwargs['timeout'],(3,10))
+        self.assertFalse(get.call_args.kwargs['allow_redirects'])
+        response.json.assert_not_called()
+        response=Mock(status_code=403)
+        with patch('tenant_chat_ai_provider.requests.get',return_value=response):
+            denied=check_voice_consent_phrase_read_access('company-key')
+        self.assertFalse(denied['api_voices_read_verified'])
+        self.assertEqual(denied['http_status'],403)
+        self.assertEqual(denied['recorded_voice_creation_access'],'not_checked')
 
     def test_agent_generation_accepts_tenant_instructions_and_verified_images(self):
         from unittest.mock import patch

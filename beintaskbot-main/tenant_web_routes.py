@@ -16,6 +16,7 @@ from tenant_news_api import news_handler
 from tenant_news_telegram_api import handler as news_telegram_handler
 from tenant_chat_ai_api import handler as chat_ai_handler
 from tenant_chat_ai_api import model_management_handler as chat_ai_model_handler
+from tenant_chat_ai_api import recorded_voice_access_handler as chat_ai_recorded_voice_access_handler
 from tenant_chat_send_api import handler as chat_send_handler, receipt_handler as chat_receipt_handler
 from tenant_chat_upload_api import handler as chat_upload_handler
 from tenant_customer_voice_api import handler as customer_voice_handler, receipt_handler as customer_voice_receipt_handler, capability_handler as customer_voice_capability_handler, status_handler as customer_voice_status_handler, manual_confirmation_handler as customer_voice_manual_confirmation_handler
@@ -86,6 +87,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/chat/ai/settings', chat_ai_handler(member, origin, logger, settings=True), ('GET', 'POST')),
         ('/api/platform/chat/ai/models', chat_ai_model_handler(member, origin, logger), ('GET',)),
         ('/api/platform/chat/ai/model-probe', chat_ai_model_handler(member, origin, logger, probe=True), ('POST',)),
+        ('/api/platform/chat/ai/recorded-voice-access', chat_ai_recorded_voice_access_handler(member, origin, logger), ('POST',)),
         ('/api/platform/chat/ai', chat_ai_handler(member, origin, logger), ('POST',)),
         ('/api/platform/news/telegram/settings', news_telegram_handler(member, origin, context.bot, logger, configuration=True), ('GET', 'POST')),
         ('/api/platform/news/telegram', news_telegram_handler(member, origin, context.bot, logger), ('GET', 'POST')),

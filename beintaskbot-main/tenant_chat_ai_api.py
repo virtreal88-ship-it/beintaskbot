@@ -1,10 +1,10 @@
 """Authenticated same-origin APIs, expected company/user checked before provider I/O."""
 import asyncio
 from aiohttp import web
-from tenant_chat_ai_settings import read, save, available_models, test_model
+from tenant_chat_ai_settings import read, save, available_models, test_model, recorded_voice_read_access
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
-from tenant_chat_ai_provider import ChatAIProviderError
+from tenant_chat_ai_provider import ChatAIProviderError, safe_failure_code
 
 
 def handler(member_from_request, canonical_origin, logger, *, settings=False):
@@ -81,4 +81,31 @@ def model_management_handler(member_from_request, canonical_origin, logger, *, p
         except Exception:
             logger.warning('Copilot model check unavailable')
             return web.json_response({'success': False, 'error': 'Не удалось проверить модели OpenAI.'}, status=503, headers=headers)
+    return handle
+
+
+def recorded_voice_access_handler(member_from_request, canonical_origin, logger):
+    """Owner-only read probe for recorded-voice consent phrase API access."""
+    async def handle(request):
+        headers={'Cache-Control':'no-store'}
+        try:
+            if request.method!='POST':
+                raise TenantLinearError('Method not allowed.',405)
+            profile=member_from_request(request)
+            if not profile:
+                raise TenantLinearError('Нет доступа.',403)
+            require_json_post(request,canonical_origin)
+            data=await request.json()
+            if (not isinstance(data,dict) or set(data)!={'expected_tenant_id','expected_user_id'}):
+                raise TenantLinearError('Некорректный запрос.')
+            if (str(data.get('expected_tenant_id') or '')!=str(profile.get('tenant_id')) or
+                    str(data.get('expected_user_id') or '')!=str(profile.get('telegram_id'))):
+                raise TenantLinearError('Кабинет изменился. Обновите страницу.',409)
+            result=await asyncio.to_thread(recorded_voice_read_access,profile)
+            return web.json_response({'success':True,**result},headers=headers)
+        except TenantLinearError as error:
+            return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
+        except Exception as error:
+            logger.warning('OpenAI recorded voice read check unavailable code=%s',safe_failure_code(error))
+            return web.json_response({'success':False,'error':'Не удалось проверить доступ к API голосов OpenAI.'},status=503,headers=headers)
     return handle
