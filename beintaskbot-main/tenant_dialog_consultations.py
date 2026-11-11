@@ -120,8 +120,8 @@ def _case_access(cur,profile,case_id,channel,conversation,*,sending=False):
     tenant,actor,policy=require(cur,profile,case_id,'update' if sending else 'view',lock=sending)
     from tenant_dialog_access import scope,require_source
     permitted=scope(policy,'view')!='none' if scope(policy,'view') is not None else policy.legacy_allows('dialogs')
-    if not permitted or (sending and policy.profile.get('role')!='owner'):
-        raise TenantLinearError('Только владелец с доступом к обращению и диалогу может отправить запрос.',403)
+    if not permitted:
+        raise TenantLinearError('Нужны права на обращение и исходный диалог.',403)
     require_source(cur,tenant,policy,'connect',channel,'view')
     from tenant_support_case_context import load_scope
     case=load_scope(cur,tenant,identifier(case_id),channel,conversation)
