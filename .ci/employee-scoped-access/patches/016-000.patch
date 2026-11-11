@@ -593,7 +593,7 @@ index e85defea635a56d40c9f6cf37cdf22958a337262..4cc3c295fb430d8ebbe057e08a2fb976
              for policy_key, value in policy_items:
 diff --git a/beintaskbot-main/tests/ai_scoped_documents_browser_acceptance.js b/beintaskbot-main/tests/ai_scoped_documents_browser_acceptance.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..90ffa748501238e905b8801e3a3ea4c9bbd715cf
+index 0000000000000000000000000000000000000000..7f4ec03327b38b30219e23e311ff513618b2fc77
 --- /dev/null
 +++ b/beintaskbot-main/tests/ai_scoped_documents_browser_acceptance.js
 @@ -0,0 +1,56 @@
@@ -620,7 +620,7 @@ index 0000000000000000000000000000000000000000..90ffa748501238e905b8801e3a3ea4c9
 +  assert(![...host().querySelectorAll('button')].some(button=>button.textContent==='Edit'),'R-only update absent');
 +  let denied=await direct('agents/'+config.own,'PATCH',{name:'ILLEGAL READ WRITE',expected_version:1});assert([403,404].includes(denied.status),'R-only backend rejects save');
 +  const readBefore=(await control('state')).list_reads;
-+  await mode('create');await wait(()=>host().querySelector('[data-scoped-create]'),'C-only create button');
++  await mode('create');await wait(()=>host().querySelector('[data-scoped-create]')&&!host().querySelector('[data-scoped-create]').disabled,'C-only ready create button');
 +  await wait(()=>host().querySelector('[data-scoped-list]')?.textContent.includes('not allowed'),'C-only settled');
 +  host().querySelector('[data-scoped-create]').click();
 +  await wait(()=>form()?.elements.sources.options.length===1,'source catalog only assigned source');
@@ -655,10 +655,10 @@ index 0000000000000000000000000000000000000000..90ffa748501238e905b8801e3a3ea4c9
 +})();
 diff --git a/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs b/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..de69268d76f7152d6ff89aebd6dd5306a82963c1
+index 0000000000000000000000000000000000000000..04eef242f448ac6e60edef9751f21be48372f973
 --- /dev/null
 +++ b/beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,37 @@
 +/* Real Chromium lifecycle, production controller and localhost synthetic HTTP.
 +   Assertions execute as DOM events in the page, not physical pointer tests. */
 +const assert=require('node:assert/strict');
@@ -671,16 +671,55 @@ index 0000000000000000000000000000000000000000..de69268d76f7152d6ff89aebd6dd5306
 +  '--disable-component-update','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
 + try{
 +  const context=await browser.newContext({viewport:{width,height:950}});
-+  const page=await context.newPage(),errors=[],failed=[];
++  const page=await context.newPage(),errors=[],failed=[],responses=[];
++  page.on('response',response=>responses.push({url:response.url(),status:response.status()}));
 +  page.on('pageerror',error=>errors.push(error.message));
 +  page.on('requestfailed',request=>failed.push({url:request.url(),failure:request.failure()?.errorText}));
++  async function diagnostics(){
++   const state=await page.evaluate(async()=>({
++    href:location.href,readyState:document.readyState,
++    acceptance:document.getElementById('aiAcceptanceResult')?.textContent,
++    host:document.getElementById('aiScopedDocuments')?.outerHTML,
++    activeView:document.getElementById('view-ai_agents')?.className,
++    bootstrapErrors:window.AI_ACCEPTANCE_ERRORS,
++    profile:window.tenantProfileSnapshot,
++    httpState:await fetch('/test/state').then(r=>r.json()).catch(error=>String(error)),
++    bodyText:document.body.innerText.slice(-4000)
++   })).catch(error=>({diagnosticError:String(error)}));
++   return JSON.stringify({errors,failed,responses,state});
++  }
 +  await page.goto(origin+'/app',{waitUntil:'domcontentloaded',timeout:15000});
 +  try{await page.locator('#aiAcceptanceResult[data-result=passed], #aiAcceptanceResult[data-result=failed]').waitFor({state:'attached',timeout:45000});}
-+  catch(error){throw new Error('Browser acceptance did not finish: '+JSON.stringify({errors,failed,body:(await page.locator('body').innerText()).slice(-4000)}));}
++  catch(error){throw new Error('Browser acceptance did not finish: '+await diagnostics());}
 +  const result=page.locator('#aiAcceptanceResult'),message=await result.textContent();
-+  assert.equal(await result.getAttribute('data-result'),'passed',message);
++  assert.equal(await result.getAttribute('data-result'),'passed',message+'\n'+(await result.getAttribute('data-result')==='passed'?'':await diagnostics()));
 +  assert.deepEqual(errors,[]);console.log(message);
 + }finally{await browser.close();}
++})().catch(error=>{console.error(error.stack);process.exitCode=1;});
+diff --git a/beintaskbot-main/tests/ai_scoped_documents_http_dom.cjs b/beintaskbot-main/tests/ai_scoped_documents_http_dom.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..4f6ebe6627db7d1bebc1de668d02050322514c0c
+--- /dev/null
++++ b/beintaskbot-main/tests/ai_scoped_documents_http_dom.cjs
+@@ -0,0 +1,19 @@
++/* Fast contract check for the same real HTML/controller/HTTP acceptance script.
++   JSDOM is not Chromium or visual evidence. No API/fetch response mocks. */
++const assert=require('node:assert/strict');
++const {JSDOM,VirtualConsole}=require('../.support-test-deps/node_modules/jsdom');
++const origin=process.env.AI_RUNTIME_ORIGIN;
++assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(origin||''),'localhost only');
++(async()=>{
++ const errors=[],console=new VirtualConsole();console.on('jsdomError',error=>errors.push(error.message));
++ const dom=await JSDOM.fromURL(origin+'/app',{runScripts:'dangerously',resources:'usable',pretendToBeVisual:true,virtualConsole:console,
++  beforeParse(window){window.fetch=(url,options)=>fetch(new URL(url,window.location.href),options);}});
++ try{
++  const deadline=Date.now()+20000;
++  let result;
++  do{await new Promise(resolve=>setTimeout(resolve,20));result=dom.window.document.getElementById('aiAcceptanceResult');}
++  while((!result||result.dataset.result==='running')&&Date.now()<deadline);
++  assert.equal(result?.dataset.result,'passed',JSON.stringify({result:result?.textContent,errors,host:dom.window.document.getElementById('aiScopedDocuments')?.outerHTML}));
++  assert.deepEqual(errors,[]);global.console.log(result.textContent);
++ }finally{dom.window.close();}
 +})().catch(error=>{console.error(error.stack);process.exitCode=1;});
 diff --git a/beintaskbot-main/tests/contacts_directory_fixture.cjs b/beintaskbot-main/tests/contacts_directory_fixture.cjs
 index 3d47a8e4030e7e6dd116a17cb679d109ac31f005..a8c15c168d009133ca5e4e5110a7294cf39bc74c 100644

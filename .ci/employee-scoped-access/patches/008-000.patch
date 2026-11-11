@@ -1,3 +1,231 @@
+diff --git a/beintaskbot-main/scripts/scope_activation_preflight.py b/beintaskbot-main/scripts/scope_activation_preflight.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d4a1286482084909d1b3817c2181b40fa938ea6
+--- /dev/null
++++ b/beintaskbot-main/scripts/scope_activation_preflight.py
+@@ -0,0 +1,145 @@
++#!/usr/bin/env python3
++"""Read-only activation inventory. Never an authorization to enable scopes.
++
++No application bootstrap, schema repair, provider client or default DB URL is used.
++"""
++import argparse
++import hashlib
++import json
++import secrets
++import sys
++from pathlib import Path
++
++# Every query is code-owned, SELECT-only, and returns only a local key.
++QUERIES = {
++    'historical_ownership_issues': "SELECT tenant_id::text||':'||resource_table||':'||resource_id AS key FROM public.saas_access_migration_issues",
++    'inactive_members': "SELECT tenant_id::text||':'||telegram_id AS key FROM public.saas_tenant_members WHERE active IS NOT TRUE",
++    'active_members_without_department': "SELECT tenant_id::text||':'||telegram_id AS key FROM public.saas_tenant_members WHERE active AND department_id IS NULL",
++    'inactive_or_missing_departments': "SELECT m.tenant_id::text||':'||m.telegram_id AS key FROM public.saas_tenant_members m LEFT JOIN public.saas_tenant_departments d ON d.tenant_id=m.tenant_id AND d.id=m.department_id WHERE m.active AND m.department_id IS NOT NULL AND (d.id IS NULL OR d.active IS NOT TRUE)",
++    'ineligible_tenants': "SELECT id::text AS key FROM public.saas_tenants WHERE status NOT IN ('active','onboarding','ready_for_integration')",
++    'ambiguous_company_owners': "SELECT t.id::text AS key FROM public.saas_tenants t LEFT JOIN public.saas_tenant_members m ON m.tenant_id=t.id AND m.role='owner' GROUP BY t.id,t.owner_telegram_id HAVING count(m.telegram_id)<>1 OR NOT coalesce(bool_and(m.active),false) OR min(m.telegram_id) IS DISTINCT FROM t.owner_telegram_id",
++    'connect_unassigned_sources': "SELECT ch.tenant_id::text||':'||ch.connect_channel_id AS key FROM public.saas_connect_channels ch WHERE NOT EXISTS(SELECT 1 FROM public.saas_dialog_source_members s JOIN public.saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.employee_id AND m.active WHERE s.tenant_id=ch.tenant_id AND s.source_id=ch.connect_channel_id AND s.provider='connect')",
++    'invalid_source_members': "SELECT s.tenant_id::text||':'||s.source_id||':'||s.employee_id AS key FROM public.saas_dialog_source_members s LEFT JOIN public.saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.employee_id LEFT JOIN public.saas_connect_channels ch ON ch.tenant_id=s.tenant_id AND ch.connect_channel_id=s.source_id WHERE m.active IS NOT TRUE OR ch.connect_channel_id IS NULL OR s.provider<>'connect'",
++    'kommo_source_mapping_required': "SELECT DISTINCT tenant_id::text AS key FROM public.saas_crm_messages WHERE channel NOT LIKE 'connect:%%'",
++    'legacy_processing_or_unknown': "SELECT id::text AS key FROM public.saas_crm_sync_outbox WHERE state IN ('processing','unknown')",
++    'legacy_attempted_pending': "SELECT id::text AS key FROM public.saas_crm_sync_outbox WHERE state='pending' AND attempts>0",
++    'legacy_unresolved_possible_send': "SELECT event_id::text AS key FROM public.saas_crm_legacy_delivery_attempts WHERE outcome IN ('sending','unknown')",
++    'legacy_claim_aware_unsent': "SELECT o.id::text AS key FROM public.saas_crm_sync_outbox o JOIN public.saas_crm_legacy_delivery_attempts a ON a.event_id=o.id WHERE a.outcome='not_started' AND a.claim_attempt=o.attempts",
++    'legacy_mismatched_unsent_evidence': "SELECT a.event_id::text AS key FROM public.saas_crm_legacy_delivery_attempts a LEFT JOIN public.saas_crm_sync_outbox o ON o.id=a.event_id WHERE a.outcome='not_started' AND (o.id IS NULL OR a.claim_attempt IS DISTINCT FROM o.attempts)",
++    'legacy_links_without_bound_identity': "SELECT l.tenant_id::text||':'||l.entity_type||':'||l.internal_id AS key FROM public.saas_crm_entity_links l WHERE NOT EXISTS(SELECT 1 FROM public.saas_crm_relation_identities i WHERE i.tenant_id=l.tenant_id AND i.entity_type=l.entity_type AND i.internal_id=l.internal_id AND i.provider=l.provider)",
++    'bound_identity_inventory': "SELECT tenant_id::text||':'||entity_type||':'||internal_id AS key FROM public.saas_crm_relation_identities",
++    'scalar_unverified_binding': "SELECT id::text AS key FROM public.saas_crm_scalar_outbox WHERE binding IS NULL OR external_id IS NULL OR state='needs_verification'",
++    'scalar_provenance_heads': "SELECT tenant_id::text||':'||entity_type||':'||internal_id AS key FROM public.saas_crm_scalar_heads",
++    'relation_provenance_heads': "SELECT tenant_id::text||':'||changed_type||':'||changed_id AS key FROM public.saas_crm_relation_heads",
++}
++QUERIES['stale_account_or_generation_identities'] = """SELECT i.tenant_id::text||':'||i.entity_type||':'||i.internal_id AS key
++ FROM public.saas_crm_relation_identities i WHERE NOT EXISTS (
++ SELECT 1 FROM public.saas_tenant_integrations c WHERE c.tenant_id=i.tenant_id
++ AND c.provider IN ('kommo','kommo_manual') AND c.status='connected'
++ AND c.account_domain=i.account_id
++ AND split_part(i.connection_generation,':',1)=c.provider
++ AND substring(i.connection_generation FROM position(':' IN i.connection_generation)+1)::timestamptz=c.connected_at
++ AND (c.provider='kommo' OR NOT EXISTS(SELECT 1 FROM public.saas_tenant_integrations preferred
++ WHERE preferred.tenant_id=c.tenant_id AND preferred.provider='kommo' AND preferred.status='connected')))"""
++for outcome in ('not_started','sending','unknown','completed'):
++    QUERIES['legacy_evidence_' + outcome] = f"SELECT event_id::text AS key FROM public.saas_crm_legacy_delivery_attempts WHERE outcome='{outcome}'"
++for table in ('saas_crm_native_contacts', 'saas_crm_native_companies', 'saas_crm_native_deals',
++              'saas_crm_native_tasks', 'saas_ai_agents', 'saas_support_tickets'):
++    QUERIES['unowned_' + table] = f'SELECT tenant_id::text||\':\'||id AS key FROM public.{table} WHERE access_responsible_id IS NULL'
++for journal, states in {
++    'scalar': ('pending','processing','synced','disabled','superseded','conflict','unknown','needs_verification'),
++    'relation': ('pending','processing','synced','superseded','disabled','conflict','unknown'),
++}.items():
++    for state in states:
++        QUERIES[f'{journal}_{state}'] = f"SELECT id::text AS key FROM public.saas_crm_{journal}_outbox WHERE state='{state}'"
++    QUERIES[f'{journal}_sending'] = f"SELECT id::text AS key FROM public.saas_crm_{journal}_outbox WHERE attempt_outcome='sending'"
++
++MANDATORY_EXTERNAL_EVIDENCE = [
++    'all_process_versions_and_old_worker_drain_verified',
++    'provider_conditional_relation_and_unknown_completion_guarantees',
++    'production_adapter_and_account_generation_mapping_registration',
++    'durable_recovery_and_mixed_writer_provenance_resolution',
++    'source_ownership_and_effective_access_comparison_reviewed',
++    'exact_release_ci_postgres_races_browser_and_migrations_verified',
++    'compatible_rollback_preserves_provenance_and_admission_fences',
++]
++
++
++def inventory(connection, *, sample_limit=20):
++    """Own a fresh connection transaction; rollback on success AND failure.
++
++    Counts include all tenants. Samples are salted hashes, not Telegram IDs,
++    account identifiers, provider IDs, names, messages, credentials or DSNs.
++    Missing tables/columns stay unknown; no repair or guessed zero is allowed.
++    """
++    if not isinstance(sample_limit, int) or not 0 <= sample_limit <= 100:
++        raise ValueError('invalid_sample_limit')
++    salt = secrets.token_bytes(32)
++    checks = {}
++    try:
++        with connection.cursor() as cur:
++            cur.execute('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
++            cur.execute("SET LOCAL search_path TO pg_catalog, public")
++            cur.execute("SET LOCAL statement_timeout TO '15s'")
++            cur.execute("SET LOCAL lock_timeout TO '2s'")
++            cur.execute('SHOW transaction_read_only')
++            if cur.fetchone()['transaction_read_only'] != 'on':
++                raise RuntimeError('read_only_transaction_required')
++            for name, query in QUERIES.items():
++                cur.execute('SAVEPOINT inventory_check')
++                try:
++                    cur.execute('SELECT count(*) AS count FROM (' + query + ') AS inventory')
++                    count = int(cur.fetchone()['count'])
++                    cur.execute('SELECT key FROM (' + query + ') AS inventory ORDER BY key LIMIT %s', (sample_limit,))
++                    tokens = [hashlib.sha256(salt + name.encode() + str(r['key']).encode()).hexdigest()[:24]
++                              for r in cur.fetchall()]
++                    checks[name] = {'status': 'observed', 'count': count, 'sample_ids': tokens,
++                                    'sample_truncated': count > sample_limit}
++                except Exception:
++                    # Never render DB errors: they may contain credentials/data.
++                    cur.execute('ROLLBACK TO SAVEPOINT inventory_check')
++                    checks[name] = {'status': 'unknown', 'reason': 'query_unavailable_or_failed'}
++                cur.execute('RELEASE SAVEPOINT inventory_check')
++    finally:
++        connection.rollback()
++    return {'format_version': 1, 'safe_to_enable': False, 'decision': 'NOT_SAFE_TO_ENABLE',
++            'scope': 'all_tenants_read_only_snapshot', 'checks': checks,
++            'mandatory_external_evidence_not_certified': MANDATORY_EXTERNAL_EVIDENCE,
++            'limitations': ['No provider, worker version, environment flag or remote completion was inspected.',
++                'Bound identity presence is not account/generation validity proof.',
++                'Historical issue receipts may remain after resolution; compare current unowned counts.',
++                'Inactive members and absent departments are review inventory, not automatic defects.',
++                'A zero count is not rollout approval. Samples are opaque and only comparable within this report.']}
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--dsn-file', required=True, help='Explicit file containing complete host, dbname and user DSN; never DATABASE_URL.')
++    parser.add_argument('--sample-limit', type=int, choices=range(0,101), default=20, metavar='0..100')
++    args = parser.parse_args(argv)
++    try:
++        import psycopg
++        from psycopg.conninfo import conninfo_to_dict
++        from psycopg.rows import dict_row
++        dsn = Path(args.dsn_file).read_text().strip()
++        parsed = conninfo_to_dict(dsn)
++        if not all(parsed.get(k) for k in ('host','dbname','user')) or parsed.get('service'):
++            raise ValueError('explicit_connection_required')
++        # Avoid libpq ambient defaults influencing the supplied target/session.
++        import os
++        for name in tuple(os.environ):
++            if name.startswith('PG'):
++                os.environ.pop(name)
++        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
++                             connect_timeout=5, options='-c default_transaction_read_only=on') as connection:
++            report = inventory(connection, sample_limit=args.sample_limit)
++        print(json.dumps(report, ensure_ascii=True, indent=2))
++        return 2  # Inventory never certifies operational/provider guarantees.
++    except Exception:
++        print(json.dumps({'safe_to_enable': False, 'decision': 'NOT_SAFE_TO_ENABLE',
++                          'error': 'preflight_connection_or_snapshot_failed'}))
++        return 3
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/beintaskbot-main/tenant_ai_administrator_apply.py b/beintaskbot-main/tenant_ai_administrator_apply.py
+index f03cd6c607cddea069bab284199fe5060a3c5cb5..11cadb84db3729f61946f9f0b963a7282b2c8bdc 100644
+--- a/beintaskbot-main/tenant_ai_administrator_apply.py
++++ b/beintaskbot-main/tenant_ai_administrator_apply.py
+@@ -32,6 +32,8 @@ def ensure_schema(conn):
+         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_config_rollbacks(
+           tenant_id UUID NOT NULL REFERENCES saas_tenants(id), approval_id UUID PRIMARY KEY, draft_id UUID NOT NULL,
+           agent_id UUID NOT NULL, channel_id UUID NOT NULL, before_patch JSONB NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
++    from tenant_ai_unused_archive import install_schema_references
++    install_schema_references(conn)
+ 
+ 
+ def _guard(cur, profile, *, scoped_training_policy_id=None):
+@@ -233,7 +235,14 @@ def validate_config_proposal(cur,cfg,data):
+         raise TenantLinearError('Invalid agent configuration proposal.',400)
+     agent_id=str(uuid.UUID(str(data['agent_id']))); channel_id=str(uuid.UUID(str(data['channel_id'])))
+     if agent_id!=cfg['AI_LEARNING_MCP_AGENT_ID'] or channel_id!=cfg['AI_LEARNING_MCP_CHANNEL_ID']: raise TenantLinearError('Configuration outside OAuth scope.',403)
+-    cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(cfg['AI_LEARNING_MCP_TENANT_ID'],agent_id)); previous=cur.fetchone()
++    # Validation is shared by proposal creation and approved application. Take
++    # fresh membership/policy fences before the configuration mutex, and take
++    # that mutex before the first parent-agent row lock. Acquiring it only in
++    # save_agent is too late: an archive can hold the mutex while this caller
++    # holds the agent row, creating a lock-order cycle.
++    tenant,_=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
++    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
++    cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(tenant,agent_id)); previous=cur.fetchone()
+     if not previous or previous['version']!=data['expected_agent_version']: raise TenantLinearError('Agent changed; review again.',409)
+     from tenant_ai_agent_connect import scope_matches
+     if not scope_matches(previous['scopes'],channel_id,is_group=False): raise TenantLinearError('Channel outside agent scope.',403)
+diff --git a/beintaskbot-main/tenant_ai_administrator_approvals.py b/beintaskbot-main/tenant_ai_administrator_approvals.py
+index 735ab82730598f5769a03c6bf7bf220c4d72747c..3137046db0635fe613dc9ca2707cc9716d38ef80 100644
+--- a/beintaskbot-main/tenant_ai_administrator_approvals.py
++++ b/beintaskbot-main/tenant_ai_administrator_approvals.py
+@@ -156,6 +156,8 @@ def _publication_schema(cur):
+     _training_policy_schema(cur)
+     cur.execute("ALTER TABLE saas_ai_administrator_publication_grants ADD COLUMN IF NOT EXISTS policy_id UUID NULL")
+     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_publication_one_live_material ON saas_ai_administrator_publication_grants(tenant_id,kind,object_id) WHERE state IN ('granted','consumed')")
++    from tenant_ai_unused_archive import install_existing
++    install_existing(cur)
+ 
+ 
+ def _publication_object(cur,tenant,kind,key,*,lock=True):
+@@ -439,6 +441,8 @@ def _training_policy_schema(cur):
+     cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_scope_kind_check CHECK (scope_kind IN ('agent_channel','company'))")
+     cur.execute("ALTER TABLE saas_ai_training_policies DROP CONSTRAINT IF EXISTS saas_ai_training_policies_company_bounds_check")
+     cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_company_bounds_check CHECK ((scope_kind='agent_channel' AND agent_id IS NOT NULL AND channel_id IS NOT NULL AND max_operations BETWEEN 1 AND 1000 AND max_per_hour BETWEEN 1 AND 100 AND expires_at IS NOT NULL) OR (scope_kind='company' AND agent_id IS NULL AND channel_id IS NULL AND max_operations IS NULL AND max_per_hour IS NULL AND expires_at IS NULL))")
++    from tenant_ai_unused_archive import install_existing
++    install_existing(cur)
+ 
+ 
+ def training_policy_create(cur,profile,data):
+diff --git a/beintaskbot-main/tenant_ai_administrator_drafts.py b/beintaskbot-main/tenant_ai_administrator_drafts.py
+index 27c8306fe7228c3f8730d7de54b80413c7ec638a..5a02d888631ef17a49bec7c888c62f9cfa2a1e2c 100644
+--- a/beintaskbot-main/tenant_ai_administrator_drafts.py
++++ b/beintaskbot-main/tenant_ai_administrator_drafts.py
+@@ -43,6 +43,8 @@ def ensure_schema(conn):
+         cur.execute('''INSERT INTO saas_ai_administrator_draft_versions(tenant_id,draft_id,version,title,body,target,created_by,created_at)
+           SELECT tenant_id,id,version,title,body,target,created_by,updated_at FROM saas_ai_administrator_drafts
+           ON CONFLICT(tenant_id,draft_id,version) DO NOTHING''')
++    from tenant_ai_unused_archive import install_schema_references
++    install_schema_references(conn)
+ 
+ 
+ def definitions():
+diff --git a/beintaskbot-main/tenant_ai_administrator_observations.py b/beintaskbot-main/tenant_ai_administrator_observations.py
+index 6ca8074be936c8a3b5ca414ccf071c1d1f05863d..d1c6149ab6ec3485a803b4daf3a2127460f63710 100644
+--- a/beintaskbot-main/tenant_ai_administrator_observations.py
++++ b/beintaskbot-main/tenant_ai_administrator_observations.py
+@@ -27,6 +27,8 @@ def ensure_schema(conn):
+         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_observation_drafts(
+           observation_id UUID PRIMARY KEY REFERENCES saas_ai_administrator_observations(id) ON DELETE CASCADE,
+           tenant_id UUID NOT NULL, draft_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
++    from tenant_ai_unused_archive import install_schema_references
++    install_schema_references(conn)
+ 
+ 
+ def enqueue(cur, tenant_id, source, payload, checkpoint=''):
 diff --git a/beintaskbot-main/tenant_ai_agents_api.py b/beintaskbot-main/tenant_ai_agents_api.py
 index 538cacfdf5db4dd092ec40fdc5460fe7003ad2c1..dffd4510ab86cdd8dfdb05b1e30b4898b29df686 100644
 --- a/beintaskbot-main/tenant_ai_agents_api.py
@@ -859,395 +1087,3 @@ index 3321fcb734953131167c494dff189158bae7b1c8..1dbf4ec9ac890205573a8387efde1eae
              if technical:
                  # Deliberately check the DB role/manage grant, never profile.role.
                  _authorize(cur, profile)
-diff --git a/beintaskbot-main/tenant_ai_unused_archive.py b/beintaskbot-main/tenant_ai_unused_archive.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..85ae858e29d90d173d89c3bf0a8dec505ff42f1f
---- /dev/null
-+++ b/beintaskbot-main/tenant_ai_unused_archive.py
-@@ -0,0 +1,202 @@
-+"""Unused-agent archive: no transfer, side effects, history deletion or provider calls.
-+
-+Reference writers take SHARE on the referenced agent before admitting a row.
-+Archive takes UPDATE before inspecting references. Thus a writer admitted first
-+is visible to the check; a writer admitted later sees the archive marker.
-+"""
-+from contextlib import nullcontext
-+import json
-+
-+from tenant_linear_policy import TenantLinearError, identifier
-+
-+# Structural relationship fields only, not arbitrary logs or prompt text.
-+REFERENCES = {
-+    'saas_ai_agents': ('expert_policy', 'response_policy', 'archived_replaced_by'),
-+    'saas_ai_agent_triggers': ('agent_id', 'condition', 'actions'),
-+    'saas_ai_conversation_state': ('agent_id',),
-+    'saas_ai_group_coordination': ('assignments',),
-+    'saas_ai_group_channel_legacy_permits': ('agent_id',),
-+    'saas_ai_legacy_permits': ('agent_id',),
-+    'saas_ai_agent_jobs': ('agent_id',),
-+    'saas_ai_agent_runs': ('agent_id',),
-+    'saas_ai_agent_token_usage': ('agent_id',),
-+    'saas_ai_agent_drafts': ('agent_id',),
-+    'saas_ai_agent_action_runs': ('agent_id',),
-+    'saas_ai_expert_tasks': ('principal_agent_id', 'expert_agent_id'),
-+    'saas_ai_test_sessions': ('agent_id',),
-+    'saas_ai_knowledge_sources': ('agent_id',),
-+    'saas_knowledge_campaigns': ('analysis_agent_id',),
-+    'saas_knowledge_candidate_sources': ('agent_id',),
-+    'saas_knowledge_quality_checks': ('agent_id',),
-+    'saas_ai_no_answer_state': ('agent_id',),
-+    'saas_ai_case_developer_dispatches': ('agent_id',),
-+    'saas_ai_simulation_configs': ('agent_id',),
-+    'saas_ai_simulation_runs': ('primary_agent_id','expert_results','events'),
-+    'saas_ai_simulation_usage': ('agent_id',),
-+    'saas_ai_channel_legacy_state': ('original',),
-+    'saas_ai_administrator_drafts': ('body', 'target'),
-+    'saas_ai_administrator_draft_versions': ('body', 'target'),
-+    'saas_ai_administrator_observations': ('payload',),
-+    'saas_connect_dialog_links': ('snapshot',),
-+    'saas_connect_direct_merge_backups': ('snapshot',),
-+    'saas_tenant_webhook_events': ('payload',),
-+
-+    'saas_ai_instructor_jobs': ('primary_agent_id', 'expert_agent_id', 'progress'),
-+    'saas_ai_pilot_followups': ('agent_id',),
-+    'saas_dialog_consultation_replies': ('draft_agent_id',),
-+    'saas_dialog_audio_attempts': ('agent_id',),
-+    'saas_owner_asr_comparisons': ('agent_id',),
-+    'saas_instruction_video_offers': ('agent_id',),
-+    'saas_ai_learning_mcp_tokens': ('agent_id',),
-+    'saas_ai_learning_mcp_codes': ('agent_id',),
-+    'saas_ai_single_message_extraction_consents': ('agent_id',),
-+    'saas_ai_owner_publish_capabilities': ('agent_id',),
-+    'saas_ai_administrator_rollbacks': ('agent_id',),
-+    'saas_ai_administrator_trigger_rollbacks': ('agent_id',),
-+    'saas_ai_administrator_config_rollbacks': ('agent_id', 'before_patch'),
-+    'saas_ai_administrator_publication_grants': ('agent_id','before_snapshot','applied_snapshot'),
-+    'saas_ai_training_policies': ('agent_id',),
-+    'saas_knowledge_extractions': ('route',),
-+    'saas_knowledge_batches': ('params', 'routes', 'continuations'),
-+    'saas_knowledge_batch_items': ('route',),
-+    'saas_knowledge_campaign_fragments': ('route',),
-+
-+}
-+
-+
-+def _reference_triggers(cur):
-+    cur.execute("""SELECT name,to_regclass(name) AS present,t.tgname,t.tgenabled,t.tgtype,t.tgargs,
-+      t.tgfoid=to_regprocedure('saas_ai_unused_archive_reference_fn()') AS correct_function
-+      FROM unnest(%s::text[]) names(name) LEFT JOIN pg_trigger t
-+        ON t.tgrelid=to_regclass(name) AND t.tgname='saas_ai_unused_archive_reference_v1'""", (list(REFERENCES),))
-+    return cur.fetchall()
-+
-+
-+def _correct_trigger(row):
-+    expected=b'\0'.join(field.encode() for field in REFERENCES[row['name']])+b'\0'
-+    return (row.get('tgenabled') in ('O','A') and row.get('tgtype')==23
-+            and row.get('correct_function') is True and bytes(row.get('tgargs') or b'')==expected)
-+
-+
-+def fences_ready(cur):
-+    cur.execute("""SELECT to_regclass('saas_ai_scoped_archives') IS NOT NULL
-+      AND to_regprocedure('saas_ai_unused_archive_reference_fn()') IS NOT NULL
-+      AND to_regprocedure('saas_ai_reference_ids(jsonb)') IS NOT NULL AS ready""")
-+    if not (cur.fetchone() or {}).get('ready'):
-+        return False
-+    return all(not row['present'] or _correct_trigger(row) for row in _reference_triggers(cur))
-+
-+
-+def install_existing(cur):
-+    """Also called by optional schema creators, before their first writes."""
-+    cur.execute("SELECT to_regclass('saas_ai_scoped_archives') AS present")
-+    if not (cur.fetchone() or {}).get('present'):
-+        return
-+    trigger='saas_ai_unused_archive_reference_v1'
-+    for relation in _reference_triggers(cur):
-+        if not relation['present'] or _correct_trigger(relation):
-+            continue
-+        table=relation['name'];columns=REFERENCES[table]
-+        # Identifiers and arguments are source constants, never request input.
-+        if relation['tgname']:
-+            cur.execute(f'DROP TRIGGER {trigger} ON {table}')
-+        args = ','.join("'" + column + "'" for column in columns)
-+        cur.execute(f'''CREATE TRIGGER {trigger} BEFORE INSERT OR UPDATE ON {table}
-+          FOR EACH ROW EXECUTE FUNCTION saas_ai_unused_archive_reference_fn({args})''')
-+
-+
-+def install_schema_references(conn):
-+    with conn.cursor() as cur:
-+        install_existing(cur)
-+
-+
-+def create_schema(conn):
-+    with conn.cursor() as cur:
-+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_scoped_archives(
-+          tenant_id UUID NOT NULL,id UUID NOT NULL,archived_by BIGINT NOT NULL,
-+          archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,id),
-+          FOREIGN KEY(tenant_id,id) REFERENCES saas_ai_agent_history_identities(tenant_id,id) ON DELETE CASCADE)''')
-+        cur.execute('''CREATE OR REPLACE FUNCTION saas_ai_reference_ids(value jsonb)
-+          RETURNS uuid[] LANGUAGE sql IMMUTABLE AS $$
-+          WITH RECURSIVE nodes(v,k) AS (
-+            SELECT value,''::text UNION ALL
-+            SELECT child.v,child.k FROM nodes n CROSS JOIN LATERAL (
-+              SELECT v,n.k FROM jsonb_array_elements(CASE WHEN jsonb_typeof(n.v)='array' THEN n.v ELSE '[]'::jsonb END) a(v)
-+              UNION ALL
-+              SELECT v,k FROM jsonb_each(CASE WHEN jsonb_typeof(n.v)='object' THEN n.v ELSE '{}'::jsonb END) o(k,v)
-+            ) child
-+          ) SELECT COALESCE(array_agg(DISTINCT (v #>> '{}')::uuid),ARRAY[]::uuid[])
-+          FROM nodes WHERE jsonb_typeof(v)='string'
-+            AND k ~ '(^|_)agent_ids?$|^allowed_primary_ids$|^archived_replaced_by$'
-+            AND (v #>> '{}') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-+          $$''')
-+        cur.execute('''CREATE OR REPLACE FUNCTION saas_ai_unused_archive_reference_fn()
-+          RETURNS trigger LANGUAGE plpgsql AS $$
-+          DECLARE data jsonb:=to_jsonb(NEW); selected jsonb:='{}'; field text;
-+            ids uuid[]; old_ids uuid[]; previous jsonb:='{}'; company uuid:=(data->>'tenant_id')::uuid;
-+          BEGIN
-+            FOREACH field IN ARRAY TG_ARGV LOOP selected:=selected || jsonb_build_object(field,data->field); END LOOP;
-+            ids:=saas_ai_reference_ids(selected);
-+            IF TG_OP='UPDATE' AND OLD.tenant_id=NEW.tenant_id THEN
-+              FOREACH field IN ARRAY TG_ARGV LOOP previous:=previous || jsonb_build_object(field,to_jsonb(OLD)->field); END LOOP;
-+              old_ids:=saas_ai_reference_ids(previous);
-+              ids:=ARRAY(SELECT unnest(ids) EXCEPT SELECT unnest(old_ids));
-+            END IF;
-+            IF cardinality(ids)=0 THEN RETURN NEW; END IF;
-+            PERFORM id FROM saas_ai_agents WHERE tenant_id=company AND id=ANY(ids) ORDER BY id FOR SHARE;
-+            IF EXISTS(SELECT 1 FROM saas_ai_scoped_archives WHERE tenant_id=company AND id=ANY(ids)) THEN
-+              RAISE EXCEPTION 'ai_agent_archived_reference' USING ERRCODE='23514';
-+            END IF;
-+            RETURN NEW;
-+          END $$''')
-+        install_existing(cur)
-+
-+
-+def require_unused(cur, tenant, target, row):
-+    if row.get('enabled') or row.get('scopes'):
-+        raise TenantLinearError('ai_agent_archive_requires_unused_agent', 409)
-+    cur.execute('SELECT saas_ai_reference_ids(%s::jsonb) AS ids', (json.dumps([row.get('expert_policy'), row.get('response_policy')]),))
-+    if (cur.fetchone() or {}).get('ids'):
-+        raise TenantLinearError('ai_agent_archive_requires_unused_agent', 409)
-+    for table, columns in REFERENCES.items():
-+        cur.execute('SELECT to_regclass(%s) AS present', (table,))
-+        if not (cur.fetchone() or {}).get('present'):
-+            continue
-+        fields=','.join(f"'{column}',t.{column}" for column in columns)
-+        cur.execute(f'''SELECT 1 FROM {table} t WHERE t.tenant_id=%s::uuid
-+          AND %s::uuid=ANY(saas_ai_reference_ids(jsonb_build_object({fields}))) LIMIT 1''', (tenant,target))
-+        if cur.fetchone():
-+            # Never expose a reference count, type, target or preview to D-only.
-+            raise TenantLinearError('ai_agent_archive_requires_unused_agent', 409)
-+
-+
-+def archive_unused_agent(profile, agent_id, *, expected_version, connection=None):
-+    from tenant_ai_agents_store import _connect, ensure_schema, _authorize, _require_owner, _audit
-+    from tenant_ai_scoped_access import authorize
-+    target=identifier(agent_id)
-+    if type(expected_version) is not int or expected_version < 1:
-+        raise TenantLinearError('expected_version_required',400)
-+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
-+        ensure_schema(conn)
-+        with conn.cursor() as cur:
-+            authority=authorize(cur,profile,'delete',target)
-+            if authority is None:
-+                tenant,actor=_authorize(cur,profile)
-+                _require_owner(cur,tenant,actor)
-+                cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
-+            else:
-+                tenant,actor=authority
-+            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid
-+              AND id=%s::uuid AND archived_at IS NULL FOR UPDATE''',(tenant,target))
-+            row=cur.fetchone()
-+            if not row:
-+                raise TenantLinearError('Agent tapılmadı.',404)
-+            if int(row['version']) != expected_version:
-+                raise TenantLinearError('agent_version_conflict',409)
-+            require_unused(cur,tenant,target,row)
-+            cur.execute('INSERT INTO saas_ai_scoped_archives(tenant_id,id,archived_by) VALUES(%s,%s,%s)',(tenant,target,actor))
-+            cur.execute('''UPDATE saas_ai_agents SET enabled=FALSE,archived_at=now(),archived_by=%s,
-+              version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid''',(actor,tenant,target))
-+            _audit(cur,tenant,actor,'ai_agent_archived_unused','ai_agent',target,{})
-+        conn.commit()
-+    return {'id':str(target),'version':expected_version+1,'archived':True}
-diff --git a/beintaskbot-main/tenant_auth_api.py b/beintaskbot-main/tenant_auth_api.py
-index 2ae2792034007d4c75e666533b09c006252bcb98..4948920815fabd6be3aea28fdd72a19e012741d1 100644
---- a/beintaskbot-main/tenant_auth_api.py
-+++ b/beintaskbot-main/tenant_auth_api.py
-@@ -366,7 +366,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
-             capabilities = context.capabilities(profile)
-             members = await asyncio.to_thread(
-                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
--            ) if capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'}) else []
-+            ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []
-             account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
-         except Exception:
-             context.logger.exception("Platform session lookup failed")
-diff --git a/beintaskbot-main/tenant_bein_api.py b/beintaskbot-main/tenant_bein_api.py
-index a3c145ed958dd00fb7870b1fbb0e503b6b89d4a0..e19577448e69b3d57eb9f2f9003e99bd89455233 100644
---- a/beintaskbot-main/tenant_bein_api.py
-+++ b/beintaskbot-main/tenant_bein_api.py
-@@ -8,6 +8,15 @@ from aiohttp import web
- from tenant_bein_integration import credential, save, set_primary, status
- from tenant_crm_provider import CrmProviderError
- from tenant_platform_core import TenantPlatformError
-+from tenant_linear_policy import TenantLinearError
-+from tenant_shared_integration_access import operation
-+from tenant_bein_integration import _connect, _ensure_schema
-+
-+
-+@operation('beinsystems', 'view')
-+def _test_connection(profile):
-+    client = credential(profile['tenant_id'])
-+    return asyncio.run(client.list_resource('pipelines', page=1))
- 
- 
- def _valid_write(request: web.Request, origin: str) -> bool:
-@@ -18,14 +27,22 @@ def _valid_write(request: web.Request, origin: str) -> bool:
- 
- def handler(member: Callable, origin: str, logger) -> Callable:
-     async def endpoint(request: web.Request) -> web.Response:
--        profile = member(request, owner_only=True)
-+        from tenant_scoped_access import scoped_access_enabled
-+        profile = member(request, owner_only=True) if not scoped_access_enabled() else member(request)
-         if not profile:
-             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-         if request.method == "GET":
-             try:
-                 return web.json_response({"success": True, "integration": await asyncio.to_thread(status, profile)})
-+            except TenantLinearError as exc:
-+                return web.json_response({'success': False, 'error': str(exc)}, status=exc.status)
-             except TenantPlatformError as exc:
-                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-+        if scoped_access_enabled():
-+            from tenant_request_origin import require_json_post
-+            try: require_json_post(request, origin)
-+            except TenantLinearError as exc:
-+                return web.json_response({'success':False,'error':str(exc)},status=exc.status)
-         if not _valid_write(request, origin):
-             return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."}, status=403)
-         try:
-@@ -43,20 +60,23 @@ def handler(member: Callable, origin: str, logger) -> Callable:
-                 item = await asyncio.to_thread(save, profile,
-                     base_url=str(data.get("base_url") or ""), token=str(data.get("token") or ""),
-                     branch_id=str(data.get("branch_id") or ""),
--                    primary=bool(data.get("primary")))
-+                    primary=bool(data.get("primary")), authorization=data)
-                 return web.json_response({"success": True, "integration": item,
-                                           "message": "BeinSystems API tokeni təhlükəsiz saxlanıldı.",
-                                           "catalog_available": False})
-             if action == "test":
--                client = await asyncio.to_thread(credential, profile["tenant_id"])
--                payload = await client.list_resource("pipelines", page=1)
-+                if scoped_access_enabled():
-+                    payload = await asyncio.to_thread(_test_connection, profile)
-+                else:
-+                    client = await asyncio.to_thread(credential, profile['tenant_id'])
-+                    payload = await client.list_resource('pipelines', page=1)
-                 return web.json_response({"success": True, "message": "BeinSystems ERP bağlantısı işləyir.",
-                                           "catalog_available": bool(payload)})
-             if action == "primary":
--                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""))
-+                selected = await asyncio.to_thread(set_primary, profile, str(data.get("provider") or ""), authorization=data)
-                 return web.json_response({"success": True, **selected})
-             return web.json_response({"success": False, "error": "Əməliyyat düzgün deyil."}, status=400)
--        except (TenantPlatformError, CrmProviderError) as exc:
-+        except (TenantPlatformError, CrmProviderError, TenantLinearError) as exc:
-             return web.json_response({"success": False, "error": str(exc)}, status=getattr(exc, "status", 400))
-         except Exception:
-             logger.exception("BeinSystems ERP integration command failed: tenant=%s action=%s",
-diff --git a/beintaskbot-main/tenant_bein_integration.py b/beintaskbot-main/tenant_bein_integration.py
-index bd6739d998f3ed82ecf5088a1027771aa571bccb..ceff4533975f1bc3a492c1593b32a297eb814185 100644
---- a/beintaskbot-main/tenant_bein_integration.py
-+++ b/beintaskbot-main/tenant_bein_integration.py
-@@ -9,12 +9,14 @@ from tenant_bein_crm import BeinCrm
- from tenant_crm_provider import CrmProviderError
- from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
- 
-+from tenant_shared_integration_access import operation, admitted
-+
- PROVIDER = "beinsystems"
- CRM_PROVIDERS = ("kommo", PROVIDER)
- 
- 
- def _owner(profile: dict | None) -> tuple[str, int]:
--    if not profile or profile.get("role") != "owner" or not profile.get("active", True):
-+    if not admitted(profile, PROVIDER) and (not profile or profile.get("role") != "owner" or not profile.get("active", True)):
-         raise TenantPlatformError("İcazə yoxdur.")
-     return str(profile.get("tenant_id") or ""), int(profile.get("telegram_id") or 0)
- 
-@@ -39,6 +41,7 @@ def _public(row: dict | None) -> dict:
-     }
- 
- 
-+@operation(PROVIDER, 'view')
- def status(profile: dict | None) -> dict:
-     tenant, _ = _owner(profile)
-     with _connect() as conn:
-@@ -78,8 +81,10 @@ def credential(tenant_id: str) -> BeinCrm:
-         raise TenantPlatformError(str(exc)) from exc
- 
- 
-+@operation(PROVIDER, 'connect', data_arg='authorization',
-+           required_actions=lambda values: ('update',) if values['primary'] else ())
- def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str = "",
--         primary: bool = False) -> dict:
-+         primary: bool = False, authorization=None) -> dict:
-     tenant, actor = _owner(profile)
-     # Validate before touching the currently working connection. Encryption is
-     # also performed before the transaction so a missing key cannot corrupt it.
-@@ -99,11 +104,11 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
--                        (tenant, actor))
--            current = cur.fetchone()
--            if not current or current.get("role") != "owner" or not current.get("active"):
--                raise TenantPlatformError("İcazə yoxdur.")
-+            if not admitted(profile, PROVIDER):
-+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
-+                current = cur.fetchone()
-+                if not current or current.get("role") != "owner" or not current.get("active"):
-+                    raise TenantPlatformError("İcazə yoxdur.")
-             cur.execute("""INSERT INTO saas_tenant_integrations
-                 (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
-                 VALUES (%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
-@@ -129,7 +134,8 @@ def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str
-     return _public(row)
- 
- 
--def set_primary(profile: dict | None, provider: str) -> dict:
-+@operation(PROVIDER, 'update', data_arg='authorization')
-+def set_primary(profile: dict | None, provider: str, *, authorization=None) -> dict:
-     tenant, actor = _owner(profile)
-     selected = str(provider or "").casefold()
-     if selected not in CRM_PROVIDERS:
-@@ -137,11 +143,11 @@ def set_primary(profile: dict | None, provider: str) -> dict:
-     with _connect() as conn:
-         _ensure_schema(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE",
--                        (tenant, actor))
--            current = cur.fetchone()
--            if not current or current.get("role") != "owner" or not current.get("active"):
--                raise TenantPlatformError("İcazə yoxdur.")
-+            if not admitted(profile, PROVIDER):
-+                cur.execute("SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE", (tenant, actor))
-+                current = cur.fetchone()
-+                if not current or current.get("role") != "owner" or not current.get("active"):
-+                    raise TenantPlatformError("İcazə yoxdur.")
-             cur.execute("SELECT status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider=%s",
-                         (tenant, selected))
-             integration = cur.fetchone()
-diff --git a/beintaskbot-main/tenant_chat_ai_api.py b/beintaskbot-main/tenant_chat_ai_api.py
-index 9d47d922f34cdb413fbd559b583f88654b0fea3a..168efc93d378bc535c86264dc208e0c4954a2dbc 100644
---- a/beintaskbot-main/tenant_chat_ai_api.py
-+++ b/beintaskbot-main/tenant_chat_ai_api.py
-@@ -55,7 +55,8 @@ def model_management_handler(member_from_request, canonical_origin, logger, *, p
-                 if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id'])
-                         or str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
-                     raise TenantLinearError('Кабинет изменился. Обновите страницу.', 409)
--                result = await asyncio.to_thread(test_model, profile, data.get('model'))
-+                from tenant_scoped_access import scoped_access_enabled
-+                result = await asyncio.to_thread(test_model, profile, data.get('model'), **({'authorization':data} if scoped_access_enabled() else {}))
-             else:
-                 if request.method != 'GET':
-                     raise TenantLinearError('Метод не поддерживается.', 405)

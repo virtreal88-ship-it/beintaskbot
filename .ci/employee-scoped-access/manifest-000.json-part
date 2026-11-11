@@ -1,8 +1,8 @@
 {
   "base_commit": "5e02c6c12c48b37a9d67346b84f65b05bc0fd2d7",
   "base_tree": "2b139e7f096b9695c8990dc7cfc5049f9466015f",
-  "target_local_commit": "ac8e06b69068444316ab3e3281528005f57267e5",
-  "target_tree": "e964ef5fa1c52add29ec7b9b343e6048f61db98e",
+  "target_local_commit": "d69ca58daef582e1056f99d69141862f626e271d",
+  "target_tree": "bb08e951fa5ef84c8cb6e020058fc1d11c60d4a9",
   "patches": [
     {
       "paths": [
@@ -19,13 +19,13 @@
         "beintaskbot-main/docs/night-report-scopes.md",
         "beintaskbot-main/docs/shared-integration-scopes.md"
       ],
-      "sha256": "cceba46c6c2a2085799d60bd70643596726bff6b112a95745ae64577cd667183",
-      "bytes": 78159,
+      "sha256": "10328ac1353cceb3b1094ef57b6a23911761815754509c562e59e4cfd6aac203",
+      "bytes": 78442,
       "parts": [
         {
           "file": "patches/000-000.patch",
-          "sha256": "cceba46c6c2a2085799d60bd70643596726bff6b112a95745ae64577cd667183",
-          "bytes": 78159
+          "sha256": "10328ac1353cceb3b1094ef57b6a23911761815754509c562e59e4cfd6aac203",
+          "bytes": 78442
         }
       ]
     },
@@ -34,13 +34,13 @@
         "beintaskbot-main/docs/support-inbox-scoped-access.md",
         "beintaskbot-main/docs/tenant-ai-agents.js"
       ],
-      "sha256": "e8873f9906f2a0cde7fc4f28cf4695cbcffc75ce78703fb998e2a5a9dbe39039",
-      "bytes": 20308,
+      "sha256": "2add57b788e5549f52b3d5f24487ff19a14cc1e3254033bbbd593723882d977a",
+      "bytes": 20343,
       "parts": [
         {
           "file": "patches/001-000.patch",
-          "sha256": "e8873f9906f2a0cde7fc4f28cf4695cbcffc75ce78703fb998e2a5a9dbe39039",
-          "bytes": 20308
+          "sha256": "2add57b788e5549f52b3d5f24487ff19a14cc1e3254033bbbd593723882d977a",
+          "bytes": 20343
         }
       ]
     },
@@ -214,24 +214,25 @@
         "beintaskbot-main/docs/tenant-support-inbox.js",
         "beintaskbot-main/docs/tenant-task-flow.js",
         "beintaskbot-main/docs/tenant-view-demand.js",
-        "beintaskbot-main/docs/tenant-workspace.js",
-        "beintaskbot-main/tenant_ai_administrator_apply.py",
-        "beintaskbot-main/tenant_ai_administrator_approvals.py",
-        "beintaskbot-main/tenant_ai_administrator_drafts.py",
-        "beintaskbot-main/tenant_ai_administrator_observations.py"
+        "beintaskbot-main/docs/tenant-workspace.js"
       ],
-      "sha256": "805f86f9dedec3d31bcc765f228bb98e264c2640323d8f25d2a8a5e8e61c6727",
-      "bytes": 79768,
+      "sha256": "8fb99f6668cf759b58477e0294547bc2b7b5e6a2d489668aedc9196887e5886a",
+      "bytes": 73651,
       "parts": [
         {
           "file": "patches/007-000.patch",
-          "sha256": "805f86f9dedec3d31bcc765f228bb98e264c2640323d8f25d2a8a5e8e61c6727",
-          "bytes": 79768
+          "sha256": "8fb99f6668cf759b58477e0294547bc2b7b5e6a2d489668aedc9196887e5886a",
+          "bytes": 73651
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/scripts/scope_activation_preflight.py",
+        "beintaskbot-main/tenant_ai_administrator_apply.py",
+        "beintaskbot-main/tenant_ai_administrator_approvals.py",
+        "beintaskbot-main/tenant_ai_administrator_drafts.py",
+        "beintaskbot-main/tenant_ai_administrator_observations.py",
         "beintaskbot-main/tenant_ai_agents_api.py",
         "beintaskbot-main/tenant_ai_agents_schema.py",
         "beintaskbot-main/tenant_ai_agents_store.py",
@@ -243,25 +244,25 @@
         "beintaskbot-main/tenant_ai_scoped_access.py",
         "beintaskbot-main/tenant_ai_simulation_schema.py",
         "beintaskbot-main/tenant_ai_single_message_extraction.py",
-        "beintaskbot-main/tenant_ai_state.py",
-        "beintaskbot-main/tenant_ai_unused_archive.py",
-        "beintaskbot-main/tenant_auth_api.py",
-        "beintaskbot-main/tenant_bein_api.py",
-        "beintaskbot-main/tenant_bein_integration.py",
-        "beintaskbot-main/tenant_chat_ai_api.py"
+        "beintaskbot-main/tenant_ai_state.py"
       ],
-      "sha256": "b9b7e18dc5c600514d2095e2538ce59ab618f6fdde556323fd3348ee55474d2a",
-      "bytes": 77855,
+      "sha256": "0e400b972fce93958d36f46b126cd5552abd6f72ccc315946808f73812d1776f",
+      "bytes": 72738,
       "parts": [
         {
           "file": "patches/008-000.patch",
-          "sha256": "b9b7e18dc5c600514d2095e2538ce59ab618f6fdde556323fd3348ee55474d2a",
-          "bytes": 77855
+          "sha256": "0e400b972fce93958d36f46b126cd5552abd6f72ccc315946808f73812d1776f",
+          "bytes": 72738
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tenant_ai_unused_archive.py",
+        "beintaskbot-main/tenant_auth_api.py",
+        "beintaskbot-main/tenant_bein_api.py",
+        "beintaskbot-main/tenant_bein_integration.py",
+        "beintaskbot-main/tenant_chat_ai_api.py",
         "beintaskbot-main/tenant_chat_ai_settings.py",
         "beintaskbot-main/tenant_chat_ai_store.py",
         "beintaskbot-main/tenant_chat_api.py",
@@ -278,41 +279,41 @@
         "beintaskbot-main/tenant_connect_direct_reconcile.py",
         "beintaskbot-main/tenant_connect_transport.py",
         "beintaskbot-main/tenant_consultation_group.py",
-        "beintaskbot-main/tenant_crm_contact_listing.py",
-        "beintaskbot-main/tenant_crm_native_access.py",
-        "beintaskbot-main/tenant_crm_native_api.py"
+        "beintaskbot-main/tenant_crm_contact_listing.py"
       ],
-      "sha256": "228ff55464dbc97df8cfdbafc44b519bed27392555d49c83fa67541383000a5b",
-      "bytes": 66693,
+      "sha256": "1b0d4106aa28ece6968953993eaf7ae460775431876b58cca0ae67ddc9c12525",
+      "bytes": 78084,
       "parts": [
         {
           "file": "patches/009-000.patch",
-          "sha256": "228ff55464dbc97df8cfdbafc44b519bed27392555d49c83fa67541383000a5b",
-          "bytes": 66693
+          "sha256": "1b0d4106aa28ece6968953993eaf7ae460775431876b58cca0ae67ddc9c12525",
+          "bytes": 78084
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tenant_crm_native_access.py",
+        "beintaskbot-main/tenant_crm_native_api.py",
         "beintaskbot-main/tenant_crm_native_companies.py",
         "beintaskbot-main/tenant_crm_native_company_api.py",
         "beintaskbot-main/tenant_crm_native_contacts.py",
         "beintaskbot-main/tenant_crm_native_deal_api.py",
-        "beintaskbot-main/tenant_crm_native_deals.py",
-        "beintaskbot-main/tenant_crm_native_task_api.py"
+        "beintaskbot-main/tenant_crm_native_deals.py"
       ],
-      "sha256": "2e157140b4ba7cc589efb4aeba03f105ae44af4f8268f3345660371545f92c68",
-      "bytes": 73923,
+      "sha256": "c2e2027e47ed8c5347e9a1aace4ac203fa953be51fb5c203afb2d110b8319ecb",
+      "bytes": 76931,
       "parts": [
         {
           "file": "patches/010-000.patch",
-          "sha256": "2e157140b4ba7cc589efb4aeba03f105ae44af4f8268f3345660371545f92c68",
-          "bytes": 73923
+          "sha256": "c2e2027e47ed8c5347e9a1aace4ac203fa953be51fb5c203afb2d110b8319ecb",
+          "bytes": 76931
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tenant_crm_native_task_api.py",
         "beintaskbot-main/tenant_crm_native_tasks.py",
         "beintaskbot-main/tenant_crm_notice_outbox.py",
         "beintaskbot-main/tenant_crm_notice_policy.py",
@@ -322,21 +323,21 @@
         "beintaskbot-main/tenant_crm_relation_delivery.py",
         "beintaskbot-main/tenant_crm_relation_identity.py",
         "beintaskbot-main/tenant_crm_relation_kommo.py",
-        "beintaskbot-main/tenant_crm_relation_schema.py",
-        "beintaskbot-main/tenant_crm_relation_store.py"
+        "beintaskbot-main/tenant_crm_relation_schema.py"
       ],
-      "sha256": "b6ca36e18d44a889e4d0f06e4b47160cf54bd5e03a9bfe1cb2a0c00ce2a33696",
-      "bytes": 76957,
+      "sha256": "a77f9a77a9b5827b5cc14c9e7ef4045a2a3d135af498652bc45ef20972047a09",
+      "bytes": 77879,
       "parts": [
         {
           "file": "patches/011-000.patch",
-          "sha256": "b6ca36e18d44a889e4d0f06e4b47160cf54bd5e03a9bfe1cb2a0c00ce2a33696",
-          "bytes": 76957
+          "sha256": "a77f9a77a9b5827b5cc14c9e7ef4045a2a3d135af498652bc45ef20972047a09",
+          "bytes": 77879
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tenant_crm_relation_store.py",
         "beintaskbot-main/tenant_crm_scalar_delivery.py",
         "beintaskbot-main/tenant_crm_scalar_schema.py",
         "beintaskbot-main/tenant_crm_scalar_store.py",
@@ -347,21 +348,21 @@
         "beintaskbot-main/tenant_dialog_access.py",
         "beintaskbot-main/tenant_dialog_audio_store.py",
         "beintaskbot-main/tenant_dialog_audio_transcription.py",
-        "beintaskbot-main/tenant_dialog_consultations.py",
-        "beintaskbot-main/tenant_employee_policy.py"
+        "beintaskbot-main/tenant_dialog_consultations.py"
       ],
-      "sha256": "52dcf9dc0d75ee3146a69d119d8fe412d61946f38fb49487ecacfa3a4bdca84c",
-      "bytes": 74392,
+      "sha256": "c0b70bdad9f9c1f185f1caa2cba5c00e26f51f4f84ae955510d8f27d36a2e16b",
+      "bytes": 71515,
       "parts": [
         {
           "file": "patches/012-000.patch",
-          "sha256": "52dcf9dc0d75ee3146a69d119d8fe412d61946f38fb49487ecacfa3a4bdca84c",
-          "bytes": 74392
+          "sha256": "c0b70bdad9f9c1f185f1caa2cba5c00e26f51f4f84ae955510d8f27d36a2e16b",
+          "bytes": 71515
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tenant_employee_policy.py",
         "beintaskbot-main/tenant_finance.py",
         "beintaskbot-main/tenant_finance_policy.py",
         "beintaskbot-main/tenant_instruction_library.py",
@@ -375,13 +376,13 @@
         "beintaskbot-main/tenant_linear_api.py",
         "beintaskbot-main/tenant_member_access.py"
       ],
-      "sha256": "a737616c8dad3c4785de525711aee23511a15e6ea054e533bc57841ac62d223d",
-      "bytes": 53533,
+      "sha256": "63a53dec2bff69e0bb9e4d8a621ca49df775f181a69cd2a9f7570831ded37084",
+      "bytes": 64101,
       "parts": [
         {
           "file": "patches/013-000.patch",
-          "sha256": "a737616c8dad3c4785de525711aee23511a15e6ea054e533bc57841ac62d223d",
-          "bytes": 53533
+          "sha256": "63a53dec2bff69e0bb9e4d8a621ca49df775f181a69cd2a9f7570831ded37084",
+          "bytes": 64101
         }
       ]
     },
@@ -446,18 +447,19 @@
         "beintaskbot-main/tenant_workflow_store.py",
         "beintaskbot-main/tests/ai_scoped_documents_browser_acceptance.js",
         "beintaskbot-main/tests/ai_scoped_documents_http_browser.cjs",
+        "beintaskbot-main/tests/ai_scoped_documents_http_dom.cjs",
         "beintaskbot-main/tests/contacts_directory_fixture.cjs",
         "beintaskbot-main/tests/contacts_directory_http_browser.cjs",
         "beintaskbot-main/tests/employee_scope_matrix_browser.cjs",
         "beintaskbot-main/tests/native_company_deal_fixture.cjs"
       ],
-      "sha256": "4c92c34f21010f7983ecc6be91addd51d50affa5a84390def0e3d4dd2e137800",
-      "bytes": 76371,
+      "sha256": "a1fb66abeed9740ef6c972651c8f7a6de3fdc2eae0863a2e893a5baed3fe9639",
+      "bytes": 78963,
       "parts": [
         {
           "file": "patches/016-000.patch",
-          "sha256": "4c92c34f21010f7983ecc6be91addd51d50affa5a84390def0e3d4dd2e137800",
-          "bytes": 76371
+          "sha256": "a1fb66abeed9740ef6c972651c8f7a6de3fdc2eae0863a2e893a5baed3fe9639",
+          "bytes": 78963
         }
       ]
     },
@@ -469,23 +471,24 @@
         "beintaskbot-main/tests/test_ai_integration_access_preparation.py",
         "beintaskbot-main/tests/test_ai_scoped_documents.py",
         "beintaskbot-main/tests/test_ai_scoped_documents_browser.py",
+        "beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py",
         "beintaskbot-main/tests/test_ai_scoped_documents_postgres.py",
         "beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs",
-        "beintaskbot-main/tests/test_ai_unused_archive.py",
-        "beintaskbot-main/tests/test_ai_unused_archive_postgres.py"
+        "beintaskbot-main/tests/test_ai_unused_archive.py"
       ],
-      "sha256": "58f6909abfac62d7aa605b28e81eff90b12ce9853921a900c467b5b4e4d1c3e2",
-      "bytes": 79581,
+      "sha256": "a76161e3f948643ed88d79dbb7dfaa3d3d6c0cf69682a5b5cbadd36a8af6ba69",
+      "bytes": 77231,
       "parts": [
         {
           "file": "patches/017-000.patch",
-          "sha256": "58f6909abfac62d7aa605b28e81eff90b12ce9853921a900c467b5b4e4d1c3e2",
-          "bytes": 79581
+          "sha256": "a76161e3f948643ed88d79dbb7dfaa3d3d6c0cf69682a5b5cbadd36a8af6ba69",
+          "bytes": 77231
         }
       ]
     },
     {
       "paths": [
+        "beintaskbot-main/tests/test_ai_unused_archive_postgres.py",
         "beintaskbot-main/tests/test_analytics_scoped_dialog_guard.py",
         "beintaskbot-main/tests/test_business_analyst_scoped_boundary.py",
         "beintaskbot-main/tests/test_contacts_directory_postgres.py",
@@ -499,13 +502,13 @@
         "beintaskbot-main/tests/test_crm_save_receipt_ui.cjs",
         "beintaskbot-main/tests/test_crm_scalar_fences_postgres.py"
       ],
-      "sha256": "2a7a4918adeac6324deeb6b2ec19e4967b0b602074316d2a3994fe54182ff65c",
-      "bytes": 63632,
+      "sha256": "509b7f85fc8fc0729a009c167c763563975a7da5311f833ef4e202fb514dd8fc",
+      "bytes": 67436,
       "parts": [
         {
           "file": "patches/018-000.patch",
-          "sha256": "2a7a4918adeac6324deeb6b2ec19e4967b0b602074316d2a3994fe54182ff65c",
-          "bytes": 63632
+          "sha256": "509b7f85fc8fc0729a009c167c763563975a7da5311f833ef4e202fb514dd8fc",
+          "bytes": 67436
         }
       ]
     },
@@ -581,23 +584,20 @@
         "beintaskbot-main/tests/test_night_report_scopes.py",
         "beintaskbot-main/tests/test_night_report_scopes_postgres.py",
         "beintaskbot-main/tests/test_operator_list_performance.py",
+        "beintaskbot-main/tests/test_scope_activation_preflight.py",
+        "beintaskbot-main/tests/test_scope_activation_preflight_bootstrap.py",
         "beintaskbot-main/tests/test_scoped_access_foundation.py"
       ],
-      "sha256": "0ecadc5c93ce74c87b643103b8b87dd4364ad4d9da7c26160992aceaf4516390",
-      "bytes": 66335,
+      "sha256": "84c6ba32de0fdaed0bbc564a595c2e62b4c32f69ed3e23731625ba620ddf0941",
+      "bytes": 76387,
       "parts": [
         {
           "file": "patches/022-000.patch",
-          "sha256": "0ecadc5c93ce74c87b643103b8b87dd4364ad4d9da7c26160992aceaf4516390",
-          "bytes": 66335
+          "sha256": "84c6ba32de0fdaed0bbc564a595c2e62b4c32f69ed3e23731625ba620ddf0941",
+          "bytes": 76387
         }
       ]
     },
     {
       "paths": [
         "beintaskbot-main/tests/test_scoped_access_foundation_postgres.py",
-        "beintaskbot-main/tests/test_shared_integration_scopes.py",
-        "beintaskbot-main/tests/test_shared_integration_scopes_postgres.py",
-        "beintaskbot-main/tests/test_shared_integration_settings.cjs",
-        "beintaskbot-main/tests/test_support_access_ownership_postgres.py",
-        "beintaskbot-main/tests/test_support_ai_projection_scopes.py",

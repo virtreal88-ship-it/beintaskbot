@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/employee-scoped-access.yml b/.github/workflows/employee-scoped-access.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..0a6837737b69fd76f60ae142b0431ce7ff43441f
+index 0000000000000000000000000000000000000000..11ecf0dee21f0043719516e1bb7440219e99e6cc
 --- /dev/null
 +++ b/.github/workflows/employee-scoped-access.yml
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,176 @@
 +name: Employee scoped access
 +on:
 +  push:
@@ -59,6 +59,8 @@ index 0000000000000000000000000000000000000000..0a6837737b69fd76f60ae142b0431ce7
 +        run: >-
 +          python -m pytest -q -rs
 +          tests/test_scoped_access_foundation.py
++          tests/test_scope_activation_preflight.py
++          tests/test_scope_activation_preflight_bootstrap.py
 +          tests/test_scoped_access_foundation_postgres.py
 +          tests/test_employee_scope_settings_postgres.py
 +          tests/test_employee_creation_scopes.py
@@ -91,6 +93,7 @@ index 0000000000000000000000000000000000000000..0a6837737b69fd76f60ae142b0431ce7
 +          tests/test_support_inbox_scopes_postgres.py
 +          tests/test_instruction_member_access_postgres.py
 +          tests/test_ai_scoped_documents.py
++          tests/test_ai_scoped_documents_browser_bootstrap.py
 +          tests/test_ai_scoped_documents_postgres.py
 +          tests/test_ai_unused_archive.py
 +          tests/test_ai_unused_archive_postgres.py
@@ -163,11 +166,13 @@ index 0000000000000000000000000000000000000000..0a6837737b69fd76f60ae142b0431ce7
 +          node tests/test_tenant_ai_agent_connect_scope_ui.cjs
 +      - name: Chromium employee matrix, tasks and CRM
 +        run: |
-+          node tests/employee_scope_matrix_browser.cjs
-+          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
-+          node tests/test_native_company_deal_source_browser.cjs
-+          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
-+          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
++          status=0
++          node tests/employee_scope_matrix_browser.cjs || status=1
++          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py || status=1
++          node tests/test_native_company_deal_source_browser.cjs || status=1
++          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres || status=1
++          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history || status=1
++          exit "$status"
 +      - name: Save synthetic matrix screenshots
 +        if: always()
 +        uses: actions/upload-artifact@v4

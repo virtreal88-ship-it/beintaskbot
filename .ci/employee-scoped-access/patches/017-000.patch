@@ -646,10 +646,10 @@ index 0000000000000000000000000000000000000000..3db6936901ae6014ce864d646a1dbf65
 +    assert store.delete_trigger({'tenant_id':A,'telegram_id':11},ids['self'],trigger)=={'deleted':True}
 diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..892d1d8d6f325f871c6dbe6147efc519a01568bb
+index 0000000000000000000000000000000000000000..b957747cc0e5cbbe85de1ce7cfcdce59ece55d97
 --- /dev/null
 +++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser.py
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,165 @@
 +"""Chromium acceptance for the unmodified production AI controller.
 +
 +Synthetic HTTP boundary runs locally without a provider/database. This is not cookie/PostgreSQL authorization evidence. It uses the production
@@ -726,8 +726,8 @@ index 0000000000000000000000000000000000000000..892d1d8d6f325f871c6dbe6147efc519
 +        return response({'id':row['id'],'version':row['version']})
 +
 +
-+def run_browser(boundary,width):
-+    executable=chromium()
++def run_browser(boundary,width,*,runner='ai_scoped_documents_http_browser.cjs'):
++    executable=chromium() if runner=='ai_scoped_documents_http_browser.cjs' else ''
 +    sock=socket.socket();sock.bind(('127.0.0.1',0))
 +    origin='http://127.0.0.1:'+str(sock.getsockname()[1])
 +    loop=asyncio.new_event_loop();ready=threading.Event()
@@ -753,7 +753,9 @@ index 0000000000000000000000000000000000000000..892d1d8d6f325f871c6dbe6147efc519
 +            html=re.sub(r'<script\b[^>]*>[\s\S]*?</script>','',html,flags=re.I)
 +            # Preserve real HTML/styles but block every external resource.
 +            html=re.sub(r'<link\b[^>]*>','',html,flags=re.I)
-+            bootstrap="window.AI_ACCEPTANCE_ERRORS=[];window.addEventListener('error',e=>AI_ACCEPTANCE_ERRORS.push(e.message));window.tenantI18n={language:'en',t:key=>key};document.querySelectorAll('.view').forEach(n=>n.classList.remove('active'));document.getElementById('view-ai_agents').classList.add('active');window.AI_ACCEPTANCE_CONFIG="+json.dumps(config)+';'
++            # Shared app bootstrap is deliberately omitted; provide its full
++            # translation interface, without loading other app controllers.
++            bootstrap="window.AI_ACCEPTANCE_ERRORS=[];window.addEventListener('error',e=>AI_ACCEPTANCE_ERRORS.push(e.message));window.tenantI18n={language:'en',t:key=>key,source:value=>value,date:value=>String(value),capture:()=>{}};document.querySelectorAll('.view').forEach(n=>n.classList.remove('active'));document.getElementById('view-ai_agents').classList.add('active');window.AI_ACCEPTANCE_CONFIG="+json.dumps(config)+';'
 +            html=html.replace('</body>','<script>'+bootstrap+'</script><script src="/assets/tenant-ai-agents.js"></script><script src="/test/acceptance.js"></script></body>')
 +            response=web.Response(text=html,content_type='text/html',headers={'Content-Security-Policy':"default-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"})
 +            boundary.cookie(response)
@@ -796,7 +798,7 @@ index 0000000000000000000000000000000000000000..892d1d8d6f325f871c6dbe6147efc519
 +    thread=threading.Thread(target=serve,daemon=True);thread.start();assert ready.wait(10)
 +    try:
 +        assert not errors,errors
-+        process=subprocess.run(['node',str(ROOT/'tests/ai_scoped_documents_http_browser.cjs')],cwd=ROOT,
++        process=subprocess.run(['node',str(ROOT/'tests'/runner)],cwd=ROOT,
 +            env={**os.environ,'AI_RUNTIME_ORIGIN':origin,'AI_RUNTIME_WIDTH':str(width),'CHROMIUM_EXECUTABLE_PATH':executable},capture_output=True,text=True,timeout=70)
 +        assert process.returncode==0,process.stdout+'\n'+process.stderr
 +        assert state['shared']==[]
@@ -813,6 +815,18 @@ index 0000000000000000000000000000000000000000..892d1d8d6f325f871c6dbe6147efc519
 +def test_production_ai_controller_in_chromium_synthetic_http(width):
 +    """Browser/DOM/transport evidence only: this API boundary is synthetic."""
 +    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),width)
+diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..de663b0d9a278577b27d3c5f8d6a0357eaeb7056
+--- /dev/null
++++ b/beintaskbot-main/tests/test_ai_scoped_documents_browser_bootstrap.py
+@@ -0,0 +1,6 @@
++"""Full-controller bootstrap/HTTP contract; JSDOM is not browser layout proof."""
++from test_ai_scoped_documents_browser import run_browser,SyntheticBoundary
++
++
++def test_full_controller_bootstrap_and_acceptance_over_http():
++    assert 'PASS synthetic HTTP boundary' in run_browser(SyntheticBoundary(),1100,runner='ai_scoped_documents_http_dom.cjs')
 diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py b/beintaskbot-main/tests/test_ai_scoped_documents_postgres.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..eb2ace307cc2d03b1782cc5dde5aa42991d0f1bf
@@ -957,10 +971,10 @@ index 0000000000000000000000000000000000000000..eb2ace307cc2d03b1782cc5dde5aa429
 +    assert save(factory, ids['self'], 'revoked') in (403, 404)
 diff --git a/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..dad97a1c5cfd25628a47af02a2679894e7a75cb0
+index 0000000000000000000000000000000000000000..ef17250325ae8bd54313e2173e3dc5f77ee3ac4e
 --- /dev/null
 +++ b/beintaskbot-main/tests/test_ai_scoped_documents_ui.cjs
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +/* Strict scoped document UI: actual DOM, synthetic data, no shared requests. */
 +const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 +const {JSDOM}=require('jsdom');
@@ -980,6 +994,7 @@ index 0000000000000000000000000000000000000000..dad97a1c5cfd25628a47af02a2679894
 +const host=()=>document.getElementById('aiScopedDocuments');
 +(async()=>{
 + ui.profile(profile(true,false,false));await settle();assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/platform/ai/agents');assert(document.getElementById('legacy').hidden);assert(!host().querySelector('[data-scoped-create]'));assert(![...host().querySelectorAll('button')].some(b=>b.textContent==='Edit'));
++ let releaseOptions;pending=new Promise(resolve=>releaseOptions=resolve);ui.profile(profile(false,true,false));await flush();assert(host().querySelector('[data-scoped-create]').disabled);host().querySelector('[data-scoped-create]').click();assert(!host().querySelector('form'));releaseOptions({ok:true,status:200,json:async()=>({success:true,result:options})});await settle();assert(!host().querySelector('[data-scoped-create]').disabled);
 + requests=[];ui.profile(profile(false,true,false));await settle();assert.equal(requests.length,1);assert(requests[0].url.includes('options'));assert(host().textContent.includes('viewing is not allowed'));host().querySelector('[data-scoped-create]').click();let form=host().querySelector('form');assert(form.elements.enabled.disabled);form.elements.name.value='New';form.elements.instructions.value='Known text';form.dispatchEvent(new window.Event('submit',{cancelable:true}));form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='POST').length,1);assert(!requests.some(r=>r.url.endsWith('/agents')&&r.method==='GET'));const created=JSON.parse(requests.find(r=>r.method==='POST').body);assert.equal(created.enabled,false);assert.equal(created.expected_tenant_id,'tenant-a');
 + requests=[];ui.profile(profile(true,false,true));await settle();let edits=[...host().querySelectorAll('button')].filter(b=>b.textContent==='Edit');assert.equal(edits.length,1);edits[0].click();host().querySelector('[data-scoped-cancel]').click();assert(!host().querySelector('form'));edits[0].click();form=host().querySelector('form');form.elements.name.value='Changed';form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();assert.equal(requests.filter(r=>r.method==='PATCH').length,1);assert.equal(JSON.parse(requests.find(r=>r.method==='PATCH').body).expected_version,1);
 + let release;pending=new Promise(resolve=>release=resolve);const old=ui.load();await flush();ui.profile(profile(false,false,false,'tenant-b'));release({ok:true,status:200,json:async()=>({success:true,result:[{id:'old',name:'PRIVATE OLD',instructions:'stale'}]})});await old;await settle();assert(!host().textContent.includes('PRIVATE OLD'));assert(!host().querySelector('[data-scoped-create]'));
@@ -1193,71 +1208,3 @@ index 0000000000000000000000000000000000000000..4e83f767bf1cdd5c4f68fbf84a72467d
 +    insert_run(2)
 +    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s AND agent_id=%s',(A,ids['self']))[0]['n']==2
 +    assert db.execute('SELECT deleted_at FROM saas_ai_agent_history_identities WHERE id=%s',(ids['self'],))[0]['deleted_at']
-diff --git a/beintaskbot-main/tests/test_ai_unused_archive_postgres.py b/beintaskbot-main/tests/test_ai_unused_archive_postgres.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..4857bf838f7ce8425120385152c848a9a511eb09
---- /dev/null
-+++ b/beintaskbot-main/tests/test_ai_unused_archive_postgres.py
-@@ -0,0 +1,62 @@
-+"""Real PostgreSQL admission races; never PGlite/provider execution."""
-+from concurrent.futures import ThreadPoolExecutor
-+import json
-+import pytest
-+from test_connect_channel_multiprocess import database
-+from test_tenant_support_inbox import db, A
-+from test_ai_scoped_documents import scoped, grants, ACTOR
-+from test_ai_scoped_documents_postgres import concurrent, worker_pid, wait_blocked
-+from tenant_ai_unused_archive import archive_unused_agent
-+from tenant_linear_policy import TenantLinearError
-+
-+
-+def archive(factory,target,ready):
-+    with factory() as conn:
-+        ready(conn.info.backend_pid)
-+        try:return archive_unused_agent(ACTOR,target,expected_version=1,connection=conn)
-+        except TenantLinearError as error:return error.status
-+
-+
-+def test_association_admitted_first_blocks_archive(concurrent,scoped):
-+    factory,ids=concurrent;database,_=scoped;grants(database,{'delete':'self'})
-+    event,pids,ready=worker_pid()
-+    with factory() as writer:
-+        writer.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']))
-+        with ThreadPoolExecutor(max_workers=1) as pool:
-+            future=pool.submit(archive,factory,ids['self'],ready)
-+            assert event.wait(4);wait_blocked(factory,pids[0],writer.info.backend_pid)
-+            writer.commit()
-+            assert future.result(timeout=12)==409
-+    with factory() as conn:assert conn.execute('SELECT archived_at FROM saas_ai_agents WHERE id=%s',(ids['self'],)).fetchone()['archived_at'] is None
-+
-+
-+def test_archive_fence_first_rejects_waiting_json_writer(concurrent,scoped):
-+    factory,ids=concurrent;database,_=scoped;grants(database,{'delete':'self'})
-+    event,pids,ready=worker_pid()
-+    def associate():
-+        with factory() as conn:
-+            ready(conn.info.backend_pid)
-+            try:
-+                conn.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s',(json.dumps({'allowed_primary_ids':[ids['self']]}),ids['peer']))
-+                conn.commit();return 'unexpected success'
-+            except Exception as error:return getattr(error,'sqlstate',None)
-+    with factory() as holder:
-+        holder.execute('SELECT id FROM saas_ai_agents WHERE id=%s FOR UPDATE',(ids['self'],))
-+        with ThreadPoolExecutor(max_workers=1) as pool:
-+            future=pool.submit(associate)
-+            assert event.wait(4);wait_blocked(factory,pids[0],holder.info.backend_pid)
-+            result=archive_unused_agent(ACTOR,ids['self'],expected_version=1,connection=holder)
-+            assert result['archived']
-+            assert future.result(timeout=12)=='23514'
-+    with factory() as conn:assert not conn.execute('SELECT expert_policy FROM saas_ai_agents WHERE id=%s',(ids['peer'],)).fetchone()['expert_policy']
-+
-+
-+def test_revoked_membership_seen_before_archive(concurrent,scoped):
-+    factory,ids=concurrent;database,_=scoped;grants(database,{'delete':'self'})
-+    event,pids,ready=worker_pid()
-+    with factory() as revoker:
-+        revoker.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s AND telegram_id=31',(A,))
-+        with ThreadPoolExecutor(max_workers=1) as pool:
-+            future=pool.submit(archive,factory,ids['self'],ready)
-+            assert event.wait(4);wait_blocked(factory,pids[0],revoker.info.backend_pid)
-+            revoker.commit();assert future.result(timeout=12)==403

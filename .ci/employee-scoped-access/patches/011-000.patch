@@ -1,3 +1,95 @@
+diff --git a/beintaskbot-main/tenant_crm_native_task_api.py b/beintaskbot-main/tenant_crm_native_task_api.py
+index 386fdbf273c399a30fd08128351f9dcaca53e106..5d91959766626ba9f98865cbf5277aae7dbcdcf3 100644
+--- a/beintaskbot-main/tenant_crm_native_task_api.py
++++ b/beintaskbot-main/tenant_crm_native_task_api.py
+@@ -5,6 +5,7 @@ from uuid import UUID
+ from aiohttp import web
+ from tenant_crm_native_tasks import create_task,get_task,list_tasks,update_task,set_task_state,archive_task,task_options,NativeTaskAccessError,task_access_allowed
+ from tenant_policy import TenantPolicy
++from tenant_scoped_access import scoped_access_enabled
+ from tenant_linear_policy import TenantLinearError
+ from tenant_request_origin import require_json_post
+ from tenant_task_flow import query as flow_query,read as read_flow,TaskFlowError
+@@ -13,7 +14,8 @@ from tenant_crm_request_context import native_policy_profile
+ def _jsonable(value):
+     if isinstance(value,UUID):return str(value)
+     if isinstance(value,(date,datetime)):return value.isoformat()
+-    if isinstance(value,dict):return {k:_jsonable(v) for k,v in value.items()}
++    if isinstance(value,dict):return {k:_jsonable(v) for k,v in value.items()
++        if k not in {'access_responsible_id','access_responsible_department_id'}}
+     if isinstance(value,list):return [_jsonable(v) for v in value]
+     return value
+ 
+@@ -33,9 +35,11 @@ def handler(member_from_request,origin,logger):
+         profile=member_from_request(request)
+         profile=native_policy_profile(profile) if profile else None
+         policy=TenantPolicy(profile or {})
+-        if not profile or not (policy.allows('tasks') or
+-                any(str(item).startswith('tasks:') for item in (profile.get('permissions') or [])) or
+-                any(policy.allows_action('tasks', action) for action in ('view', 'create', 'update', 'delete'))):
++        # Assignment is a row-level read/completion exception. Do not require a
++        # generic read/update grant before the transactional store evaluates it.
++        if not profile or profile.get('active') is False:
++            return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
++        if not scoped_access_enabled() and not any(policy.allows_action('tasks', action) for action in ('view','create','update','delete')):
+             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+         tenant=str(profile['tenant_id']); actor=int(profile['telegram_id']); task_id=request.match_info.get('id')
+         if task_id:
+@@ -45,7 +49,7 @@ def handler(member_from_request,origin,logger):
+             params=flow_query(request,profile)
+             if request.method=='GET':
+                 _expected(request.query,tenant,actor)
+-                if not policy.allows_action('tasks','view'):
++                if not scoped_access_enabled() and not policy.allows_action('tasks','view'):
+                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+                 if not task_id and request.query.get('options')=='1':
+                     options=await asyncio.to_thread(task_options,tenant,actor,policy.privileged,
+@@ -55,10 +59,10 @@ def handler(member_from_request,origin,logger):
+                     result=await asyncio.to_thread(read_flow,profile,source='native',task_id=task_id,search=request.query.get('search',''))
+                     return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store'})
+                 if task_id:
+-                    row=await asyncio.to_thread(get_task,tenant,task_id)
+-                    if not _allowed(policy,row,actor):return web.json_response({'success':False,'error':'not_found'},status=404)
++                    row=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor)
++                    if not row:return web.json_response({'success':False,'error':'not_found'},status=404)
+                     return web.json_response({'success':True,'task':_jsonable(row)},headers={'Cache-Control':'no-store'})
+-                rows=await asyncio.to_thread(list_tasks,tenant,search=request.query.get('search',''),responsible_id=None if policy.privileged else actor,scope=policy.pipeline_scope() if profile.get('role')=='manager' else None,limit=100)
++                rows=await asyncio.to_thread(list_tasks,tenant,search=request.query.get('search',''),actor_id=actor,limit=100)
+                 return web.json_response({'success':True,'tasks':_jsonable(rows)},headers={'Cache-Control':'no-store'})
+             require_json_post(request,origin)
+             data=await request.json()
+@@ -71,7 +75,7 @@ def handler(member_from_request,origin,logger):
+                     return web.json_response({'success':False,'error':'invalid_task_version'},status=400)
+                 version={'expected_updated_at':data.pop('expected_updated_at')}
+             permission_action='create' if not task_id else ('delete' if data.get('action')=='archive' else 'update')
+-            if not policy.allows_action('tasks',permission_action):
++            if (data.get('action')!='complete' or not scoped_access_enabled()) and not policy.allows_action('tasks',permission_action):
+                 return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+             if not task_id:
+                 if set(data)-{'deal_id','text','responsible_id','due_at','request_id'}:return web.json_response({'success':False,'error':'invalid_fields'},status=400)
+@@ -80,19 +84,17 @@ def handler(member_from_request,origin,logger):
+                 if not policy.privileged and policy.requires_task_approval(creator_id=actor,executor_id=responsible):return web.json_response({'success':False,'error':'approval_required'},status=403)
+                 row=await asyncio.to_thread(create_task,tenant,data.get('deal_id'),data.get('text'),responsible,due_at=data.get('due_at'),created_by=actor,idempotency_key=data.get('request_id'),actor_id=actor)
+             else:
+-                current=await asyncio.to_thread(get_task,tenant,task_id)
+-                if not _allowed(policy,current,actor):return web.json_response({'success':False,'error':'not_found'},status=404)
++                current=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor,operation='complete' if data.get('action')=='complete' else permission_action)
++                if not current:return web.json_response({'success':False,'error':'not_found'},status=404)
+                 action=data.get('action')
+                 if action=='archive' and data=={'action':'archive'}:
+-                    if not policy.privileged and int(current.get('created_by') or 0)!=actor:return web.json_response({'success':False,'error':'forbidden'},status=403)
+                     result=await asyncio.to_thread(archive_task,tenant,task_id,actor_id=actor,**version)
+                     return web.json_response({'success':True,'archived':result})
+                 if action in {'complete','reopen'} and data=={'action':action}:
+-                    if action=='complete' and not policy.privileged and policy.requires_task_approval(creator_id=int(current.get('created_by') or 0),executor_id=int(current.get('responsible_id') or 0),completion=True):return web.json_response({'success':False,'error':'approval_required'},status=403)
+                     row=await asyncio.to_thread(set_task_state,tenant,task_id,'completed' if action=='complete' else 'open',actor_id=actor,**version)
+                 elif action=='update' and not (set(data)-{'action','text','responsible_id','due_at'}):
+                     responsible=int(data.get('responsible_id') or current['responsible_id'])
+-                    if not policy.privileged and responsible!=actor:return web.json_response({'success':False,'error':'forbidden_assignment'},status=403)
++                    if not policy.privileged and (not scoped_access_enabled() or responsible!=int(current['responsible_id'])) and responsible!=actor:return web.json_response({'success':False,'error':'forbidden_assignment'},status=403)
+                     row=await asyncio.to_thread(update_task,tenant,task_id,data.get('text',current['text']),responsible,due_at=data.get('due_at',current['due_at']),actor_id=actor,**version)
+                 else:return web.json_response({'success':False,'error':'invalid_action'},status=400)
+             return web.json_response({'success':True,'task':_jsonable(row)},headers={'Cache-Control':'no-store'})
 diff --git a/beintaskbot-main/tenant_crm_native_tasks.py b/beintaskbot-main/tenant_crm_native_tasks.py
 index d337530b48ac48dd1f9c995bf7a3f92be527fe01..544a5644630b9e765811852f7de558dcf3961a19 100644
 --- a/beintaskbot-main/tenant_crm_native_tasks.py
@@ -1201,143 +1293,3 @@ index 0000000000000000000000000000000000000000..01735c94dbee2d679e2733fb9e6a376f
 +      changed_type TEXT NOT NULL, changed_id UUID NOT NULL, relation TEXT NOT NULL,
 +      event_id UUID NOT NULL, PRIMARY KEY(tenant_id,changed_type,changed_id,relation),
 +      FOREIGN KEY(tenant_id,event_id) REFERENCES saas_crm_relation_outbox(tenant_id,id))''')
-diff --git a/beintaskbot-main/tenant_crm_relation_store.py b/beintaskbot-main/tenant_crm_relation_store.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..0e9d4286e651d3cc9a6f8905ec188c6d48ced3a9
---- /dev/null
-+++ b/beintaskbot-main/tenant_crm_relation_store.py
-@@ -0,0 +1,134 @@
-+"""Dormant transactional relationship journal. No routes or workers call it.
-+
-+All primitives use the caller's transaction. No legacy external ID is adopted,
-+no whole-record sync event is created, and no permission is inferred from a
-+queued intent. The existing request-time 409 gate intentionally remains.
-+"""
-+import json
-+import uuid
-+
-+from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
-+from tenant_crm_relation_contract import RecordRef, RelationIntent
-+from tenant_crm_relation_identity import current_binding, read_identity
-+
-+ENTITIES = {
-+    'deal': ('deals', 'saas_crm_native_deals'),
-+    'contact': ('customers', 'saas_crm_native_contacts'),
-+    'company': ('companies', 'saas_crm_native_companies'),
-+}
-+RELATIONS = {'deal_contact': ('deal', 'contact_id', 'contact'),
-+             'contact_company': ('contact', 'company_id', 'company')}
-+
-+
-+def _lock_resources(cur, tenant, actor, source, records):
-+    # Tenant key lock also fences insertion of a newly preferred integration
-+    # (a missing OAuth row cannot be protected by locking existing rows only).
-+    cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR UPDATE', (tenant,))
-+    if not cur.fetchone():
-+        raise CRMAccessError('relation_resource_unavailable')
-+    module, _ = ENTITIES[source.entity_type]
-+    if type(actor) is not int or actor <= 0:
-+        raise CRMAccessError('relation_human_actor_required')
-+    profile = current_access(cur, tenant, actor, module, 'update')
-+    rows = {}
-+    # Same ordering for forward and reverse-card operations.
-+    for ref in sorted(set(records) | {source}, key=lambda ref: (ref.entity_type, ref.internal_id)):
-+        resource_module, table = ENTITIES[ref.entity_type]
-+        if ref == source:
-+            row = locked_resource(cur, profile, resource_module, 'update', table, tenant, ref.internal_id)
-+        else:
-+            cur.execute(f'''SELECT * FROM {table} WHERE tenant_id=%s::uuid
-+              AND id=%s::uuid AND archived_at IS NULL FOR UPDATE''', (tenant, ref.internal_id))
-+            row = cur.fetchone()
-+        if not row:
-+            raise CRMAccessError('relation_resource_unavailable')
-+        rows[ref] = row
-+    return rows
-+
-+
-+def _settings(cur, binding, relation):
-+    entity, field, _ = RELATIONS[relation]
-+    cur.execute('''SELECT provider,sync_direction,allowed_fields FROM saas_crm_provider_settings
-+      WHERE tenant_id=%s::uuid AND entity_type=%s FOR SHARE''', (binding.tenant_id, entity))
-+    row = cur.fetchone() or {}
-+    if (row.get('provider') != binding.provider
-+            or row.get('sync_direction') not in ('to_external', 'bidirectional')
-+            or field not in (row.get('allowed_fields') or [])):
-+        raise CRMAccessError('relation_sync_disabled', 409)
-+
-+
-+def _identities(cur, intent):
-+    if current_binding(cur, intent.changed.binding.tenant_id) != intent.changed.binding:
-+        raise CRMAccessError('relation_connection_changed', 409)
-+    for identity in (intent.changed, intent.before, intent.after):
-+        if identity and read_identity(cur, identity.binding, identity.record) != identity:
-+            raise CRMAccessError('relation_identity_changed', 409)
-+    _settings(cur, intent.changed.binding, intent.relation)
-+
-+
-+def change_relation(cur, *, tenant, actor, source, changed, relation, before, after,
-+                    expected_revision, expectation, event_id=None):
-+    """Atomic local FK change + journal; caller commits or rolls back BOTH.
-+
-+    Expected provider digest comes from a binding-verified complete observation.
-+    This is not a public API and does not enable outbound delivery.
-+    """
-+    kind, column, target_kind = RELATIONS[relation]
-+    if changed.entity_type != kind or any(ref and ref.entity_type != target_kind for ref in (before, after)):
-+        raise CRMAccessError('invalid_relation', 409)
-+    records = [ref for ref in (changed, before, after) if ref]
-+    rows = _lock_resources(cur, tenant, actor, source, records)
-+    previous = rows[changed]
-+    if (previous['updated_at'] != expected_revision
-+            or str(previous.get(column) or '') != (before.internal_id if before else '')):
-+        raise CRMAccessError('relation_local_conflict', 409)
-+    binding = current_binding(cur, tenant)
-+    if not binding:
-+        raise CRMAccessError('relation_connection_unavailable', 409)
-+    refs = {ref: read_identity(cur, binding, ref) for ref in records}
-+    # Validate source semantics before any mutation.
-+    ident = event_id or str(uuid.uuid4())
-+    intent = RelationIntent(ident, actor, source, relation, refs[changed],
-+        refs.get(before), refs.get(after), expected_revision, expectation)
-+    _settings(cur, binding, relation)
-+    table = ENTITIES[kind][1]
-+    cur.execute(f'''UPDATE {table} SET {column}=%s::uuid,updated_at=clock_timestamp()
-+      WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING updated_at''',
-+      (after.internal_id if after else None, tenant, changed.internal_id))
-+    revision = cur.fetchone()['updated_at']
-+    intent = RelationIntent(ident, actor, source, relation, refs[changed],
-+        refs.get(before), refs.get(after), revision, expectation)
-+    cur.execute('''INSERT INTO saas_crm_relation_outbox
-+      (id,tenant_id,changed_type,changed_id,relation,intent,intent_hash)
-+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s::jsonb,%s)''',
-+      (ident, tenant, kind, changed.internal_id, relation, json.dumps(intent.to_payload()), intent.fingerprint()))
-+    cur.execute('''INSERT INTO saas_crm_relation_heads(tenant_id,changed_type,changed_id,relation,event_id)
-+      VALUES(%s::uuid,%s,%s::uuid,%s,%s::uuid)
-+      ON CONFLICT(tenant_id,changed_type,changed_id,relation)
-+      DO UPDATE SET event_id=EXCLUDED.event_id''', (tenant, kind, changed.internal_id, relation, ident))
-+    return intent
-+
-+
-+def reauthorize(cur, row):
-+    """Locks source U, graph, identity, connection and policy until I/O ends."""
-+    intent = RelationIntent.from_payload(row['intent'])
-+    tenant = intent.changed.binding.tenant_id
-+    if (intent.fingerprint() != row['intent_hash'] or str(row['id']) != intent.event_id
-+            or str(row['tenant_id']) != tenant or row['relation'] != intent.relation
-+            or row['changed_type'] != intent.changed.record.entity_type
-+            or str(row['changed_id']) != intent.changed.record.internal_id):
-+        raise CRMAccessError('relation_event_changed', 409)
-+    records = [ref.record for ref in (intent.changed, intent.before, intent.after) if ref]
-+    rows = _lock_resources(cur, tenant, intent.actor_id, intent.source, records)
-+    _identities(cur, intent)
-+    cur.execute('''SELECT event_id FROM saas_crm_relation_heads WHERE tenant_id=%s::uuid
-+      AND changed_type=%s AND changed_id=%s::uuid AND relation=%s FOR SHARE''',
-+      (tenant, intent.changed.record.entity_type, intent.changed.record.internal_id, intent.relation))
-+    head = cur.fetchone()
-+    current = rows[intent.changed.record]
-+    column = RELATIONS[intent.relation][1]
-+    if (not head or str(head['event_id']) != intent.event_id
-+            or current['updated_at'] != intent.local_revision
-+            or str(current.get(column) or '') != (intent.after.record.internal_id if intent.after else '')):
-+        raise CRMAccessError('relation_superseded', 409)
-+    return intent

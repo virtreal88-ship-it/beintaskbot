@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'employee-scoped-access'
           manifest_bytes = b''.join(p.read_bytes() for p in sorted(root.glob('manifest-*.json-part')))
-          assert hashlib.sha256(manifest_bytes).hexdigest() == '50ac19d7e63a96a4e2edc44c63ad0c1680bac5245c099c799da4c30061fceaf6'
+          assert hashlib.sha256(manifest_bytes).hexdigest() == '3c17c43fc8de107526012599ec655aa43d063050340144e655843b602c98564e'
           manifest = json.loads(manifest_bytes)
           def git(*args, data=None):
               return subprocess.check_output(['git', *args], input=data).decode().strip()
@@ -76,7 +76,7 @@ jobs:
               assert hashlib.sha256(content).hexdigest() == patch['sha256']
               subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', '-'], input=content, check=True)
           actual = git('write-tree')
-          assert actual == manifest['target_tree'] == 'e964ef5fa1c52add29ec7b9b343e6048f61db98e', actual
+          assert actual == manifest['target_tree'] == 'bb08e951fa5ef84c8cb6e020058fc1d11c60d4a9', actual
           assert not git('diff', '--name-only')
           print('Verified exact final source tree:', actual)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -97,6 +97,8 @@ jobs:
         run: >-
           python -m pytest -q -rs
           tests/test_scoped_access_foundation.py
+          tests/test_scope_activation_preflight.py
+          tests/test_scope_activation_preflight_bootstrap.py
           tests/test_scoped_access_foundation_postgres.py
           tests/test_employee_scope_settings_postgres.py
           tests/test_employee_creation_scopes.py
@@ -129,6 +131,7 @@ jobs:
           tests/test_support_inbox_scopes_postgres.py
           tests/test_instruction_member_access_postgres.py
           tests/test_ai_scoped_documents.py
+          tests/test_ai_scoped_documents_browser_bootstrap.py
           tests/test_ai_scoped_documents_postgres.py
           tests/test_ai_unused_archive.py
           tests/test_ai_unused_archive_postgres.py
@@ -201,11 +204,13 @@ jobs:
           node tests/test_tenant_ai_agent_connect_scope_ui.cjs
       - name: Chromium employee matrix, tasks and CRM
         run: |
-          node tests/employee_scope_matrix_browser.cjs
-          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py
-          node tests/test_native_company_deal_source_browser.cjs
-          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres
-          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history
+          status=0
+          node tests/employee_scope_matrix_browser.cjs || status=1
+          python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py || status=1
+          node tests/test_native_company_deal_source_browser.cjs || status=1
+          python -m pytest -q -rs tests/test_task_read_save_flow_postgres.py -k actual_tasks_app_reads_and_saves_through_cookie_postgres || status=1
+          python -m pytest -q -rs tests/test_contacts_directory_postgres.py -k actual_contacts_directory_app_uses_current_cookie_postgres_and_cached_history || status=1
+          exit "$status"
       - name: Save synthetic matrix screenshots
         if: always()
         uses: actions/upload-artifact@v4

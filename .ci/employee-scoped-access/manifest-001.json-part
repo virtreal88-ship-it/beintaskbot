@@ -1,3 +1,8 @@
+        "beintaskbot-main/tests/test_shared_integration_scopes.py",
+        "beintaskbot-main/tests/test_shared_integration_scopes_postgres.py",
+        "beintaskbot-main/tests/test_shared_integration_settings.cjs",
+        "beintaskbot-main/tests/test_support_access_ownership_postgres.py",
+        "beintaskbot-main/tests/test_support_ai_projection_scopes.py",
         "beintaskbot-main/tests/test_support_inbox_scopes.py",
         "beintaskbot-main/tests/test_support_inbox_scopes_postgres.py",
         "beintaskbot-main/tests/test_support_inbox_scopes_ui.cjs",
@@ -56,15 +61,16 @@
         "beintaskbot-main/tests/test_tenant_web_routes.py",
         "beintaskbot-main/ui/src/main.jsx",
         "docs/crm-relation-delivery-safety.md",
-        "docs/crm-scoped-scalar-sync.md"
+        "docs/crm-scoped-scalar-sync.md",
+        "docs/scope-activation-preflight.md"
       ],
-      "sha256": "782c17641d20b103c158a8eabe177b37dbbec5909f1c19df4d62e0a5b132afc6",
-      "bytes": 43936,
+      "sha256": "47f342331360c551936157912b69ad5ed1ff0836ed753e71791cdb24833ca18e",
+      "bytes": 49481,
       "parts": [
         {
           "file": "patches/025-000.patch",
-          "sha256": "782c17641d20b103c158a8eabe177b37dbbec5909f1c19df4d62e0a5b132afc6",
-          "bytes": 43936
+          "sha256": "47f342331360c551936157912b69ad5ed1ff0836ed753e71791cdb24833ca18e",
+          "bytes": 49481
         }
       ]
     }
