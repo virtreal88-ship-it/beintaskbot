@@ -12,7 +12,7 @@
     data?.member?.role, data?.member?.active, [...(data?.member?.permissions || [])].sort(),
     Object.fromEntries(Object.entries(data?.capabilities || {}).filter(([key]) => !['deal_board', 'notification_events'].includes(key))),
     Object.fromEntries(Object.entries(data?.role_permissions || {}).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])),
-    binding(data)?.can_review_news === true, (data?.integrations || []).map(row => [row.provider, row.management_actions, row.status_only])]));
+    binding(data)?.can_review_news === true, (Array.isArray(data?.integrations) ? data.integrations : []).map(row => [row.provider, row.management_actions, row.status_only])]));
   const snapshot = data => JSON.stringify([data?.member, data?.integrations]);
   const employees = item => item.host === 'staffManagement';
   // Employee drafts do not depend on integration health or news-review bindings.
