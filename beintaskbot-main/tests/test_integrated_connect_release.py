@@ -5,7 +5,7 @@ import uuid
 from unittest.mock import Mock, patch, AsyncMock
 import pytest
 from test_tenant_support_inbox import (
-    database, db, A, B, CA, CB, AGENT, PROFILE, seed_job, config_company,
+    database, db, PGliteStartupConnection, A, B, CA, CB, AGENT, PROFILE, seed_job, config_company,
     manual, store, summary, agents, actions, connect_ai,
 )
 import tenant_ai_agent_run_store as runs
@@ -130,12 +130,22 @@ def test_startup_prepares_pilot_case_schema_repeatably_before_signed_ingress(flo
     db.execute('DROP TABLE IF EXISTS saas_ai_pilot_followups');db.commit()
     assert not db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
     monkeypatch.setattr(transport,'_verify_signature',lambda *_:True)
-    monkeypatch.setattr(tenant_platform_core,'_connect',lambda:db)
+    connections=[]
+    def startup_connection():
+        connection=PGliteStartupConnection(db);connections.append(connection);return connection
+    monkeypatch.setattr(tenant_platform_core,'_connect',startup_connection)
     monkeypatch.setattr(tenant_platform_core,'_fernet',transport._fernet)
     secret=transport._fernet().encrypt(json.dumps({'webhook_secret':'test-secret'}).encode())
     db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
-    prepare_database();db.commit()
-    prepare_database();db.commit()
+    settings=db.query("SELECT current_setting('transaction_timeout') AS transaction_timeout,current_setting('lock_timeout') AS lock_timeout")
+    for _ in range(2):
+        prepare_database()
+        assert connections[-1].closed
+        assert not db.transaction
+        assert db.process.poll() is None
+        assert not db.query("SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'")
+        assert db.query("SELECT current_setting('transaction_timeout') AS transaction_timeout,current_setting('lock_timeout') AS lock_timeout")==settings
+    assert len(connections)==2 and connections[0] is not connections[1]
     assert db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
     db.commit()
 

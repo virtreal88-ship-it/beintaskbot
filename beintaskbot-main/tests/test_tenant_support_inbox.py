@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
+from types import SimpleNamespace
 import uuid
 from unittest.mock import patch
 import pytest
@@ -97,6 +98,58 @@ class Cursor:
     def fetchone(self):return self.rows.pop(0) if self.rows else None
 
 
+class PGliteStartupConnection:
+    """Exclusive borrowed handle for SQL-only startup tests on shared PGlite.
+
+    PGlite has one session. Read its real version, then explicitly undo the
+    session state owned by this handle on close without killing the fixture.
+    This is NOT evidence of native backend termination, isolation or timing;
+    test_startup_transaction_budget_postgres exercises those on native PG.
+    """
+    def __init__(self,db):
+        assert not db.transaction, 'Commit fixture setup before borrowing startup connection'
+        assert not getattr(db,'_startup_borrowed',False), 'Startup borrow cannot overlap'
+        assert not db.query("SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'"), 'Fixture must not own session locks'
+        settings=db.query("""SELECT current_setting('server_version_num') AS server_version,
+            current_setting('lock_timeout') AS lock_timeout,
+            current_setting('transaction_timeout',true) AS transaction_timeout""")[0]
+        self.info=SimpleNamespace(server_version=int(settings.pop('server_version')))
+        self._settings=settings
+        self._db=db
+        self.closed=False
+        db._startup_borrowed=True
+
+    def _open(self):
+        if self.closed:raise RuntimeError('Startup test connection is closed')
+
+    def execute(self,statement,params=()):
+        self._open()
+        return self._db.execute(statement,params)
+
+    def cursor(self):
+        self._open()
+        return Cursor(self)
+
+    def commit(self):
+        self._open()
+        self._db.commit()
+
+    def rollback(self):
+        self._open()
+        self._db.rollback()
+
+    def close(self):
+        if self.closed:return
+        self._db.rollback()
+        # No caller locks existed at admission, so all session locks belong
+        # to this exclusive startup borrow. Run cleanup outside a transaction.
+        self._db.query('SELECT pg_advisory_unlock_all()')
+        for name,value in self._settings.items():
+            if value is not None:self._db.query('SELECT set_config(%s,%s,false)',(name,value))
+        self.closed=True
+        self._db._startup_borrowed=False
+
+
 @pytest.fixture(scope='module')
 def database():
     if not (ROOT/'.support-test-deps/node_modules/@electric-sql/pglite').exists():
@@ -138,6 +191,52 @@ def prepare_manual_developer():
     connection.execute("INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by) VALUES(%s::uuid,%s::uuid,%s,TRUE,11) ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET enabled=TRUE",(A,CA,target))
     connection.commit()
     return target
+
+
+def test_pglite_startup_borrow_reads_real_version_and_cleans_failed_transaction(db):
+    from contextlib import closing
+    before=db.query("SELECT current_setting('lock_timeout') AS lock_timeout,current_setting('transaction_timeout') AS transaction_timeout")
+    version=int(db.query("SELECT current_setting('server_version_num') AS version")[0]['version'])
+    original=db.query('SELECT name FROM saas_tenants WHERE id=%s::uuid',(A,))
+    connection=PGliteStartupConnection(db)
+    failure=RuntimeError('Synthetic migration failure')
+    with pytest.raises(RuntimeError) as caught:
+        with closing(connection):
+            assert connection.info.server_version==version
+            connection.execute("SET transaction_timeout='5s'")
+            connection.execute("SET lock_timeout='2s'")
+            connection.commit()  # Session settings survive a nested commit.
+            connection.execute("SELECT pg_advisory_lock(hashtextextended('startup-adapter-test',0))")
+            connection.execute("UPDATE saas_tenants SET name='Must rollback' WHERE id=%s::uuid",(A,))
+            raise failure
+    assert caught.value is failure
+    assert connection.closed and not db.transaction
+    assert db.process.poll() is None
+    assert db.query('SELECT name FROM saas_tenants WHERE id=%s::uuid',(A,))==original
+    assert db.query("SELECT current_setting('lock_timeout') AS lock_timeout,current_setting('transaction_timeout') AS transaction_timeout")==before
+    assert not db.query("SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'")
+    connection.close()  # Idempotent without consuming/closing the fixture.
+    with pytest.raises(RuntimeError,match='closed'):connection.execute('SELECT 1')
+    with closing(PGliteStartupConnection(db)) as reopened:
+        assert reopened is not connection and reopened.info.server_version==version
+        assert reopened.execute('SELECT 1 AS available')==[{'available':1}]
+
+
+def test_pglite_startup_borrow_cannot_discard_caller_transaction_or_locks(db):
+    from contextlib import closing
+    db.execute('SELECT 1')
+    with pytest.raises(AssertionError,match='Commit fixture setup'):PGliteStartupConnection(db)
+    assert db.transaction
+    db.rollback()
+    db.query("SELECT pg_advisory_lock(hashtextextended('caller-owned-test',0))")
+    try:
+        with pytest.raises(AssertionError,match='must not own session locks'):PGliteStartupConnection(db)
+        assert db.query("SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'")
+    finally:
+        db.query("SELECT pg_advisory_unlock(hashtextextended('caller-owned-test',0))")
+    with closing(PGliteStartupConnection(db)) as connection:
+        with pytest.raises(AssertionError,match='cannot overlap'):PGliteStartupConnection(db)
+        assert not connection.closed
 
 
 def manual(**values):
