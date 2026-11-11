@@ -19,3 +19,13 @@ not trigger retries or return keys, provider bodies, or customer data.
 No model setting, default, catalogue policy, tariff, budget reservation, grant,
 AI flag, or historical record changes. No generation or compatibility probe.
 The separate retirement and Luna activation work is not part of this change.
+
+## Recorded-voice permission read check
+
+The owner-only `POST /api/platform/chat/ai/recorded-voice-access` performs a
+fixed `GET /v1/audio/consent_phrases` with the saved company Chat AI key. The
+request body contains only the expected tenant and user identity; the provider
+response body is discarded. The result reports the HTTP status and whether
+`api.voices.read` was verified. It always reports recorded-voice creation access
+as `not_checked`: this read-only operation does not test `api.voices.write` or
+create a consent or voice resource.

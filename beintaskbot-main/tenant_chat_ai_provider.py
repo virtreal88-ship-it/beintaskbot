@@ -134,6 +134,23 @@ def check_realtime_model(key,model):
             'error':messages.get(status,'OpenAI отклонил проверку модели.')}
 
 
+def check_voice_consent_phrase_read_access(key):
+    """Check the company's read permission for recorded-voice consent phrases.
+
+    This is a bounded GET only. It never returns or stores the provider body,
+    and it deliberately cannot verify the write permission needed to create a
+    voice or consent recording.
+    """
+    response=requests.get('https://api.openai.com/v1/audio/consent_phrases',
+        headers={'Authorization':'Bearer '+key},timeout=(3,10),allow_redirects=False)
+    status=int(response.status_code)
+    return {
+        'http_status':status,
+        'api_voices_read_verified':status==200,
+        'recorded_voice_creation_access':'not_checked',
+    }
+
+
 def probe_model(key, model):
     """One minimal, context-free Responses call to confirm a selected model."""
     result = generate(key, model, 'summary', [], 'Return exactly OK.',

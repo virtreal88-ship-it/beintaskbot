@@ -4,16 +4,19 @@ import re
 from tenant_platform import _connect, _fernet
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_policy import configuration
-from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model
+from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model, check_realtime_model, check_voice_consent_phrase_read_access as provider_voice_consent_read_access
 from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_shared_integration_access import operation, admitted, principal
 
 
-def authorize(cur, session):
+def authorize(cur, session, *, owner_only=False):
     """Allow current scoped management or the unchanged legacy owner/admin path."""
-    from tenant_shared_integration_access import admitted, principal
-    if admitted(session, 'chat_ai'): return principal(session)
+    from tenant_shared_integration_access import admitted, principal, current_role
+    if admitted(session, 'chat_ai'):
+        if owner_only and current_role(session, 'chat_ai')!='owner':
+            raise TenantLinearError('Company owner access required.',403)
+        return principal(session)
     if not isinstance(session, dict):
         raise TenantLinearError('İcazə yoxdur.', 403)
     tenant = identifier(session.get('tenant_id'))
@@ -31,6 +34,8 @@ def authorize(cur, session):
         raise TenantLinearError('Bu şirkətdə Chat AI ayarlarını idarə etmək mümkün deyil.', 403)
     if person.get('role') not in {'owner', 'admin'}:
         raise TenantLinearError('Chat AI ayarlarını yalnız şirkət sahibi və ya admin dəyişə bilər.', 403)
+    if owner_only and person.get('role')!='owner':
+        raise TenantLinearError('Company owner access required.',403)
     return tenant, user
 
 
@@ -76,11 +81,11 @@ def read(session):
             return public(cur.fetchone(), tenant)
 
 
-def _company_key(session):
+def _company_key(session, *, owner_only=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, _ = authorize(cur, session)
+            tenant, _ = authorize(cur, session, owner_only=True) if owner_only else authorize(cur, session)
             cur.execute("SELECT secrets,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
             row = cur.fetchone() or {}
     metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
@@ -107,6 +112,12 @@ def realtime_model_availability(session,model):
     """Use only the authorized company's saved key; never return the key."""
     _tenant, _metadata, key = _company_key(session)
     return check_realtime_model(key,model)
+
+
+def recorded_voice_read_access(session):
+    """Read-only owner check using only the saved company Chat AI key."""
+    _tenant,_metadata,key=_company_key(session,owner_only=True)
+    return provider_voice_consent_read_access(key)
 
 
 @operation('chat_ai', 'update', data_arg='authorization')

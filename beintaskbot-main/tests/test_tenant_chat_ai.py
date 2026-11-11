@@ -82,6 +82,14 @@ class SettingsAuthorization(unittest.TestCase):
                 cur=Mock();cur.fetchone.return_value={'role':role,'active':True,'status':status}
                 self.assertEqual(self.authorize(cur,SESSION),(TENANT,20))
 
+    def test_recorded_voice_read_probe_requires_company_owner(self):
+        cur=Mock();cur.fetchone.return_value={'role':'owner','active':True,'status':'active'}
+        self.assertEqual(self.authorize(cur,SESSION,owner_only=True),(TENANT,20))
+        cur=Mock();cur.fetchone.return_value={'role':'admin','active':True,'status':'active'}
+        with self.assertRaises(TenantLinearError) as error:
+            self.authorize(cur,SESSION,owner_only=True)
+        self.assertEqual(error.exception.status,403)
+
     def test_other_roles_inactive_members_and_suspended_tenants_are_denied(self):
         for person in (
             {'role':'manager','active':True,'status':'active'},
