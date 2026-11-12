@@ -13,14 +13,20 @@ class Store(unittest.TestCase):
         self.cur = self.conn.cursor.return_value.__enter__.return_value
         self.schema = Mock(); self.read_workflow = Mock(return_value={})
         self.fernet = Mock(); self.fernet.decrypt.return_value = b'{"access_token":"tenant-key"}'
+        # Profile loading has its own scoped-access tests; retain one fixture row
+        # here while exercising the receipt store's current authority checks.
+        profile_reader = patch('tenant_scoped_access_store.read_access_profile',
+                               side_effect=lambda cur, *args, **kwargs: cur.fetchone())
+        profile_reader.start(); self.addCleanup(profile_reader.stop)
         self.policy = Mock(); self.policy.allows.return_value = True; self.policy.can_access_deal.return_value = True
+        self.policy.action_scope.return_value = None
         self.module = loaders.load('tenant_chat_send_store', {'_connect': self.connect,
             'ensure_schema': self.schema, '_read_tenant_workflow': self.read_workflow,
             '_fernet': lambda: self.fernet, 'TenantPolicy': lambda person: self.policy},
             {'tenant_platform', 'tenant_chat_send_schema', 'tenant_policy'})
         self.person = {**SESSION, 'active': True, 'tenant_status': 'active', 'role': 'manager'}
         self.integration = {'status': 'connected', 'secrets': b'encrypted', 'account_domain': 'client.kommo.com', 'connected_at': 'version'}
-        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, None, self.integration]
+        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, None, None, self.integration]
 
     def reserve(self, existing=None, busy=None):
         self.cur.fetchone.side_effect = [*self.authority_rows, existing, busy]
