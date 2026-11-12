@@ -7,6 +7,41 @@ const route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'d
 const messages=[1,2,3].map(n=>({id:`message-${n}`,external_id:`external-${n}`,direction:n===3?'incoming':'outgoing',message_type:'text',body:`Message ${n}`,author_type:n===3?'customer':'operator',author_name:n===3?'Customer':'Operator',happened_at:`2026-10-21T10:0${n}:00Z`}));
 let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:true,result:{unread_count:readThrough.get(route.conversation_id)===messages.at(-1).id?0:unreadValue,dialogs:[{...route,unread_count:readThrough.get(route.conversation_id)===messages.at(-1).id?0:unreadValue,last_message_id:messages.at(-1).id,last_message_direction:messages.at(-1).direction,last_message_type:'text',last_message_text:messages.at(-1).body,last_message_at:messages.at(-1).happened_at}],channels:[],agents:[],attention_count:0,next_offset:null}});
 (async()=>{
+ for(const config of [
+  {name:'scoped read-only',pages:{dialogs:true},module:false,allowed:true},
+  {name:'explicit page denial',pages:{dialogs:false},module:true,allowed:false},
+  {name:'inactive member',pages:{dialogs:true},module:false,active:false,allowed:false},
+  {name:'legacy allowed',module:true,allowed:true},
+  {name:'legacy denied',module:false,allowed:false},
+ ]){
+  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app/dialogs',runScripts:'outside-only'}),w=dom.window,calls=[];
+  w.setTimeout=()=>1;w.clearTimeout=()=>{};
+  const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:config.active!==false},capabilities:{modules:{dialogs:config.module},...(config.pages?{pages:config.pages}:{})}};
+  w.tenantProfileSnapshot=profile;
+  w.fetch=async(url,options={})=>{const value=String(url);calls.push({url:value,method:options.method||'GET'});let result;
+   if(value.includes('/api/platform/me'))return {ok:true,json:async()=>profile};
+   if(value.includes('/dialogs/history'))result={dialog:{...route},messages:[...messages],next_before:null};
+   else if(value.includes('/dialogs/read'))result={updated:true};
+   else if(value.includes('/dialogs?'))result=latest().result;
+   else throw Error('Unexpected request '+value);
+   return {ok:true,json:async()=>({success:true,result})};
+  };
+  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js'])w.eval(read(file));
+  await settle();await w.tenantOperator.refresh();await settle();
+  assert.equal(w.tenantOperator.hasRight('dialogs'),config.allowed,config.name);
+  if(config.allowed){
+   assert.equal(w.document.querySelectorAll('[data-open-operator]').length,1,config.name+' loads assigned response');
+   await w.tenantOperator.openDialog(route);await settle();
+   assert.match(w.document.getElementById('chatRows').textContent,/Message 1/);
+   assert.equal(w.document.getElementById('sendChat').disabled,true);
+   assert.equal(w.document.getElementById('chatText').disabled,true);
+   const before=calls.length;w.document.getElementById('sendChat').click();await settle();assert.equal(calls.length,before,'read-only cannot send');
+  }else{
+   assert.equal(calls.filter(c=>c.url.includes('/dialogs?')).length,0,config.name+' never fetches list');
+   assert.equal(w.document.querySelector('[data-open-operator]'),null);
+  }
+  w.close();
+ }
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app/dialogs',runScripts:'outside-only'}),w=dom.window,calls=[],timers=new Map();let timerId=0;Object.defineProperty(w.document,'hidden',{configurable:true,value:false});
  w.setTimeout=(fn,delay=0)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};w.clearTimeout=id=>timers.delete(id);
  const member={tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},profile={member,capabilities:{modules:{dialogs:true}}};w.tenantProfileSnapshot=profile;w.AudioContext=class{constructor(){this.state='suspended';this.currentTime=1;soundCalls++;}resume(){this.state='running';return Promise.resolve();}createOscillator(){return{type:'',frequency:{value:0},connect(){},start(){soundCalls++;},stop(){}};}createGain(){return{gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}};}};

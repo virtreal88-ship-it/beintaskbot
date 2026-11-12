@@ -108,7 +108,12 @@
   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
   const afterLayout=callback=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(callback):Promise.resolve().then(callback);
   const canCreateSupport=()=>capabilities.support?.create??hasRight('support');
-  const hasRight=right=>!!member&&member.active!==false&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
+  // Page admission includes scoped dialog access; a coarse module grant does not.
+  // Per-dialog capabilities (including can_send) remain authoritative for actions.
+  const hasRight=right=>!!member&&member.active!==false&&(
+    right==='dialogs'&&typeof capabilities.pages?.dialogs==='boolean'
+      ?capabilities.pages.dialogs
+      :(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right))));
   function closeCopilotPanel(fromHistory=false){
     const panel=$('operatorCopilot');if(!panel)return;
     panel.querySelector('[data-copilot-voice]')?.endVoice?.();
