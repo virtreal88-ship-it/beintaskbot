@@ -13,9 +13,10 @@ Azerbaijani per utterance; pronunciation still requires a real listening check.
    review on the exact candidate SHA.
 2. Read the production lease through the official Railway SQL UI. Do not reset
    a live or uncertain lease. Apply `migrations/voice_lease_provider_kind.sql`
-   after `voice_lease_provider_open.sql`, before deploying the new worker.
-   This additive migration marks existing provenance unknown; it does not
-   manufacture an opening timestamp or close a lease.
+   after `voice_lease_provider_open.sql`, then apply
+   `migrations/voice_lease_hybrid_recovery.sql`, before deploying the new
+   worker. Existing rows are not rewritten and no opening timestamp is
+   manufactured.
 3. Deploy with `COPILOT_VOICE_TTS_PROVIDER` absent or `openai` first. The new
    schema protects overlap with old workers. Verify the SHA and healthy worker.
 4. Securely provision `ELEVENLABS_API_KEY` on the Railway **worker**, with access
@@ -31,11 +32,13 @@ Azerbaijani per utterance; pronunciation still requires a real listening check.
 
 ## Failure and rollback
 
-Hybrid/unknown leases have no automatic age recovery: OpenAI's documented
-maximum duration is not evidence that ElevenLabs is finished. Only confirmed
-provider closure and drained operations allow the exact fenced owner to release
-the row. Uncertain cleanup remains fail-closed. Never change a provider kind or
-timestamp to recover an old row.
+Confirmed `active` OpenAI and hybrid leases can be recovered on a later claim
+after the OpenAI Realtime maximum of 60 minutes plus five minutes of margin.
+ElevenLabs TTD closes after 20 seconds without client messages. A `starting`
+lease without a provider-open marker remains fail-closed. Normal Stop, tab close,
+and graceful Worker shutdown still release only after provider closure and
+in-flight operations are confirmed. Never change a provider kind or timestamp
+to recover an old row.
 
 Rollback the feature selection to `openai` for **new** sessions after normal
 cleanup. Leave the additive migration in place; older workers must remain
@@ -44,6 +47,7 @@ excluded in full because an ElevenLabs playback offset cannot safely truncate
 the upstream text item. Audio, response text and secrets must never enter logs.
 
 Official protocol references:
+- https://developers.openai.com/api/docs/guides/realtime-conversations
 - https://elevenlabs.io/docs/api-reference/text-to-dialogue/ttd-websocket
 - https://elevenlabs.io/docs/eleven-api/guides/how-to/websockets/realtime-tdd
 - https://elevenlabs.io/docs/overview/models

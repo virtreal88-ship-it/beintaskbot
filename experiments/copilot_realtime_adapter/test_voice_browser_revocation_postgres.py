@@ -52,7 +52,7 @@ class BrowserRevocationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 tenant_id uuid,actor_id bigint,channel_id uuid,conversation_id text,session_id uuid,owner_id uuid,
                 fence bigint,state text,lease_until timestamptz,updated_at timestamptz DEFAULT now(),
                 provider_opened_at timestamptz,closed_at timestamptz,PRIMARY KEY(tenant_id,actor_id))''')
-            for name in ('voice_lease_provider_open.sql','voice_lease_provider_kind.sql'):
+            for name in ('voice_lease_provider_open.sql','voice_lease_provider_kind.sql','voice_lease_hybrid_recovery.sql'):
                 conn.execute((Path(__file__).parents[2]/'beintaskbot-main'/'migrations'/name).read_text(encoding='utf-8'))
 
     @classmethod
