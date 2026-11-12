@@ -220,8 +220,35 @@ test('voice screen uses its animated orb as the only response interruption contr
  const screen=mountScreen(host,{language:'ru',preflight:async()=>({available:true}),isCurrent:()=>true});
  try{
   const orb=screen.querySelector('[data-voice-orb]');assert.equal(orb.tagName,'BUTTON');assert.equal(orb.disabled,true);
+  const close=screen.querySelector('[data-voice-close]');assert.ok(close,'the full-screen close control exists before voice scripts mount');
+  assert.equal(close.hidden,false);assert.equal(close.getAttribute('aria-label'),'Завершить разговор');
   assert.equal(screen.querySelector('.voice-session-talk'),null,'no separate Stop/interrupt button is rendered');
  }finally{await screen.disposeVoice();dom.window.close();}
+});
+
+test('full-screen X ends the server session and remains visible when closure is unconfirmed',async()=>{
+ for(const terminal of ['ended','end_unconfirmed']){
+  const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/',pretendToBeVisual:true});
+  const win=dom.window,host=win.document.querySelector('#host');let eventHandler,endCount=0;
+  win.mountExperimentalCopilotVoice=mountVoice;win.acquireTenantMicrophone=async()=>()=>{};
+  win.openExperimentalCopilotAudio=async()=>({mute(){},flush(){},stopNow(){},close:async()=>{}});
+  win.connectExperimentalCopilotVoice=async (_path,cb)=>{eventHandler=cb;await cb({type:'ready'});
+    return{send(event){if(event.type==='end')endCount++;},close:async()=>{}};};
+  const mountScreen=require('../docs/tenant-operator-copilot-voice.js');
+  const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
+  try{
+   await screen.startVoice();await tick();
+   screen.querySelector('[data-voice-close]').click();
+   assert.equal(endCount,1);assert.equal(screen.hidden,false,'X waits for the server terminal result');
+   await eventHandler({type:terminal});await tick();
+   assert.equal(screen.hidden,terminal==='ended');
+   if(terminal==='end_unconfirmed'){
+    assert.match(screen.querySelector('[role=status]').textContent,/не подтверждено/i);
+    screen.querySelector('[data-voice-close]').click();
+    assert.equal(screen.hidden,false,'X cannot hide an unconfirmed lease close');
+   }
+  }finally{await screen.disposeVoice();dom.window.close();}
+ }
 });
 
 test('close during connecting is honored if the lease claim is refused',async()=>{
