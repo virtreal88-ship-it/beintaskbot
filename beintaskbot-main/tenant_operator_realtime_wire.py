@@ -654,7 +654,15 @@ class _HybridRealtimeMixin:
             self._hybrid_pending_dispatch=None;self._hybrid_cancel_pending=False
             raise
 
-    def _cancel_hybrid_response(self):
+    @staticmethod
+    def _close_hybrid_stream(stream,graceful=False):
+        close_gracefully=getattr(stream,'close_gracefully',None)
+        if graceful and callable(close_gracefully):
+            close_gracefully()
+        else:
+            stream.cancel_now()
+
+    def _cancel_hybrid_response(self,*,graceful=False):
         # Audio already moved out of the TTS queue is stale too. Keep terminal
         # lifecycle events so the Session can still reconcile the response.
         self._hybrid_ready=deque(event for event in self._hybrid_ready
@@ -663,10 +671,13 @@ class _HybridRealtimeMixin:
         if active is None:
             if self._hybrid_pending_dispatch is not None:self._hybrid_cancel_pending=True
             return
-        if active['cancelled']:return
+        if active['cancelled']:
+            if graceful and active['stream'] is not None:
+                self._close_hybrid_stream(active['stream'],graceful=True)
+            return
         active['cancelled']=True
         if active['stream'] is None:active['tts_done']=True
-        else:active['stream'].cancel_now()
+        else:self._close_hybrid_stream(active['stream'],graceful=graceful)
 
     def _hybrid_current(self,epoch):
         active=self._hybrid_active
@@ -940,8 +951,8 @@ class _HybridRealtimeMixin:
         await asyncio.shield(self._hybrid_close_task)
 
     async def _close_hybrid(self):
-        self._hybrid_closing=True;self._cancel_hybrid_response()
-        for stream in self._hybrid_streams:stream.cancel_now()
+        self._hybrid_closing=True;self._cancel_hybrid_response(graceful=True)
+        for stream in self._hybrid_streams:self._close_hybrid_stream(stream,graceful=True)
         # Drain a bounded queue so a completing reader cannot hold cleanup.
         while not self._hybrid_events.empty():self._hybrid_events.get_nowait()
         readers=[task for task in (self._hybrid_openai_task,self._hybrid_tts_task) if task is not None]

@@ -2030,19 +2030,22 @@ class Session:
     async def _finish_end(self, reason):
         reservation=self.current_reservation
         self.current_reservation=None
-        async def hold_unknown():
-            if self.pilot_policy is not None:
-                await self.pilot_policy.close()
-            elif reservation:
-                await self.ledger.mark_unknown(reservation)
-        # close and both drains are independent: close can unblock a running
-        # send, but the lease remains held until *all* I/O is really drained.
+        # Close and drains are independent: close can unblock a running send,
+        # but the lease remains held until *all* I/O is really drained. Keep
+        # pilot admission live through provider shutdown so its bounded TTS
+        # close command can be authenticated against the same fenced lease.
         drains=[self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
                 self._drain(self.provider_event_lock),self._drain(self.client_event_lock),
-                self._drain(self.client_lock),hold_unknown()]
+                self._drain(self.client_lock)]
         retry_lock=getattr(self,'retry_lock',None)
         if retry_lock is not None:drains.append(self._drain(retry_lock))
+        if self.pilot_policy is None and reservation:
+            # Preserve budget quarantine timing for legacy sessions.
+            drains.append(self.ledger.mark_unknown(reservation))
         drained=await self._bounded(*drains)
+        # Revoke owner-pilot response permits only after the provider has had
+        # its authenticated chance to confirm shutdown.
+        if self.pilot_policy is not None and not await self._bounded(self.pilot_policy.close()):drained=False
         async def terminal(event):
             async with self.client_lock:
                 await self.client.send(event)

@@ -210,6 +210,22 @@ class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(socket.closed)
         self.assertFalse(any(event.get('close_socket') for event in socket.sent))
 
+    async def test_session_close_flushes_provider_buffer_but_discards_unsent_text(self):
+        guard=Guard();socket=TTDSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        stream.feed('Already accepted text.')
+        self.assertEqual((await asyncio.wait_for(events.get(),2))[0],'audio')
+        stream.feed(' text that must not be submitted')
+        self.assertTrue(stream.close_gracefully())
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('cancelled',1,None))
+        await stream.wait_closed()
+        submitted=[item['text'] for event in socket.sent for item in event.get('inputs',[])]
+        self.assertEqual(submitted,['Already accepted text.'])
+        self.assertEqual(sum(event.get('close_socket') is True for event in socket.sent),1)
+        self.assertTrue(stream._provider_final_received)
+        self.assertTrue(socket.closed)
+
     async def test_unconfirmed_close_and_connect_cleanup_propagate(self):
         guard=Guard();events=asyncio.Queue();socket=TTDSocket(close_fails=True)
         async def connector(*_):return socket
@@ -316,6 +332,17 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(closed.wait(),2)
         self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
         self.assertFalse(any(event.get('close_socket') for event in state['sent']))
+
+    async def test_session_close_sends_close_socket_and_confirms_provider_final(self):
+        stream,_,socket,events,state,closed=await self.make_stream('idle')
+        await self.wait_for_active_receive(socket)
+        self.assertTrue(stream.close_gracefully())
+        await asyncio.wait_for(stream.wait_closed(),3)
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('cancelled',1,None))
+        await asyncio.wait_for(closed.wait(),2)
+        self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
+        self.assertEqual(sum(event.get('close_socket') is True for event in state['sent']),1)
+        self.assertTrue(stream._provider_final_received)
 
     async def test_writer_error_with_receive_pending_preserves_cause_and_confirms_close(self):
         stream,guard,socket,events,state,closed=await self.make_stream('idle')
@@ -449,8 +476,9 @@ class HybridOpenAILoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
     async def test_openai_tcp_abort_remains_unconfirmed(self):
         wire,ws,reading,stop,_,closed=await self.make_wire(abort=True)
         class TTDProbe:
-            cancelled=False;closed=False
+            cancelled=False;graceful=False;closed=False
             def cancel_now(self):self.cancelled=True
+            def close_gracefully(self):self.graceful=True
             async def wait_closed(self):self.closed=True
         ttd=TTDProbe();wire._hybrid_streams.append(ttd)
         try:
@@ -459,7 +487,8 @@ class HybridOpenAILoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
                 await asyncio.wait_for(wire.close(),3)
             self.assertEqual(ws.close_code,1006)
-            self.assertTrue(ttd.cancelled and ttd.closed)
+            self.assertTrue(ttd.graceful and ttd.closed)
+            self.assertFalse(ttd.cancelled)
         finally:
             if not reading.done():reading.cancel()
             await asyncio.gather(reading,return_exceptions=True)
@@ -642,6 +671,34 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         await self.openai.incoming.put({'type':'response.done','response':{'id':'response1','status':'cancelled','output':[]}})
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.done')
         self.assertFalse(any(event.get('close_socket') for event in self.ttd_sockets[0].sent))
+
+    async def test_session_end_confirms_ttd_before_revoking_admission_and_releasing_lease(self):
+        await self.start_response()
+        await self.openai.incoming.put(self.text_event('response.output_text.delta',delta='Hello, synthetic voice!'))
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio.delta')
+        socket=self.ttd_sockets[0];send_json=socket.send_json
+        async def observe_shutdown(event):
+            if event.get('close_socket'):
+                self.assertFalse(self.policy._closed)
+                await self.policy.assert_live(self.scope,self.session_id)
+            await send_json(event)
+        socket.send_json=observe_shutdown
+        released=[]
+        async def release(scope,fence):
+            self.assertTrue(self.openai.closed and socket.closed)
+            released.append((scope,fence))
+            return True
+        self.policy.lease.release=release
+        session=object.__new__(Session)
+        session.current_reservation=None;session.pilot_policy=self.policy;session.history=None
+        session.provider=self.wire;session.lease=self.policy.lease;session.scope=self.scope;session.fence=1
+        session.shutdown_timeout=3;session.client=type('Client',(),{'send':AsyncMock()})()
+        for name in ('io_lock','receive_lock','provider_event_lock','client_event_lock','client_lock'):
+            setattr(session,name,asyncio.Lock())
+        self.assertTrue(await session._finish_end('user_end'))
+        self.assertTrue(self.policy._closed)
+        self.assertEqual(released,[(self.scope,1)])
+        self.assertTrue(any(event.get('close_socket') is True for event in socket.sent))
 
     async def test_speech_started_preempts_ready_audio_with_pending_reader(self):
         await self.start_response()
