@@ -106,6 +106,20 @@ class Lease:
 
 
 class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_many_small_deltas_do_not_overflow_tts_input(self):
+        guard=Guard();socket=TTDSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        text='x'*129
+        for char in text:stream.feed(char)
+        stream.finish_input()
+        event=await asyncio.wait_for(events.get(),2)
+        self.assertEqual(event[:2],('audio',1))
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('done',1,None))
+        await stream.wait_closed()
+        submitted=[item['text'] for event in socket.sent for item in event.get('inputs',[])]
+        self.assertEqual(''.join(submitted),text)
+
     async def test_comma_does_not_force_a_spoken_chunk_boundary(self):
         guard=Guard();socket=TTDSocket();events=asyncio.Queue()
         async def connector(*_):return socket

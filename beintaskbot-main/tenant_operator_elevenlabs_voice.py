@@ -16,7 +16,6 @@ TTD_URL=('wss://api.elevenlabs.io/v1/text-to-dialogue/stream-input'
 MAX_DELTA_CHARS=1600
 MAX_RESPONSE_CHARS=24000
 MAX_AUDIO_BYTES=4_800_000
-TEXT_QUEUE_LIMIT=128
 TEXT_FLUSH_SECONDS=.1
 MAX_NO_SPACE_CHARS=120
 MAX_CLIENT_AUDIO_BYTES=9600
@@ -132,7 +131,11 @@ class ElevenTTDStream:
     def __init__(self,guard,loader,epoch,is_current,emit,*,connector=None):
         self.guard=guard;self.loader=loader;self.epoch=epoch;self.is_current=is_current;self.emit=emit
         self.connector=connector or _open_eleven_ttd_socket
-        self.queue=asyncio.Queue(maxsize=TEXT_QUEUE_LIMIT)
+        # OpenAI may split one answer into thousands of tiny text deltas. Keep
+        # them in one bounded buffer (MAX_RESPONSE_CHARS) so a burst cannot
+        # overflow a small per-delta queue while TTS is sending a chunk.
+        self._text_buffer=[]
+        self._text_ready=asyncio.Event()
         self.task=None;self.socket=None;self.cancelled=False;self.finished=False
         self.text_chars=0;self.audio_bytes=0;self._input_finished=False;self._started=False;self._cleaning=False
         self._close_socket_started=False
@@ -153,14 +156,13 @@ class ElevenTTDStream:
             raise ValueError('tts_text_invalid')
         self.text_chars+=len(text)
         if self.first_text_at is None:self.first_text_at=time.monotonic()
-        try:self.queue.put_nowait(('text',text))
-        except asyncio.QueueFull:raise ValueError('tts_input_backlog') from None
+        self._text_buffer.append(text)
+        self._text_ready.set()
 
     def finish_input(self):
         if self.cancelled or self._input_finished:raise ValueError('tts_input_finished')
         self._input_finished=True
-        try:self.queue.put_nowait(('finish',None))
-        except asyncio.QueueFull:raise ValueError('tts_input_backlog') from None
+        self._text_ready.set()
 
     def cancel_now(self):
         if self.cancelled:return
@@ -206,13 +208,32 @@ class ElevenTTDStream:
                 await self._send({'inputs':[{'text':text,'voice_id':VOICE_ID}], 'flush':True})
         deadline=None
         while True:
-            timeout=max(0,deadline-asyncio.get_running_loop().time()) if deadline is not None else None
-            try:kind,text=await asyncio.wait_for(self.queue.get(),timeout)
-            except asyncio.TimeoutError:
-                await flush()
-                deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS if pending else None
-                continue
-            if kind=='finish':
+            if not self._text_buffer and not self._input_finished:
+                self._text_ready.clear()
+                if not self._text_buffer and not self._input_finished:
+                    try:
+                        if deadline is None:
+                            await self._text_ready.wait()
+                        else:
+                            timeout=max(0,deadline-asyncio.get_running_loop().time())
+                            await asyncio.wait_for(self._text_ready.wait(),timeout)
+                    except asyncio.TimeoutError:
+                        await flush()
+                        deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS if pending else None
+                        continue
+            parts,self._text_buffer=self._text_buffer,[]
+            text=''.join(parts)
+            # Coalesce fine-grained provider deltas in a bounded buffer, then
+            # process in small slices to preserve the existing streaming and
+            # sentence-boundary behavior.
+            for offset in range(0,len(text),80):
+                pending+=text[offset:offset+80]
+                if deadline is None:deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS
+                if ((len(pending)>=16 and pending[-1] in '.!?;:') or
+                    (len(pending)>=80 and any(ch.isspace() for ch in pending))):
+                    await flush()
+                    deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS if pending else None
+            if self._input_finished and not self._text_buffer:
                 await flush(force=True)
                 # This command flushes buffered content, so it is used only
                 # for a natural finish, never for interruption.
@@ -223,12 +244,6 @@ class ElevenTTDStream:
                 self._close_socket_started=True
                 await self._send({'close_socket':True})
                 return
-            pending+=text
-            if deadline is None:deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS
-            if ((len(pending)>=16 and pending[-1] in '.!?;:') or
-                (len(pending)>=80 and any(ch.isspace() for ch in pending))):
-                await flush()
-                deadline=asyncio.get_running_loop().time()+TEXT_FLUSH_SECONDS if pending else None
 
     async def _read(self):
         pending=bytearray();next_event=None
