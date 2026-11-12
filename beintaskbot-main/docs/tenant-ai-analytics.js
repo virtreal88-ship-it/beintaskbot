@@ -1,4 +1,4 @@
-/* Owner-only navigation for the read-only company analytics workspace. */
+/* Owner-only navigation for the read-only company analytics workspace. Tabs show persisted findings only after they are connected. */
 (()=>{'use strict';
   const root=document.getElementById('aiAnalyticsPage'),host=document.getElementById('aiBusinessAnalystHost');
   if(!root||!host)return;
