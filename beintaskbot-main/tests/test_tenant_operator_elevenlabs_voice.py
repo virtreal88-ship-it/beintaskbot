@@ -70,6 +70,18 @@ class InvalidPCMttdSocket(TTDSocket):
         if event.get('close_socket'):await self.incoming.put({'is_final':True})
 
 
+class ChunkedPCMttdSocket(TTDSocket):
+    async def send_json(self,event):
+        self.sent.append(copy.deepcopy(event))
+        if event.get('inputs'):
+            # A PCM sample is split across two provider frames. The bridge
+            # must preserve the byte boundary instead of rejecting either.
+            await self.incoming.put({'audio':'AA=='})
+            await self.incoming.put({'audio':'AA=='})
+        if event.get('close_socket'):
+            await self.incoming.put({'audio':'','is_final':True})
+
+
 class OpenAISocket:
     synthetic_only=True
     def __init__(self):self.sent=[];self.incoming=asyncio.Queue();self.closed=False;self.first=True
@@ -136,9 +148,24 @@ class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
             stream.feed('Synthetic safe error test.')
             event=await asyncio.wait_for(events.get(),2)
             await stream.wait_closed()
-        self.assertEqual(event,('error',1,'tts_audio_invalid'))
-        self.assertIn('stage=receive code=tts_audio_invalid',repr(logs.output))
+        self.assertEqual(event,('error',1,'tts_audio_base64_invalid'))
+        self.assertIn('stage=receive code=tts_audio_base64_invalid',repr(logs.output))
         self.assertNotIn('private synthetic speech',repr(logs.output))
+
+    async def test_empty_final_audio_and_split_pcm_sample_complete_normally(self):
+        guard=Guard();socket=ChunkedPCMttdSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        stream.feed('A short synthetic answer.')
+        audio=await asyncio.wait_for(events.get(),2)
+        self.assertEqual(audio[:2],('audio',1))
+        self.assertEqual(base64.b64decode(audio[2]),b'\x00\x00')
+        stream.finish_input()
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('done',1,None))
+        await stream.wait_closed()
+        self.assertTrue(socket.closed)
+        self.assertEqual(stream.empty_audio_frames,1)
+        self.assertEqual(stream.odd_audio_frames,2)
 
     async def test_cancel_never_sends_flush_close_and_waits_for_socket_close(self):
         guard=Guard();socket=TTDSocket();events=asyncio.Queue()
