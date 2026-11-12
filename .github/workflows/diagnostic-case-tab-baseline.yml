@@ -36,3 +36,17 @@ jobs:
         with:
           name: baseline-case-tab-evidence
           path: beintaskbot-main/baseline-case-tabs.log
+
+  current-head-case-tab-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.62.1
+      - run: node beintaskbot-main/.support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run unchanged keyboard loops against complete current control list
+        working-directory: beintaskbot-main
+        run: node tests/test_case_card_tabs_browser.cjs

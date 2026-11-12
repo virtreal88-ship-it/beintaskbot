@@ -55,7 +55,11 @@ function installCaseTabsFixture(){
     const summary=page.locator('#supportCaseMaterials>summary'),close=page.locator('#supportClose');
     assert.equal(await page.locator('#supportHistory [data-ticket-media-open]').count(),2);
     assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
-    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportRiskAssessment','#supportSuggestions','#supportNextSteps','#supportEditStatus','#supportEditAssignee','#supportTake','#supportTakeover','#supportCreateTask','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
+    for(const selector of ['#supportRecommendations > button','#supportPriority','#supportResponseDueAt'])assert.equal(await page.locator(selector).isVisible(),true,'new case tool visible: '+selector);
+    assert.equal(await page.locator('#supportRecommendations > button').getAttribute('type'),'button');
+    assert.equal(await page.locator('#supportPriority').evaluate(node=>node.tagName),'SELECT');
+    assert.equal(await page.locator('#supportResponseDueAt').getAttribute('type'),'datetime-local');
+    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportRiskAssessment','#supportSuggestions','#supportNextSteps','#supportRecommendations > button','#supportEditStatus','#supportEditAssignee','#supportPriority','#supportResponseDueAt','#supportTake','#supportTakeover','#supportCreateTask','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
     const photo='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000602"]',documentMessage='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000603"]';
     const opened=[...closed,'#caseMediaLoad',photo+' [data-ticket-media-open]',documentMessage+' [data-ticket-media-open]'];
     await assertTabOrder(page,closed,'closed Materials '+width);
