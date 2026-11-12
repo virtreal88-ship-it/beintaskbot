@@ -32,6 +32,21 @@ class Policy:
     def pipeline_scope(self):
         return self.profile.get("scope", [])
 
+    def kommo_pipeline_scope(self):
+        return self.profile.get("scope", [])
+
+    def kommo_user_id(self):
+        return int(self.profile.get("kommo_user_id") or 0)
+
+    def kommo_access(self):
+        return self.profile.get("active", True) and (self.privileged or bool(self.kommo_pipeline_scope()) or bool(self.kommo_user_id()))
+
+    def kommo_task_scope(self):
+        if self.privileged:
+            return {"kind": "all"}
+        return {"kind": "kommo", "pipelines": self.kommo_pipeline_scope(), "marker": "member",
+                "kommo_user_id": self.kommo_user_id()}
+
 
 class Request:
     def __init__(self, body=None, *, method="GET", query=None, origin="https://crm.pro.az",
@@ -106,7 +121,8 @@ class TenantTaskApiTests(unittest.IsolatedAsyncioTestCase):
         self.profile["role"] = "worker"
         response = await self.api["tasks"](Request())
         self.assertEqual(response.status, 200)
-        self.assertEqual(self.list_tasks.call_args.kwargs["scope"], {"kind": "marker", "marker": "member"})
+        self.assertEqual(self.list_tasks.call_args.kwargs["scope"], {"kind": "kommo", "pipelines": self.profile["scope"],
+            "marker": "member", "kommo_user_id": 0})
 
     async def test_options_filter_executors_and_keep_deals_in_actor_scope(self):
         response = await self.api["options"](Request())
@@ -114,7 +130,7 @@ class TenantTaskApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["name"] for row in data["executors"]], ["Owner"])
         self.assertEqual(data["executors"][0]["pipelines"][0]["name"], "Sales")
         self.assertEqual(data["deals"], [{"id": 7, "name": "Lead", "pipeline_id": 10}])
-        self.list_deals.assert_called_once_with(tenant_id="company-a", scope=self.profile["scope"], limit=200)
+        self.list_deals.assert_called_once_with(tenant_id="company-a", scope=self.profile["scope"], limit=200, creator_id=None)
 
     async def test_create_and_complete_forward_once_to_domain_services(self):
         create_request = Request({"text": "Call"}, method="POST")

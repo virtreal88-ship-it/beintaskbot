@@ -178,6 +178,44 @@ class TenantPolicy:
                     result.append({'pipeline_id': pid, 'status_ids': [positive_id(s) for s in pipeline.get('stage_ids', []) if positive_id(s)]})
         return result
 
+    def kommo_pipeline_scope(self) -> list[dict]:
+        configured = self.config.get('pipelines') or []
+        assigned = {str(pid) for pid in self.member_settings.get('pipeline_ids', [])}
+        allowed = None if self.privileged else assigned
+        result = []
+        for pipeline in configured:
+            pid = positive_id(pipeline.get('pipeline_id'))
+            settings = pipeline.get('settings') or {}
+            if not pid or not pipeline.get('active', True) or settings.get('provider') == 'beintaskbot' or (allowed is not None and str(pid) not in allowed):
+                continue
+            stages = [stage for stage in self.config.get('stages', []) if str(stage.get('pipeline_id')) == str(pid)]
+            visible = [positive_id(stage.get('stage_id')) for stage in stages if (stage.get('settings') or {}).get('visible', True)]
+            if stages and not visible:
+                continue
+            result.append({'pipeline_id': pid, 'status_ids': visible})
+        if not configured and self.privileged:
+            for pipeline in (((self.profile.get('onboarding') or {}).get('pipeline') or {}).get('selected') or []):
+                pid = positive_id(pipeline.get('id'))
+                if pid: result.append({'pipeline_id': pid, 'status_ids': [positive_id(s) for s in pipeline.get('stage_ids', []) if positive_id(s)]})
+        return result
+
+    def kommo_user_id(self) -> int:
+        return positive_id(self.member_settings.get('kommo_user_id'))
+
+    def kommo_access(self) -> bool:
+        return self.profile.get('active') is True and (self.privileged or bool(self.kommo_pipeline_scope()) or bool(self.kommo_user_id()))
+
+    def can_access_kommo_deal(self, deal: dict | None) -> bool:
+        if not deal or str(deal.get('tenant_id')) != str(self.profile.get('tenant_id')): return False
+        if self.privileged: return True
+        if any(positive_id(deal.get('pipeline_id')) == item['pipeline_id'] and (not item['status_ids'] or positive_id(deal.get('status_id')) in item['status_ids']) for item in self.kommo_pipeline_scope()): return True
+        raw = deal.get('raw') if isinstance(deal.get('raw'), dict) else {}
+        creator = self.kommo_user_id()
+        return bool(creator and positive_id(raw.get('created_by_id') or raw.get('created_by')) == creator)
+
+    def kommo_task_scope(self) -> dict:
+        return {'kind': 'all'} if self.privileged else {'kind': 'kommo', 'pipelines': self.kommo_pipeline_scope(), 'marker': self.task_marker(), 'kommo_user_id': self.kommo_user_id()}
+
     def legacy_crm_view_restricted(self, module='deals') -> bool:
         """An explicit employee read scope needs resource-aware rows.
 
@@ -293,7 +331,7 @@ class TenantPolicy:
                 'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),
-                'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
+                'pipeline_scope': self.pipeline_scope(), 'kommo_pipeline_scope': self.kommo_pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
         if scoped_access_enabled():

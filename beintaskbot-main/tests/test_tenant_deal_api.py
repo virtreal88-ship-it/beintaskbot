@@ -35,7 +35,7 @@ def manager_profile():
         "workflow": {
             "pipelines": [{"pipeline_id": 10, "owner_telegram_id": 20, "active": True}],
             "stages": [{"pipeline_id": 10, "stage_id": 100, "settings": {"visible": True}}],
-            "policies": [],
+            "policies": [{"policy_key":"members","value":{"20":{"pipeline_ids":["10"]}}}],
         },
     }
 
@@ -63,6 +63,7 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.status.assert_called_once_with("company-a", ["leads", "tasks"])
         self.profile.update(role="worker", permissions=["tasks"], modules={"tasks": True})
+        self.profile["workflow"]["policies"][0]["value"]["20"]["pipeline_ids"] = []
         self.status.reset_mock()
         response = await self.api["sync_status"](Request())
         self.assertEqual(response.status, 200)
@@ -86,7 +87,7 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.list_deals.assert_called_once_with(
             tenant_id="company-a", search="Ali", pipeline_ids=[10], status_ids=[100],
-            limit=25, offset=5, scope=[{"pipeline_id": 10, "status_ids": [100]}],
+            limit=25, offset=5, scope=[{"pipeline_id": 10, "status_ids": [100]}], creator_id=0,
         )
         self.assertEqual(response_body(response)["total"], 1)
 
@@ -113,10 +114,10 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 404)
 
     async def test_missing_permission_and_bad_lead_id_fail_before_storage(self):
-        self.profile["permissions"] = []
+        self.profile["workflow"]["policies"][0]["value"]["20"]["pipeline_ids"] = []
         response = await self.api["deals"](Request())
         self.assertEqual(response.status, 403)
-        self.profile["permissions"] = ["deals"]
+        self.profile["workflow"]["policies"][0]["value"]["20"]["pipeline_ids"] = ["10"]
         response = await self.api["deal"](Request({"lead_id": "bad"}))
         self.assertEqual(response.status, 400)
         self.get_deal.assert_not_called()
