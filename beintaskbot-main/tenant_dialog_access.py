@@ -179,11 +179,9 @@ def activation_preflight(cur,tenant):
 
 
 def validate_activation(cur,tenant,scopes):
-    """Called in employee-card save before enabling dialog scopes."""
-    if not isinstance(scopes,dict) or not any(value in {'self','department'} for value in (scopes.get('dialogs') or {}).values()):return
-    check=activation_preflight(cur,tenant)
-    if not check['ready']:
-        raise TenantLinearError('Права диалогов пока нельзя активировать: сначала владелец должен проверить привязки всех источников; источники Kommo требуют отдельного согласования.',409)
+    """Validate scopes; mapping inventory is advisory, not an activation gate."""
+    from tenant_scoped_access import validate_access_scopes
+    validate_access_scopes(scopes)
 
 
 def require_lead(cur,tenant,policy,lead,action='view'):

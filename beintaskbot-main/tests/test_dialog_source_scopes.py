@@ -123,11 +123,11 @@ def test_owner_bindings_are_explicit_versioned_and_tenant_bound(scoped):
     assert db.execute('SELECT count(*) AS n FROM saas_dialog_source_members WHERE tenant_id=%s::uuid',(B,))[0]['n']==0
 
 
-def test_unassigned_sources_block_narrow_activation_without_mutation(scoped):
+def test_unassigned_sources_allow_fail_closed_activation_without_mutation(scoped):
     db,_=scoped
     db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(A,CA));db.commit()
     assert access.activation_preflight(db.cursor(),A)['unassigned_sources']==[{'source_id':CA,'name':'WhatsApp'}]
-    with pytest.raises(TenantLinearError):access.validate_activation(db.cursor(),A,{'dialogs':{'view':'self'}})
+    access.validate_activation(db.cursor(),A,{'dialogs':{'view':'self'}})
     access.validate_activation(db.cursor(),A,{'dialogs':{'view':'all'}})
     assert not db.execute('SELECT * FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(A,CA))
 
@@ -420,3 +420,42 @@ def test_structural_redirect_proof_keeps_exact_tenant_source_and_route(scoped):
             with pytest.raises(TenantLinearError) as denied:
                 _resolve_connect_route(cur,tenant,conversation,channel,lead,allow_merged=True)
             assert denied.value.status==404
+
+
+@pytest.mark.parametrize('selected',['self','department'])
+def test_card_save_with_unmapped_sources_is_fail_closed(scoped,monkeypatch,selected):
+    import tenant_member_store as members
+    from tenant_scoped_access_store import read_access_profile
+    db,person=scoped
+    monkeypatch.setattr(members,'_connect',lambda:db)
+    db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid',(A,))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,99,'unmapped-kommo','whatsapp','incoming','hidden')",(str(uuid.uuid4()),A));db.commit()
+    row=next(r for r in members.list_members(tenant_id=A,owner_id=11) if r['telegram_id']==33)
+    receipt=members.upsert_member(tenant_id=A,owner_id=11,telegram_id=33,
+      expected_version=row['card_version'],changes={'access_settings':{
+        'expected_version':row['access_settings']['version'],
+        'changes':{'scopes':{'dialogs':{'view':selected,'update':selected}}}}})
+    assert receipt['card_version']!=row['card_version']
+    result=dialogs.listing(person)
+    assert result['dialogs']==[] and result['channels']==[]
+    for source,lead in ((CA,41),(C2,43),(CB,42)):
+        with pytest.raises(TenantLinearError):dialogs.history(person,'connect',lead,source,'client')
+        with pytest.raises(TenantLinearError):sender.authority(db.cursor(),person,lead)
+    policy=TenantPolicy(read_access_profile(db.cursor(),A,33))
+    with pytest.raises(TenantLinearError):access.require_source(db.cursor(),A,policy,'kommo','whatsapp')
+    assert not db.execute('SELECT * FROM saas_dialog_source_members WHERE tenant_id=%s::uuid',(A,))
+
+
+def test_one_assignment_does_not_expose_unmapped_sources(scoped):
+    db,person=scoped
+    db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid',(A,))
+    db.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s::uuid,%s::uuid,33,11)',(A,CA))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,99,'unmapped-kommo','whatsapp','incoming','hidden')",(str(uuid.uuid4()),A));db.commit()
+    grants(db,33,'self','self')
+    result=dialogs.listing(person)
+    assert [r['channel_id'] for r in result['dialogs']]==[CA]
+    assert [r['id'] for r in result['channels']]==['connect:'+CA]
+    assert dialogs.history(person,'connect',41,CA,'client')['messages'][0]['body']=='Internet is down'
+    assert sender.authority(db.cursor(),person,41)[1]==['connect',CA,'client']
+    with pytest.raises(TenantLinearError):dialogs.history(person,'connect',43,C2,'client')
+    with pytest.raises(TenantLinearError):sender.authority(db.cursor(),person,43)

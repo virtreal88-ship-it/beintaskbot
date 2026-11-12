@@ -572,14 +572,9 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                     except (TypeError, ValueError):
                         raise MemberCardError('member_card_invalid',
                                               fields={'access_settings': 'invalid'}) from None
-                    dialog_scopes = patch['changes'].get('scopes', {}).get('dialogs', {})
-                    if any(scope in {'self', 'department'} for scope in dialog_scopes.values()):
-                        from tenant_dialog_access import activation_preflight
-                        preflight = activation_preflight(cur, tenant_id)
-                        if not preflight['ready']:
-                            raise MemberCardError('dialog_source_mapping_required', 409,
-                                fields={'access_settings': 'source_mapping_required'},
-                                message='Сначала распределите источники диалогов между сотрудниками.')
+                    # Unmapped sources must not prevent an owner restricting access.
+                    # Runtime source predicates deny them under self/department;
+                    # saving scopes never creates or infers source assignments.
                     permissions = applied['permissions']
                     # Update this setting only. The same transaction may also
                     # change work settings; neither patch replaces the other.

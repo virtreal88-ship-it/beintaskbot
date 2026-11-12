@@ -10,5 +10,14 @@ function open(e,isCurrent=()=>true){e.w.document.dispatchEvent(new e.w.CustomEve
  open(e);await tick();e.host.querySelector('input').checked=true;e.host.querySelector('button').click();e.host.querySelector('button').click();await tick();assert.equal(posts.length,1,'repeated click is single flight');assert.deepEqual(posts[0].employee_ids,[34,33]);assert.equal(posts[0].expected_revision,0);assert.equal(posts[0].expected_tenant_id,'a');assert.equal(posts[0].expected_user_id,'11');resolvePost();await tick();await tick();assert.match(e.host.textContent,/assignments saved/);e.dom.window.close();
  const stale=env();let finish,current=true;stale.w.fetch=()=>new Promise(r=>finish=r);open(stale,()=>current);current=false;stale.host.textContent='new company';finish({ok:true,json:async()=>({success:true,result})});await tick();assert.equal(stale.host.textContent,'new company','late response cannot populate a changed card');stale.dom.window.close();
  const denied=env();denied.w.fetch=async()=>({ok:false,json:async()=>({success:false,error:'Source assignments changed. Refresh.'})});open(denied);await tick();assert.match(denied.host.textContent,/Refresh/);assert.equal(denied.host.querySelector('button').disabled,true);denied.dom.window.close();
+ for(const kommo of [false,true]){
+  const advisory=env();let posts=0;
+  advisory.w.fetch=async(_url,opt)=>{if(opt.method==='POST')posts++;return {ok:true,json:async()=>({success:true,result:{sources:[{...source,employee_ids:[]}],preflight:{ready:false,unassigned_sources:[source],kommo_source_mapping_required:kommo}}})}};
+  open(advisory);await tick();
+  assert.match(advisory.host.textContent,/WhatsApp number alone does not grant access/);
+  assert.match(advisory.host.textContent,kommo?/Kommo sources are hidden/:/restrictions can be saved/);
+  assert.equal(advisory.host.querySelector('input').checked,false);
+  assert.equal(posts,0,'rendering never assigns sources automatically');advisory.dom.window.close();
+ }
  console.log('PASS: source assignments retain other employees, bind identity/version, prevent repeat sends and discard stale card responses.');
 })().catch(e=>{console.error(e);process.exitCode=1});

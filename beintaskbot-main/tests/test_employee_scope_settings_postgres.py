@@ -109,17 +109,22 @@ def test_scope_gate_off_rejects_changes_without_mutation(scoped,monkeypatch):
     assert get(scoped)['card_version']==row['card_version']
 
 
-def test_unmapped_dialog_source_blocks_narrow_scopes_atomically(scoped,monkeypatch):
+@pytest.mark.parametrize('scope',['self','department'])
+def test_unmapped_dialog_sources_do_not_block_restriction_save(scoped,monkeypatch,scope):
     import tenant_dialog_access
-    monkeypatch.setattr(tenant_dialog_access,'activation_preflight',lambda cur,tenant:{'ready':False,'unassigned_sources':[{'source_id':'test','name':'Test source'}],'kommo_source_mapping_required':False})
+    def unexpected_preflight(*args):
+        pytest.fail('Global source inventory must not block a restriction save')
+    monkeypatch.setattr(tenant_dialog_access,'activation_preflight',unexpected_preflight)
     row=get(scoped)
-    with pytest.raises(members.MemberCardError) as blocked:
-        apply(scoped,row,{'display_name':'Do not persist',**patch(row,{'dialogs':{'view':'department'}})})
-    assert blocked.value.code=='dialog_source_mapping_required'
-    assert get(scoped)['card_version']==row['card_version']
-    assert get(scoped)['display_name']==row['display_name']
-    apply(scoped,row,patch(row,{'dialogs':{'view':'none'}}))
-    assert get(scoped)['access_settings']['scoped_actions']['dialogs']['view']=='none'
+    apply(scoped,row,patch(row,{'dialogs':{'view':scope,'update':scope}}))
+    fresh=get(scoped)
+    assert fresh['access_settings']['scoped_actions']['dialogs']=={'view':scope,'update':scope}
+    assert fresh['explicit_permissions']==row['explicit_permissions']
+    assert fresh['card_version']!=row['card_version']
+    with pytest.raises(members.MemberCardError) as stale:
+        apply(scoped,row,patch(row,{'dialogs':{'view':'all'}}))
+    assert stale.value.code=='member_card_conflict'
+    assert get(scoped)['access_settings']['scoped_actions']['dialogs']['view']==scope
 
 
 def test_first_scope_policy_activation_waits_at_tenant_fence(scoped):
