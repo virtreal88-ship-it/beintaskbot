@@ -98,6 +98,14 @@ def recheck_rights(profile, config, intent):
             raise TenantLinearError('Düymə icazəsi dəyişib.', 403)
 
 
+def status_recovery_result(profile, config, key, issue_id, fields):
+    row = authorized_row(profile, config, key, issue_id)
+    return {'issue_id': issue_id, 'updated_at': row['updatedAt'],
+        'recovery': 'status_review_required',
+        'current_state_id': (row.get('state') or {}).get('id'),
+        'target_is_current': fields_match(row, fields)}
+
+
 def execute(session, data):
     if data.get('action') not in {'create', 'edit', 'status', 'button'}:
         raise TenantLinearError('Əməliyyat düzgün deyil.')
@@ -121,6 +129,16 @@ def execute(session, data):
                 intent = previous['intent']
             else:
                 if data.get('config_version') != version:
+                    if data['action'] == 'status':
+                        fields = {'stateId': identifier(data.get('state_id'))}
+                        result = status_recovery_result(profile, config, key, issue_id, fields)
+                        # Even an absent intent needs a terminal record: a delayed
+                        # old request must not become executable after UI recovery.
+                        cur.execute('''INSERT INTO saas_linear_commands(tenant_id,actor_id,request_id,issue_id,fingerprint,intent,result,completed_at)
+                          VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s::jsonb,%s::jsonb,now())''',
+                          (tenant, user, request, issue_id, stamp, json.dumps({'action':'status'}), json.dumps(result)))
+                        conn.commit()
+                        return result
                     raise TenantLinearError('Linear qaydaları dəyişib. Yeniləyin.', 409)
                 intent = intent_for(profile, config, key, data, issue_id)
                 intent['config_version'] = version
@@ -138,6 +156,16 @@ def execute(session, data):
                 return stored['result']
             intent = stored['intent']
             if intent['config_version'] != version:
+                if intent['action'] == 'status' and not intent.get('comment'):
+                    # A rotated key invalidates the old version. Never replay its
+                    # uncertain write. Read current state using current scope and
+                    # store a terminal receipt, so another tab cannot revive it.
+                    result = status_recovery_result(profile, config, key, issue_id, intent['fields'])
+                    cur.execute('''UPDATE saas_linear_commands SET result=%s::jsonb,completed_at=now()
+                      WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''',
+                      (json.dumps(result), tenant, user, request))
+                    conn.commit()
+                    return result
                 raise TenantLinearError('Linear qaydaları dəyişib. Köhnə sorğu icra edilmədi.', 409)
             recheck_rights(profile, config, intent)
             if intent['action'] == 'create':

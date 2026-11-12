@@ -36,7 +36,7 @@
   document.querySelector('.nav').insertAdjacentHTML('beforeend','<button data-view="linear" id="tlNav" hidden style="display:none"><span>▦</span> Linear</button>');
   document.querySelector('main').insertAdjacentHTML('beforeend',`<section class="view" id="view-linear"><div class="top"><div><h1>Linear</h1><p id="tlCount"></p></div></div>
     <div class="tl-toolbar"><input class="search" id="tlSearch" placeholder="Linear-da axtarış"><button class="outline" id="tlFind">Axtar</button><select class="search" id="tlStateFilter"><option value="">Bütün statuslar</option></select><button class="tl-column-trigger" type="button" id="tlColumnsOpen" aria-haspopup="dialog" aria-controls="tlColumnDialog" aria-expanded="false">Sütunlar <span aria-hidden="true">▾</span></button><dialog class="tl-column-dialog" id="tlColumnDialog" aria-labelledby="tlColumnDialogTitle"><div class="tl-column-dialog__surface"><div class="tl-column-dialog__header"><div><h2 id="tlColumnDialogTitle">Sütunlar</h2><p>Status sütunlarının görünüşünü seçin.</p></div><button class="tl-column-dialog__close" type="button" id="tlColumnsClose" aria-label="Bağla">×</button></div><div class="tl-column-options" id="tlColumnOptions" role="group" aria-label="Status sütunları"></div><button class="tl-column-dialog__reset" type="button" id="tlColumnsAll">Bütün sütunları göstər</button></div></dialog><button class="refresh" id="tlRefresh">Yenilə</button><button class="primary" id="tlCreate" hidden>+ Tapşırıq</button><button class="outline" id="tlNext" hidden>Daha çox</button></div>
-    <div id="tlBoardNotice" class="notice" role="status"></div><button id="tlRecover" class="outline" hidden>Yarımçıq sorğunu yoxla</button><div class="tl-board" id="tlBoard" tabindex="0" role="region" aria-label="Linear tapşırıq lövhəsi"></div>
+    <div id="tlBoardNotice" class="notice" role="status"></div><div class="tl-board" id="tlBoard" tabindex="0" role="region" aria-label="Linear tapşırıq lövhəsi"></div>
     </section>
     <div class="modal" id="tlTaskModal"><div class="modal-card panel"><div class="modal-head"><h2 id="tlTaskTitle"></h2><button class="close" id="tlTaskClose" aria-label="Bağla">×</button></div><div id="tlTaskFields"></div><p id="tlTaskMessage" role="status"></p><div class="tl-footer"><button class="primary" id="tlTaskSave">Saxla</button><button class="outline" id="tlTaskCancel">Bağla</button></div></div></div>`);
   function storageKey(person=profile){return 'tenant-linear-command:'+person.tenant_id+':'+person.telegram_id;}
@@ -68,7 +68,7 @@
     const selected=rows.filter(row=>hasAccount(row)&&(!$('tlStateFilter').value||row.state?.id===$('tlStateFilter').value));
     const visibleStatuses=catalog.filter(state=>!hidden.has(String(state.id))&&($('tlStateFilter').value===''||state.id===$('tlStateFilter').value));
     $('tlCount').textContent=`Yüklənib: ${rows.filter(hasAccount).length} · Görünür: ${selected.length}`;
-    $('tlCreate').hidden=!rights.can_create;$('tlNext').hidden=!cursor;$('tlRecover').hidden=!pending;
+    $('tlCreate').hidden=!rights.can_create;$('tlNext').hidden=!cursor;
     const priorities=['Yoxdur','Təcili','Yüksək','Normal','Aşağı'];
     $('tlBoard').innerHTML=visibleStatuses.map(state=>{const items=selected.filter(row=>String(row.state?.id)===String(state.id));return `<section class="tl-column" data-state-id="${esc(state.id)}"><h2 style="font-size:17px">${esc(state.name||'Status')} · ${items.length}</h2>`+
       items.map(row=>`<article class="tl-card" data-issue="${esc(row.id)}"><div class="sub">${/^https:\/\/linear\.app\//i.test(String(row.url||''))?`<a href="${esc(row.url)}" target="_blank" rel="noopener">${esc(row.identifier)}</a>`:esc(row.identifier)}</div><div class="badge" style="font-size:15px">${esc(row.account)}</div>
@@ -129,7 +129,10 @@
   async function send(data,current){if(sending||current!==epoch)return;const key=storageKey();pending=data;
     try{sessionStorage.setItem(key,JSON.stringify(data));}catch{pending=null;$('tlTaskMessage').textContent='Sorğunu təhlükəsiz saxlamaq alınmadı.';return;}
     sending=true;$('tlTaskSave').disabled=true;$('tlTaskMessage').textContent='Göndərilir…';$('tlTaskFields').querySelectorAll('input,textarea,select').forEach(input=>input.disabled=true);
-    try{await api('',data);sessionStorage.removeItem(key);if(current!==epoch)return;pending=null;sending=false;close();await load();}
+    try{const result=await api('',data);sessionStorage.removeItem(key);if(current!==epoch)return;pending=null;sending=false;close();await load();
+      if(current===epoch&&result.recovery==='status_review_required')notice(result.target_is_current
+        ?'Yoxlama zamanı status artıq seçdiyiniz status idi. Köhnə sorğu təkrar göndərilmədən bağlandı.'
+        :'Bağlantı və ya qaydalar dəyişib. Köhnə sorğu təkrar göndərilmədən bağlandı; əvvəlki cəhdin nəticəsi təsdiqlənmir. Cari statusu yoxlayın və lazım olsa Status düyməsindən yenidən seçib təsdiqləyin.');}
     catch(error){if(current!==epoch)return;if(error.status===400){sessionStorage.removeItem(key);pending=null;$('tlTaskFields').querySelectorAll('input,textarea,select').forEach(input=>input.disabled=false);}
       else {$('tlTaskSave').onclick=()=>send(pending,current);$('tlTaskSave').textContent='Eyni sorğunu yoxla';} $('tlTaskMessage').textContent=error.message;render();}
     finally{if(current===epoch){sending=false;$('tlTaskSave').disabled=false;}}
@@ -139,7 +142,7 @@
     $('tlNav').hidden=!allowed;$('tlNav').style.display=allowed?'':'none';
     if(changed||!allowed){epoch++;selectedState=null;rows=[];statuses=[];cursor=null;rights={};version='';loading=false;sending=false;pending=null;$('tlSearch').value='';$('tlTaskModal').classList.remove('show');$('tlRefresh').disabled=false;$('tlNext').disabled=false;render();
       try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved&&String(saved.expected_tenant_id)===String(next.tenant_id)&&String(saved.expected_user_id)===String(next.telegram_id))pending=saved;}catch{}
-      $('tlRecover').hidden=!pending;if(!allowed){$('view-linear').classList.remove('active');return;}}
+      if(!allowed){$('view-linear').classList.remove('active');return;}}
     return changed&&allowed;
   }
   $('tlNav').onclick=()=>{if(window.tenantAppNavigate?.('linear',true))return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b===$('tlNav')));document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-linear'));load();};
@@ -150,7 +153,7 @@
   $('tlColumnDialog').addEventListener('cancel',event=>{event.preventDefault();closeColumnDialog();});
   $('tlColumnDialog').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeColumnDialog();}});
   $('tlColumnDialog').addEventListener('click',event=>{if(event.target===$('tlColumnDialog'))closeColumnDialog();});
-  $('tlSearch').onkeydown=event=>{if(event.key==='Enter')load();};$('tlCreate').onclick=()=>open('create');$('tlRecover').onclick=frozen;$('tlTaskClose').onclick=close;$('tlTaskCancel').onclick=close;
+  $('tlSearch').onkeydown=event=>{if(event.key==='Enter')load();};$('tlCreate').onclick=()=>open('create');$('tlTaskClose').onclick=close;$('tlTaskCancel').onclick=close;
   $('tlBoard').onclick=event=>{const card=event.target.closest('[data-issue]');if(!card)return;const row=rows.find(item=>item.id===card.dataset.issue);if(!row)return;
     if(event.target.closest('[data-edit]'))open('edit',row);else if(event.target.closest('[data-status]'))open('status',row);else{const action=event.target.closest('[data-button-id]');if(action){const button=row.capabilities.buttons.find(b=>b.id===action.dataset.buttonId);if(button)open('button',row,button);}}};
   function restoreView(){
