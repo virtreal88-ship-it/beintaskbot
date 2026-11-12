@@ -41,6 +41,18 @@ class TTDSocket:
         if self.close_fails:raise ValueError('synthetic failure')
 
 
+class FinalBeforeSendReturnsTTDSocket(TTDSocket):
+    async def send_json(self,event):
+        if event.get('close_socket'):
+            self.sent.append(copy.deepcopy(event))
+            await self.incoming.put({'is_final':True})
+            # Simulate a fast provider response arriving before aiohttp's
+            # send coroutine has returned to the writer task.
+            await asyncio.sleep(.02)
+            return
+        await super().send_json(event)
+
+
 class SlowCloseTTDSocket(TTDSocket):
     def __init__(self,*,close_fails=False):
         super().__init__(close_fails=close_fails)
@@ -74,6 +86,19 @@ class Lease:
 
 
 class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_final_frame_can_arrive_before_close_socket_send_returns(self):
+        guard=Guard();socket=FinalBeforeSendReturnsTTDSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        stream.feed('Hello, synthetic voice!')
+        self.assertEqual((await asyncio.wait_for(events.get(),2))[0],'audio')
+        stream.finish_input()
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('done',1,None))
+        await stream.wait_closed()
+        self.assertTrue(socket.closed)
+        self.assertTrue(stream.final_before_close_send_return)
+        self.assertTrue(any(event.get('close_socket') for event in socket.sent))
+
     async def test_streams_russian_and_azerbaijani_and_logs_only_aggregates(self):
         for phrase in ('Привет, как дела?', 'Salam, məni eşidirsən?'):
             with self.subTest(language='ru' if phrase.startswith('Привет') else 'az'):
