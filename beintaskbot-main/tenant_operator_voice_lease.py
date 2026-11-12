@@ -72,7 +72,8 @@ class VoiceSessionLease:
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
                           lease_until>now() AS live,
-                          (state='active' AND provider_kind='openai_realtime' AND provider_opened_at IS NOT NULL AND
+                          (state='active' AND provider_kind IN ('openai_realtime','openai_elevenlabs_tts') AND
+                           provider_opened_at IS NOT NULL AND
                            provider_opened_at <= now() - (%s * interval '1 second'))
                             AS provider_session_expired
                           FROM saas_operator_voice_lease
@@ -81,9 +82,10 @@ class VoiceSessionLease:
                         old = cur.fetchone()
                         # `starting` means provider startup may be in flight or
                         # its outcome is unknown, so never age-reclaim it.
-                        # Reclaim `active` only when the provider-open marker
-                        # proves startup completed and its maximum lifetime
-                        # elapsed. The incremented fence blocks stale owners.
+                        # Reclaim either supported Realtime-backed voice mode
+                        # only when the provider-open marker proves startup
+                        # completed and its maximum lifetime elapsed. The
+                        # incremented fence blocks stale owners.
                         if old and not (old['state']=='closed' or
                                         (old['state']=='active' and old['provider_session_expired'] is True)):
                             # Operational diagnosis only: never log tenant,

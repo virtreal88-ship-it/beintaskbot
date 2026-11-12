@@ -98,10 +98,59 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
     with patch('tenant_operator_voice_lease._connect', return_value=conn):
         assert lease._transaction('claim') == 5
 
+    select, _select_params = cursor.statements[1]
+    assert "provider_kind IN ('openai_realtime','openai_elevenlabs_tts')" in select
+    assert "provider_opened_at IS NOT NULL" in select
+    assert "provider_opened_at <= now() - (%s * interval '1 second')" in select
     update, params = cursor.statements[-2]
     assert "state='starting'" in update
     assert params[4] == 5  # new fencing token
     assert params[-1] == 4  # compare-and-swap against the old token
+    assert conn.commits == 1
+
+
+def test_confirmed_hybrid_realtime_lease_is_reclaimed_after_maximum_lifetime():
+    cursor = Cursor([
+        {
+            'session_id': str(uuid.uuid4()), 'actor_id': 77, 'owner_id': str(uuid.uuid4()),
+            'fence': 8, 'state': 'active', 'live': False,
+            'provider_session_expired': True,
+        },
+        {'fence': 9},
+        {'fence': 9},
+    ])
+    conn = Connection(cursor)
+    lease = VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='openai_elevenlabs_tts')
+
+    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+        assert lease._transaction('claim') == 9
+
+    select, params = cursor.statements[1]
+    assert "provider_kind IN ('openai_realtime','openai_elevenlabs_tts')" in select
+    assert params == (ACTIVE_RECOVERY_AFTER_SECONDS, *Authority.session_scope[:2])
+    update, update_params = cursor.statements[-2]
+    assert "state='starting'" in update
+    assert update_params[4] == 9
+    assert update_params[-1] == 8
+    assert conn.commits == 1
+
+
+def test_hybrid_active_lease_without_confirmed_expiry_remains_fail_closed():
+    cursor = Cursor([{
+        'session_id': str(uuid.uuid4()), 'actor_id': 77, 'owner_id': str(uuid.uuid4()),
+        'fence': 8, 'state': 'active', 'live': False,
+        'provider_session_expired': False,
+    }])
+    conn = Connection(cursor)
+    lease = VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='openai_elevenlabs_tts')
+
+    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+        assert lease._transaction('claim') is None
+
+    select, _params = cursor.statements[1]
+    assert "provider_kind IN ('openai_realtime','openai_elevenlabs_tts')" in select
+    assert "provider_opened_at IS NOT NULL" in select
+    assert len(cursor.statements) == 2  # no update or new claim
     assert conn.commits == 1
 
 
