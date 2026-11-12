@@ -5,7 +5,8 @@ import uuid
 
 from tenant_connect_phone_evidence import _pair, _belongs, _present
 
-LIMIT = 50
+SAMPLES_PER_REASON = 3
+CHUNK_SIZE = 100
 
 
 def classify(evidence, route, *, ledger=False):
@@ -35,7 +36,7 @@ def _timestamp(value):
 def diagnose(cur, tenant, channel, identities, token):
     """Call only after exact-pair owner preview. IDs never leave this function.
 
-    Samples are independently bounded per source. Full counts count rows, not
+    Samples are bounded per reason/source. Full counts count rows, not
     distinct events (the append-only ledger can contain both affected routes).
     """
     identities = sorted(set(identities))
@@ -47,23 +48,33 @@ def diagnose(cur, tenant, channel, identities, token):
         AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text
       WHERE m.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid
         AND c.conversation_id=ANY(%s) AND m.raw->>'conversationIdentityConflict'='true' ''',
-                'm.id AS ref,m.created_at AS stamp,c.conversation_id AS route,m.raw AS evidence', False)]
+                'm.id AS ref,m.created_at AS stamp,c.conversation_id AS route', False)]
     for table, name in [('saas_connect_identity_conflicts', 'first_conflict_ledger'),
                         ('saas_connect_identity_conflict_events', 'conflict_event_ledger')]:
         if _present(cur, table):
             queries.append((name, f'''FROM {table} WHERE tenant_id=%s::uuid
               AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s) ''',
-                            'event_id AS ref,created_at AS stamp,conversation_id AS route,evidence', True))
+                            'event_id AS ref,created_at AS stamp,conversation_id AS route', True))
     for name, where, columns, ledger in queries:
         args = (tenant, channel, identities)
-        cur.execute('SELECT count(*) AS n ' + where, args)
-        total = int(cur.fetchone()['n'])
-        cur.execute('SELECT ' + columns + ' ' + where + ' ORDER BY stamp,ref,route LIMIT %s', args + (LIMIT,))
-        rows = cur.fetchall()
-        samples, counts = [], Counter()
-        for row in rows:
+        raw = 'evidence' if ledger else 'm.raw'
+        fields = ('directIdentity','originalConversationId','canonicalConversationId',
+                  'pair_matches_conversation','_crm_provider_conversation_id','conversationId',
+                  'conversationIdentityConflictProvenance')
+        projection = "jsonb_build_object(" + ','.join("'%s',%s->'%s'" % (key,raw,key) for key in fields) + ')'
+        projection = "CASE WHEN jsonb_typeof(%s)='object' THEN %s ELSE NULL END AS evidence" % (raw,projection)
+        cur.execute('SELECT ' + columns + ',' + projection + ' ' + where + ' ORDER BY stamp,ref,route', args)
+        samples, counts, sampled = [], Counter(), Counter()
+        def rows():
+            while True:
+                chunk = cur.fetchmany(CHUNK_SIZE)
+                if not chunk: break
+                yield from chunk
+        for row in rows():
             reason = classify(row.get('evidence'), row['route'], ledger=ledger)
             counts[reason] += 1
+            if sampled[reason] >= SAMPLES_PER_REASON: continue
+            sampled[reason] += 1
             reference = token('conflict-event', tenant, channel, name, row['route'], str(row.get('ref')))
             item = {'event_ref': reference, 'reason': reason, 'recorded_at': _timestamp(row.get('stamp'))}
             evidence = row.get('evidence')
@@ -74,7 +85,7 @@ def diagnose(cur, tenant, channel, identities, token):
                 try: item['message_ref'] = str(uuid.UUID(str(row.get('ref'))))
                 except (ValueError, TypeError): pass
             samples.append(item)
-        sources.append({'source': name, 'total_rows': total, 'sampled_rows': len(rows),
-                        'truncated': total > len(rows), 'sample_reason_counts': dict(counts), 'samples': samples})
+        sources.append({'source': name, 'total_rows': sum(counts.values()), 'sampled_rows': len(samples),
+                        'samples_truncated': sum(counts.values()) > len(samples), 'reason_counts': dict(counts), 'samples': samples})
     return {'available': True, 'read_only': True, 'classification_is_identity_proof': False,
-            'sample_limit_per_source': LIMIT, 'sources': sources}
+            'sample_limit_per_reason': SAMPLES_PER_REASON, 'sources': sources}

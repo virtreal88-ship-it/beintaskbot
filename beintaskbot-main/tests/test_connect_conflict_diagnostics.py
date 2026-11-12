@@ -20,18 +20,21 @@ def test_shapes_do_not_grant_identity():
 class Cursor:
     def __init__(self): self.sql=[]
     def execute(self,sql,args):
-        self.sql.append((sql,args)); self.last=sql
+        self.sql.append((sql,args)); self.last=sql; self.read=False
         assert sql.startswith('SELECT ')
     def fetchone(self): return {'present':True,'n':70}
-    def fetchall(self):
-        return [{'ref':'00000000-0000-4000-8000-000000000123','stamp':datetime(2026,11,12,tzinfo=timezone.utc),'route':LID,
+    def fetchmany(self,size):
+        assert size == 100
+        if self.read: return []
+        self.read=True
+        return 70 * [{'ref':'00000000-0000-4000-8000-000000000123','stamp':datetime(2026,11,12,tzinfo=timezone.utc),'route':LID,
                  'evidence':{'conversationIdentityConflict':True,'conversationId':LID,'body':'SECRET CUSTOMER TEXT','apikey':'SECRET'}}]
 
 def test_bounded_scoped_redacted_read_only():
     c=Cursor(); result=diagnose(c,'tenant','channel',[LID,JID],lambda *x:hashlib.sha256(repr(x).encode()).hexdigest())
     assert result['classification_is_identity_proof'] is False
     assert len(result['sources'])==3
-    assert all(s['total_rows']==70 and s['truncated'] and s['sample_reason_counts']=={'missing_pair':1} for s in result['sources'])
+    assert all(s['total_rows']==70 and s['samples_truncated'] and s['reason_counts']=={'missing_pair':70} for s in result['sources'])
     payload=json.dumps(result)
     for secret in [LID,JID,'SECRET','apikey','body']: assert secret not in payload
     assert result['sources'][0]['samples'][0]['message_ref']=='00000000-0000-4000-8000-000000000123'
@@ -39,7 +42,8 @@ def test_bounded_scoped_redacted_read_only():
         if 'to_regclass' not in sql:
             assert args[:2]==('tenant','channel')
             assert 'ANY(%s)' in sql
-            if ' AS ref' in sql: assert 'LIMIT %s' in sql and args[-1]==50
+            if ' AS ref' in sql:
+                assert 'jsonb_build_object' in sql and 'body' not in sql and 'apikey' not in sql
 
 def test_requires_exact_two_routes():
     c=Cursor(); assert diagnose(c,'t','c',[LID],str)=={'available':False}; assert not c.sql
@@ -69,8 +73,22 @@ def test_native_postgres_scope_and_ledger():
             cur.execute(f'INSERT INTO {table}(tenant_id,connect_channel_id,conversation_id,event_id,evidence) VALUES(%s,%s,%s,%s,%s::jsonb)',(t,c,LID,'provider-event-private',json.dumps({'originalConversationId':LID,'canonicalConversationId':JID,'directIdentity':PAIR,'pair_matches_conversation':True})))
         result=diagnose(cur,tenant,channel,[LID,JID],lambda *x:hashlib.sha256(repr(x).encode()).hexdigest())
         assert [x['total_rows'] for x in result['sources']]==[1,1,1]
-        assert result['sources'][0]['sample_reason_counts']=={'missing_pair':1}
-        assert result['sources'][1]['sample_reason_counts']=={'paired_shape_compatible':1}
+        assert result['sources'][0]['reason_counts']=={'missing_pair':1}
+        assert result['sources'][1]['reason_counts']=={'paired_shape_compatible':1}
         assert 'provider-event-private' not in json.dumps(result)
         cur.execute('SELECT count(*) AS n FROM saas_crm_messages'); assert cur.fetchone()['n']==3
       conn.rollback()
+
+def test_late_pairless_blocker_counted_after_many_compatible_receipts():
+    class Many(Cursor):
+        def fetchmany(self,size):
+            self.read = int(self.read) + 1
+            if self.read > 2: return []
+            good={'ref':'private','route':LID,'stamp':None,'evidence':{'conversationId':LID,'originalConversationId':LID,'canonicalConversationId':JID,'directIdentity':PAIR,'pair_matches_conversation':True}}
+            bad={**good,'evidence':{}}
+            return [good]*100 if self.read == 1 else [good]*80+[bad]
+    result=diagnose(Many(),'t','c',[LID,JID],lambda *x:hashlib.sha256(repr(x).encode()).hexdigest())
+    for source in result['sources']:
+        assert source['reason_counts']=={'paired_shape_compatible':180,'missing_pair':1}
+        assert len(source['samples'])==4
+        assert source['samples'][-1]['reason']=='missing_pair'
