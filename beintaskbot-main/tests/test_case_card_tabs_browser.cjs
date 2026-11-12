@@ -39,7 +39,20 @@ function installCaseTabsFixture(){
   await page.locator(selectors[0]).focus();
   for(const [key,direction] of [['Tab',1],['Shift+Tab',-1]]){
    for(let step=1;step<=selectors.length;step++){
+    const previous=selectors[(direction*(step-1)+selectors.length)%selectors.length];
     await page.keyboard.press(key);const selector=selectors[(direction*step+selectors.length)%selectors.length];
+    // Chromium datetime-local exposes multiple native segments on one DOM input.
+    // Traverse only that exact prior control; never skip an unexpected DOM node.
+    if(previous==='#supportResponseDueAt'){
+     let segments=0;
+     while(await page.locator(previous).evaluate(node=>node===document.activeElement)){
+      assert.equal(await page.locator(previous).getAttribute('type'),'datetime-local');
+      assert.equal(await page.locator(previous).isVisible(),true,label+' native segment remains visible');
+      assert.equal(await page.evaluate(()=>!document.querySelector('#supportDetail').hidden&&document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,label+' native segment remains in active modal');
+      assert(++segments<=8,label+' native datetime traversal is bounded');
+      await page.keyboard.press(key);
+     }
+    }
     const actual=await page.evaluate(()=>document.activeElement.outerHTML.slice(0,240));
     assert.equal(await page.locator(selector).evaluate(node=>node===document.activeElement),true,label+' '+key+' reaches '+selector+', got '+actual);
     assert.equal(await page.locator(selector).isVisible(),true,label+' never focuses a hidden control');
