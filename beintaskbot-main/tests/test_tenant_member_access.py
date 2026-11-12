@@ -158,11 +158,11 @@ def test_native_view_disabled_preserves_external_authority_without_menu_override
     changed = with_result(person, apply_access_patch(person, {'actions': {module: {'view': False}}}))
     assert TenantPolicy(changed).allows(module)
     assert not TenantPolicy(changed).allows_action(module, 'view')
-    assert page_capabilities(changed)[module]
+    assert page_capabilities(changed)[module] is (module != 'deals')
     if module == 'customers':
         assert not page_capabilities(changed)['companies']
     changed['workflow']['policies']['members']['20']['page_visibility'] = {module: False}
-    assert page_capabilities(changed)[module]
+    assert page_capabilities(changed)[module] is (module != 'deals')
     assert TenantPolicy(changed).allows(module)
 
 
@@ -194,6 +194,9 @@ def test_deals_only_contacts_prerequisite_requires_pipeline_scope():
 
 def test_customers_only_legacy_grant_can_open_shared_kommo_deals_feed():
     person = profile(role='manager', permissions=['customers'], modules={'customers': True})
+    assert not page_capabilities(person)['deals']
+    person['workflow']['pipelines'] = [{'pipeline_id': 10, 'owner_telegram_id': 20, 'active': True}]
+    person['workflow']['policies']['members']['20']['pipeline_ids'] = ['10']
     assert page_capabilities(person)['deals']
     assert not any(action_capabilities(person)['deals'].values())
     assert not TenantPolicy(person).allows('deals')
