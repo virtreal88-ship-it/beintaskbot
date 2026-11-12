@@ -2,3 +2,5 @@
 !Dockerfile
 !patch-status.cjs
 !test-status.cjs
+!patch-direct-identity.cjs
+!test-direct-identity.cjs
