@@ -55,6 +55,7 @@ class RealPostgresLeaseTests(unittest.IsolatedAsyncioTestCase):
             conn.execute(Path(__file__).with_name('voice_session_lease.sql').read_text())
             conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_open.sql').read_text())
             conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_kind.sql').read_text())
+            conn.execute((Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_hybrid_recovery.sql').read_text())
 
     @classmethod
     def tearDownClass(cls):
@@ -111,17 +112,18 @@ os._exit(0)
                               env={'TEST_DATABASE_URL':self.dsn,'PYTHONPATH':os.environ['PYTHONPATH']})
         self.assertEqual(result.returncode,0,result.stderr)
 
-    async def test_hybrid_owner_process_exit_remains_fail_closed_after_lifetime(self):
+    async def test_hybrid_owner_process_exit_reclaims_only_after_provider_lifetime(self):
         authority=Authority(self.tenant)
         self.crash_after_claim(authority,True,'openai_elevenlabs_tts')
         self.expire(7,provider_age=True)
         contender=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
-        self.assertIsNone(await contender.claim(authority.session_scope))
-        with self.assertRaises(psycopg.Error):
-            with self.connect() as conn:
-                conn.execute("UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7",(str(uuid.uuid4()),str(uuid.uuid4()),self.tenant))
+        self.assertEqual(await contender.claim(authority.session_scope),2)
+        with self.connect() as conn:
+            state,kind,marker,fence=conn.execute("SELECT state,provider_kind,provider_opened_at,fence FROM saas_operator_voice_lease WHERE tenant_id=%s AND actor_id=7",(self.tenant,)).fetchone()
+        self.assertEqual((state,kind,marker,fence),('starting','openai_realtime',None,2))
+        self.assertTrue(await contender.release(authority.session_scope,2))
 
-    async def test_hybrid_crash_is_not_reclaimed_by_new_or_legacy_worker(self):
+    async def test_hybrid_crash_recovery_requires_marker_and_maximum_lifetime(self):
         authority=Authority(self.tenant)
         for active in (False,True):
             with self.subTest(active=active):
@@ -134,13 +136,40 @@ os._exit(0)
                 else:
                     self.expire(7)
                 contender=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()))
-                self.assertIsNone(await contender.claim(authority.session_scope))
+                if active:
+                    self.assertEqual(await contender.claim(authority.session_scope),fence+1)
+                    self.assertFalse(await owner.release(authority.session_scope,fence))
+                else:
+                    self.assertIsNone(await contender.claim(authority.session_scope))
                 with self.assertRaises(psycopg.Error):
                     with self.connect() as conn:
                         conn.execute("""UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,
                           fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7""",
                           (str(uuid.uuid4()),str(uuid.uuid4()),self.tenant))
-                self.assertTrue(await owner.release(authority.session_scope,fence))
+                if active:
+                    self.assertTrue(await contender.release(authority.session_scope,fence+1))
+                else:
+                    self.assertTrue(await owner.release(authority.session_scope,fence))
+
+    async def test_mixed_worker_reclaim_of_hybrid_requires_expired_provider_bound(self):
+        authority=Authority(self.tenant)
+        owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
+        fence=await owner.claim(authority.session_scope)
+        await owner.confirm_provider_open(authority.session_scope,fence)
+        self.expire(7)
+        with self.assertRaises(psycopg.Error):
+            with self.connect() as conn:
+                conn.execute("""UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,
+                  fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7""",
+                  (str(uuid.uuid4()),str(uuid.uuid4()),self.tenant))
+        self.expire(7,provider_age=True)
+        new_session,new_owner=str(uuid.uuid4()),str(uuid.uuid4())
+        with self.connect() as conn:
+            row=conn.execute("""UPDATE saas_operator_voice_lease SET session_id=%s,owner_id=%s,
+              fence=fence+1,state='starting' WHERE tenant_id=%s AND actor_id=7
+              RETURNING session_id::text,owner_id::text,fence,state,provider_kind,provider_opened_at""",
+              (new_session,new_owner,self.tenant)).fetchone()
+        self.assertEqual(row,(new_session,new_owner,fence+1,'starting','unknown',None))
 
     async def test_legacy_closed_claim_clears_hybrid_kind_and_old_marker(self):
         authority=Authority(self.tenant)
@@ -199,7 +228,9 @@ os._exit(0)
 
     async def test_scope_immutable_and_migration_is_repeatable(self):
         migration=(Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_provider_kind.sql').read_text()
+        hybrid_migration=(Path(__file__).parents[2] / 'beintaskbot-main/migrations/voice_lease_hybrid_recovery.sql').read_text()
         with self.connect(autocommit=True) as conn:conn.execute(migration)
+        with self.connect(autocommit=True) as conn:conn.execute(hybrid_migration)
         authority=Authority(self.tenant)
         owner=lease_module.VoiceSessionLease(authority,str(uuid.uuid4()),provider_kind='openai_elevenlabs_tts')
         fence=await owner.claim(authority.session_scope)

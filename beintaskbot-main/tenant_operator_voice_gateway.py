@@ -75,6 +75,63 @@ _VOICE_ACTIVITY_COUNTERS=(
     'provider_events','provider_event_process_ms','provider_event_queue_max_ms',
 )
 
+_ACTIVE_VOICE_SESSIONS = web.AppKey('active_voice_sessions', set)
+_VOICE_SHUTDOWN_INSTALLED = web.AppKey('voice_shutdown_installed', bool)
+
+
+def install_voice_shutdown(app):
+    """Install graceful per-Worker voice cleanup before the aiohttp app freezes."""
+    if app.get(_VOICE_SHUTDOWN_INSTALLED, False):
+        return
+    app[_ACTIVE_VOICE_SESSIONS] = set()
+    app.on_shutdown.append(_shutdown_voice_sessions)
+    app[_VOICE_SHUTDOWN_INSTALLED] = True
+
+
+async def _shutdown_voice_sessions(app):
+    sessions = tuple(app.get(_ACTIVE_VOICE_SESSIONS, ()))
+    if not sessions:
+        return
+
+    async def close_session(session):
+        try:
+            confirmed = await session.end('worker_shutdown')
+            if not confirmed and getattr(session, '_opening', False):
+                # A startup can be cancelled at the same time Railway asks
+                # the old Worker to stop. Let start() finish its own provider
+                # cleanup and exact-fence release before shutting down.
+                start_task = getattr(session, '_start_task', None)
+                if start_task is not None and start_task is not asyncio.current_task():
+                    try:
+                        await asyncio.shield(start_task)
+                    except BaseException:
+                        pass
+                confirmed = getattr(session, 'fence', None) is None
+        except BaseException:
+            confirmed = False
+        if confirmed or getattr(session, 'fence', None) is None:
+            app[_ACTIVE_VOICE_SESSIONS].discard(session)
+            return True
+        return False
+
+    results = await asyncio.gather(*(close_session(session) for session in sessions))
+    unconfirmed = sum(result is not True for result in results)
+    if unconfirmed:
+        # Counts only. An uncertain provider close keeps its lease fail-closed.
+        _LOG.warning('realtime_voice_worker_shutdown_close_unconfirmed count=%d', unconfirmed)
+
+
+def _register_voice_session(app, session):
+    sessions = app.get(_ACTIVE_VOICE_SESSIONS)
+    if isinstance(sessions, set):
+        sessions.add(session)
+
+
+def _unregister_voice_session(app, session):
+    sessions = app.get(_ACTIVE_VOICE_SESSIONS)
+    if isinstance(sessions, set):
+        sessions.discard(session)
+
 
 def _provider_failure_fields(stage,event,exc):
     """Return allowlisted protocol diagnostics, never provider/user payloads."""
@@ -268,6 +325,8 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         socket_client=SocketClient(ws,activity)
         try:
             session=build_session(scope, socket_client)
+            request_app=getattr(request, 'app', None)
+            if request_app is not None:_register_voice_session(request_app, session)
             async def read_frames():
                 count=0;window=time.monotonic()
                 try:
@@ -493,7 +552,10 @@ def make_handler(*, allowed_origins, authenticate, build_session):
         finally:
             try:
                 if session is not None:
-                    await session.end('disconnected')
+                    ended = await session.end('disconnected')
+                    if ended or getattr(session, 'fence', None) is None:
+                        request_app=getattr(request, 'app', None)
+                        if request_app is not None:_unregister_voice_session(request_app, session)
             finally:
                 if reader is not None:
                     reader.cancel()

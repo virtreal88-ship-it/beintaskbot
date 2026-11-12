@@ -23,6 +23,7 @@ class BootstrapTests(unittest.TestCase):
         builder.read_timeout.return_value = builder
         builder.write_timeout.return_value = builder
         builder.post_init.return_value = builder
+        builder.post_shutdown.return_value = builder
         builder.build.return_value = app
         with (
             patch.object(bootstrap.Application, "builder", return_value=builder),
@@ -31,7 +32,7 @@ class BootstrapTests(unittest.TestCase):
             patch.object(bootstrap, "MessageHandler", side_effect=lambda filt, cb: ("message", filt, cb)),
         ):
             result = bootstrap.build_telegram_application(
-                token="hidden", post_init=Mock(),
+                token="hidden", post_init=Mock(), post_shutdown=Mock(),
                 command_handlers=[("start", Mock())],
                 callback_handlers=[("^x", Mock())],
                 message_handlers=[("filter", Mock())],
@@ -42,6 +43,29 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(app.add_handler.call_count, 3)
         app.job_queue.run_repeating.assert_called_once()
         app.job_queue.run_daily.assert_called_once()
+        builder.post_shutdown.assert_called_once()
+
+    def test_http_server_handle_cleans_runner_on_its_own_loop(self):
+        import asyncio
+        import threading
+
+        state = {}
+
+        class Runner:
+            async def cleanup(self):
+                state['cleanup_thread'] = threading.get_ident()
+
+        async def start_server():
+            state['server_thread'] = threading.get_ident()
+            return Runner()
+
+        async def run():
+            handle = bootstrap.start_http_thread(start_server, Mock())
+            await handle.stop()
+            self.assertFalse(handle.thread.is_alive())
+
+        asyncio.run(run())
+        self.assertEqual(state['cleanup_thread'], state['server_thread'])
 
     def test_polling_keeps_update_and_queue_contract(self):
         app = Mock()

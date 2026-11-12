@@ -1,7 +1,9 @@
 """Synthetic real Session plus hybrid wire; no network or credentials."""
 import asyncio,base64,copy,unittest,uuid
+from aiohttp import web
 from tenant_operator_realtime_wire import SyntheticHybridRealtimeWire,MODEL,QUOTE,MINIMUM_HOLD
 from tenant_operator_voice_session import Session
+from tenant_operator_voice_gateway import _ACTIVE_VOICE_SESSIONS, install_voice_shutdown
 
 class Socket:
     synthetic_only=True
@@ -121,3 +123,42 @@ class AliSessionIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.session.end('test'))
         self.assertTrue(self.lease.held);self.assertFalse(self.lease.released)
         self.assertEqual(self.client.events[-1]['type'],'end_unconfirmed')
+
+    async def test_stop_waits_for_slow_confirmed_provider_close_and_releases_lease(self):
+        original_close=self.wire.close
+        async def slow_close():
+            await asyncio.sleep(.6)
+            await original_close()
+        self.wire.close=slow_close
+        await self.session.receive_client({'type':'end'})
+        self.assertFalse(self.lease.held)
+        self.assertTrue(self.lease.released)
+
+    async def test_worker_shutdown_drains_session_and_allows_immediate_new_claim(self):
+        app=web.Application()
+        install_voice_shutdown(app)
+        self.assertTrue(await self.session.end('test_finish_before_restart'))
+        # Start a new connection on the same app and lease owner scope, then
+        # emulate Railway's graceful SIGTERM hook while it is active.
+        self.socket=Socket();self.streams=[];self.client=Client()
+        self.wire=SyntheticHybridRealtimeWire(self.socket,Guard(),None,
+            lambda *args: FakeTTS(*args))
+        self.session=Session(self.scope,authority=Authority(),ledger=Ledger(),lease=self.lease,
+            context=Context(),provider=self.wire,client=self.client,duplex=True)
+        await self.session.start()
+        app[_ACTIVE_VOICE_SESSIONS].add(self.session)
+        runner=web.AppRunner(app)
+        await runner.setup()
+        await runner.cleanup()
+        self.assertFalse(self.lease.held)
+        self.assertEqual(len(app[_ACTIVE_VOICE_SESSIONS]),0)
+
+        # A clean close is all the new Worker needs before the next claim.
+        self.socket=Socket();self.streams=[];self.client=Client()
+        self.wire=SyntheticHybridRealtimeWire(self.socket,Guard(),None,
+            lambda *args: FakeTTS(*args))
+        next_session=Session(self.scope,authority=Authority(),ledger=Ledger(),lease=self.lease,
+            context=Context(),provider=self.wire,client=self.client,duplex=True)
+        await next_session.start()
+        self.assertTrue(self.lease.held)
+        await next_session.end('test_cleanup')

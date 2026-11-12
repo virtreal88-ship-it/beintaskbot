@@ -43,7 +43,7 @@ class Cursor:
             key=tuple(args[-2:])
             self.row=dict(self.store.rows[key]) if key in self.store.rows else None
             if self.row:
-                self.row['provider_session_expired']=(self.row.get('provider_session_expired',False) and self.row.get('provider_kind')=='openai_realtime')
+                self.row['provider_session_expired']=(self.row.get('provider_session_expired',False) and self.row.get('provider_kind') in ('openai_realtime','openai_elevenlabs_tts'))
         elif sql.lstrip().startswith('INSERT INTO saas_operator_voice_lease'):
             tenant,actor,channel,conversation,session,owner,fence,ttl=args
             key=(tenant,actor)
@@ -128,6 +128,18 @@ class VoiceLeaseTests(unittest.IsolatedAsyncioTestCase):
             await first.assert_current(authority.session_scope,1)
             await first.confirm_provider_open(authority.session_scope,1)
             self.assertEqual(store.rows[('tenant',17)]['state'],'active')
+            store.rows[('tenant',17)]['live']=False
+            store.rows[('tenant',17)]['provider_session_expired']=True
+            self.assertEqual(await second.claim(authority.session_scope),2)
+            with self.assertRaises(TenantLinearError):await first.assert_current(authority.session_scope,1)
+
+    async def test_confirmed_hybrid_open_can_be_reclaimed_after_maximum_provider_lifetime(self):
+        store=Store();authority=FakeAuthority()
+        first=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000015',provider_kind='openai_elevenlabs_tts')
+        second=lease_module.VoiceSessionLease(authority,'00000000-0000-0000-0000-000000000016')
+        with patch.object(lease_module,'_connect',store.connect):
+            self.assertEqual(await first.claim(authority.session_scope),1)
+            await first.confirm_provider_open(authority.session_scope,1)
             store.rows[('tenant',17)]['live']=False
             store.rows[('tenant',17)]['provider_session_expired']=True
             self.assertEqual(await second.claim(authority.session_scope),2)

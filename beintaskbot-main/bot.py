@@ -18865,7 +18865,9 @@ async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
     _register_legacy_web_routes(app_web)
     _register_tenant_web_routes(app_web)
-    runner = web.AppRunner(app_web)
+    # Voice shutdown needs a bounded window to close OpenAI and ElevenLabs
+    # transports before aiohttp force-closes remaining request handlers.
+    runner = web.AppRunner(app_web, shutdown_timeout=30)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
@@ -18923,6 +18925,7 @@ async def start_webhook_server():
             logger.exception("Tenant AI queue worker could not start; HTTP service remains available")
     app_web["tenant_ai_agent_startup"] = asyncio.create_task(
         _start_tenant_ai_worker(), name="tenant-ai-agent-startup")
+    return runner
 
 
 def _rehydrate_tecili_tasks():
@@ -19804,7 +19807,7 @@ def main():
     _prepare_database_with_retry(prepare_database)
     from tenant_scoped_access import scoped_access_enabled
     logger.info("Scoped access rollout enabled=%s", scoped_access_enabled())
-    start_http_thread(start_webhook_server, logger)
+    http_server = start_http_thread(start_webhook_server, logger)
     async def post_init(application: Application) -> None:
         remove_retired_employee_access()
         ensure_known_employee_registrations()
@@ -19830,9 +19833,18 @@ def main():
         except Exception as exc:
             logger.warning("Could not remove Telegram Mini App menu button: %s", exc)
 
+    async def post_shutdown(application: Application) -> None:
+        # Railway sends SIGTERM before stopping the old deployment. Stop aiohttp
+        # on its owning loop so its on_shutdown hook drains active voice leases.
+        try:
+            await http_server.stop()
+        except Exception:
+            logger.warning("HTTP server shutdown did not confirm completion")
+
     app = build_telegram_application(
         token=TELEGRAM_TOKEN,
         post_init=post_init,
+        post_shutdown=post_shutdown,
         command_handlers=[("start", start_command), ("role", role_command)],
         callback_handlers=[
             ("^reg_", registration_type_callback),

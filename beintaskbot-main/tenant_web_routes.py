@@ -251,6 +251,10 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
 
 
 def register_feature_routes(app: web.Application, context: TenantWebContext) -> None:
+    # Install before AppRunner freezes the application. A graceful Worker
+    # shutdown must drain active voice sessions before Railway tears it down.
+    from tenant_operator_voice_gateway import install_voice_shutdown
+    install_voice_shutdown(app)
     for method, path, handle in feature_routes(context):
         # AI agent CRUD also needs PATCH and DELETE; register explicitly so
         # every module route is mounted instead of silently becoming POST-only.

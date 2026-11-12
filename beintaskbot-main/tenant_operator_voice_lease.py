@@ -13,6 +13,10 @@ from tenant_platform import _connect
 
 LEASE_SECONDS = 15
 # OpenAI documents a hard maximum Realtime session duration of 60 minutes.
+# For hybrid sessions, ElevenLabs documents that its TTD WebSocket ends after
+# 20 seconds without client messages; the OpenAI session is the longer bound.
+# https://developers.openai.com/api/docs/guides/realtime-conversations
+# https://elevenlabs.io/docs/api-reference/text-to-dialogue/ttd-websocket
 # Only `provider_opened_at`, committed after provider startup succeeds, can
 # make an active lease age-recoverable. Uncertain startup remains fail-closed.
 # The five-minute margin covers provider shutdown and scheduling delay; a mere
@@ -72,7 +76,7 @@ class VoiceSessionLease:
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
                           lease_until>now() AS live,
-                          (state='active' AND provider_kind='openai_realtime' AND provider_opened_at IS NOT NULL AND
+                          (state='active' AND provider_kind IN ('openai_realtime','openai_elevenlabs_tts') AND provider_opened_at IS NOT NULL AND
                            provider_opened_at <= now() - (%s * interval '1 second'))
                             AS provider_session_expired
                           FROM saas_operator_voice_lease
@@ -145,12 +149,23 @@ class VoiceSessionLease:
                         conn.commit()
                         return bool(row and int(row['fence'])==fence)
                     if operation == 'release':
+                        exact = (*self.key,self.channel,self.conversation,self.session_id,self.owner_id,fence)
                         cur.execute('''UPDATE saas_operator_voice_lease SET state='closed',lease_until=now(),
                           updated_at=now(),closed_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid
                             AND conversation_id=%s AND session_id=%s::uuid AND owner_id=%s::uuid
                           AND fence=%s AND state IN ('starting','active') RETURNING fence''',
-                          (*self.key,self.channel,self.conversation,self.session_id,self.owner_id,fence))
+                          exact)
                         row=cur.fetchone()
+                        if not row:
+                            # A connection can drop after Postgres committed
+                            # but before the caller received the result. Treat
+                            # only this exact fenced row's persisted closure as
+                            # success, making release safe to retry.
+                            cur.execute('''SELECT fence FROM saas_operator_voice_lease
+                              WHERE tenant_id=%s::uuid AND actor_id=%s AND channel_id=%s::uuid
+                                AND conversation_id=%s AND session_id=%s::uuid AND owner_id=%s::uuid
+                                AND fence=%s AND state='closed' AND closed_at IS NOT NULL''', exact)
+                            row=cur.fetchone()
                         conn.commit()
                         return bool(row and int(row['fence'])==fence)
                     raise ValueError('unknown_lease_operation')
@@ -183,6 +198,16 @@ class VoiceSessionLease:
     async def release(self, scope, fence):
         if scope != self.scope or self.fence is None or fence != self.fence:
             return False
-        released=await asyncio.to_thread(self._transaction,'release',fence)
-        if released:self.fence=None
-        return released
+        for attempt in range(3):
+            try:
+                released=await asyncio.to_thread(self._transaction,'release',fence)
+            except TenantLinearError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(.1 * (2 ** attempt))
+                continue
+            if released:
+                self.fence=None
+                return True
+            return False
+        return False

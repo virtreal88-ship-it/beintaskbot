@@ -115,6 +115,10 @@ class Session:
     LOCAL_ANALYSIS_SAMPLES = 240  # 10 ms at 24 kHz.
     LOCAL_SILENCE_BYTES = 24000  # 500 ms at 24 kHz mono PCM16.
     LOCAL_SPEECH_GATE_TIMEOUT = 1.5
+    # Closing both provider transports may each take up to three seconds.
+    # Leave room for in-flight operations, policy cleanup and the fenced DB
+    # release so Stop and Worker SIGTERM are not cut off early.
+    SHUTDOWN_TIMEOUT_SECONDS = 15.0
 
     def __init__(self, scope, *, authority, ledger, lease, context, provider, client, history=None,
                  max_seconds=120, idle_seconds=30, poll_seconds=1, executor='local-prototype', session_id=None,
@@ -268,11 +272,12 @@ class Session:
         self.client_event_lock = asyncio.Lock()
         self.client_lock = asyncio.Lock()
         self.retry_lock = asyncio.Lock()
-        self.shutdown_timeout = .5
+        self.shutdown_timeout = self.SHUTDOWN_TIMEOUT_SECONDS
         self._end_task = None
         self._opening = False
         self._stop_requested = False
         self._open_task = None
+        self._start_task = None
         self._latency_response_sent_at = None
         self._latency_first_audio_at = None
         self._latency_first_audio_item = None
@@ -493,6 +498,7 @@ class Session:
             return await self.provider.receive()
 
     async def start(self):
+        self._start_task = asyncio.current_task()
         if self.open_attempted or self._stop_requested:
             raise Refused('session_already_started')
         if self.pilot_policy is not None:
@@ -624,6 +630,7 @@ class Session:
             raise
         finally:
             self._opening = False
+            self._start_task = None
 
     @staticmethod
     def _check_receipt(receipt, scope, state):

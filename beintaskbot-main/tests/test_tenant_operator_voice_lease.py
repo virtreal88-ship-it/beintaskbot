@@ -93,12 +93,15 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
         {'fence': 5},
     ])
     conn = Connection(cursor)
-    lease = _lease()
+    lease = VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='openai_elevenlabs_tts')
 
     with patch('tenant_operator_voice_lease._connect', return_value=conn):
         assert lease._transaction('claim') == 5
 
     update, params = cursor.statements[-2]
+    select, select_params = cursor.statements[1]
+    assert "provider_kind IN ('openai_realtime','openai_elevenlabs_tts')" in select
+    assert select_params == (ACTIVE_RECOVERY_AFTER_SECONDS, *Authority.session_scope[:2])
     assert "state='starting'" in update
     assert params[4] == 5  # new fencing token
     assert params[-1] == 4  # compare-and-swap against the old token
@@ -144,3 +147,35 @@ def test_claim_uses_provider_kind_and_transactional_exact_fence():
     assert params[0] == 'openai_elevenlabs_tts'
     assert params[-3:] == (lease.session_id, lease.owner_id, 1)
     assert conn.commits == 1
+
+
+def test_release_confirms_only_the_same_already_closed_fenced_row():
+    lease = _lease()
+    lease.fence = 7
+    cursor = Cursor([None, {'fence': 7}])
+    conn = Connection(cursor)
+    with patch('tenant_operator_voice_lease._connect', return_value=conn):
+        assert lease._transaction('release', 7) is True
+    update, params = cursor.statements[-2]
+    verify, verify_params = cursor.statements[-1]
+    assert "state IN ('starting','active')" in update
+    assert "state='closed' AND closed_at IS NOT NULL" in verify
+    assert params == verify_params
+    assert params[-1] == 7
+    assert conn.commits == 1
+
+
+def test_release_retries_a_transient_database_failure_with_same_fence():
+    import asyncio
+    from tenant_operator_voice_lease import TenantLinearError
+
+    lease = _lease()
+    lease.fence = 8
+    with patch.object(lease, '_transaction', side_effect=[
+        TenantLinearError('unavailable', 503), True,
+    ]) as transaction:
+        assert asyncio.run(lease.release(lease.scope, 8)) is True
+    assert transaction.call_count == 2
+    assert transaction.call_args_list[0].args == ('release', 8)
+    assert transaction.call_args_list[1].args == ('release', 8)
+    assert lease.fence is None
