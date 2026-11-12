@@ -31,7 +31,10 @@ _SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','vo
 _SAFE_TRANSPORT_CODES=frozenset({'websocket_closed','websocket_error','websocket_nontext_frame',
                                  'provider_message_too_large','provider_json_invalid','provider_event_invalid'})
 _SAFE_TRANSPORT_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
-_SAFE_LOCAL_TTD_CODES=frozenset({'tts_audio_invalid','tts_ended_early'})
+_SAFE_LOCAL_TTD_CODES=frozenset({
+    'tts_audio_invalid','tts_audio_base64_invalid','tts_audio_frame_too_large',
+    'tts_audio_limit_exceeded','tts_audio_unaligned_final','tts_ended_early',
+})
 
 
 def _safe_close_code(value):
@@ -135,6 +138,7 @@ class ElevenTTDStream:
         self._close_socket_started=False
         self.final_before_close_send_return=False
         self.close_unconfirmed=False;self.attempted_chars=0;self.pcm_chunks=0
+        self.empty_audio_frames=0;self.odd_audio_frames=0
         self.first_text_at=None;self.first_pcm_at=None
         self._text_submitted=asyncio.Event();self._pending_receive=None
 
@@ -224,6 +228,8 @@ class ElevenTTDStream:
     async def _read(self):
         pending=bytearray();next_event=None
         async def send_audio(size):
+            size-=size%2
+            if size<=0:return
             pcm=bytes(pending[:size]);del pending[:size]
             if pcm and self._current():await self.emit(('audio',self.epoch,base64.b64encode(pcm).decode('ascii')))
         try:
@@ -242,16 +248,31 @@ class ElevenTTDStream:
                 if event.get('error') is not None:raise _TTDProviderError(event)
                 encoded=event.get('audio')
                 if encoded is not None:
-                    if not isinstance(encoded,str) or not encoded or len(encoded)>4*((MAX_AUDIO_BYTES+2)//3):
+                    if not isinstance(encoded,str):
                         raise ValueError('tts_audio_invalid')
+                    if not encoded:
+                        # Some terminal frames carry an empty audio field next
+                        # to is_final. The final marker below still closes the
+                        # stream; an empty chunk contributes no PCM samples.
+                        self.empty_audio_frames+=1
+                        encoded=None
+                if encoded is not None:
+                    if len(encoded)>4*((MAX_AUDIO_BYTES+2)//3):
+                        raise ValueError('tts_audio_frame_too_large')
                     try:pcm=base64.b64decode(encoded,validate=True)
-                    except (ValueError,TypeError,binascii.Error):raise ValueError('tts_audio_invalid') from None
-                    if not pcm or len(pcm)%2 or self.audio_bytes+len(pcm)>MAX_AUDIO_BYTES:raise ValueError('tts_audio_invalid')
-                    if self.first_pcm_at is None:self.first_pcm_at=time.monotonic()
-                    self.audio_bytes+=len(pcm);self.pcm_chunks+=1;pending.extend(pcm)
-                    audio_deadline=asyncio.get_running_loop().time()+NEXT_PCM_TIMEOUT
-                    while len(pending)>=MAX_CLIENT_AUDIO_BYTES:await send_audio(MAX_CLIENT_AUDIO_BYTES)
+                    except (ValueError,TypeError,binascii.Error):raise ValueError('tts_audio_base64_invalid') from None
+                    if not pcm:
+                        self.empty_audio_frames+=1
+                    if self.audio_bytes+len(pcm)>MAX_AUDIO_BYTES:
+                        raise ValueError('tts_audio_limit_exceeded')
+                    if pcm:
+                        if len(pcm)%2:self.odd_audio_frames+=1
+                        if self.first_pcm_at is None:self.first_pcm_at=time.monotonic()
+                        self.audio_bytes+=len(pcm);self.pcm_chunks+=1;pending.extend(pcm)
+                        audio_deadline=asyncio.get_running_loop().time()+NEXT_PCM_TIMEOUT
+                        while len(pending)>=MAX_CLIENT_AUDIO_BYTES:await send_audio(MAX_CLIENT_AUDIO_BYTES)
                 if event.get('is_final') is True:
+                    if len(pending)%2:raise ValueError('tts_audio_unaligned_final')
                     if pending:await send_audio(len(pending))
                     return
         finally:
@@ -316,7 +337,9 @@ class ElevenTTDStream:
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
             _LOG.info('realtime_tts_activity provider=elevenlabs_ali attempted_chars=%d pcm_bytes=%d '
-                      'pcm_chunks=%d first_text_to_pcm_ms=%d final_before_close_send_return=%s',
+                      'pcm_chunks=%d empty_audio_frames=%d odd_audio_frames=%d '
+                      'first_text_to_pcm_ms=%d final_before_close_send_return=%s',
                       min(self.attempted_chars,MAX_RESPONSE_CHARS),min(self.audio_bytes,MAX_AUDIO_BYTES),
-                      min(self.pcm_chunks,10**9),first_ms,self.final_before_close_send_return)
+                      min(self.pcm_chunks,10**9),min(self.empty_audio_frames,10**6),
+                      min(self.odd_audio_frames,10**6),first_ms,self.final_before_close_send_return)
             await self.emit((result,self.epoch,failure))
