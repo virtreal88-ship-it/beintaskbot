@@ -167,6 +167,7 @@
       '<div id="tkBody" hidden>',
       '<p id="tkStatus" role="status"></p>',
       '<div id="tkEmployees"></div>',
+      '<div id="tkCrmSyncHost"></div>',
       '<div id="tkManual">',
       '<p>Mövcud şəxsi Kommo inteqrasiyanızın long-lived tokenindən istifadə edin; yenisini yaratmağa ehtiyac yoxdur. Token güclü giriş hüquqlarına malik ola bilər və Kommo-da ləğv edilə bilər. Token yalnız Kommo hesabında yoxlanılır, serverdə şifrəli saxlanır və yenidən göstərilmir. Tokeni söhbətdə göndərməyin.</p>',
       '<p><a href="https://developers.kommo.com/docs/long-lived-token" target="_blank" rel="noopener noreferrer">Kommo long-lived token təlimatı</a></p>',
