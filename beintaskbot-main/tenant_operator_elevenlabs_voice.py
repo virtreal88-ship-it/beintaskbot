@@ -24,7 +24,6 @@ FIRST_PCM_TIMEOUT=10
 NEXT_PCM_TIMEOUT=5
 FINAL_DRAIN_TIMEOUT=120
 FINAL_SEND_DRAIN_TIMEOUT=3
-GRACEFUL_CLOSE_TIMEOUT=10
 _LOG=logging.getLogger(__name__)
 _SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','voice_not_found',
                                   'quota_exceeded','max_character_limit_exceeded'})
@@ -146,6 +145,7 @@ class ElevenTTDStream:
         self.first_text_at=None;self.first_pcm_at=None
         self._text_submitted=asyncio.Event();self._pending_receive=None
         self._shutdown_close_requested=False;self._provider_final_received=False
+        self._transport_close_confirmed=False
 
     def start(self):
         if self.task is not None:raise ValueError('tts_started')
@@ -172,7 +172,7 @@ class ElevenTTDStream:
         if self.task is not None and not self.task.done() and self._started and not self._cleaning:self.task.cancel()
 
     def close_gracefully(self):
-        """Close an active provider stream with its documented final frame."""
+        """Close an active provider stream with the documented terminal command."""
         if self.finished or self.cancelled:return False
         if self.task is None or self.task.done() or self.socket is None:
             self.cancel_now()
@@ -184,7 +184,8 @@ class ElevenTTDStream:
 
     async def wait_closed(self):
         if self.task is not None:await asyncio.shield(self.task)
-        if self._shutdown_close_requested and not self._provider_final_received:
+        if (self._shutdown_close_requested and not self._provider_final_received and
+            not self._transport_close_confirmed):
             self.close_unconfirmed=True
         if self.close_unconfirmed:raise ValueError('tts_close_unconfirmed')
 
@@ -277,7 +278,7 @@ class ElevenTTDStream:
                 return
 
     async def _read(self):
-        pending=bytearray();next_event=None;shutdown_deadline=None
+        pending=bytearray();next_event=None
         async def send_audio(size):
             size-=size%2
             if size<=0:return
@@ -286,23 +287,14 @@ class ElevenTTDStream:
         try:
             await self._text_submitted.wait()
             audio_deadline=asyncio.get_running_loop().time()+FIRST_PCM_TIMEOUT
-            if self._shutdown_close_requested:
-                shutdown_deadline=asyncio.get_running_loop().time()+GRACEFUL_CLOSE_TIMEOUT
             while True:
-                if self._shutdown_close_requested and shutdown_deadline is None:
-                    shutdown_deadline=asyncio.get_running_loop().time()+GRACEFUL_CLOSE_TIMEOUT
-                if shutdown_deadline is not None and asyncio.get_running_loop().time()>=shutdown_deadline:
-                    raise ValueError('tts_close_unconfirmed')
                 if next_event is None:next_event=asyncio.create_task(self.socket.receive_json())
                 remaining=audio_deadline-asyncio.get_running_loop().time()
-                if shutdown_deadline is not None:
-                    remaining=min(remaining,shutdown_deadline-asyncio.get_running_loop().time())
-                if remaining<=0:
-                    raise ValueError('tts_close_unconfirmed' if shutdown_deadline is not None else 'tts_timeout')
+                if remaining<=0:raise ValueError('tts_timeout')
                 done,_=await asyncio.wait({next_event},timeout=min(remaining,AUDIO_COALESCE_SECONDS) if pending else remaining)
                 if not done:
                     if pending:await send_audio(len(pending));continue
-                    raise ValueError('tts_close_unconfirmed' if shutdown_deadline is not None else 'tts_timeout')
+                    raise ValueError('tts_timeout')
                 event=await next_event;next_event=None
                 if not isinstance(event,dict):raise ValueError('provider_event_invalid')
                 if event.get('error') is not None:raise _TTDProviderError(event)
@@ -364,10 +356,16 @@ class ElevenTTDStream:
                     except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
             stage='send'
             await writer
-            stage='receive'
-            try:await asyncio.wait_for(asyncio.shield(reader),FINAL_DRAIN_TIMEOUT)
-            except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
-            result='cancelled' if self._shutdown_close_requested else 'done'
+            if self._shutdown_close_requested:
+                # A user ending the whole session does not need to wait for
+                # buffered speech to finish playing. The WebSocket close
+                # handshake below can prove the provider session is closed.
+                result='cancelled'
+            else:
+                stage='receive'
+                try:await asyncio.wait_for(asyncio.shield(reader),FINAL_DRAIN_TIMEOUT)
+                except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
+                result='done'
         except asyncio.CancelledError:
             self.cancelled=True;result='cancelled'
         except Exception as error:
@@ -386,7 +384,9 @@ class ElevenTTDStream:
                 if not writer.done():writer.cancel()
                 await asyncio.gather(writer,return_exceptions=True)
             if self.socket is not None:
-                try:await self.socket.close()
+                try:
+                    await self.socket.close()
+                    self._transport_close_confirmed=True
                 except Exception:failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             if reader is not None:
                 if not reader.done():reader.cancel()
@@ -395,7 +395,8 @@ class ElevenTTDStream:
                 if not self._pending_receive.done():self._pending_receive.cancel()
                 await asyncio.gather(self._pending_receive,return_exceptions=True)
             self.finished=True
-            if self._shutdown_close_requested and not self._provider_final_received:
+            if (self._shutdown_close_requested and not self._provider_final_received and
+                not self._transport_close_confirmed):
                 failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)

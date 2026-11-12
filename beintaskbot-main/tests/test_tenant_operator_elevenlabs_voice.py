@@ -223,7 +223,7 @@ class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
         submitted=[item['text'] for event in socket.sent for item in event.get('inputs',[])]
         self.assertEqual(submitted,['Already accepted text.'])
         self.assertEqual(sum(event.get('close_socket') is True for event in socket.sent),1)
-        self.assertTrue(stream._provider_final_received)
+        self.assertTrue(stream._provider_final_received or stream._transport_close_confirmed)
         self.assertTrue(socket.closed)
 
     async def test_unconfirmed_close_and_connect_cleanup_propagate(self):
@@ -293,7 +293,9 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
                         if mode=='normal':
                             await ws.send_json({'audio':base64.b64encode(bytes(480)).decode()})
                     if event.get('close_socket'):
-                        await ws.send_json({'is_final':True});await ws.close();break
+                        if mode=='abort_close':request.transport.abort();break
+                        if mode!='close_ack_without_final':await ws.send_json({'is_final':True})
+                        await ws.close();break
             finally:
                 server_state['code']=ws.close_code;server_closed.set()
             return ws
@@ -333,7 +335,7 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
         self.assertFalse(any(event.get('close_socket') for event in state['sent']))
 
-    async def test_session_close_sends_close_socket_and_confirms_provider_final(self):
+    async def test_session_close_sends_close_socket_and_confirms_peer_shutdown(self):
         stream,_,socket,events,state,closed=await self.make_stream('idle')
         await self.wait_for_active_receive(socket)
         self.assertTrue(stream.close_gracefully())
@@ -342,7 +344,30 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(closed.wait(),2)
         self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
         self.assertEqual(sum(event.get('close_socket') is True for event in state['sent']),1)
-        self.assertTrue(stream._provider_final_received)
+        self.assertTrue(stream._provider_final_received or stream._transport_close_confirmed)
+
+    async def test_session_close_accepts_clean_peer_close_without_final_audio(self):
+        stream,_,socket,events,state,closed=await self.make_stream('close_ack_without_final')
+        await self.wait_for_active_receive(socket)
+        self.assertTrue(stream.close_gracefully())
+        await asyncio.wait_for(stream.wait_closed(),3)
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('cancelled',1,None))
+        await asyncio.wait_for(closed.wait(),2)
+        self.assertFalse(stream._provider_final_received)
+        self.assertTrue(stream._transport_close_confirmed)
+        self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
+
+    async def test_session_close_keeps_lease_unconfirmed_after_abrupt_peer_loss(self):
+        stream,_,socket,events,state,closed=await self.make_stream('abort_close')
+        await self.wait_for_active_receive(socket)
+        self.assertTrue(stream.close_gracefully())
+        with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+            await asyncio.wait_for(stream.wait_closed(),3)
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('error',1,'tts_close_unconfirmed'))
+        await asyncio.wait_for(closed.wait(),2)
+        self.assertFalse(stream._provider_final_received)
+        self.assertFalse(stream._transport_close_confirmed)
+        self.assertEqual(socket.ws.close_code,1006)
 
     async def test_writer_error_with_receive_pending_preserves_cause_and_confirms_close(self):
         stream,guard,socket,events,state,closed=await self.make_stream('idle')
