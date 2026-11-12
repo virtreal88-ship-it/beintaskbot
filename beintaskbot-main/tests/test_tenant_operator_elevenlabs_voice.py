@@ -62,6 +62,14 @@ class SlowCloseTTDSocket(TTDSocket):
         await super().close()
 
 
+class InvalidPCMttdSocket(TTDSocket):
+    async def send_json(self,event):
+        self.sent.append(copy.deepcopy(event))
+        if event.get('inputs'):
+            await self.incoming.put({'audio':'invalid-base64','transcript':'private synthetic speech'})
+        if event.get('close_socket'):await self.incoming.put({'is_final':True})
+
+
 class OpenAISocket:
     synthetic_only=True
     def __init__(self):self.sent=[];self.incoming=asyncio.Queue();self.closed=False;self.first=True
@@ -119,6 +127,18 @@ class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(guard.checks,len(sent)+1)
                 self.assertTrue(socket.closed)
                 self.assertNotIn(phrase,repr(logs.output));self.assertIn('provider=elevenlabs_ali',repr(logs.output))
+
+    async def test_invalid_pcm_is_classified_without_logging_provider_payload(self):
+        guard=Guard();socket=InvalidPCMttdSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        with self.assertLogs('tenant_operator_elevenlabs_voice',level='WARNING') as logs:
+            stream.feed('Synthetic safe error test.')
+            event=await asyncio.wait_for(events.get(),2)
+            await stream.wait_closed()
+        self.assertEqual(event,('error',1,'tts_audio_invalid'))
+        self.assertIn('stage=receive code=tts_audio_invalid',repr(logs.output))
+        self.assertNotIn('private synthetic speech',repr(logs.output))
 
     async def test_cancel_never_sends_flush_close_and_waits_for_socket_close(self):
         guard=Guard();socket=TTDSocket();events=asyncio.Queue()
@@ -243,7 +263,7 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         guard.assert_live=AsyncMock(side_effect=TenantLinearError('private synthetic denial',403))
         with self.assertLogs('tenant_operator_elevenlabs_voice',level='WARNING') as logs:
             stream.finish_input();await asyncio.wait_for(stream.wait_closed(),3)
-        self.assertEqual(await asyncio.wait_for(events.get(),2),('error',1,'tts_provider_error'))
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('error',1,'tts_admission_rejected'))
         await asyncio.wait_for(closed.wait(),2)
         self.assertEqual((socket.ws.close_code,state['code']),(1000,1000))
         self.assertIn('stage=send code=tts_admission_rejected',repr(logs.output))
@@ -268,7 +288,7 @@ class TTDLoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(events.empty())
             finally:close_release.set()
             await asyncio.wait_for(stream.wait_closed(),3)
-        self.assertEqual(await asyncio.wait_for(events.get(),2),('error',1,'tts_provider_error'))
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('error',1,'tts_admission_rejected'))
         self.assertEqual(socket.ws.close_code,1000)
 
     async def test_pcm_timeout_confirms_peer_close_without_cancelling_active_read(self):
@@ -519,6 +539,13 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         await self.start_response()
         await self.openai.incoming.put({'type':'response.output_audio.delta','response_id':'response1',
                                        'item_id':'item1','content_index':0,'delta':'AAA='})
+        with self.assertRaisesRegex(ValueError,'hybrid_event_forbidden'):
+            await asyncio.wait_for(self.wire.receive(),2)
+        self.assertEqual(self.ttd_sockets,[])
+
+    async def test_internal_tts_failure_event_cannot_be_forged_by_openai(self):
+        await self.openai.incoming.put({'type':'hybrid.audio_unavailable','response_id':'response1',
+                                        'item_id':'item1'})
         with self.assertRaisesRegex(ValueError,'hybrid_event_forbidden'):
             await asyncio.wait_for(self.wire.receive(),2)
         self.assertEqual(self.ttd_sockets,[])

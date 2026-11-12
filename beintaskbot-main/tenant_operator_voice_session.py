@@ -33,6 +33,7 @@ _TERMINAL_RESPONSE_EVENT_TYPES=frozenset({
     'response.function_call_arguments.delta','response.function_call_arguments.done',
     'response.output_audio.delta','response.output_audio.done',
     'response.output_audio_transcript.delta','response.output_audio_transcript.done',
+    'hybrid.audio_unavailable',
 })
 
 
@@ -676,8 +677,8 @@ class Session:
         _log_voice_latency('commit_ack_to_dispatch',commit_times.pop(self.pending_input_item_id,None),latency_dispatch_started)
         if self.pilot_policy is None and self.response_number >= 2:
             raise Refused('session_response_limit')
-        # Validate the server-owned context before issuing a one-use pilot
-        # permit and again as close as possible to dispatch.
+        # Validate the server-owned context before issuing a one-use permit
+        # and again as close as possible to dispatch.
         await self.context.revalidate(self.scope)
         if duplex and not self._duplex_dispatch_ready(dispatch_epoch,local_epoch):return
         self.response_number += 1
@@ -704,8 +705,7 @@ class Session:
         self.response_inflight = True
         self.cancel_requested = False
         try:
-            await self._check_dispatch_authority_and_lease()
-            await self.context.revalidate(self.scope)
+            await self._revalidate_context_and_dispatch()
             if self.closed:
                 raise Refused('session_closed_before_dispatch')
             # The provider consumes the one-use pilot permit before sending a
@@ -912,6 +912,16 @@ class Session:
         else:
             await self.authority.check(self.scope,'response_dispatch')
             await self.lease.assert_current(self.scope,self.fence)
+
+    async def _revalidate_context_and_dispatch(self):
+        # Keep both post-claim checks, but overlap their independent reads.
+        # The one-use permit is still consumed afterward, and the final
+        # context-then-lease recheck remains ordered under the provider lock.
+        checks=await asyncio.gather(self.context.revalidate(self.scope),
+                                    self._check_dispatch_authority_and_lease(),
+                                    return_exceptions=True)
+        for result in checks:
+            if isinstance(result,BaseException):raise result
 
     async def _receive_transactional_audio(self,event):
         # Check under the same lock as provider send, so a revoke or fence
@@ -1284,6 +1294,25 @@ class Session:
                 response_id in getattr(self,'finished_response_ids',())):
             # Never expose late audio, transcripts or items from a response
             # whose exact terminal event has already been accepted.
+            return
+        if kind=='hybrid.audio_unavailable':
+            item_id=event.get('item_id')
+            if (not getattr(self,'duplex',False) or set(event)!={'type','response_id','item_id'} or
+                not isinstance(response_id,str) or not response_id or len(response_id)>128 or
+                not isinstance(item_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}',item_id) or
+                not self.response_inflight or self.provider_response_id!=response_id or
+                self.current_reservation is None):
+                raise ProviderResponseRejected('response_id_mismatch',response_inflight,response_id_matches)
+            async with self.lock:
+                if self.cancel_requested or self.interrupt_pending:
+                    return
+                if self.item not in (None,item_id):
+                    raise ProviderResponseRejected('overlapping_output_items',response_inflight,response_id_matches)
+                if self.item==item_id:
+                    self.item=None;self.produced=0;self.output_finished=False
+                    self._latency_first_audio_at=None;self._latency_first_audio_item=None
+                    self._latency_output_done_at=None
+                await self._send_client({'type':'audio_unavailable'})
             return
         if (getattr(self,'duplex',False) and kind in ('response.output_audio.delta','response.output_audio.done') and
             self._observed_speech_epoch>self._processed_speech_epoch):

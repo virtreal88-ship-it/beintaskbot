@@ -23,6 +23,8 @@ CONNECT_DEADLINE=4
 CLOSE_DEADLINE=3
 CANCEL_RACE_DEADLINE=2
 _LOG=logging.getLogger(__name__)
+_TTD_RECOVERABLE_FAILURES=frozenset({'tts_provider_error','tts_timeout','tts_audio_invalid',
+                                     'provider_event_invalid','tts_ended_early'})
 
 # Only stable provider machine codes that are useful to the operator may reach
 # logs. Unknown codes are deliberately collapsed to ``provider_error``.
@@ -835,8 +837,25 @@ class _HybridRealtimeMixin:
         if kind in ('response.output_audio.delta','response.output_audio.done',
                     'response.output_audio_transcript.delta','response.output_audio_transcript.done'):
             raise ValueError('hybrid_event_forbidden')
+        if kind=='hybrid.audio_unavailable':raise ValueError('hybrid_event_forbidden')
         if kind in ('conversation.created','rate_limits.updated'):return None
         return event
+
+    def _fail_hybrid_audio(self,active,code):
+        if active['cancelled']:
+            active['tts_done']=True
+            self._hybrid_finish_if_ready()
+            return
+        if code not in _TTD_RECOVERABLE_FAILURES:raise ValueError('tts_provider_error')
+        active['cancelled']=True
+        active['tts_done']=True
+        response_id=active['response_id']
+        self._hybrid_ready=deque(event for event in self._hybrid_ready
+                                 if not (event.get('type')=='response.output_audio.delta' and
+                                         event.get('response_id')==response_id))
+        self._hybrid_ready.append({'type':'hybrid.audio_unavailable','response_id':response_id,
+                                   'item_id':active['item_id']})
+        self._hybrid_finish_if_ready()
 
     def _handle_hybrid_tts(self,event):
         kind,epoch,payload=event
@@ -849,10 +868,16 @@ class _HybridRealtimeMixin:
             self._hybrid_ready.append({'type':'response.output_audio.delta','response_id':active['response_id'],
                                        'item_id':active['item_id'],'content_index':0,'delta':payload})
         elif kind in ('done','cancelled'):
-            if kind=='cancelled' and not active['cancelled']:raise ValueError('tts_provider_error')
+            if kind=='cancelled' and not active['cancelled']:
+                self._fail_hybrid_audio(active,'tts_provider_error')
+                return
             active['tts_done']=True;self._hybrid_finish_if_ready()
         else:
-            raise ValueError(payload if payload in ('tts_provider_error','tts_close_unconfirmed','tts_timeout') else 'tts_provider_error')
+            if (payload in ('tts_close_unconfirmed','tts_admission_rejected') or
+                getattr(active.get('stream'),'close_unconfirmed',False)):
+                raise ValueError(payload if payload in ('tts_close_unconfirmed','tts_admission_rejected')
+                                 else 'tts_close_unconfirmed')
+            self._fail_hybrid_audio(active,payload if payload in _TTD_RECOVERABLE_FAILURES else 'tts_provider_error')
 
     async def receive(self):
         if not self.ready:raise ValueError('session_not_ready')

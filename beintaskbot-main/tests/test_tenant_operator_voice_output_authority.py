@@ -78,6 +78,17 @@ class OutputDispatchAuthorityTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.database.connects,2);self.assertEqual(self.database.authorizations,2)
         self.assertEqual([event['type'] for event in client.events],['audio','audio'])
 
+    async def test_tts_failure_notice_rechecks_authority_and_exact_response(self):
+        s,_,_,_,client=await self.make_session()
+        s.response_inflight=True;s.provider_response_id='synthetic-response';s.current_reservation={'request_id':'synthetic'}
+        s.item='synthetic-item';s.produced=480
+        await s._receive_provider({'type':'hybrid.audio_unavailable','response_id':'synthetic-response',
+                                   'item_id':'synthetic-item'})
+        self.assertEqual(self.database.connects,1)
+        self.assertEqual(self.database.authorizations,1)
+        self.assertIsNone(s.item);self.assertEqual(s.produced,0)
+        self.assertEqual(client.events,[{'type':'audio_unavailable'}])
+
     async def test_revocation_or_changed_fence_prevents_output_audio(self):
         for mode in ('identity','route','config','fence','owner','expired','state'):
             with self.subTest(mode=mode):
