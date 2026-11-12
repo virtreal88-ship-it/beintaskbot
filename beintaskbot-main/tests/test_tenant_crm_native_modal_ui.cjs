@@ -48,14 +48,14 @@ assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('
 assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');
 assert(contacts.includes("'link_company'") && contacts.includes("'unlink_company'") && app.includes("action:unlink?'unlink_deal':'link_deal'") && app.includes("'/company-link'"), 'source-card company relations retain explicit scoped and legacy commands');
 for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
-assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
+assert(!view('integrations').includes('externalCrmSyncPanel'), 'sync settings are removed from the integrations list page');
+assert(fs.readFileSync(`${__dirname}/../docs/tenant-kommo-settings.js`, 'utf8').includes('tkCrmSyncHost'), 'sync settings belong inside the Kommo integration card');
 assert(!view('deals').includes('externalCrmSyncPanel'));
 assert(!app.includes('Beintaskbot UUID:') && !app.includes('nativeContactKommoId'));
 assert(app.includes('button.disabled)return') && app.includes('showCrmModalError'), 'submits must prevent double-save and retain/report errors');
 assert(app.includes("confirm('Ayırmaq istəyirsiniz? Qeyd özü silinməyəcək.')"));
 assert(sync.includes("beinsystems:['title','pipeline_id','stage_id','contact_id','description']"));
-assert(sync.includes("['off','to_external',...(p==='kommo'?['from_external','bidirectional']:[])]"));
-assert(sync.includes("contact:['to_external','from_external','bidirectional']") === false); // capabilities are rendered from the API response
-assert(sync.includes('Dəstəklənmir') || sync.includes('dəstəklənmir'));
-assert(sync.includes('Fərdi xəta detalları API-dən əlçatan deyil.') || sync.includes('fərdi xəta detalları API-dən əlçatan deyil.'));
-console.log('PASS: CRM sections use separate modals, contacts/companies navigation is native, and sync UI reflects API capabilities.');
+assert(sync.includes("contact:{kommo:['name','phone','email']}")&&sync.includes("deal:{kommo:['title','pipeline_id','stage_id','contact_id']"));
+assert(sync.includes("['off',...(chosen==='kommo'?['to_external','from_external','bidirectional']:[])]"));
+assert(sync.includes("['off','to_external',...(chosen==='kommo'?['from_external','bidirectional']:[])]"));
+console.log('PASS: CRM sections use separate modals, contacts/companies navigation is native, and CRM sync policy is housed in Kommo integration.');
