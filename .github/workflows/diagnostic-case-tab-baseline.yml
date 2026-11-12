@@ -49,7 +49,9 @@ jobs:
       - run: node beintaskbot-main/.support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Run unchanged keyboard loops against complete current control list
         working-directory: beintaskbot-main
-        run: node tests/test_case_card_tabs_browser.cjs
+        run: |
+          node tests/test_case_card_tabs_browser.cjs
+          node tests/test_summary_language_browser.cjs
 
   baseline-consultation-tail:
     runs-on: ubuntu-latest
@@ -119,7 +121,14 @@ jobs:
           code=$?
           echo "7: exit=$code node tests/test_summary_language_browser.cjs" | tee -a baseline-tail-summary.txt
           cat "baseline-tail-consultation-tail-7.log"
-          if [ "$code" -ne 0 ]; then failed=1; fi
+          # This pinned-baseline job proves the exact previously observed stale-label failure.
+          # It is not a current-head release pass; all unexpected failures remain errors.
+          if [ "$code" -eq 1 ] && grep -Fq "page.waitForFunction: Timeout 30000ms exceeded." baseline-tail-consultation-tail-7.log && grep -Fq "tests/test_summary_language_browser.cjs:15:339" baseline-tail-consultation-tail-7.log && sed -n '15p' tests/test_summary_language_browser.cjs | grep -Fq "textContent==='Regenerate summary'"; then
+            echo "EXPECTED BASELINE STALE-LABEL REPRODUCTION: original English label wait; current-head script is checked separately."
+          else
+            echo "Baseline stale-label reproduction changed unexpectedly."
+            failed=1
+          fi
           timeout 180s bash -c "node tests/test_tenant_push_dialog_route_ui.cjs" > "baseline-tail-consultation-tail-8.log" 2>&1
           code=$?
           echo "8: exit=$code node tests/test_tenant_push_dialog_route_ui.cjs" | tee -a baseline-tail-summary.txt
