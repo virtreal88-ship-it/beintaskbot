@@ -99,3 +99,14 @@ async def test_actual_member_api_feed_cannot_select_other_tenant_or_review_statu
         response=await client.post('/api/platform/news?feed=published',headers={'Origin':'http://fixture.test'},json={
             'expected_tenant_id':A,'expected_user_id':32,'action':'reject','id':str(uuid.uuid4())})
         assert response.status==403
+
+
+def test_default_deny_feed_requires_explicit_read_grant(feed, monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    with feed['factory']() as conn:
+        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'employee_access_defaults','{\"deny_unset\":true}')", (A,))
+    with pytest.raises(TenantLinearError) as denied: news.member_published(reader())
+    assert denied.value.status == 403
+    with feed['factory']() as conn:
+        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value", (A,json.dumps({'32':{'access_scopes':{'news':{'view':'all'}}}})))
+    assert [row['title'] for row in news.member_published(reader())['news']] == ['A shared']

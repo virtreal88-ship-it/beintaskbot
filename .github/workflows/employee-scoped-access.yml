@@ -56,6 +56,10 @@ jobs:
       - name: Scoped authorization and PostgreSQL
         run: >-
           python -m pytest -q -rs
+          tests/test_employee_default_deny.py
+          tests/test_invite_default_deny_fencing.py
+          tests/test_member_implicit_grants.py
+          tests/test_tenant_workflow_sparse_postgres.py
           tests/test_scoped_access_foundation.py
           tests/test_scope_activation_preflight.py
           tests/test_scope_activation_preflight_bootstrap.py

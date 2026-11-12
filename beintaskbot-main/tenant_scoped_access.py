@@ -79,6 +79,8 @@ SCOPE_ACTION_CATALOG['ai_agents'] = ('view', 'create', 'update', 'delete')
 SCOPE_ACTION_CATALOG['integrations'] = CRUD_ACTIONS
 SCOPE_ACTION_CATALOG['employees'] = ('view', 'create', 'update')
 SCOPE_ACTION_CATALOG['support'] = ('view', 'create', 'update')
+SCOPE_ACTION_CATALOG['news'] = ('view',)
+SCOPE_ACTION_CATALOG['instructions'] = ('view',)
 ACTIVE_TENANT_STATUSES = frozenset({'active', 'onboarding', 'ready_for_integration'})
 MODULE_ALIASES = {'contacts': 'customers'}
 
@@ -88,6 +90,8 @@ def canonical_module(module):
 
 
 def applicable_scope_levels(module, action):
+    if module in {'news', 'instructions'}:
+        return ('none', 'all')
     return ('none', 'department', 'all') if (module, action) == ('employees', 'create') else ('none', 'self', 'department', 'all')
 
 
@@ -107,24 +111,27 @@ def configured_action_scope(policy, module, action):
     A legacy grant is deliberately not converted into `all`: legacy providers
     may have more restrictive pipeline/marker or role checks.
     """
-    if not scoped_access_enabled():
+    from tenant_employee_defaults import default_deny
+    denied_default = default_deny(policy)
+    if not scoped_access_enabled() and not denied_default:
         return None
+    absent = 'none' if denied_default else None
     module = canonical_module(module)
     if module not in SCOPE_ACTION_CATALOG or action not in SCOPE_ACTION_CATALOG[module]:
         return None
     settings = policy.member_settings
     if 'access_scopes' not in settings:
-        return None
+        return absent
     scopes = settings['access_scopes']
     if not isinstance(scopes, dict):
         return 'none'
     if module not in scopes:
-        return None
+        return absent
     actions = scopes[module]
     if not isinstance(actions, dict):
         return 'none'
     if action not in actions:
-        return None
+        return absent
     scope = actions[action]
     return scope if isinstance(scope, str) and scope in applicable_scope_levels(module, action) else 'none'
 

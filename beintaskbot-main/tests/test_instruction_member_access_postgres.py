@@ -74,3 +74,23 @@ def test_published_catalog_holds_revocation_fence_until_read_finishes(catalog, t
         with pytest.raises(TenantLinearError) as denied:
             read()
         assert denied.value.status == 403
+
+
+def test_default_deny_blocks_list_detail_assets_until_explicit_grant(catalog, monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    factory, keys, profile = catalog
+    own, asset = keys[(A, 'published')]
+    with factory() as conn:
+        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'employee_access_defaults','{\"deny_unset\":true}')", (A,))
+    reads = [lambda: instructions.published_list(profile),
+             lambda: instructions.published_read(profile, own),
+             lambda: instructions.published_asset(profile, own, asset+'.jpg')]
+    for read in reads:
+        with pytest.raises(TenantLinearError) as denied: read()
+        assert denied.value.status == 403
+    with factory() as conn:
+        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'members',%s::jsonb)", (A,json.dumps({'33':{'access_scopes':{'instructions':{'view':'all'}}}})))
+    for read in reads: assert read()
+    foreign, foreign_asset = keys[(B,'published')]
+    with pytest.raises(TenantLinearError) as denied: instructions.published_asset(profile,foreign,foreign_asset+'.jpg')
+    assert denied.value.status == 404

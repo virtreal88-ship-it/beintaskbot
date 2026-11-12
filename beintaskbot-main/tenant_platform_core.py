@@ -23,7 +23,17 @@ def _database_url() -> str:
 
 
 def _connect():
-    return psycopg.connect(_database_url(), row_factory=dict_row)
+    conn = psycopg.connect(_database_url(), row_factory=dict_row)
+    try:
+        from tenant_employee_defaults import require_compatible_runtime
+        require_compatible_runtime(conn)
+        # The compatibility probe must not start the caller's transaction:
+        # finance/tasks may set isolation before their first statement.
+        conn.rollback()
+    except Exception:
+        conn.close()
+        raise
+    return conn
 
 
 def _json(value) -> str:

@@ -1,4 +1,5 @@
 """Instruction authoring only. Published knowledge uses existing Knowledge Sources."""
+from tenant_policy import TenantPolicy
 from contextlib import nullcontext
 import base64,hashlib,json,re,secrets,uuid,math
 from tenant_platform import _connect,_json
@@ -235,11 +236,10 @@ def _authorize_published_catalog(cur, profile):
         actor = int(profile.get('telegram_id'))
     except (TypeError, ValueError):
         raise TenantLinearError('No access', 403) from None
-    cur.execute('''SELECT m.active,t.status
-      FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
-      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
-    row = cur.fetchone()
-    if not row or not row.get('active') or row.get('status') != 'active':
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_employee_defaults import published_section_allowed
+    current = read_access_profile(cur, tenant, actor, lock=True)
+    if not current or not published_section_allowed(TenantPolicy(current), 'instructions'):
         raise TenantLinearError('No access', 403)
     return tenant, actor
 
