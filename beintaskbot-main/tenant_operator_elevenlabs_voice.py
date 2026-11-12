@@ -191,10 +191,15 @@ class ElevenTTDStream:
         async def flush(force=False):
             nonlocal pending
             if not pending:return
-            if force or len(pending)>=MAX_NO_SPACE_CHARS or pending[-1].isspace() or pending[-1] in '.!?;:,':
+            # A comma is a soft prosody cue, not a useful chunk boundary. Keep
+            # collecting the clause so Text-to-Dialogue does not add a new
+            # audible pause after each comma in a streamed transcript.
+            if not force and pending.rstrip().endswith(','):
+                return
+            if force or len(pending)>=MAX_NO_SPACE_CHARS or pending[-1].isspace() or pending[-1] in '.!?;:':
                 text,pending=pending,''
             else:
-                boundary=max((i+1 for i,ch in enumerate(pending) if ch.isspace() or ch in '.!?;:,'),default=0)
+                boundary=max((i+1 for i,ch in enumerate(pending) if ch.isspace() or ch in '.!?;:'),default=0)
                 if not boundary:return
                 text,pending=pending[:boundary],pending[boundary:]
             if text.strip():

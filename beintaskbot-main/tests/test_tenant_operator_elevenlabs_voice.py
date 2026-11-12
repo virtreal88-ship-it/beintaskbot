@@ -106,6 +106,25 @@ class Lease:
 
 
 class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_comma_does_not_force_a_spoken_chunk_boundary(self):
+        guard=Guard();socket=TTDSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        with patch('tenant_operator_elevenlabs_voice.TEXT_FLUSH_SECONDS',.02):
+            stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+            first='If I create the inventory document today,'
+            second=' I can continue tomorrow.'
+            stream.feed(first)
+            await asyncio.sleep(.08)
+            self.assertFalse(any(event.get('inputs') for event in socket.sent))
+            stream.feed(second)
+            audio=await asyncio.wait_for(events.get(),2)
+            self.assertEqual(audio[:2],('audio',1))
+            stream.finish_input()
+            self.assertEqual(await asyncio.wait_for(events.get(),2),('done',1,None))
+            await stream.wait_closed()
+        submitted=[event['inputs'][0]['text'] for event in socket.sent if event.get('inputs')]
+        self.assertEqual(submitted,[first+second])
+
     async def test_final_frame_can_arrive_before_close_socket_send_returns(self):
         guard=Guard();socket=FinalBeforeSendReturnsTTDSocket();events=asyncio.Queue()
         async def connector(*_):return socket
