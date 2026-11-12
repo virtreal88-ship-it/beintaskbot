@@ -132,7 +132,7 @@ def command(profile, data):
         with conn.cursor() as cur:
             authorize(cur, tenant, user)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-linear:' + tenant,))
-            cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='linear' FOR UPDATE", (tenant,))
+            cur.execute("SELECT updated_at,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='linear' FOR UPDATE", (tenant,))
             previous = cur.fetchone()
             if config is not None and not previous:
                 raise TenantLinearError('Əvvəlcə Linear bağlantısını yaradın.', 409)
@@ -145,9 +145,23 @@ def command(profile, data):
                     raise TenantLinearError('Əməkdaş bu şirkətə aid deyil.')
                 cur.execute("UPDATE saas_tenant_integrations SET metadata=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND provider='linear' RETURNING status,metadata,updated_at", (json.dumps({'settings': config}), tenant))
             elif action == 'connect':
+                # Rotation keeps the exact saved rules. Prove the replacement
+                # key can access the SAME team before retaining its bindings;
+                # a key for another workspace must not silently reset/rebind it.
+                saved = (previous or {}).get('metadata') or {}
+                prior_settings = saved.get('settings') or {}
+                if admitted(profile, 'linear') and current_role(profile, 'linear') != 'owner' and (
+                    prior_settings.get('members') or (prior_settings.get('news') or {}).get('enabled')
+                    or (prior_settings.get('workflow') or {}).get('enabled')):
+                    raise TenantLinearError('Only the company owner can replace a Linear connection with employee or runtime rules.',403)
+                prior_team = prior_settings.get('team_id')
+                if prior_team:
+                    team = team_catalog(key.strip(), identifier(prior_team))
+                    if not team or team.get('id') != prior_team:
+                        raise TenantLinearError('Yeni açar saxlanmış Linear komandasına daxil ola bilmir. Mövcud bağlantı və ayarlar dəyişdirilmədi.', 409)
                 cur.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,connected_at)
                   VALUES(%s::uuid,'linear','connected',%s,now()) ON CONFLICT(tenant_id,provider) DO UPDATE
-                  SET status='connected',secrets=EXCLUDED.secrets,metadata='{}'::jsonb,connected_at=now(),updated_at=now()
+                  SET status='connected',secrets=EXCLUDED.secrets,connected_at=now(),updated_at=now()
                   RETURNING status,metadata,updated_at""", (tenant, encrypted))
             else:
                 cur.execute("UPDATE saas_tenant_integrations SET status='not_connected',secrets=NULL,connected_at=NULL,updated_at=now() WHERE tenant_id=%s::uuid AND provider='linear' RETURNING status,metadata,updated_at", (tenant,))

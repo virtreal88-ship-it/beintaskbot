@@ -52,6 +52,69 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn('private-key', str(result)); self.assertFalse(result['runtime_enabled'])
         self.conn.commit.assert_called_once()
 
+    def test_key_rotation_preserves_exact_rules_for_same_team(self):
+        saved = {'settings': {'team_id': ID, 'workflow': {'enabled': True},
+            'members': {'20': {'can_change_status': True}}, 'news': {'enabled': True}},
+            'unrelated_metadata': {'keep': 'unchanged'}}
+        self.cur.fetchone.side_effect = [{'role': 'owner', 'active': True},
+            {'updated_at': 'old', 'metadata': saved},
+            {'status': 'connected', 'metadata': saved, 'updated_at': 'new'}]
+        self.service.team_catalog.return_value = {'id': ID}
+        result = self.service.command(PROFILE, {'action': 'connect', 'api_key': 'replacement-key',
+            'expected_updated_at': 'old'})
+        self.service.team_catalog.assert_called_once_with('replacement-key', ID)
+        sql, params = self.cur.execute.call_args.args
+        self.assertNotIn('metadata=', sql)
+        self.assertEqual(result['settings'], saved['settings'])
+        self.assertTrue(result['runtime_enabled'])
+        self.assertEqual(json.loads(self.cipher.decrypt(params[1]))['api_key'], 'replacement-key')
+        self.conn.commit.assert_called_once()
+
+    def test_rotation_rejects_unavailable_or_different_team_without_write(self):
+        for returned in (None, {'id': 'foreign-team'}):
+            with self.subTest(returned=returned):
+                self.cur.reset_mock(); self.conn.commit.reset_mock()
+                self.cur.fetchone.side_effect = [{'role':'owner','active':True},
+                    {'updated_at':'old','metadata':{'settings':{'team_id':ID}}}]
+                self.service.team_catalog.return_value = returned
+                with self.assertRaises(TenantLinearError):
+                    self.service.command(PROFILE, {'action':'connect','api_key':'replacement-key',
+                        'expected_updated_at':'old'})
+                self.conn.commit.assert_not_called()
+                self.assertFalse(any('INSERT INTO' in call.args[0] or 'UPDATE saas_' in call.args[0]
+                    for call in self.cur.execute.call_args_list))
+
+    def test_rotation_read_failure_preserves_old_connection(self):
+        self.cur.fetchone.side_effect = [{'role':'owner','active':True},
+            {'updated_at':'old','metadata':{'settings':{'team_id':ID}}}]
+        self.service.team_catalog.side_effect = TenantLinearError('Provider unavailable',502)
+        with self.assertRaises(TenantLinearError):
+            self.service.command(PROFILE, {'action':'connect','api_key':'replacement-key',
+                'expected_updated_at':'old'})
+        self.conn.commit.assert_not_called()
+        self.assertFalse(any('INSERT INTO' in call.args[0] for call in self.cur.execute.call_args_list))
+
+    def test_rotation_rechecks_new_protected_rules_under_lock(self):
+        run = self.service.command.__wrapped__
+        self.cur.fetchone.side_effect = [{'metadata': {}},
+            {'updated_at':'old','metadata':{'settings':{'team_id':ID,'workflow':{'enabled':True}}}}]
+        with patch.dict(run.__globals__, {'owner': Mock(return_value=(ID,20)),
+                'admitted': Mock(return_value=True), 'current_role': Mock(return_value='worker')}):
+            with self.assertRaises(TenantLinearError) as caught:
+                run(PROFILE, {'action':'connect','api_key':'replacement-key','expected_updated_at':'old'})
+        self.assertEqual(caught.exception.status,403)
+        self.service.team_catalog.assert_not_called(); self.conn.commit.assert_not_called()
+        self.assertFalse(any('INSERT INTO' in call.args[0] for call in self.cur.execute.call_args_list))
+
+    def test_rotation_conflict_stops_before_team_read_and_write(self):
+        self.cur.fetchone.side_effect = [{'role':'owner','active':True},
+            {'updated_at':'changed','metadata':{'settings':{'team_id':ID}}}]
+        with self.assertRaises(TenantLinearError) as caught:
+            self.service.command(PROFILE, {'action':'connect','api_key':'replacement-key',
+                'expected_updated_at':'old'})
+        self.assertEqual(caught.exception.status,409)
+        self.service.team_catalog.assert_not_called(); self.conn.commit.assert_not_called()
+
     def test_encryption_failure_stops_before_provider(self):
         self.service.command.__wrapped__.__globals__['_fernet'].side_effect = RuntimeError('configuration')
         with self.assertRaises(RuntimeError): self.service.command(PROFILE, {'action': 'connect', 'api_key': 'key'})
