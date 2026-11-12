@@ -1,0 +1,38 @@
+name: Baseline case-tab evidence (not a release pass)
+on:
+  pull_request:
+    paths: ['.github/workflows/diagnostic-case-tab-baseline.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce-existing-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 367ff1f3073a9d4d6c45e15d3f1acf4789443852
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.62.1
+      - run: node beintaskbot-main/.support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Prove unchanged baseline reproduces exact known tab assertion
+        working-directory: beintaskbot-main
+        shell: bash
+        run: |
+          set +e
+          node tests/test_case_card_tabs_browser.cjs > baseline-case-tabs.log 2>&1
+          result=$?
+          set -e
+          cat baseline-case-tabs.log
+          test "$result" -ne 0
+          grep -F "closed Materials 390 Tab reaches #supportEditStatus" baseline-case-tabs.log
+          grep -F "Найти похожие решения" baseline-case-tabs.log
+          echo "BASELINE REPRODUCTION CONFIRMED; this does not assert the current-head UI passes."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-case-tab-evidence
+          path: beintaskbot-main/baseline-case-tabs.log
