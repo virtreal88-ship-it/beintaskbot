@@ -35,6 +35,10 @@
         if(typeof msg.pcm_base64!=='string'||msg.pcm_base64.length>12800)throw new Error('invalid_audio');
         const raw=env.atob(msg.pcm_base64),pcm=Uint8Array.from(raw,ch=>ch.charCodeAt(0));
         onEvent({type:'audio',item_id:msg.item_id,pcm});
+      }else if(msg.type==='audio_unavailable'){
+        // The gateway intentionally sends no provider details here. Keep this
+        // internal recovery notice payload-free as it crosses into the UI.
+        onEvent({type:'audio_unavailable'});
       }else if(['ready','thinking','listening','talk_ready','talk_empty','interrupt','audio_done','ended','end_unconfirmed'].includes(msg.type)){
         if(['ended','end_unconfirmed'].includes(msg.type))terminal=true;
         onEvent(msg);

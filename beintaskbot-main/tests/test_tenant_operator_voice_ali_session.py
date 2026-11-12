@@ -43,16 +43,20 @@ class Client:
     def __init__(self):self.events=[]
     async def send(self,e):self.events.append(e)
 class FakeTTS:
-    def __init__(self,guard,loader,epoch,current,emit):self.epoch=epoch;self.emit=emit;self.closed=False;self.cancelled=False;self.tasks=[]
+    def __init__(self,guard,loader,epoch,current,emit):self.epoch=epoch;self.emit=emit;self.closed=False;self.cancelled=False;self.close_unconfirmed=False;self.tasks=[]
     def start(self):return self
     def _emit(self,kind,payload=None):self.tasks.append(asyncio.create_task(self.emit((kind,self.epoch,payload))))
     def feed(self,text):
         assert text=='Привет.'
         self._emit('audio',base64.b64encode(bytes([1,0])*240).decode())
     def finish_input(self):self._emit('done')
+    def fail(self,code='tts_provider_error'):self._emit('error',code)
     def cancel_now(self):
         if not self.cancelled:self.cancelled=True;self._emit('cancelled')
-    async def wait_closed(self):await asyncio.gather(*self.tasks);self.closed=True
+    async def wait_closed(self):
+        await asyncio.gather(*self.tasks)
+        if self.close_unconfirmed:raise ValueError('tts_close_unconfirmed')
+        self.closed=True
 
 class AliSessionIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -91,6 +95,44 @@ class AliSessionIntegration(unittest.IsolatedAsyncioTestCase):
         await self.session.receive_client({'type':'played_all','item_id':'item_1'})
         self.assertIsNone(self.session.item);self.assertEqual(self.client.events[-1]['type'],'listening')
         self.assertTrue(await self.session.end('test'));self.assertTrue(self.socket.closed and self.lease.released and all(s.closed for s in self.streams))
+    async def test_tts_provider_error_ends_only_this_reply_and_next_turn_works(self):
+        await self.turn('user_1');await self.begin_output('reply_1','item_1')
+        self.streams[0].fail('tts_audio_invalid')
+        failed=await asyncio.wait_for(self.session.next_provider_event(),3)
+        self.assertEqual(failed,{'type':'hybrid.audio_unavailable','response_id':'reply_1','item_id':'item_1'})
+        await self.session.receive_provider(failed)
+        self.assertFalse(self.session.closed)
+        self.assertTrue(self.session.lease.held)
+        self.assertIsNone(self.session.item)
+        self.assertEqual(self.client.events[-1],{'type':'audio_unavailable'})
+        self.socket.put({'type':'response.output_text.done','response_id':'reply_1','item_id':'item_1',
+                          'output_index':0,'content_index':0,'text':'Привет.'})
+        self.socket.put({'type':'response.output_item.done','response_id':'reply_1','output_index':0,
+                          'item':{'id':'item_1','type':'message','role':'assistant','status':'completed',
+                                  'content':[{'type':'output_text','text':'Привет.'}]}})
+        self.socket.put({'type':'response.done','response':{'id':'reply_1','status':'completed',
+                          'output':[{'id':'item_1','type':'message','role':'assistant'}]}})
+        event=await asyncio.wait_for(self.session.next_provider_event(),3)
+        self.assertEqual(event['type'],'response.done')
+        await self.session.receive_provider(event)
+        self.assertFalse(self.session.closed)
+        self.assertFalse(self.session.response_inflight)
+        self.assertEqual(self.client.events[-1]['type'],'listening')
+        await self.turn('user_2')
+        self.assertEqual(sum(event['type']=='response.create' for event in self.socket.sent),2)
+        self.assertTrue(await self.session.end('test'))
+        self.assertTrue(self.lease.released)
+    async def test_tts_close_uncertainty_still_fails_closed(self):
+        await self.turn('user_1');await self.begin_output('reply_1','item_1')
+        self.streams[0].close_unconfirmed=True
+        self.streams[0].fail('tts_close_unconfirmed')
+        with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+            await asyncio.wait_for(self.session.next_provider_event(),3)
+        self.assertFalse(await self.session.end('provider_disconnected'))
+        self.assertTrue(self.session.closed)
+        self.assertTrue(self.lease.held)
+        self.assertFalse(self.lease.released)
+        self.assertEqual(self.client.events[-1]['type'],'end_unconfirmed')
     async def test_barge_in_delete_ack_excludes_old_text_from_followup(self):
         await self.turn('user_1');await self.begin_output('reply_1','item_1')
         await self.session.receive_client({'type':'stop_response','item_id':'item_1','audio_end_ms':5})

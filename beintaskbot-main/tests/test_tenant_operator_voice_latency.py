@@ -93,5 +93,37 @@ class LatencyDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(s._latency_commit_times,{})
         s._send_provider.assert_awaited_once_with({'type':'response.create'})
 
+    async def test_post_claim_context_and_lease_gates_run_concurrently_and_both_complete(self):
+        s=object.__new__(Session);started=set();both_started=asyncio.Event()
+        async def arrive(name):
+            started.add(name)
+            if len(started)==2:both_started.set()
+            await asyncio.wait_for(both_started.wait(),1)
+        async def revalidate(self,_scope):await arrive('context')
+        async def check_lease():await arrive('lease')
+        s.scope=('tenant',7,'channel','conversation')
+        s.context=type('Context',(),{'revalidate':revalidate})()
+        s._check_dispatch_authority_and_lease=check_lease
+        await asyncio.wait_for(s._revalidate_context_and_dispatch(),2)
+        self.assertEqual(started,{'context','lease'})
+
+    async def test_post_claim_context_failure_still_waits_for_lease_check(self):
+        s=object.__new__(Session);started=set();both_started=asyncio.Event()
+        async def revalidate(self,_scope):
+            started.add('context')
+            if len(started)==2:both_started.set()
+            await asyncio.wait_for(both_started.wait(),1)
+            raise ValueError('context_changed')
+        async def check_lease():
+            started.add('lease')
+            if len(started)==2:both_started.set()
+            await asyncio.wait_for(both_started.wait(),1)
+        s.scope=('tenant',7,'channel','conversation')
+        s.context=type('Context',(),{'revalidate':revalidate})()
+        s._check_dispatch_authority_and_lease=check_lease
+        with self.assertRaisesRegex(ValueError,'context_changed'):
+            await asyncio.wait_for(s._revalidate_context_and_dispatch(),2)
+        self.assertEqual(started,{'context','lease'})
+
 
 if __name__=='__main__':unittest.main()

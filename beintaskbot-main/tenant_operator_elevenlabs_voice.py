@@ -17,10 +17,10 @@ MAX_DELTA_CHARS=1600
 MAX_RESPONSE_CHARS=24000
 MAX_AUDIO_BYTES=4_800_000
 TEXT_QUEUE_LIMIT=128
-TEXT_FLUSH_SECONDS=.18
+TEXT_FLUSH_SECONDS=.1
 MAX_NO_SPACE_CHARS=120
 MAX_CLIENT_AUDIO_BYTES=9600
-AUDIO_COALESCE_SECONDS=.03
+AUDIO_COALESCE_SECONDS=.015
 FIRST_PCM_TIMEOUT=10
 NEXT_PCM_TIMEOUT=5
 FINAL_DRAIN_TIMEOUT=120
@@ -31,6 +31,7 @@ _SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','vo
 _SAFE_TRANSPORT_CODES=frozenset({'websocket_closed','websocket_error','websocket_nontext_frame',
                                  'provider_message_too_large','provider_json_invalid','provider_event_invalid'})
 _SAFE_TRANSPORT_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
+_SAFE_LOCAL_TTD_CODES=frozenset({'tts_audio_invalid','tts_ended_early'})
 
 
 def _safe_close_code(value):
@@ -58,7 +59,8 @@ def _log_tts_failure(stage,error):
         close_code=_safe_close_code(error.diagnostic_close_code)
         if isinstance(error.diagnostic_transport_kind,str) and error.diagnostic_transport_kind in _SAFE_TRANSPORT_KINDS:
             transport=error.diagnostic_transport_kind
-    elif error.args and error.args[0] in ('tts_timeout','tts_close_unconfirmed','tts_admission_rejected'):
+    elif error.args and error.args[0] in ('tts_timeout','tts_close_unconfirmed','tts_admission_rejected',
+                                          'provider_event_invalid',*_SAFE_LOCAL_TTD_CODES):
         code=error.args[0]
     if stage not in ('connect','receive','send'):stage='unknown'
     _LOG.warning('realtime_tts_failure provider=elevenlabs_ali stage=%s code=%s close_code=%s '
@@ -236,7 +238,7 @@ class ElevenTTDStream:
                     if pending:await send_audio(len(pending));continue
                     raise ValueError('tts_timeout')
                 event=await next_event;next_event=None
-                if not isinstance(event,dict):raise ValueError('tts_provider_error')
+                if not isinstance(event,dict):raise ValueError('provider_event_invalid')
                 if event.get('error') is not None:raise _TTDProviderError(event)
                 encoded=event.get('audio')
                 if encoded is not None:
@@ -288,7 +290,9 @@ class ElevenTTDStream:
             self.cancelled=True;result='cancelled'
         except Exception as error:
             _log_tts_failure(stage,error)
-            failure=str(error) if str(error) in ('tts_close_unconfirmed','tts_timeout') else 'tts_provider_error'
+            safe_failures={'tts_close_unconfirmed','tts_timeout','tts_admission_rejected',
+                           'provider_event_invalid',*_SAFE_LOCAL_TTD_CODES}
+            failure=str(error) if str(error) in safe_failures else 'tts_provider_error'
             if failure=='tts_close_unconfirmed':self.close_unconfirmed=True
         finally:
             self._cleaning=True

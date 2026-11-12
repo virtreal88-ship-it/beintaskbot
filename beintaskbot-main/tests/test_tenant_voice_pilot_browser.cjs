@@ -59,6 +59,11 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal(await page.evaluate(()=>window.voiceEvents.some(x=>x.type==='talk_start'||x.type==='talk_end')),false);
  await page.evaluate(()=>{window.sockets[0].emit({type:'thinking'});window.sockets[0].emit({type:'audio',item_id:'assistant-1',pcm_base64:'AAA='});});
  await page.waitForFunction(()=>window.playCount===1);
+ await page.evaluate(()=>window.sockets[0].emit({type:'audio_unavailable',provider_error:'private detail',transcript:'must not reach UI'}));
+ await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent.includes('Не удалось озвучить этот ответ'));
+ assert.equal(await voice.locator('[role=status]').textContent(),'Не удалось озвучить этот ответ. Разговор продолжается — можете говорить дальше.','the channel keeps provider details and transcripts out of the UI');
+ assert.equal(await page.evaluate(()=>window.interruptCalls),1,'a failed ElevenLabs reply stops any partial playback');
+ assert.equal(await page.evaluate(()=>window.sockets[0].readyState===1&&window.releaseCount===0),true,'a recoverable TTS error keeps the owner session and microphone active');
  const before=await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio').length);
  await page.evaluate(()=>window.emitSpeech(40));
  assert.equal(await page.evaluate(()=>window.voiceEvents.filter(x=>x.type==='audio').length),before+2,'microphone remains live during output');
