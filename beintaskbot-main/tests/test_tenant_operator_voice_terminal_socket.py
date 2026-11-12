@@ -4,7 +4,7 @@ import unittest
 from aiohttp import web, WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 
-from tenant_operator_voice_gateway import SocketClient, make_handler
+from tenant_operator_voice_gateway import SocketClient, make_handler, install_voice_shutdown, _ACTIVE_VOICE_SESSIONS
 from tenant_operator_voice_session import Session
 
 
@@ -158,3 +158,44 @@ class TerminalSocketTest(unittest.IsolatedAsyncioTestCase):
                     close=await asyncio.wait_for(ws.receive(),3)
                     self.assertIn(close.type,(WSMsgType.CLOSE,WSMsgType.CLOSED))
                 finally:await client.close()
+
+    async def test_browser_tab_close_releases_before_next_websocket_claim(self):
+        state={'held':False};ended=asyncio.Event();sessions=[]
+        class FakeSession:
+            def __init__(self,client):
+                self.client=client;self.provider=object();self.closed=False;self.fence=1
+            async def start(self):
+                if state['held']:raise RuntimeError('lease_busy')
+                state['held']=True
+            async def end(self,reason):
+                if self.closed:return False
+                self.closed=True;self.fence=None;state['held']=False;ended.set()
+                return True
+            _consume_task=staticmethod(Session._consume_task)
+
+        async def authenticate(_request):return ('tenant','actor','channel','dialog')
+        def build(_scope,client):
+            session=FakeSession(client);sessions.append(session);return session
+
+        app=web.Application();install_voice_shutdown(app)
+        app.router.add_get('/voice',make_handler(allowed_origins=['https://test.local'],
+            authenticate=authenticate,build_session=build))
+        client=TestClient(TestServer(app));await client.start_server()
+        try:
+            first=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
+            await first.close()
+            await asyncio.wait_for(ended.wait(),2)
+            for _ in range(50):
+                if not app[_ACTIVE_VOICE_SESSIONS]:break
+                await asyncio.sleep(.01)
+            self.assertFalse(state['held'])
+            self.assertEqual(len(app[_ACTIVE_VOICE_SESSIONS]),0)
+
+            second=await client.ws_connect('/voice',headers={'Origin':'https://test.local'})
+            self.assertEqual(len(sessions),2)
+            self.assertTrue(state['held'])
+            await second.close()
+            await asyncio.sleep(.05)
+            self.assertFalse(state['held'])
+        finally:
+            await client.close()
