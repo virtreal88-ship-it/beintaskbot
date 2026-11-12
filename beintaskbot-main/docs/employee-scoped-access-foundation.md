@@ -60,3 +60,10 @@ Disposable localhost PostgreSQL tests verify historical backfill and unresolved 
 ## Night-report read scopes
 
 `night_report.view` is an independent read grant. Connect activity/error figures use current source ownership; ticket queues and ticket counts use the ticket's `access_responsible_id`. Ticket-scoped correspondence requires explicit message links and never grants the complete conversation. See [the report boundary audit](night-report-scopes.md) for all read routes, stale-page handling, compatibility and verification. This addition does not enable the rollout gate or grant report generation/settings authority.
+
+### Restricting dialogs with unmapped sources
+
+Saving Self or Department does not require company-wide source assignment.
+Unassigned Connect sources and unsupported Kommo mappings remain hidden by
+current runtime read/send checks. No phone-based source assignment is inferred.
+Owner, tenant, card-version and settings-version checks remain required.
