@@ -157,6 +157,12 @@ def preview(cur,cfg,args):
     from tenant_connect_phone_evidence import normalize_phone
     phone_search=normalize_phone(search)
     phone_evidence=scan['phone_evidence']
+    if args.get('pair_id') and len(items)==1:
+        from tenant_connect_conflict_diagnostics import diagnose
+        leads={items[0]['canonical_lead_id'],items[0]['split_lead_id']}-{None}
+        identities=[key for key,row in scan['routes'].items() if row['lead_id'] in leads]
+        items[0]['conflict_diagnostics']=diagnose(cur,tenant,channel,identities,
+            lambda *parts:_token(cfg,*parts))
     routes=[]
     for identity,row in sorted(scan['routes'].items()):
         phones=phone_evidence['phones_by_identity'].get(identity,set())
@@ -293,3 +299,4 @@ def definitions():
       {'name':'whatsapp_dialogue_duplicate_candidates','description':'Owner-scoped full-channel direct WhatsApp identity inventory with optional search. Reports provider-confirmed aliases and blocked heuristic candidates, route/lead IDs, aggregate counts and conflicts; never phone/JID/LID, text, names, or media. Only eligible provider-proven pairs may be merged.', 'inputSchema':read,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]},
       {'name':'whatsapp_dialogue_merge','description':'Owner-delegated reversible logical merge for one freshly previewed, provider-proven direct pair. It never rewrites messages, attachments, timestamps, attribution, cases, CRM or WhatsApp; groups and ambiguous identities fail closed.', 'inputSchema':write,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[MERGE_SCOPE]}]},
     ]+owner_definitions(MERGE_SCOPE)
+
