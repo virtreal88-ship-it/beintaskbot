@@ -24,6 +24,7 @@ AUDIO_COALESCE_SECONDS=.03
 FIRST_PCM_TIMEOUT=10
 NEXT_PCM_TIMEOUT=5
 FINAL_DRAIN_TIMEOUT=120
+FINAL_SEND_DRAIN_TIMEOUT=3
 _LOG=logging.getLogger(__name__)
 _SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','voice_not_found',
                                   'quota_exceeded','max_character_limit_exceeded'})
@@ -129,6 +130,8 @@ class ElevenTTDStream:
         self.queue=asyncio.Queue(maxsize=TEXT_QUEUE_LIMIT)
         self.task=None;self.socket=None;self.cancelled=False;self.finished=False
         self.text_chars=0;self.audio_bytes=0;self._input_finished=False;self._started=False;self._cleaning=False
+        self._close_socket_started=False
+        self.final_before_close_send_return=False
         self.close_unconfirmed=False;self.attempted_chars=0;self.pcm_chunks=0
         self.first_text_at=None;self.first_pcm_at=None
         self._text_submitted=asyncio.Event();self._pending_receive=None
@@ -202,6 +205,11 @@ class ElevenTTDStream:
                 await flush(force=True)
                 # This command flushes buffered content, so it is used only
                 # for a natural finish, never for interruption.
+                # The provider can answer with is_final before this send task
+                # gets its next event-loop turn. Mark the protocol boundary
+                # before awaiting the write so _run does not mistake that
+                # valid ordering for an early provider termination.
+                self._close_socket_started=True
                 await self._send({'close_socket':True})
                 return
             pending+=text
@@ -261,7 +269,15 @@ class ElevenTTDStream:
             if reader in done:
                 stage='receive'
                 await reader
-                if not writer.done():raise ValueError('tts_ended_early')
+                if not writer.done():
+                    if not self._close_socket_started:raise ValueError('tts_ended_early')
+                    self.final_before_close_send_return=True
+                    # A final frame may beat completion of send_json even
+                    # though the provider has already received close_socket.
+                    # Let that in-flight write settle briefly, then fail
+                    # closed if the transport itself remains stuck.
+                    try:await asyncio.wait_for(asyncio.shield(writer),FINAL_SEND_DRAIN_TIMEOUT)
+                    except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
             stage='send'
             await writer
             stage='receive'
@@ -296,6 +312,7 @@ class ElevenTTDStream:
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
             _LOG.info('realtime_tts_activity provider=elevenlabs_ali attempted_chars=%d pcm_bytes=%d '
-                      'pcm_chunks=%d first_text_to_pcm_ms=%d',min(self.attempted_chars,MAX_RESPONSE_CHARS),
-                      min(self.audio_bytes,MAX_AUDIO_BYTES),min(self.pcm_chunks,10**9),first_ms)
+                      'pcm_chunks=%d first_text_to_pcm_ms=%d final_before_close_send_return=%s',
+                      min(self.attempted_chars,MAX_RESPONSE_CHARS),min(self.audio_bytes,MAX_AUDIO_BYTES),
+                      min(self.pcm_chunks,10**9),first_ms,self.final_before_close_send_return)
             await self.emit((result,self.epoch,failure))
