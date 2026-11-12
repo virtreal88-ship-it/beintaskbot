@@ -119,6 +119,67 @@ class CommandTests(unittest.TestCase):
         with self.assertRaises(TenantLinearError) as caught:self.module.execute(PERSON,self.data)
         self.assertEqual(caught.exception.status,409);self.mutate.assert_not_called();self.conn.commit.assert_called_once()
 
+    def stale_status(self, *, state=STATE, action='status', comment=''):
+        data={**self.data,'action':action,'state_id':TARGET}
+        intent={'action':action,'fields':{'stateId':TARGET},'before':'version',
+            'config_version':'old-cfg','comment':comment}
+        fingerprint=hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        self.cur.fetchone.side_effect=[{'fingerprint':fingerprint,'intent':intent,'result':None},
+            {'intent':intent,'result':None}]
+        self.provider_issue.return_value=issue(state={'id':state},updatedAt='current')
+        return data
+
+    def test_stale_status_closes_without_replaying_and_reports_current_state(self):
+        data=self.stale_status()
+        result=self.module.execute(PERSON,data)
+        self.assertEqual(result['recovery'],'status_review_required')
+        self.assertFalse(result['target_is_current'])
+        self.assertEqual(result['current_state_id'],STATE)
+        self.mutate.assert_not_called(); self.comment.assert_not_called()
+        self.provider_issue.assert_called_once_with('secret',OTHER)
+        receipt=json.loads(self.cur.execute.call_args.args[1][0])
+        self.assertEqual(receipt,result)
+        self.assertEqual(self.conn.commit.call_count,2)
+        # A delayed retry/other tab sees the terminal receipt, never revives intent.
+        fingerprint=hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        self.cur.fetchone.side_effect=[{'fingerprint':fingerprint,'result':receipt}]
+        self.provider_issue.reset_mock()
+        self.assertEqual(self.module.execute(PERSON,data),receipt)
+        self.provider_issue.assert_not_called(); self.mutate.assert_not_called()
+
+    def test_stale_status_without_intent_gets_terminal_record(self):
+        data={**self.data,'action':'status','state_id':TARGET,'config_version':'old-cfg'}
+        self.cur.execute.side_effect=None
+        result=self.module.execute(PERSON,data)
+        self.assertEqual(result['recovery'],'status_review_required')
+        sql,params=self.cur.execute.call_args.args
+        self.assertIn('intent,result,completed_at',sql)
+        self.assertEqual(json.loads(params[-1]),result)
+        self.mutate.assert_not_called();self.comment.assert_not_called()
+        self.conn.commit.assert_called_once()
+
+    def test_stale_status_already_target_is_current_not_replayed(self):
+        result=self.module.execute(PERSON,self.stale_status(state=TARGET))
+        self.assertTrue(result['target_is_current'])
+        self.mutate.assert_not_called();self.comment.assert_not_called()
+
+    def test_stale_status_current_scope_and_read_failure_cannot_clear_pending(self):
+        for error in (TenantLinearError('Unavailable',502),TenantLinearError('Not visible',404)):
+            data=self.stale_status();self.provider_issue.side_effect=error
+            self.cur.execute.reset_mock()
+            with self.assertRaises(TenantLinearError):self.module.execute(PERSON,data)
+            self.assertFalse(any('SET result=' in call.args[0] for call in self.cur.execute.call_args_list))
+        self.mutate.assert_not_called();self.comment.assert_not_called()
+
+    def test_stale_create_comment_and_button_are_not_automatically_closed(self):
+        for action,comment in (('create',''),('button','reason'),('status','reason')):
+            data=self.stale_status(action=action,comment=comment)
+            self.cur.execute.reset_mock()
+            with self.assertRaises(TenantLinearError) as caught:self.module.execute(PERSON,data)
+            self.assertEqual(caught.exception.status,409)
+            self.assertFalse(any('SET result=' in call.args[0] for call in self.cur.execute.call_args_list))
+        self.mutate.assert_not_called();self.comment.assert_not_called();self.provider_issue.assert_not_called()
+
     def test_create_uses_same_deterministic_id_and_configured_initial_state(self):
         data={'action':'create','request_id':TARGET,'config_version':'cfg'}
         expected=str(uuid.uuid5(uuid.UUID(TEAM),'20:'+TARGET))
