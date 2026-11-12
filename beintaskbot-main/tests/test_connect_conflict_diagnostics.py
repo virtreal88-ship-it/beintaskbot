@@ -92,3 +92,21 @@ def test_late_pairless_blocker_counted_after_many_compatible_receipts():
         assert source['reason_counts']=={'paired_shape_compatible':180,'missing_pair':1}
         assert len(source['samples'])==4
         assert source['samples'][-1]['reason']=='missing_pair'
+
+
+def test_pglite_cursor_fetchmany_consumes_exactly_once():
+    from test_tenant_support_inbox import Cursor
+    class Connection:
+        def execute(self,sql,params): return list(range(5))
+    cursor=Cursor(Connection())
+    cursor.execute('synthetic')
+    assert cursor.fetchmany(2)==[0,1]
+    assert cursor.fetchone()==2
+    assert cursor.fetchmany(0)==[]
+    assert cursor.fetchmany(100)==[3,4]
+    assert cursor.fetchmany(100)==[]
+    assert cursor.fetchone() is None
+    cursor.execute('synthetic')
+    assert cursor.fetchmany()==[0]
+    assert cursor.fetchall()==[1,2,3,4]
+    assert cursor.fetchmany()==[]

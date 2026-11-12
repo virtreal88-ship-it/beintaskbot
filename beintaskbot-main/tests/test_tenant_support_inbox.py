@@ -95,6 +95,9 @@ class Cursor:
     def __exit__(self,*_):pass
     def execute(self,sql,params=None):self.rows=self.connection.execute(sql,params)
     def fetchall(self):rows,self.rows=self.rows,[];return rows
+    def fetchmany(self,size=1):
+        rows,self.rows=self.rows[:size],self.rows[size:]
+        return rows
     def fetchone(self):return self.rows.pop(0) if self.rows else None
 
 
