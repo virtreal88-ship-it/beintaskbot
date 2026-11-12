@@ -550,8 +550,12 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
     tenant = str(profile['tenant_id'])
     key = str(payload.get('api_key') or '').strip()
     requested = {str(value) for value in (payload.get('channel_ids') or []) if str(value).strip()}
-    if not key or not requested:
+    if not requested:
         raise TenantPlatformError('Connect API açarı və ən azı bir WhatsApp kanalı seçin.')
+    if not key:
+        # Adding a number may reuse this tenant's saved credentials, as listing does.
+        # The outer connecting guard still requires company-impact confirmation.
+        key = str(_stored_connect_credentials(profile)['api_key'])
     remote = _request(key, 'GET', '/v1/channels').get('data', [])
     if not isinstance(remote, list):
         raise TenantPlatformError('Connect kanalları oxunmadı.')

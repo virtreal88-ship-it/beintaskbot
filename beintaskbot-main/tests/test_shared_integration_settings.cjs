@@ -32,6 +32,23 @@ function harness(provider, actions, role='worker', linearSettings={}){
   assert.throws(()=>h.shared.command(h.data,provider,{},'create'),/icazə/);
   h.close();
  }
+ // Existing connection: linking selected numbers with an empty key must confirm.
+ const link=harness('connect',{view:true,create:false,update:true,delete:false});
+ const list=link.w.document.createElement('input');list.type='checkbox';list.checked=true;list.value='new-channel';
+ link.w.document.querySelector('#sharedIntegration-connect > div').append(list);
+ const linkButton=[...link.w.document.querySelectorAll('button')].find(b=>b.textContent==='Seçilmiş nömrələri qoş');
+ link.w.confirm=()=>false;linkButton.click();await tick();
+ assert.equal(link.calls.length,0,'declining link confirmation never posts');
+ assert.equal(list.checked,true,'declined link retains selection');
+ link.w.confirm=message=>{link.confirmations.push(message);return true;};
+ linkButton.click();await tick();
+ assert.equal(link.calls.length,1);
+ const linkBody=JSON.parse(link.calls[0].body);
+ assert.equal(linkBody.api_key,'');assert.deepEqual(linkBody.channel_ids,['new-channel']);
+ assert.equal(linkBody.confirm_company_impact,true);
+ assert.equal(linkBody.expected_tenant_id,'tenant-a');assert.equal(linkBody.expected_user_id,42);
+ assert.equal(link.confirmations.length,1);
+ link.close();
  const reconnectHarness=harness('connect',{view:false,create:false,update:true,delete:false});
  const reconnectPayload=reconnectHarness.shared.command(reconnectHarness.data,'connect',{action:'reconnect_channel',channel_id:'synthetic'},'update');
  assert.equal(reconnectPayload.confirm_company_impact,true,'reconnect confirms company-wide webhook changes');

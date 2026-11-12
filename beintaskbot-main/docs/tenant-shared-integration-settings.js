@@ -7,7 +7,7 @@
   function command(data, provider, payload, action) {
     if (!scoped(data, provider)) return payload;
     if (!can(data, provider, action)) throw new Error('Bu əməliyyat üçün icazə yoxdur.');
-    const impact = action === 'delete' || (action === 'update' && (payload.action === 'reconnect_channel' || ['api_key','access_token','token','remove_key'].some(key => payload[key])));
+    const impact = action === 'delete' || (action === 'update' && (payload.action === 'reconnect_channel' || (provider === 'connect' && Array.isArray(payload.channel_ids) && payload.channel_ids.length > 0) || ['api_key','access_token','token','remove_key'].some(key => payload[key])));
     if (impact && !window.confirm('Bu dəyişiklik bütün şirkətin bağlantısına təsir edəcək. Davam edilsin?')) throw new Error('Əməliyyat ləğv edildi.');
     return {...payload, expected_tenant_id:data.member.tenant_id, expected_user_id:data.member.telegram_id, ...(impact ? {confirm_company_impact:true} : {})};
   }
