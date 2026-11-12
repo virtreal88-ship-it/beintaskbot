@@ -2045,11 +2045,14 @@ class Session:
         drained=await self._bounded(*drains)
         # Revoke owner-pilot response permits only after the provider has had
         # its authenticated chance to confirm shutdown.
-        if self.pilot_policy is not None and not await self._bounded(self.pilot_policy.close()):drained=False
+        if self.pilot_policy is not None and not await self._bounded(self.pilot_policy.close()):
+            _LOG.warning('realtime_voice_end_unconfirmed stage=admission_close')
+            drained=False
         async def terminal(event):
             async with self.client_lock:
                 await self.client.send(event)
         if not drained:
+            _LOG.warning('realtime_voice_end_unconfirmed stage=provider_close_or_io_drain')
             await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
         if self.history is not None and self.fence is not None:
@@ -2058,6 +2061,7 @@ class Session:
                 if not await self.history.flush(entries,self.fence):
                     raise Refused('history_close_unconfirmed')
             if not await self._bounded(finish_history()):
+                _LOG.warning('realtime_voice_end_unconfirmed stage=history_flush')
                 await self._bounded(terminal({'type':'end_unconfirmed'}))
                 return False
         # Release only after provider close and all I/O drains. A failed or
@@ -2066,6 +2070,9 @@ class Session:
             if not await self.lease.release(self.scope, self.fence):
                 raise Refused('lease_release_unconfirmed')
         if not await self._bounded(release_lease()):
+            _LOG.warning('realtime_voice_end_unconfirmed stage=lease_release')
             await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
-        return await self._bounded(terminal({'type':'ended','reason':reason}))
+        confirmed=await self._bounded(terminal({'type':'ended','reason':reason}))
+        if not confirmed:_LOG.warning('realtime_voice_end_unconfirmed stage=terminal_delivery')
+        return confirmed

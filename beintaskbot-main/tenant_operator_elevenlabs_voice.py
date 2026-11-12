@@ -28,7 +28,8 @@ _LOG=logging.getLogger(__name__)
 _SAFE_TTD_ERROR_CODES=frozenset({'authentication_required','invalid_api_key','voice_not_found',
                                   'quota_exceeded','max_character_limit_exceeded'})
 _SAFE_TRANSPORT_CODES=frozenset({'websocket_closed','websocket_error','websocket_nontext_frame',
-                                 'provider_message_too_large','provider_json_invalid','provider_event_invalid'})
+                                 'provider_message_too_large','provider_json_invalid','provider_event_invalid',
+                                 'websocket_close_unconfirmed','openai_close_unconfirmed'})
 _SAFE_TRANSPORT_KINDS=frozenset({'none','timeout','aiohttp_client_error','socket_error','unknown'})
 _SAFE_LOCAL_TTD_CODES=frozenset({
     'tts_audio_invalid','tts_audio_base64_invalid','tts_audio_frame_too_large',
@@ -37,7 +38,7 @@ _SAFE_LOCAL_TTD_CODES=frozenset({
 
 
 def _safe_close_code(value):
-    if type(value) is int and (1000<=value<=1015 or 3000<=value<=4999):return value
+    if type(value) is int and ((1000<=value<=1014 and value not in (1004,1005,1006)) or 3000<=value<=4999):return value
     return 'none'
 
 
@@ -50,7 +51,7 @@ class _TTDProviderError(ValueError):
         super().__init__('tts_provider_error')
 
 
-def _log_tts_failure(stage,error):
+def _log_tts_failure(stage,error,stream_epoch=None):
     from tenant_operator_realtime_wire import SafeRealtimeFailure
     code='tts_provider_error';close_code='none';declared_close_code='none';transport='none'
     provider_error_event=isinstance(error,_TTDProviderError)
@@ -64,10 +65,11 @@ def _log_tts_failure(stage,error):
     elif error.args and error.args[0] in ('tts_timeout','tts_close_unconfirmed','tts_admission_rejected',
                                           'provider_event_invalid',*_SAFE_LOCAL_TTD_CODES):
         code=error.args[0]
-    if stage not in ('connect','receive','send'):stage='unknown'
-    _LOG.warning('realtime_tts_failure provider=elevenlabs_ali stage=%s code=%s close_code=%s '
+    if stage not in ('connect','receive','send','close'):stage='unknown'
+    epoch=stream_epoch if type(stream_epoch) is int and 0<=stream_epoch<=10**9 else 0
+    _LOG.warning('realtime_tts_failure provider=elevenlabs_ali stream_epoch=%d stage=%s code=%s close_code=%s '
                  'provider_error_event=%s declared_close_code=%s transport_kind=%s',
-                 stage,code,close_code,provider_error_event,declared_close_code,transport)
+                 epoch,stage,code,close_code,provider_error_event,declared_close_code,transport)
 
 
 def _credential_valid(value):
@@ -107,7 +109,7 @@ async def _open_eleven_ttd_socket(guard,loader,is_current):
             if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}',kind):kind='UnknownError'
             _LOG.warning('realtime_tts_connect_failed stage=websocket_upgrade provider=elevenlabs_ali error=%s status=%s',kind,status)
             raise ValueError('tts_provider_error') from None
-        socket=AiohttpRealtimeSocket(ws,owned_session=session)
+        socket=AiohttpRealtimeSocket(ws,owned_session=session,component='elevenlabs_ttd')
         await _require_live_admission(guard)
         if not is_current():raise ValueError('tts_cancelled')
         await socket.send_json({'voices':[VOICE_ID]})
@@ -387,7 +389,11 @@ class ElevenTTDStream:
                 try:
                     await self.socket.close()
                     self._transport_close_confirmed=True
-                except Exception:failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
+                except BaseException as close_error:
+                    from tenant_operator_realtime_wire import SafeRealtimeFailure
+                    diagnostic=close_error if isinstance(close_error,SafeRealtimeFailure) else ValueError('tts_close_unconfirmed')
+                    _log_tts_failure('close',diagnostic,self.epoch)
+                    failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             if reader is not None:
                 if not reader.done():reader.cancel()
                 await asyncio.gather(reader,return_exceptions=True)
@@ -401,9 +407,9 @@ class ElevenTTDStream:
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
             _LOG.info('realtime_tts_activity provider=elevenlabs_ali attempted_chars=%d pcm_bytes=%d '
-                      'pcm_chunks=%d empty_audio_frames=%d odd_audio_frames=%d '
+                      'stream_epoch=%d pcm_chunks=%d empty_audio_frames=%d odd_audio_frames=%d '
                       'first_text_to_pcm_ms=%d final_before_close_send_return=%s',
-                      min(self.attempted_chars,MAX_RESPONSE_CHARS),min(self.audio_bytes,MAX_AUDIO_BYTES),
+                      min(self.attempted_chars,MAX_RESPONSE_CHARS),min(self.audio_bytes,MAX_AUDIO_BYTES),self.epoch,
                       min(self.pcm_chunks,10**9),min(self.empty_audio_frames,10**6),
                       min(self.odd_audio_frames,10**6),first_ms,self.final_before_close_send_return)
             await self.emit((result,self.epoch,failure))

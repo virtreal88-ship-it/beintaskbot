@@ -235,3 +235,19 @@ class AliSessionIntegration(unittest.IsolatedAsyncioTestCase):
         await next_session.start()
         self.assertTrue(self.lease.held)
         await next_session.end('test_cleanup')
+
+    async def test_x_cancels_active_tts_and_allows_immediate_next_owner_session(self):
+        await self.turn('user_1');await self.begin_output('reply_1','item_1')
+        old_stream=self.streams[0]
+        await self.session.receive_client({'type':'end'})
+        self.assertFalse(self.lease.held)
+        self.assertTrue(self.lease.released and self.socket.closed and old_stream.closed)
+        self.assertEqual(self.client.events[-1]['type'],'ended')
+
+        self.socket=Socket();self.streams=[];self.client=Client()
+        self.wire=SyntheticHybridRealtimeWire(self.socket,Guard(),None,
+            lambda *args: FakeTTS(*args))
+        self.session=Session(self.scope,authority=Authority(),ledger=Ledger(),lease=self.lease,
+            context=Context(),provider=self.wire,client=self.client,duplex=True)
+        await self.session.start()
+        self.assertTrue(self.lease.held,'a confirmed X close admits the next session immediately')

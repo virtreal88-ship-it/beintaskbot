@@ -83,6 +83,13 @@ class Cursor:
             if old and old['session_id']==session and old['channel']==channel and old['conversation']==conversation and old['owner_id']==owner and old['fence']==fence:
                 old['state']='closed';old['live']=False;self.row={'fence':fence}
             else:self.row=None
+        elif sql.lstrip().startswith('SELECT fence FROM saas_operator_voice_lease'):
+            tenant,actor,channel,conversation,session,owner,fence=args
+            old=self.store.rows.get((tenant,actor))
+            if (old and old['session_id']==session and old['channel']==channel and old['conversation']==conversation
+                and old['owner_id']==owner and old['fence']==fence and old['state']=='closed'):
+                self.row={'fence':fence}
+            else:self.row=None
         else:raise AssertionError('unexpected SQL in lease unit test')
     def fetchone(self):return self.row
 

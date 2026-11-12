@@ -933,7 +933,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             async def close(self):self.closed=True;return True
         for code,error in [(1006,None),(None,None),(1000,ConnectionError('synthetic'))]:
             wrapped=AiohttpRealtimeSocket(BrokenWS(code,error))
-            with self.assertRaisesRegex(ValueError,'wire_close_unconfirmed'):
+            with self.assertRaisesRegex(ValueError,'websocket_close_unconfirmed'):
                 await wrapped.close()
 
     async def test_real_local_peer_abort_is_not_a_confirmed_close(self):
@@ -949,7 +949,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             port=site._server.sockets[0].getsockname()[1]
             ws=await client.ws_connect(f'http://127.0.0.1:{port}/abort')
             await asyncio.wait_for(ws.receive(),1)
-            with self.assertRaisesRegex(ValueError,'wire_close_unconfirmed'):
+            with self.assertRaisesRegex(ValueError,'websocket_close_unconfirmed'):
                 await AiohttpRealtimeSocket(ws).close()
         finally:
             await client.close();await runner.cleanup()

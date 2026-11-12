@@ -172,10 +172,49 @@ def test_release_retries_a_transient_database_failure_with_same_fence():
     lease = _lease()
     lease.fence = 8
     with patch.object(lease, '_transaction', side_effect=[
-        TenantLinearError('unavailable', 503), True,
+        TenantLinearError('unavailable', 503), True, True,
     ]) as transaction:
         assert asyncio.run(lease.release(lease.scope, 8)) is True
-    assert transaction.call_count == 2
+        assert asyncio.run(lease.release(lease.scope, 8)) is True
+    assert transaction.call_count == 3
     assert transaction.call_args_list[0].args == ('release', 8)
     assert transaction.call_args_list[1].args == ('release', 8)
+    assert transaction.call_args_list[2].args == ('release', 8)
+    assert lease.fence is None
+
+    # A late cleanup for an old fence cannot release a newly claimed lease.
+    lease.fence = 9
+    assert asyncio.run(lease.release(lease.scope, 8)) is False
+
+
+def test_release_retry_survives_a_disconnected_waiter_and_closes_only_same_fence():
+    import asyncio
+    import threading
+    from tenant_linear_policy import TenantLinearError
+
+    lease = _lease()
+    lease.fence = 9
+    first_attempt = threading.Event()
+    calls = []
+
+    def transaction(operation, fence):
+        calls.append((operation, fence))
+        if len(calls) == 1:
+            first_attempt.set()
+            raise TenantLinearError('unavailable', 503)
+        return True
+
+    async def scenario():
+        with patch.object(lease, '_transaction', side_effect=transaction):
+            waiter = asyncio.create_task(lease.release(lease.scope, 9))
+            assert await asyncio.to_thread(first_attempt.wait, 1)
+            waiter.cancel()
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                pass
+            assert await asyncio.wait_for(lease._release_task, 1) is True
+
+    asyncio.run(scenario())
+    assert calls == [('release', 9), ('release', 9)]
     assert lease.fence is None

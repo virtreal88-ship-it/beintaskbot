@@ -48,7 +48,7 @@ test('missing end confirmation reaches a bounded failure and blocks restart',asy
  const h=await setup({duplex:true});try{
   const finished=h.voice.end();assert.equal(h.counts().stopped,1);
   assert.equal(await finished,false);await tick();
-  assert.match(h.root.querySelector('[role=status]').textContent,/не подтверждено/i);
+  assert.match(h.root.querySelector('[role=status]').textContent,/не подтвердил/i);
   assert.equal(h.root.querySelector('.voice-session-start').disabled,true);
   await h.voice.start();assert.equal(h.voice.isActive(),false);
  }finally{await h.destroy();}
@@ -188,7 +188,7 @@ test('busy startup explains uncertainty and permits closing the local screen wit
   lifecycle:{visibilityState:'visible',addEventListener(){},removeEventListener(){}}});
  try{
   await voice.start();await tick();
-  assert.match(root.querySelector('[role=status]').textContent,/другой голосовой сеанс|завершение предыдущего не подтверждено/i);
+  assert.match(root.querySelector('[role=status]').textContent,/сервер ещё не подтвердил завершение предыдущего разговора/i);
   const end=root.querySelector('.voice-session-end');assert.equal(end.hidden,false);
   end.click();assert.equal(dismissed,1);assert.equal(released,1);assert.equal(closed,1);
  }finally{await voice.destroy();dom.window.close();}
@@ -205,7 +205,7 @@ test('the full screen closes locally after a busy refusal and retains no microph
  const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
  try{
   assert.equal(await screen.startVoice(),true);await tick();await tick();
-  assert.equal(screen.hidden,false);assert.match(screen.querySelector('[role=status]').textContent,/другой голосовой сеанс/i);
+  assert.equal(screen.hidden,false);assert.match(screen.querySelector('[role=status]').textContent,/сервер ещё не подтвердил завершение предыдущего разговора/i);
   const end=screen.querySelector('.voice-session-end');assert.equal(end.hidden,false);
   screen.querySelector('[data-voice-close]').click();
   assert.equal(screen.hidden,true);assert.equal(released,1);
@@ -231,21 +231,23 @@ test('voice screen uses its animated orb as the only response interruption contr
 test('full-screen X ends active sessions and can dismiss an unconfirmed local screen',async()=>{
  for(const terminal of ['ended','end_unconfirmed']){
   const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/',pretendToBeVisual:true});
-  const win=dom.window,host=win.document.querySelector('#host');let eventHandler,endCount=0;
+  const win=dom.window,host=win.document.querySelector('#host');let eventHandler,endCount=0,idleOutcome=null;
   win.mountExperimentalCopilotVoice=mountVoice;win.acquireTenantMicrophone=async()=>()=>{};
   win.openExperimentalCopilotAudio=async()=>({mute(){},flush(){},stopNow(){},close:async()=>{}});
   win.connectExperimentalCopilotVoice=async (_path,cb)=>{eventHandler=cb;await cb({type:'ready'});
     return{send(event){if(event.type==='end')endCount++;},close:async()=>{}};};
   const mountScreen=require('../docs/tenant-operator-copilot-voice.js');
-  const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true});
+  const screen=mountScreen(host,{language:'ru',socketPath:'/ws',preflight:async()=>({available:true}),isCurrent:()=>true,
+    onIdle:outcome=>{idleOutcome=outcome;}});
   try{
    await screen.startVoice();await tick();
    screen.querySelector('[data-voice-close]').click();
    assert.equal(endCount,1);assert.equal(screen.hidden,false,'X waits for the server terminal result');
    await eventHandler({type:terminal});await tick();
    assert.equal(screen.hidden,terminal==='ended');
+   assert.equal(idleOutcome?.confirmed,terminal==='ended','the parent is told whether the server confirmed closure');
    if(terminal==='end_unconfirmed'){
-    assert.match(screen.querySelector('[role=status]').textContent,/не подтверждено/i);
+    assert.match(screen.querySelector('[role=status]').textContent,/не подтвердил/i);
     screen.querySelector('[data-voice-close]').click();
     assert.equal(screen.hidden,true,'X dismisses the local overlay after end confirmation times out');
     assert.equal(endCount,1,'dismissing the overlay does not send a reset or second end');
@@ -284,7 +286,7 @@ test('Escape on active voice waits for the server; unconfirmed termination stays
    assert.equal(endCount,1);assert.equal(screen.hidden,false,'screen remains while end is pending');
    await eventHandler({type:terminal});await tick();
    assert.equal(screen.hidden,terminal==='ended');
-   if(terminal==='end_unconfirmed')assert.match(screen.querySelector('[role=status]').textContent,/не подтверждено/i);
+   if(terminal==='end_unconfirmed')assert.match(screen.querySelector('[role=status]').textContent,/не подтвердил/i);
   }finally{await screen.disposeVoice();dom.window.close();}
  }
 });
