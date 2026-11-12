@@ -51,8 +51,11 @@ def test_global_simulation_and_case_extraction_gates_are_not_bypassable(creation
     with pytest.raises(TenantLinearError,match='Simulation'):
         agents.save_settings(PROFILE,{'operating_mode':'simulation'})
     monkeypatch.setattr(agents,'_support_case_extraction_runtime_enabled',lambda tenant:False)
+    legacy=agents.save_settings(PROFILE,{'support_case_extraction_enabled':True})
+    assert legacy['support_case_extraction_mode']=='manual'
+    assert legacy['support_case_extraction_enabled'] is False
     with pytest.raises(TenantLinearError,match='Dəstək case'):
-        agents.save_settings(PROFILE,{'support_case_extraction_enabled':True})
+        agents.save_settings(PROFILE,{'support_case_extraction_mode':'automatic'})
     assert creation.execute("SELECT support_case_extraction_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['support_case_extraction_enabled'] is False
 
 

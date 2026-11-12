@@ -1257,7 +1257,7 @@ def test_actual_pilot_handoff_and_manual_reply_do_not_send_customer(db,monkeypat
     assert db.execute("SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,case))[0]['status']!='resolved'
 
 
-def test_expired_attestations_renew_during_same_open_handoff_and_new_signed_reply_reuses_case(db,monkeypatch):
+def test_expired_attestations_leave_manual_case_stopped_when_new_signed_reply_arrives(db,monkeypatch):
     import hashlib,hmac,json
     from types import SimpleNamespace
     import tenant_ai_pilot as pilot
@@ -1289,8 +1289,6 @@ def test_expired_attestations_renew_during_same_open_handoff_and_new_signed_repl
     db.execute("UPDATE saas_ai_pilot_confirmations SET kwid_expires_at=now()-interval '1 second',owner_expires_at=now()-interval '1 second' WHERE tenant_id=%s::uuid",(A,));db.commit()
     db.execute("UPDATE saas_ai_conversation_state SET state='human',reason='ai_developer_consultation:unsupported_evidence' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
     before_state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
-    assert pilot.confirm_kwid_disabled(profile,{'confirmed':True})['handoff']=='human'
-    assert pilot.approve_pilot(profile,{'approved':True})['handoff']=='human'
     after_state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
     assert after_state==before_state
     assert len(group_sends)==1
@@ -1317,19 +1315,6 @@ def test_expired_attestations_renew_during_same_open_handoff_and_new_signed_repl
     assert db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]==before_state
 
 
-@pytest.mark.parametrize('invalid_receipt', ['closed_case','unsent_group_receipt'])
-def test_consultation_renewal_requires_open_case_and_sent_group_receipt(db,monkeypatch,invalid_receipt):
-    import tenant_ai_pilot as pilot
-    consult,case=setup_case(db,monkeypatch)
-    scope,_=setup_real_pilot_gate(db,monkeypatch)
-    if invalid_receipt=='closed_case':
-        db.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,case))
-    else:
-        db.execute("INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,'synthetic','hash','sending',11)",
-          (A,consult,str(uuid.uuid4()),case,CA,GROUP))
-    db.commit()
-    with db.cursor() as cur:
-        assert not pilot._valid_consultation_continuation(cur,A,scope)
 
 
 def test_manual_developer_rounds_remain_staff_work_without_customer_send(db,monkeypatch):

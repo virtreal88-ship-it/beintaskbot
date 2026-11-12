@@ -119,9 +119,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # to look like a successful but empty diagnostics result
                     # to the browser (false flags, no tenant, zero channels).
                     result = await asyncio.to_thread(list_connect_diagnostics, profile, request.query.get('limit', 50))
-                elif resource == 'pilot_preflight':
-                    from tenant_ai_pilot import preflight
-                    result = await asyncio.to_thread(preflight, profile)
                 elif resource == 'agent_delete_preview':
                     result = await asyncio.to_thread(preview_agent_deletion, profile, request.match_info['agent_id'])
                 elif resource == 'agents':
@@ -247,18 +244,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # show a just-saved auto-send switch as disabled.
                     await asyncio.to_thread(save_settings, profile, payload)
                     result = await asyncio.to_thread(read_settings, profile)
-                elif resource == 'pilot_kwid_confirmation' and method == 'POST':
-                    from tenant_ai_pilot import confirm_kwid_disabled
-                    result = await asyncio.to_thread(confirm_kwid_disabled, profile, payload)
-                elif resource == 'pilot_resume' and method == 'POST':
-                    from tenant_ai_pilot import resume_pilot_dialog
-                    result = await asyncio.to_thread(resume_pilot_dialog, profile, payload)
-                elif resource == 'pilot_reset' and method == 'POST':
-                    from tenant_ai_pilot import reset_pilot_test_dialog
-                    result = await asyncio.to_thread(reset_pilot_test_dialog, profile, payload)
-                elif resource == 'pilot_owner_approval' and method == 'POST':
-                    from tenant_ai_pilot import approve_pilot
-                    result = await asyncio.to_thread(approve_pilot, profile, payload)
                 elif resource == 'agents' and method == 'POST':
                     result = await asyncio.to_thread(save_agent, profile, payload)
                 elif resource == 'agent' and method == 'PATCH':

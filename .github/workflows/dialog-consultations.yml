@@ -61,7 +61,6 @@ on:
       - 'beintaskbot-main/tests/test_consultation_startup_upgrade_postgres.py'
       - 'beintaskbot-main/tests/test_tenant_consultation_notification_worker.py'
       - 'beintaskbot-main/tests/test_tenant_ai_pilot.py'
-      - 'beintaskbot-main/tests/test_tenant_ai_pilot_reset_postgres.py'
       - 'beintaskbot-main/tenant_notification_center*.py'
       - 'beintaskbot-main/tests/test_tenant_notification_center*'
       - 'beintaskbot-main/tests/test_tenant_notification_bell_ux_browser.cjs'
@@ -281,7 +280,6 @@ jobs:
             tests/test_legacy_app_bootstrap.py \
             tests/test_tenant_consultation_notification_worker.py \
             tests/test_tenant_ai_pilot.py \
-            tests/test_tenant_ai_pilot_reset_postgres.py \
             tests/test_tenant_ai_pilot_worker.py \
             tests/test_tenant_ai_agent_no_answer.py \
             tests/test_developer_primary_reserve.py \
