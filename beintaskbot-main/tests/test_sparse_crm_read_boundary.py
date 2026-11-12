@@ -9,7 +9,7 @@ from test_tenant_deal_api import manager_profile, Request, PlatformError
 
 def profile(module='deals', scope='self'):
     p=manager_profile()
-    p['workflow']['policies']={'members':{'20':{'access_scopes':{module:{'view':scope}}}}}
+    p['workflow']['policies']={'members':{'20':{'pipeline_ids':['10'],'access_scopes':{module:{'view':scope}}}}}
     return p
 
 
@@ -24,20 +24,21 @@ def api(p):
 
 @pytest.mark.parametrize('scope',['none','self','department'])
 @pytest.mark.parametrize('route',['deals','deal'])
-def test_sparse_deal_scope_cannot_read_legacy_through_customers(monkeypatch,scope,route):
+def test_kommo_funnel_scope_is_authority_independent_of_native_deal_rights(monkeypatch,scope,route):
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     p=profile(scope=scope)
     assert TenantPolicy(p).allows('customers') # Reproduction: legacy fallback still exists.
     routes,c=api(p)
     response=asyncio.run(routes[route](Request({'lead_id':'7','refresh':'1'})))
-    assert response.status==403
-    c.list_deals.assert_not_called();c.get_deal.assert_not_called();c.sync_crm.assert_not_awaited()
+    assert response.status==200
+    (c.list_deals if route=='deals' else c.get_deal).assert_called_once()
 
 
 @pytest.mark.parametrize('enabled',[False,True])
 def test_empty_matrix_keeps_legacy_customer_only_read(monkeypatch,enabled):
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED',str(enabled).lower())
     p=manager_profile();p['permissions']=['customers']
+    p['workflow']['policies'][0]['value']['20']['pipeline_ids']=['10']
     routes,c=api(p)
     assert asyncio.run(routes['deals'](Request())).status==200
     c.list_deals.assert_called_once()
@@ -83,7 +84,7 @@ def test_sparse_read_restriction_closes_board_and_ai_legacy_projection(monkeypat
     policy=TenantPolicy(p)
     assert policy.deal_board()==[]
     assert not policy.can_use_chat_ai()
-    assert not policy.can_access_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100})
+    assert policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100})
 
 
 def test_legacy_chat_fallback_cannot_use_customers_grant(monkeypatch):
@@ -99,7 +100,7 @@ def test_legacy_chat_fallback_cannot_use_customers_grant(monkeypatch):
 
 def test_all_does_not_manufacture_external_read_grant(monkeypatch):
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
-    p=profile(scope='all');p['permissions']=[]
+    p=profile(scope='all');p['permissions']=[];p['workflow']['policies']['members']['20']['pipeline_ids']=[]
     assert not TenantPolicy(p).can_read_legacy_crm()
     assert asyncio.run(api(p)[0]['deals'](Request())).status==403
 

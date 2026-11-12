@@ -157,7 +157,7 @@ def authority_key(profile):
 
 def _sources(policy):
     native = policy.profile.get('active') is not False if scoped_access_enabled() else policy.allows_action('tasks','view')
-    external = policy.allows('tasks')
+    external = policy.kommo_task_access()
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
         complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
@@ -192,7 +192,7 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
           LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
           WHERE '''+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
     else:
-        where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).task_scope())
+        where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).kommo_task_scope())
         if task_id:
             where += ' AND kommo_task_id=%s'; args.append(_positive(task_id))
         if search:
@@ -295,7 +295,7 @@ def external_options(profile):
         for person in people:
             if not TenantPolicy(person).allows('tasks'):
                 continue
-            personal = TenantPolicy({**person, 'role': 'manager'}).pipeline_scope()
+            personal = TenantPolicy(person).kommo_pipeline_scope()
             names = {str(item['pipeline_id']): item.get('name') or ''
                      for item in current['workflow'].get('pipelines', [])}
             executors.append(dict(id=str(person['telegram_id']), name=person.get('display_name') or 'Employee',
@@ -306,13 +306,18 @@ def external_options(profile):
             # executors/operations, but never expose unfiltered deal snapshots.
             return dict(executors=public(executors), deals=[])
         parts, args = [], [current['tenant_id']]
-        for item in policy.pipeline_scope():
+        for item in policy.kommo_pipeline_scope():
             part = 'pipeline_id=%s'; args.append(item['pipeline_id'])
             if item['status_ids']:
                 part += ' AND status_id=ANY(%s::bigint[])'; args.append(item['status_ids'])
             parts.append('('+part+')')
+        deal_scope = '('+(' OR '.join(parts) or 'FALSE')+')'
+        kommo_user_id = policy.kommo_user_id()
+        if kommo_user_id:
+            deal_scope = '('+deal_scope+" OR raw->>'created_by_id'=%s OR raw->>'created_by'=%s)"
+            args.extend([str(kommo_user_id), str(kommo_user_id)])
         cur.execute('''SELECT kommo_lead_id::text AS id,name,pipeline_id
-          FROM saas_crm_deals WHERE tenant_id=%s::uuid AND deleted_at IS NULL AND ('''+
-          (' OR '.join(parts) or 'FALSE')+') ORDER BY synced_at DESC,kommo_lead_id LIMIT 200', args)
+          FROM saas_crm_deals WHERE tenant_id=%s::uuid AND deleted_at IS NULL AND '''+
+          deal_scope+' ORDER BY synced_at DESC,kommo_lead_id LIMIT 200', args)
         return dict(executors=public(executors), deals=public(cur.fetchall()))
     return _attempt(profile, operation, everyone=True)

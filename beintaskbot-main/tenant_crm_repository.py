@@ -66,11 +66,11 @@ class CRMRepository:
 
     def list_deals(self, *, tenant_id: str, search: str = '', pipeline_ids: list[int] | None = None,
                    status_ids: list[int] | None = None, limit: int = 100, offset: int = 0,
-                   scope: list[dict] | None = None) -> tuple[list[dict], int]:
+                   scope: list[dict] | None = None, creator_id: int | None = None) -> tuple[list[dict], int]:
         safe_limit = max(1, min(int(limit or 100), 200))
         safe_offset = max(0, int(offset or 0))
         where, values = deal_filters(tenant_id=tenant_id, search=search, pipeline_ids=pipeline_ids,
-                                    status_ids=status_ids, scope=scope)
+                                    status_ids=status_ids, scope=scope, creator_id=creator_id)
         with self.connect() as conn:
             self.ensure_schema(conn)
             with conn.cursor() as cur:

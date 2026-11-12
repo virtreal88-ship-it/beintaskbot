@@ -109,7 +109,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                 sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
         rows = await asyncio.to_thread(
             context.list_tasks, tenant_id=profile["tenant_id"], limit=200,
-            scope=context.policy(profile).task_scope(),
+            scope=context.policy(profile).kommo_task_scope(),
         )
         return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
@@ -137,7 +137,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             for person in profiles:
                 if not context.policy(person).allows("tasks"):
                     continue
-                personal = context.policy({**person, "role": "manager"}).pipeline_scope()
+                personal = context.policy(person).kommo_pipeline_scope()
                 names = {str(row["pipeline_id"]): row.get("name") or ""
                          for row in (person.get("workflow") or {}).get("pipelines", [])}
                 personal = [{**row, "name": names.get(str(row["pipeline_id"]), "")} for row in personal]
@@ -150,7 +150,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             if not TenantPolicy(profile).legacy_crm_view_restricted():
                 rows, _ = await asyncio.to_thread(
                     context.list_deals, tenant_id=profile["tenant_id"],
-                    scope=context.policy(profile).pipeline_scope(), limit=200,
+                scope=context.policy(profile).kommo_pipeline_scope(), limit=200,
+                creator_id=context.policy(profile).kommo_user_id() or None,
                 )
             deals = [{"id": row["kommo_lead_id"], "name": row["name"], "pipeline_id": row["pipeline_id"]}
                      for row in rows]

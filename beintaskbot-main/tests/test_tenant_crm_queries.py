@@ -92,6 +92,25 @@ class CRMQueries(unittest.TestCase):
         self.assertTrue(sql.endswith('AND strpos(text, %s) > 0 AND responsible_id = %s'))
         self.assertEqual(values, ['a', '[employee]', 42])
 
+    def test_kommo_tasks_include_selected_deal_tasks_and_employee_created_tasks(self):
+        marker='[CRM:only-this-employee]'
+        sql, values=task_filters(tenant_id='a',scope={'kind':'kommo','pipelines':[{'pipeline_id':10,'status_ids':[100]}],
+            'marker':marker,'kommo_user_id':501})
+        self.assertIn("strpos(saas_crm_tasks.text, %s) > 0",sql)
+        self.assertIn("saas_crm_tasks.raw->>'created_by'=%s",sql)
+        self.assertIn('d.pipeline_id = %s AND d.status_id = ANY(%s)',sql)
+        self.assertEqual(values,['a',marker,'501',10,[100],'501','501'])
+
+    def test_kommo_tasks_follow_employee_created_deal_even_without_pipeline_assignment(self):
+        sql,values=task_filters(tenant_id='a',scope={'kind':'kommo','pipelines':[],'kommo_user_id':501})
+        self.assertIn("d.raw->>'created_by_id'=%s",sql)
+        self.assertEqual(values,['a','501','501','501'])
+
+    def test_kommo_deal_creator_is_included_without_expanding_other_pipeline_access(self):
+        sql,values=deal_filters(tenant_id='a',scope=[],creator_id=501)
+        self.assertIn("(FALSE OR raw->>'created_by_id'=%s OR raw->>'created_by'=%s)",sql)
+        self.assertEqual(values,['a','501','501'])
+
     def test_public_payload_preserves_input_and_serializes_dates(self):
         now = datetime(2026, 10, 9, tzinfo=timezone.utc)
         row = {'created_at': now, 'due_at': now, 'raw': None}

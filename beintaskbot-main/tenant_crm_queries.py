@@ -25,7 +25,8 @@ def public_crm_row(row: dict) -> dict:
 
 
 def deal_filters(*, tenant_id: str, search: str = '', pipeline_ids: list[int] | None = None,
-                 status_ids: list[int] | None = None, scope: list[dict] | None = None) -> tuple[str, list]:
+                 status_ids: list[int] | None = None, scope: list[dict] | None = None,
+                 creator_id: int | None = None) -> tuple[str, list]:
     clauses = ['tenant_id = %s::uuid', 'deleted_at IS NULL']
     values: list = [tenant_id]
     if scope is not None:
@@ -37,7 +38,11 @@ def deal_filters(*, tenant_id: str, search: str = '', pipeline_ids: list[int] | 
                 clause += ' AND status_id = ANY(%s)'
                 values.append([int(sid) for sid in rule['status_ids']])
             scope_clauses.append('(' + clause + ')')
-        clauses.append('(' + ' OR '.join(scope_clauses) + ')' if scope_clauses else 'FALSE')
+        scope_sql = '(' + ' OR '.join(scope_clauses) + ')' if scope_clauses else 'FALSE'
+        if creator_id:
+            scope_sql = '(' + scope_sql + " OR raw->>'created_by_id'=%s OR raw->>'created_by'=%s)"
+            values.extend([str(int(creator_id)), str(int(creator_id))])
+        clauses.append(scope_sql)
     needle = str(search or '').strip()[:160]
     if needle:
         clauses.append('(name ILIKE %s OR contact_name ILIKE %s OR phone ILIKE %s OR stage_name ILIKE %s)')
@@ -74,6 +79,31 @@ def task_filters(*, tenant_id: str, responsible_id: int | None = None,
         elif kind == 'marker' and scope.get('marker'):
             clauses.append('strpos(text, %s) > 0')
             values.append(str(scope['marker']))
+        elif kind == 'kommo':
+            branches = []
+            if scope.get('marker'):
+                branches.append('strpos(saas_crm_tasks.text, %s) > 0')
+                values.append(str(scope['marker']))
+            if scope.get('kommo_user_id'):
+                branches.append("saas_crm_tasks.raw->>'created_by'=%s")
+                values.append(str(int(scope['kommo_user_id'])))
+            pipeline_clauses = []
+            for item in scope.get('pipelines', []):
+                clause = '(d.pipeline_id = %s'
+                values.append(int(item['pipeline_id']))
+                if item.get('status_ids'):
+                    clause += ' AND d.status_id = ANY(%s)'
+                    values.append(item['status_ids'])
+                pipeline_clauses.append(clause + ')')
+            deal_clauses = list(pipeline_clauses)
+            if scope.get('kommo_user_id'):
+                deal_clauses.append("d.raw->>'created_by_id'=%s")
+                deal_clauses.append("d.raw->>'created_by'=%s")
+                values.extend([str(int(scope['kommo_user_id'])), str(int(scope['kommo_user_id']))])
+            if deal_clauses:
+                branches.append('EXISTS (SELECT 1 FROM saas_crm_deals d WHERE d.tenant_id=saas_crm_tasks.tenant_id '
+                    'AND d.kommo_lead_id=saas_crm_tasks.kommo_lead_id AND ('+' OR '.join(deal_clauses)+'))')
+            clauses.append('('+' OR '.join(branches)+')' if branches else 'FALSE')
         elif kind != 'all':
             clauses.append('FALSE')
     if responsible_id is not None:

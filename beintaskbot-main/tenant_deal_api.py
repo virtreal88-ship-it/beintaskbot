@@ -22,7 +22,7 @@ def _deal_access(context: DealApiContext, profile: dict | None) -> bool:
     if not profile:
         return False
     policy = context.policy(profile)
-    return policy.can_read_legacy_crm()
+    return policy.kommo_access()
 
 
 def handlers(context: DealApiContext) -> dict[str, Callable]:
@@ -30,7 +30,7 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
         profile = context.member(request)
         policy = context.policy(profile or {})
         resources = []
-        if policy.can_read_legacy_crm() or policy.task_scope().get("kind") == "pipelines":
+        if policy.kommo_access() or policy.can_read_legacy_crm():
             resources.append("leads")
         if policy.allows("tasks"):
             resources.append("tasks")
@@ -70,7 +70,8 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
         rows, total = await asyncio.to_thread(
             context.list_deals, tenant_id=profile["tenant_id"], search=str(values.get("search") or ""),
             pipeline_ids=pipeline_ids, status_ids=status_ids, limit=limit, offset=offset,
-            scope=context.policy(profile).pipeline_scope(),
+            scope=context.policy(profile).kommo_pipeline_scope(),
+            creator_id=context.policy(profile).kommo_user_id(),
         )
         return web.json_response({"success": True, "deals": rows, "total": total,
                                   "stale": bool(sync_error), "warning": sync_error})
@@ -87,7 +88,7 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
             return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
         row = await asyncio.to_thread(
             context.get_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
-        if not context.policy(profile).can_access_deal(row):
+        if not context.policy(profile).can_access_kommo_deal(row):
             return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
         return web.json_response({"success": True, "deal": row})
 

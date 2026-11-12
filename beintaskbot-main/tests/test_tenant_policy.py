@@ -24,6 +24,28 @@ class TenantPolicyTests(unittest.TestCase):
         self.assertFalse(policy.can_access_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':101}))
         self.assertFalse(policy.can_access_deal({'tenant_id':'company-a','pipeline_id':11,'status_id':100}))
 
+    def test_kommo_pipeline_is_the_provider_access_grant_for_any_employee_role(self):
+        person=profile('worker');person['permissions']=['tasks'];person['workflow']['policies'][0]['value']['20']['pipeline_ids']=['10']
+        policy=TenantPolicy(person)
+        self.assertEqual(policy.kommo_pipeline_scope(),[{'pipeline_id':10,'status_ids':[100]}])
+        self.assertTrue(policy.kommo_access())
+        self.assertTrue(policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100}))
+        self.assertFalse(policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':11,'status_id':100}))
+        self.assertTrue(policy.allows('tasks'))
+
+    def test_kommo_created_by_mapping_grants_only_own_deal_and_tasks(self):
+        person=profile('worker');person['workflow']['policies'][0]['value']['20'].update(pipeline_ids=[],kommo_user_id='501')
+        policy=TenantPolicy(person)
+        self.assertTrue(policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':11,'status_id':100,'raw':{'created_by_id':501}}))
+        self.assertFalse(policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':11,'status_id':100,'raw':{'created_by_id':502}}))
+        self.assertEqual(policy.kommo_task_scope()['kommo_user_id'],501)
+
+    def test_kommo_task_marker_does_not_require_pipeline_assignment(self):
+        person=profile('worker');person['workflow']['policies'][0]['value']['20'].update(pipeline_ids=[],kommo_user_id=None)
+        policy=TenantPolicy(person)
+        self.assertFalse(policy.kommo_access())
+        self.assertTrue(policy.kommo_task_access())
+
     def test_cross_tenant_deal_is_denied_even_to_owner(self):
         self.assertFalse(TenantPolicy(profile('owner')).can_access_deal({'tenant_id':'company-b','pipeline_id':10,'status_id':100}))
 

@@ -22,7 +22,7 @@ from tenant_email_auth import _hash_password, _password_matches
 
 
 INITIAL_PASSWORD = 'Synthetic-initial-password!42'
-LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id'}
+LOCAL_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id', 'kommo_settings'}
 GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 ALLOWED_ACTIONS = {'update_member_card', 'provision_member_account', 'upsert', 'deactivate',
                    'whatsapp_numbers', 'add_whatsapp_number', 'provision_account',

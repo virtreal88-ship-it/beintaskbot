@@ -18,7 +18,7 @@ from tenant_employee_policy import employee_action_allowed, employee_target_allo
 # when an employee card is updated; an older client must never erase them.
 _EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
 _RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
-_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id'}
+_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id', 'kommo_settings'}
 _GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
 
 
@@ -94,7 +94,7 @@ def _card_access(current, target):
                 editable.remove('active')
                 reasons['active'] = 'permission_scope'
     if current.get('role') != 'owner':
-        for field in ('permission_changes', 'work_settings', 'access_settings', 'department_id'):
+        for field in ('permission_changes', 'work_settings', 'access_settings', 'department_id', 'kommo_settings'):
             editable.discard(field)
             reasons[field] = 'owner_protected'
     elif 'permissions' not in editable:
@@ -384,6 +384,8 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
             value['permission_modules'] = sorted(PERMISSION_MODULES)
             from tenant_member_access import access_snapshot
             value['access_settings'] = access_snapshot(row)
+            from tenant_member_kommo_settings import snapshot as kommo_settings_snapshot
+            value['kommo_settings'] = kommo_settings_snapshot(workflow, row)
             value['department_catalog'] = departments
         result.append(value)
     return result
@@ -525,7 +527,7 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                     # membership moves with all scoped reads and writes before
                     # taking workflow/member locks, not after acquiring them.
                     cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR UPDATE', (tenant_id,))
-                if set(changes) & {'work_settings', 'access_settings'}:
+                if set(changes) & {'work_settings', 'access_settings', 'kommo_settings'}:
                     cur.execute('SELECT id FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant_id,))
                     cur.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'members','{}'::jsonb,%s) ON CONFLICT DO NOTHING", (tenant_id, int(owner_id)))
                     cur.execute("SELECT policy_key FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='members' FOR UPDATE", (tenant_id,))
@@ -549,7 +551,7 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                         target=telegram_id, strict=True)
                     if 'permissions' not in changes:
                         permissions = list(existing.get('permissions') or [])
-                if set(changes) & {'permission_changes', 'work_settings', 'access_settings', 'department_id'}:
+                if set(changes) & {'permission_changes', 'work_settings', 'access_settings', 'department_id', 'kommo_settings'}:
                     cur.execute('SELECT owner_telegram_id,status FROM saas_tenants WHERE id=%s::uuid', (tenant_id,))
                     company = cur.fetchone() or {}
                     if company.get('owner_telegram_id') != int(owner_id) or company.get('status') != 'active':
@@ -595,6 +597,10 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
                     from tenant_member_settings import apply_settings_patch
                     apply_settings_patch(cur, tenant_id=tenant_id, owner_id=owner_id, target=existing,
                         workflow=_read_tenant_workflow(cur, tenant_id), patch=changes['work_settings'])
+                if 'kommo_settings' in changes:
+                    from tenant_member_kommo_settings import apply_patch as apply_kommo_settings
+                    apply_kommo_settings(cur, tenant_id=tenant_id, owner_id=owner_id, target=existing,
+                        workflow=_read_tenant_workflow(cur, tenant_id), patch=changes['kommo_settings'])
                 if selected is not None:
                     _replace_numbers(cur, tenant_id, owner_id, telegram_id, selected)
                 cur.execute('''UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,
