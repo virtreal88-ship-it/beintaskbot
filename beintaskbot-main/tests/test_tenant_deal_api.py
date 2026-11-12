@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, MagicMock, patch
 
 from tenant_deal_api import DealApiContext, handlers
 from tenant_policy import TenantPolicy
@@ -90,6 +90,33 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
             limit=25, offset=5, scope=[{"pipeline_id": 10, "status_ids": [100]}], creator_id=0,
         )
         self.assertEqual(response_body(response)["total"], 1)
+
+    async def test_real_store_boundary_accepts_creator_and_preserves_tenant_scope(self):
+        # Exercise the production compatibility wrapper, not a permissive Mock.
+        # PR630 passed creator_id through the handler but omitted this adapter.
+        from dataclasses import replace
+        from tenant_crm_store import list_crm_deals
+        for role, creator in [('owner', 0), ('worker', 77)]:
+            with self.subTest(role=role):
+                self.profile['role'] = role
+                self.profile['workflow']['policies'][0]['value']['20']['kommo_user_id'] = creator
+                connection = MagicMock()
+                cur = connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                cur.fetchone.return_value = {'total': 1}
+                cur.fetchall.return_value = [{'tenant_id': 'company-a', 'kommo_lead_id': 7}]
+                with patch('tenant_crm_store._connect', connection), patch('tenant_crm_store._ensure_schema'):
+                    api = handlers(replace(self.context, list_deals=list_crm_deals))
+                    response = await api['deals'](Request())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response_body(response)['total'], 1)
+                for call in cur.execute.call_args_list:
+                    sql, values = call.args
+                    self.assertIn('tenant_id = %s::uuid', sql)
+                    self.assertEqual(values[0], 'company-a')
+                    self.assertIn('pipeline_id = %s', sql)
+                    if creator:
+                        self.assertIn("raw->>'created_by_id'=%s", sql)
+                        self.assertIn('77', values)
 
     async def test_invalid_filter_is_rejected_before_storage(self):
         response = await self.api["deals"](Request({"pipeline_id": ["invalid"]}))

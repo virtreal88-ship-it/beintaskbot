@@ -18,12 +18,12 @@ def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
 
 def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] | None = None,
                    status_ids: list[int] | None = None, limit: int = 100, offset: int = 0,
-                   scope: list[dict] | None = None) -> tuple[list[dict], int]:
+                   scope: list[dict] | None = None, creator_id: int | None = None) -> tuple[list[dict], int]:
     """List only the selected tenant's cached deals, with DB-side filtering."""
     from tenant_crm_repository import CRMRepository
     return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).list_deals(
         tenant_id=tenant_id, search=search, pipeline_ids=pipeline_ids,
-        status_ids=status_ids, limit=limit, offset=offset, scope=scope)
+        status_ids=status_ids, limit=limit, offset=offset, scope=scope, creator_id=creator_id)
 
 
 def get_crm_deal(*, tenant_id: str, kommo_lead_id: int) -> dict | None:
