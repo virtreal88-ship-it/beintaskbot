@@ -39,7 +39,20 @@ function installCaseTabsFixture(){
   await page.locator(selectors[0]).focus();
   for(const [key,direction] of [['Tab',1],['Shift+Tab',-1]]){
    for(let step=1;step<=selectors.length;step++){
+    const previous=selectors[(direction*(step-1)+selectors.length)%selectors.length];
     await page.keyboard.press(key);const selector=selectors[(direction*step+selectors.length)%selectors.length];
+    // Chromium datetime-local exposes multiple native segments on one DOM input.
+    // Traverse only that exact prior control; never skip an unexpected DOM node.
+    if(previous==='#supportResponseDueAt'){
+     let segments=0;
+     while(await page.locator(previous).evaluate(node=>node===document.activeElement)){
+      assert.equal(await page.locator(previous).getAttribute('type'),'datetime-local');
+      assert.equal(await page.locator(previous).isVisible(),true,label+' native segment remains visible');
+      assert.equal(await page.evaluate(()=>!document.querySelector('#supportDetail').hidden&&document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,label+' native segment remains in active modal');
+      assert(++segments<=8,label+' native datetime traversal is bounded');
+      await page.keyboard.press(key);
+     }
+    }
     const actual=await page.evaluate(()=>document.activeElement.outerHTML.slice(0,240));
     assert.equal(await page.locator(selector).evaluate(node=>node===document.activeElement),true,label+' '+key+' reaches '+selector+', got '+actual);
     assert.equal(await page.locator(selector).isVisible(),true,label+' never focuses a hidden control');
@@ -55,7 +68,11 @@ function installCaseTabsFixture(){
     const summary=page.locator('#supportCaseMaterials>summary'),close=page.locator('#supportClose');
     assert.equal(await page.locator('#supportHistory [data-ticket-media-open]').count(),2);
     assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
-    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportRiskAssessment','#supportSuggestions','#supportNextSteps','#supportEditStatus','#supportEditAssignee','#supportTake','#supportTakeover','#supportCreateTask','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
+    for(const selector of ['#supportRecommendations > button','#supportPriority','#supportResponseDueAt'])assert.equal(await page.locator(selector).isVisible(),true,'new case tool visible: '+selector);
+    assert.equal(await page.locator('#supportRecommendations > button').getAttribute('type'),'button');
+    assert.equal(await page.locator('#supportPriority').evaluate(node=>node.tagName),'SELECT');
+    assert.equal(await page.locator('#supportResponseDueAt').getAttribute('type'),'datetime-local');
+    const closed=['#supportClose','#supportTab-details','#supportPanel-details','#supportDescription','#supportRiskAssessment','#supportSuggestions','#supportNextSteps','#supportRecommendations > button','#supportEditStatus','#supportEditAssignee','#supportPriority','#supportResponseDueAt','#supportTake','#supportTakeover','#supportCreateTask','#supportResolve','#supportSave','#supportCaseMaterials>summary'];
     const photo='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000602"]',documentMessage='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000603"]';
     const opened=[...closed,'#caseMediaLoad',photo+' [data-ticket-media-open]',documentMessage+' [data-ticket-media-open]'];
     await assertTabOrder(page,closed,'closed Materials '+width);

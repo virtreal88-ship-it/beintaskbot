@@ -1,0 +1,310 @@
+name: Baseline case-tab evidence (not a release pass)
+on:
+  pull_request:
+    paths: ['.github/workflows/diagnostic-case-tab-baseline.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce-existing-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 367ff1f3073a9d4d6c45e15d3f1acf4789443852
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.62.1
+      - run: node beintaskbot-main/.support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Prove unchanged baseline reproduces exact known tab assertion
+        working-directory: beintaskbot-main
+        shell: bash
+        run: |
+          set +e
+          node tests/test_case_card_tabs_browser.cjs > baseline-case-tabs.log 2>&1
+          result=$?
+          set -e
+          cat baseline-case-tabs.log
+          test "$result" -ne 0
+          grep -F "closed Materials 390 Tab reaches #supportEditStatus" baseline-case-tabs.log
+          grep -F "Найти похожие решения" baseline-case-tabs.log
+          echo "BASELINE REPRODUCTION CONFIRMED; this does not assert the current-head UI passes."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-case-tab-evidence
+          path: beintaskbot-main/baseline-case-tabs.log
+
+  current-head-case-tab-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix beintaskbot-main/.support-test-deps --no-save playwright@1.62.1
+      - run: node beintaskbot-main/.support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run unchanged keyboard loops against complete current control list
+        working-directory: beintaskbot-main
+        run: |
+          node tests/test_case_card_tabs_browser.cjs
+          node tests/test_summary_language_browser.cjs
+
+  baseline-consultation-tail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 367ff1f3073a9d4d6c45e15d3f1acf4789443852
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Collect every residual baseline UI exit without short circuit
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          timeout 180s bash -c "node tests/test_case_history_alias_browser.cjs" > "baseline-tail-consultation-tail-0.log" 2>&1
+          code=$?
+          echo "0: exit=$code node tests/test_case_history_alias_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-0.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_tenant_support_inbox_ui.cjs" > "baseline-tail-consultation-tail-1.log" 2>&1
+          code=$?
+          echo "1: exit=$code node tests/test_tenant_support_inbox_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-1.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_operator_case_submission_ui.cjs" > "baseline-tail-consultation-tail-2.log" 2>&1
+          code=$?
+          echo "2: exit=$code node tests/test_operator_case_submission_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-2.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_operator_case_recovery_ui.cjs" > "baseline-tail-consultation-tail-3.log" 2>&1
+          code=$?
+          echo "3: exit=$code node tests/test_operator_case_recovery_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-3.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_operator_case_recovery_browser.cjs" > "baseline-tail-consultation-tail-4.log" 2>&1
+          code=$?
+          echo "4: exit=$code node tests/test_operator_case_recovery_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-4.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_case_developer_settings_ui.cjs" > "baseline-tail-consultation-tail-5.log" 2>&1
+          code=$?
+          echo "5: exit=$code node tests/test_case_developer_settings_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-5.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_summary_language_ui.cjs" > "baseline-tail-consultation-tail-6.log" 2>&1
+          code=$?
+          echo "6: exit=$code node tests/test_summary_language_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-6.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_summary_language_browser.cjs" > "baseline-tail-consultation-tail-7.log" 2>&1
+          code=$?
+          echo "7: exit=$code node tests/test_summary_language_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-7.log"
+          # This pinned-baseline job proves the exact previously observed stale-label failure.
+          # It is not a current-head release pass; all unexpected failures remain errors.
+          if [ "$code" -eq 1 ] && grep -Fq "page.waitForFunction: Timeout 30000ms exceeded." baseline-tail-consultation-tail-7.log && grep -Fq "tests/test_summary_language_browser.cjs:15:339" baseline-tail-consultation-tail-7.log && sed -n '15p' tests/test_summary_language_browser.cjs | grep -Fq "textContent==='Regenerate summary'"; then
+            echo "EXPECTED BASELINE STALE-LABEL REPRODUCTION: original English label wait; current-head script is checked separately."
+          else
+            echo "Baseline stale-label reproduction changed unexpectedly."
+            failed=1
+          fi
+          timeout 180s bash -c "node tests/test_tenant_push_dialog_route_ui.cjs" > "baseline-tail-consultation-tail-8.log" 2>&1
+          code=$?
+          echo "8: exit=$code node tests/test_tenant_push_dialog_route_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-8.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_tenant_notification_badge_browser.cjs" > "baseline-tail-consultation-tail-9.log" 2>&1
+          code=$?
+          echo "9: exit=$code node tests/test_tenant_notification_badge_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-9.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_dialog_photo_status_ui.cjs" > "baseline-tail-consultation-tail-10.log" 2>&1
+          code=$?
+          echo "10: exit=$code node tests/test_dialog_photo_status_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-10.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_tenant_operator_copilot_ui.cjs" > "baseline-tail-consultation-tail-11.log" 2>&1
+          code=$?
+          echo "11: exit=$code node tests/test_tenant_operator_copilot_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-11.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_saved_only_copilot_browser.cjs" > "baseline-tail-consultation-tail-12.log" 2>&1
+          code=$?
+          echo "12: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_saved_only_copilot_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-12.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs" > "baseline-tail-consultation-tail-13.log" 2>&1
+          code=$?
+          echo "13: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-13.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_knowledge_scope_browser.cjs" > "baseline-tail-consultation-tail-14.log" 2>&1
+          code=$?
+          echo "14: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_knowledge_scope_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-14.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_tenant_operator_mobile_ui.cjs" > "baseline-tail-consultation-tail-15.log" 2>&1
+          code=$?
+          echo "15: exit=$code node tests/test_tenant_operator_mobile_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-15.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs" > "baseline-tail-consultation-tail-16.log" 2>&1
+          code=$?
+          echo "16: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-16.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dynamic_audio_menu_browser.cjs" > "baseline-tail-consultation-tail-17.log" 2>&1
+          code=$?
+          echo "17: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dynamic_audio_menu_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-17.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_layout_browser.cjs" > "baseline-tail-consultation-tail-18.log" 2>&1
+          code=$?
+          echo "18: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_layout_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-18.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_longpress_browser.cjs" > "baseline-tail-consultation-tail-19.log" 2>&1
+          code=$?
+          echo "19: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_longpress_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-19.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dialog_ai_assignment_browser.cjs" > "baseline-tail-consultation-tail-20.log" 2>&1
+          code=$?
+          echo "20: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dialog_ai_assignment_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-20.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_audio_refresh_browser.cjs" > "baseline-tail-consultation-tail-21.log" 2>&1
+          code=$?
+          echo "21: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_audio_refresh_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-21.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_lazy_audio_state_browser.cjs" > "baseline-tail-consultation-tail-22.log" 2>&1
+          code=$?
+          echo "22: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_lazy_audio_state_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-22.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_audio_reload_intent_browser.cjs" > "baseline-tail-consultation-tail-23.log" 2>&1
+          code=$?
+          echo "23: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_audio_reload_intent_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-23.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_tenant_chat_attachments_ui.cjs" > "baseline-tail-consultation-tail-24.log" 2>&1
+          code=$?
+          echo "24: exit=$code node tests/test_tenant_chat_attachments_ui.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-24.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_voice_card_mobile_browser.cjs" > "baseline-tail-consultation-tail-25.log" 2>&1
+          code=$?
+          echo "25: exit=$code node tests/test_voice_card_mobile_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-25.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_list_toolbar_mobile_browser.cjs" > "baseline-tail-consultation-tail-26.log" 2>&1
+          code=$?
+          echo "26: exit=$code node tests/test_list_toolbar_mobile_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-26.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_message_attachment_menu_browser.cjs" > "baseline-tail-consultation-tail-27.log" 2>&1
+          code=$?
+          echo "27: exit=$code node tests/test_message_attachment_menu_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-27.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_photo_preview_browser.cjs" > "baseline-tail-consultation-tail-28.log" 2>&1
+          code=$?
+          echo "28: exit=$code node tests/test_photo_preview_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-28.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_visible_photo_autoload_browser.cjs" > "baseline-tail-consultation-tail-29.log" 2>&1
+          code=$?
+          echo "29: exit=$code node tests/test_visible_photo_autoload_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-29.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_visible_audio_autoload_browser.cjs" > "baseline-tail-consultation-tail-30.log" 2>&1
+          code=$?
+          echo "30: exit=$code node tests/test_visible_audio_autoload_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-30.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/test_message_footer_browser.cjs" > "baseline-tail-consultation-tail-31.log" 2>&1
+          code=$?
+          echo "31: exit=$code node tests/test_message_footer_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-consultation-tail-31.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          cat baseline-tail-summary.txt
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-consultation-tail-evidence
+          path: beintaskbot-main/baseline-tail-*.log
+
+  baseline-mcp-tail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 367ff1f3073a9d4d6c45e15d3f1acf4789443852
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Collect every residual baseline UI exit without short circuit
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          timeout 180s bash -c "PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_tenant_app_pwa_browser.cjs" > "baseline-tail-mcp-tail-0.log" 2>&1
+          code=$?
+          echo "0: exit=$code PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_tenant_app_pwa_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-mcp-tail-0.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_tenant_knowledge_candidates_media_review_browser.cjs" > "baseline-tail-mcp-tail-1.log" 2>&1
+          code=$?
+          echo "1: exit=$code SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_tenant_knowledge_candidates_media_review_browser.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-mcp-tail-1.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          timeout 180s bash -c "node tests/case-deeplink-smoke.cjs" > "baseline-tail-mcp-tail-2.log" 2>&1
+          code=$?
+          echo "2: exit=$code node tests/case-deeplink-smoke.cjs" | tee -a baseline-tail-summary.txt
+          cat "baseline-tail-mcp-tail-2.log"
+          if [ "$code" -ne 0 ]; then failed=1; fi
+          cat baseline-tail-summary.txt
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-mcp-tail-evidence
+          path: beintaskbot-main/baseline-tail-*.log
