@@ -68,7 +68,10 @@ def measured(db, function, **kwargs):
 def assert_equal(db, **kwargs):
     old, old_sql = measured(db, baseline.listing, **kwargs)
     new, new_sql = measured(db, dialogs.listing, **kwargs)
-    assert new == old
+    # The frozen 9bf0948 oracle predates explicit AI-management admission.
+    # This owner fixture must retain access; compare all pre-existing fields.
+    assert new.get('ai_management_restricted') is False
+    assert {key:value for key,value in new.items() if key != 'ai_management_restricted'} == old
     return new, old_sql, new_sql
 
 
