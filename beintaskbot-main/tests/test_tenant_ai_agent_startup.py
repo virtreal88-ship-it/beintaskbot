@@ -300,7 +300,9 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         async def setup():events.append('setup')
         async def listen():events.append('listen')
         def application(**kwargs):events.append('application');return object()
-        def runner(app):events.append('runner');return SimpleNamespace(setup=setup)
+        def runner(app, **kwargs):
+            events.append(('runner', kwargs.get('shutdown_timeout')))
+            return SimpleNamespace(setup=setup)
         def site(runner,host,port):events.append(('site',host,port));return SimpleNamespace(start=listen)
         namespace={'asyncio':asyncio,'web':SimpleNamespace(Application=application,AppRunner=runner,TCPSite=site),
             'cors_middleware':None,'canonical_web_origin_middleware':None,'telegram_auth_middleware':None,
@@ -312,7 +314,7 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         self.assertEqual(events,[])
         with patch('tenant_ai_agent_startup.require_database_ready',side_effect=lambda:events.append('ready')):
             asyncio.run(namespace['start_webhook_server']())
-        self.assertEqual(events,['ready','application','runner','setup',('site','0.0.0.0',49157),'listen'])
+        self.assertEqual(events,['ready','application',('runner',30),'setup',('site','0.0.0.0',49157),'listen'])
 
     def test_listener_port_uses_railway_port_with_existing_default(self):
         for environment,expected in (({},8080),({'PORT':'49157'},49157)):
