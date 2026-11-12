@@ -9,6 +9,10 @@ from tenant_linear_policy import TenantLinearError
 
 
 class BusinessAnalystVoiceHttpTests(unittest.IsolatedAsyncioTestCase):
+    def test_voice_prompt_prioritizes_helpful_advice_and_connected_speech(self):
+        self.assertIn('do not refuse merely because you cannot create it', voice_api._VOICE_PROMPT)
+        self.assertIn('do not pause after every comma', voice_api._VOICE_PROMPT)
+
     async def asyncSetUp(self):
         self.profile = {'tenant_id': 'tenant-synthetic', 'telegram_id': 7, 'role': 'owner'}
         self.logger = Mock()
