@@ -589,7 +589,7 @@ def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards(monkey
             return []
 
     monkeypatch.setattr(task_flow, 'TenantPolicy', lambda profile: SimpleNamespace(
-        task_scope=lambda: {'kind': 'all'}))
+        task_scope=lambda: {'kind': 'all'}, kommo_task_scope=lambda: {'kind': 'all'}))
     monkeypatch.setattr(task_flow, 'task_filters', lambda tenant_id, scope: ('tenant_id=%s::uuid', [tenant_id]))
     cursor = Cursor()
     search = r'literal % _ \\ tail'
