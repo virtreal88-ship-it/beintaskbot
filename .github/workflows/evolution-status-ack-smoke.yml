@@ -1,7 +1,7 @@
 name: Evolution status ACK isolated smoke
 on:
   push:
-    branches: [fix/evolution-status-ack-ci]
+    branches: [fix/evolution-status-ack-ci, fix/evolution-direct-identity]
     paths:
       - '.github/workflows/evolution-status-ack-smoke.yml'
       - 'infra/evolution-status-ack/**'

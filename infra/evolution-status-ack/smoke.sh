@@ -45,6 +45,7 @@ for key in ['Entrypoint','Cmd','WorkingDir','Env','User','ExposedPorts']:
 print('PASS inherited image runtime configuration')
 PY
 docker run --rm --network none --entrypoint node "$IMAGE" -e 'const c=require("node:crypto"),f=require("node:fs");if(c.createHash("sha256").update(f.readFileSync("/evolution/node_modules/baileys/lib/Socket/messages-recv.js")).digest("hex")!=="c4d111115628d7727fa1bea59a122f217a16b379fe5f7b9e749ea5f7d8f2be77")process.exit(1);console.log("PASS running image patched hash")'
+docker run --rm --network none --entrypoint node "$IMAGE" /opt/status-ack-fix/test-direct-identity.cjs
 docker network create --internal "$NET" >/dev/null
 test "$(docker network inspect --format '{{.Internal}}' "$NET")" = true
 # No host ports, production secrets, existing data, or connected WhatsApp sessions.
