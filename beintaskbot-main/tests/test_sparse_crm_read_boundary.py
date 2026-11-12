@@ -84,7 +84,7 @@ def test_sparse_read_restriction_closes_board_and_ai_legacy_projection(monkeypat
     policy=TenantPolicy(p)
     assert policy.deal_board()==[]
     assert not policy.can_use_chat_ai()
-    assert policy.can_access_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100})
+    assert policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100})
 
 
 def test_legacy_chat_fallback_cannot_use_customers_grant(monkeypatch):
