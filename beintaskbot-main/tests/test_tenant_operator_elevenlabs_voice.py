@@ -500,6 +500,7 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
                     'content':[{'type':'output_text','text':phrase}]}})
         await self.openai.incoming.put({'type':'response.done','response':{'id':'response1','status':'completed',
             'output':[{'type':'message','role':'assistant','id':'item1'}]}})
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio_transcript.done')
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio.done')
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.done')
         self.assertEqual(list(self.policy._permits.values()),[None])
@@ -529,6 +530,7 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         await self.openai.incoming.put(self.text_event('response.output_text.delta',delta=phrase))
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio.delta')
         await self.openai.incoming.put(self.text_event('response.output_text.done',text=phrase))
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio_transcript.done')
         await self.openai.incoming.put({'type':'response.output_item.done','response_id':'response1','output_index':0,
             'item':{'type':'message','role':'assistant','id':'item1','status':'completed',
                     'content':[{'type':'output_text','text':'A different response'}]}})

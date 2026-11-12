@@ -462,8 +462,16 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         session.closed=False;session.authority=Authority();session.lease=Lease()
         session.scope=('tenant','actor','channel','conversation');session.fence=9
         session.response_inflight=True;session.provider_response_id='opaque-response-id'
+        session.cancel_requested=False;session.interrupt_pending=False
+        session.assistant_response_ids={'output-item':'opaque-response-id'}
+        session._active_assistant_reply={'response_id':'opaque-response-id','item_id':'output-item','text':'',
+            'text_truncated':False,'has_output':True,'response_status':None,'audio_done':False,
+            'playback_done':False,'interrupted':False,'audio_unavailable':False}
+        session._previous_assistant_reply=None
         await session._receive_provider({'type':'response.output_audio_transcript.delta',
-                                         'response_id':'opaque-response-id','delta':'private transcript'})
+                                         'response_id':'opaque-response-id','item_id':'output-item',
+                                         'content_index':0,'delta':'private transcript'})
+        self.assertEqual(session._active_assistant_reply['text'],'private transcript')
 
     async def test_output_transcript_delta_logs_response_id_mismatch_as_bools_only(self):
         class Authority:
