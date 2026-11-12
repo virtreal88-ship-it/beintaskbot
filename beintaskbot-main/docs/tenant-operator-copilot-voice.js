@@ -25,9 +25,9 @@
   let controller=null,disposed=false,activationPromise=null,endRequested=false;
   const closeButton=section.querySelector('[data-voice-close]');
   const closeVoice=()=>{
-    const status=controls?.querySelector('[role=status]')?.textContent||'';
-    if(/не подтверж|təsdiqlənmədi|not confirmed/i.test(status))return;
     if(controller?.isActive?.()){endRequested=true;void controller.end?.();return;}
+    // Dismiss only this tab's overlay after a busy refusal or uncertain close.
+    // Hiding the UI never releases or resets a server-side lease.
     section.hidden=true;
   };
   closeButton?.addEventListener('click',closeVoice);

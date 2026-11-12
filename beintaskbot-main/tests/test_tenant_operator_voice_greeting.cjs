@@ -206,7 +206,8 @@ test('the full screen closes locally after a busy refusal and retains no microph
  try{
   assert.equal(await screen.startVoice(),true);await tick();await tick();
   assert.equal(screen.hidden,false);assert.match(screen.querySelector('[role=status]').textContent,/другой голосовой сеанс/i);
-  const end=screen.querySelector('.voice-session-end');assert.equal(end.hidden,false);end.click();
+  const end=screen.querySelector('.voice-session-end');assert.equal(end.hidden,false);
+  screen.querySelector('[data-voice-close]').click();
   assert.equal(screen.hidden,true);assert.equal(released,1);
   screen.hidden=false;
   screen.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
@@ -226,7 +227,7 @@ test('voice screen uses its animated orb as the only response interruption contr
  }finally{await screen.disposeVoice();dom.window.close();}
 });
 
-test('full-screen X ends the server session and remains visible when closure is unconfirmed',async()=>{
+test('full-screen X ends active sessions and can dismiss an unconfirmed local screen',async()=>{
  for(const terminal of ['ended','end_unconfirmed']){
   const dom=new JSDOM('<main id="host"></main>',{url:'https://crm.pro.az/',pretendToBeVisual:true});
   const win=dom.window,host=win.document.querySelector('#host');let eventHandler,endCount=0;
@@ -245,7 +246,8 @@ test('full-screen X ends the server session and remains visible when closure is 
    if(terminal==='end_unconfirmed'){
     assert.match(screen.querySelector('[role=status]').textContent,/не подтверждено/i);
     screen.querySelector('[data-voice-close]').click();
-    assert.equal(screen.hidden,false,'X cannot hide an unconfirmed lease close');
+    assert.equal(screen.hidden,true,'X dismisses the local overlay after end confirmation times out');
+    assert.equal(endCount,1,'dismissing the overlay does not send a reset or second end');
    }
   }finally{await screen.disposeVoice();dom.window.close();}
  }
