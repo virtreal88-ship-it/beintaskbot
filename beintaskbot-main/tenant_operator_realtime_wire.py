@@ -19,6 +19,7 @@ QUOTE='realtime-2.1-mini-gpt-transcribe-2026-11-03-v1'
 MINIMUM_HOLD=2_130_018
 OPENAI_URL='wss://api.openai.com/v1/realtime'
 MAX_WIRE_MESSAGE=262144
+MAX_RESPONSE_INSTRUCTIONS_CHARS=12000
 CONNECT_DEADLINE=4
 CLOSE_DEADLINE=3
 CANCEL_RACE_DEADLINE=2
@@ -402,6 +403,12 @@ class _RealtimeWire:
             allowed_response_fields={'input'}
             if isinstance(response,dict) and response.get('tool_choice')=='none':
                 allowed_response_fields.add('tool_choice')
+            if isinstance(response,dict) and 'instructions' in response:
+                instructions=response.get('instructions')
+                if (not isinstance(instructions,str) or not instructions or
+                    len(instructions)>MAX_RESPONSE_INSTRUCTIONS_CHARS):
+                    raise ValueError('response_instructions_invalid')
+                allowed_response_fields.add('instructions')
             if (set(event)!={'type','response'} or not isinstance(response,dict) or set(response)!=allowed_response_fields or
                 not isinstance(refs,list) or not 2<=len(refs)<=1024 or
                 any(not isinstance(item,dict) or set(item)!={'type','id'} or
@@ -714,7 +721,8 @@ class _HybridRealtimeMixin:
             self._hybrid_active={'epoch':self._hybrid_epoch,'response_id':rid,'item_id':None,'stream':None,
                                  'cancelled':self._hybrid_cancel_pending,'tts_done':self._hybrid_cancel_pending,
                                  'audio_seen':False,'text_done':False,'response_done':None,
-                                 'text_digest':hashlib.sha256(),'item_verified':False}
+                                 'text_digest':hashlib.sha256(),'item_verified':False,
+                                 'text_buffer':'','text_truncated':False}
             self._hybrid_cancel_pending=False
             return {'type':'response.created','response':{'id':rid}}
         if kind=='conversation.item.deleted':
@@ -774,6 +782,11 @@ class _HybridRealtimeMixin:
                     raise ValueError('hybrid_text_event_invalid')
                 if not active['cancelled']:
                     active['text_digest'].update(text.encode('utf-8'))
+                    if not active['text_truncated']:
+                        combined=active['text_buffer']+text
+                        if len(combined)>6000:
+                            active['text_buffer']='';active['text_truncated']=True
+                        else:active['text_buffer']=combined
                     if active['stream'] is None:
                         stream=self._stream_factory(self.guard,self._tts_loader,active['epoch'],
                                                     self._hybrid_current,self._hybrid_emit)
@@ -787,7 +800,11 @@ class _HybridRealtimeMixin:
                     raise ValueError('hybrid_text_mismatch')
                 active['text_done']=True
                 if active['stream'] is not None and not active['cancelled']:active['stream'].finish_input()
+                if not active['cancelled'] and len(final)<=6000:
+                    return {'type':'response.output_audio_transcript.done','response_id':active['response_id'],
+                            'item_id':active['item_id'],'content_index':0,'transcript':final}
             return None
+
         if kind in ('response.function_call_arguments.delta','response.function_call_arguments.done'):
             active=self._hybrid_active
             if (not self.tool_names or active is None or event.get('response_id')!=active['response_id'] or
@@ -840,6 +857,12 @@ class _HybridRealtimeMixin:
         if kind=='hybrid.audio_unavailable':raise ValueError('hybrid_event_forbidden')
         if kind in ('conversation.created','rate_limits.updated'):return None
         return event
+
+    def response_text_snapshot(self,response_id):
+        active=self._hybrid_active
+        if (not isinstance(active,dict) or active.get('response_id')!=response_id or
+            active.get('text_truncated') is True):return None
+        return active.get('text_buffer') if isinstance(active.get('text_buffer'),str) else None
 
     def _fail_hybrid_audio(self,active,code):
         if active['cancelled']:

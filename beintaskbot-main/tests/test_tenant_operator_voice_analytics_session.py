@@ -61,6 +61,8 @@ class VoiceAnalyticsToolSessionTests(unittest.IsolatedAsyncioTestCase):
         self.session.response_inflight=True;self.session.provider_response_id='response_1'
 
     async def test_function_call_executes_read_tool_and_dispatches_one_spoken_followup(self):
+        self.session._previous_assistant_reply={'state':'interrupted','text':'Prior spoken answer',
+                                                'text_available':True}
         call_item={'id':'function_1','type':'function_call','call_id':'call_1','name':'search_tasks',
                    'arguments':'{"query":"invoice"}'}
         await self.session.receive_provider({'type':'response.output_item.added','response_id':'response_1',
@@ -80,6 +82,8 @@ class VoiceAnalyticsToolSessionTests(unittest.IsolatedAsyncioTestCase):
         followup=[event for event in self.provider.events if event.get('type')=='response.create']
         self.assertEqual(len(followup),1)
         self.assertEqual(followup[0]['response']['tool_choice'],'none')
+        self.assertNotIn('instructions',followup[0]['response'],
+                         'continuation context belongs only on the next user turn, not a tool followup')
         self.assertEqual([ref['id'] for ref in followup[0]['response']['input']],
                          ['context_1','user_1','function_1','function_output_1'])
         self.assertEqual(self.session.current_response_kind,'tool_followup')
