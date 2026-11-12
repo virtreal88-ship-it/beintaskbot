@@ -13,6 +13,10 @@ from tenant_platform import _connect
 
 LEASE_SECONDS = 15
 # OpenAI documents a hard maximum Realtime session duration of 60 minutes.
+# For hybrid sessions, ElevenLabs documents that its TTD WebSocket ends after
+# 20 seconds without client messages; the OpenAI session is the longer bound.
+# https://developers.openai.com/api/docs/guides/realtime-conversations
+# https://elevenlabs.io/docs/api-reference/text-to-dialogue/ttd-websocket
 # Only `provider_opened_at`, committed after provider startup succeeds, can
 # make an active lease age-recoverable. Uncertain startup remains fail-closed.
 # The five-minute margin covers provider shutdown and scheduling delay; a mere
@@ -72,7 +76,7 @@ class VoiceSessionLease:
                     if operation == 'claim':
                         cur.execute('''SELECT session_id::text,actor_id,owner_id::text,fence,state,
                           lease_until>now() AS live,
-                          (state='active' AND provider_kind='openai_realtime' AND provider_opened_at IS NOT NULL AND
+                          (state='active' AND provider_kind IN ('openai_realtime','openai_elevenlabs_tts') AND provider_opened_at IS NOT NULL AND
                            provider_opened_at <= now() - (%s * interval '1 second'))
                             AS provider_session_expired
                           FROM saas_operator_voice_lease

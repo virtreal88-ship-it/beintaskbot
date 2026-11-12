@@ -93,12 +93,15 @@ def test_active_lease_reclaimed_only_after_provider_lifetime_with_new_fence():
         {'fence': 5},
     ])
     conn = Connection(cursor)
-    lease = _lease()
+    lease = VoiceSessionLease(Authority(), str(uuid.uuid4()), provider_kind='openai_elevenlabs_tts')
 
     with patch('tenant_operator_voice_lease._connect', return_value=conn):
         assert lease._transaction('claim') == 5
 
     update, params = cursor.statements[-2]
+    select, select_params = cursor.statements[1]
+    assert "provider_kind IN ('openai_realtime','openai_elevenlabs_tts')" in select
+    assert select_params == (ACTIVE_RECOVERY_AFTER_SECONDS, *Authority.session_scope[:2])
     assert "state='starting'" in update
     assert params[4] == 5  # new fencing token
     assert params[-1] == 4  # compare-and-swap against the old token
