@@ -40,6 +40,12 @@ class TenantPolicyTests(unittest.TestCase):
         self.assertFalse(policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':11,'status_id':100,'raw':{'created_by_id':502}}))
         self.assertEqual(policy.kommo_task_scope()['kommo_user_id'],501)
 
+    def test_kommo_task_marker_does_not_require_pipeline_assignment(self):
+        person=profile('worker');person['workflow']['policies'][0]['value']['20'].update(pipeline_ids=[],kommo_user_id=None)
+        policy=TenantPolicy(person)
+        self.assertFalse(policy.kommo_access())
+        self.assertTrue(policy.kommo_task_access())
+
     def test_cross_tenant_deal_is_denied_even_to_owner(self):
         self.assertFalse(TenantPolicy(profile('owner')).can_access_deal({'tenant_id':'company-b','pipeline_id':10,'status_id':100}))
 

@@ -205,6 +205,10 @@ class TenantPolicy:
     def kommo_access(self) -> bool:
         return self.profile.get('active') is True and (self.privileged or bool(self.kommo_pipeline_scope()) or bool(self.kommo_user_id()))
 
+    def kommo_task_access(self) -> bool:
+        """Task markers can authorize a member's own Kommo tasks without a deal pipeline."""
+        return self.profile.get('active') is True and self.allows('tasks')
+
     def can_access_kommo_deal(self, deal: dict | None) -> bool:
         if not deal or str(deal.get('tenant_id')) != str(self.profile.get('tenant_id')): return False
         if self.privileged: return True

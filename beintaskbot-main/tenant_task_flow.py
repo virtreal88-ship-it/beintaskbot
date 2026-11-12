@@ -157,7 +157,7 @@ def authority_key(profile):
 
 def _sources(policy):
     native = policy.profile.get('active') is not False if scoped_access_enabled() else policy.allows_action('tasks','view')
-    external = policy.allows('tasks') and policy.kommo_access()
+    external = policy.kommo_task_access()
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
         complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
