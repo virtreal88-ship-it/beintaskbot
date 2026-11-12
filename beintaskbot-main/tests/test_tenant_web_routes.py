@@ -35,6 +35,7 @@ EXPECTED_ASSETS = ['/assets/tenant-horizontal-scroll.js',"/assets/tenant-knowled
 
 EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js', '/assets/tenant-shared-integration-settings.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.js']
+EXPECTED_ASSETS += ['/assets/tenant-ai-analytics.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.css']
 
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instruction-catalog.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
