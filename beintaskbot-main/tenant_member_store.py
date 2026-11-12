@@ -122,7 +122,7 @@ def _locked_members(cur, tenant_id, owner_id, target_id=None, *, operation=None)
         raise MemberCardError('member_access_revoked', 403)
     cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
       WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
-      ORDER BY policy_key FOR SHARE''', (tenant_id, ['members', 'modules']))
+      ORDER BY policy_key FOR SHARE''', (tenant_id, ['employee_access_defaults', 'members', 'modules']))
     cur.fetchall()
     ids = sorted({int(owner_id)} | ({int(target_id)} if target_id is not None else set()))
     cur.execute('''SELECT * FROM saas_tenant_members WHERE tenant_id=%s::uuid
@@ -460,7 +460,12 @@ def _selected_membership(current, existing, requested_role, permissions, *, targ
             raise MemberCardError('member_card_invalid', fields={'role': 'invalid'})
     else:
         selected_role = _role(str(requested_role or ''), owner=target == int(current['telegram_id']))
-    selected_permissions = _permissions(permissions, selected_role)
+    # Omission while updating an existing member is not a request to revoke
+    # their recorded grants. Only new memberships default to an empty grant set.
+    if existing and permissions is None:
+        permissions = list(existing.get('permissions') or [])
+    from tenant_employee_defaults import default_deny
+    selected_permissions = _permissions(permissions, selected_role, deny_unset=default_deny(TenantPolicy(current)))
     if existing and selected_role != 'owner':
         preserved = [item for item in (existing.get('permissions') or []) if item not in _EDITOR_PERMISSION_KEYS]
         selected_permissions = list(dict.fromkeys(selected_permissions + preserved))
@@ -737,13 +742,14 @@ def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str
         except TenantPlatformError:
             raise MemberCardError('member_card_invalid', fields={'email': 'invalid'}) from None
     selected_role = _role(str(role or 'worker'))
-    selected_permissions = _permissions(permissions, selected_role)
     hashed = _hash_password(plain)
     try:
         with _connect() as conn:
             _require_member_schema(conn)
             with conn.cursor() as cur:
                 current, _ = _locked_members(cur, tenant_id, owner_id, operation='create')
+                from tenant_employee_defaults import default_deny
+                selected_permissions = _permissions(permissions, selected_role, deny_unset=default_deny(TenantPolicy(current)))
                 department_id = _creation_department(cur, tenant_id, current, department_id)
                 _creation_grants(current, selected_permissions, role=selected_role)
                 if current.get('role') != 'owner' and (selected_role in {'owner', 'admin'}

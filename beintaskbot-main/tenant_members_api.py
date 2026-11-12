@@ -93,7 +93,25 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         if action != 'upsert' and not employee_action_allowed(profile, required):
             return web.json_response({'success': False, 'code': 'member_access_revoked', 'fields': {}}, status=403)
         try:
-            if action == 'update_member_card':
+            if action in {'preview_employee_default_deny', 'apply_employee_default_deny'}:
+                rejected = strict_context(request, data, tenant_id, owner_id)
+                if rejected is not None:
+                    return rejected
+                if profile.get('role') != 'owner':
+                    return web.json_response({'success': False, 'code': 'member_access_revoked'}, status=403)
+                if set(data) - {'action', 'expected_tenant_id', 'expected_user_id', 'expected_digest'}:
+                    return invalid({'changes': 'unknown_field'})
+                applying = action == 'apply_employee_default_deny'
+                digest = data.get('expected_digest')
+                if (applying and (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest))
+                        or not applying and digest is not None):
+                    return invalid({'expected_digest': 'invalid'})
+                from tenant_employee_defaults_store import transition
+                result = await asyncio.to_thread(transition, tenant_id=tenant_id, owner_id=owner_id,
+                                                 expected_digest=digest if applying else None)
+                return web.json_response({'success': True, 'transition': result},
+                                         headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
+            elif action == 'update_member_card':
                 rejected = strict_context(request, data, tenant_id, owner_id)
                 if rejected is not None:
                     return rejected

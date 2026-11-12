@@ -18,7 +18,13 @@ def context(cur, profile, action=None):
         raise TenantLinearError('İcazə yoxdur.', 403)
     if current.get('role') == 'owner':
         return None
-    settings = TenantPolicy(current).member_settings
+    policy = TenantPolicy(current)
+    from tenant_employee_defaults import default_deny
+    if default_deny(policy):
+        if action is None:
+            raise TenantLinearError('ai_shared_operation_requires_unscoped_management', 403)
+        return current, policy.action_scope('ai_agents', action) or 'none'
+    settings = policy.member_settings
     scopes = settings.get('access_scopes', {})
     if isinstance(scopes, dict) and 'ai_agents' not in scopes:
         return None

@@ -114,6 +114,12 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                     (str(tenant_id), key, int(owner_id)))
                 cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE", (str(tenant_id), key))
                 locked_policies[key] = cur.fetchone()['value']
+            # Default-deny is an audited company-wide transition, never a side
+            # effect of an old/full settings form or an echoed policy document.
+            if any(str(key or '').strip()[:120] == 'employee_access_defaults' and key != 'employee_access_defaults' for key in policies):
+                raise TenantPlatformError('employee_default_deny_requires_audited_transition')
+            if 'employee_access_defaults' in policies and policies['employee_access_defaults'] != locked_policies.get('employee_access_defaults'):
+                raise TenantPlatformError('employee_default_deny_requires_audited_transition')
             # Matrix rights have their own version and source preflight in the
             # employee editor. Old/full workflow forms may echo or omit them,
             # but may neither change them nor erase a newer saved matrix.

@@ -64,6 +64,9 @@ def page_capabilities(profile):
     # Only published news is shared. Review and publication still enforce
     # their existing Linear reviewer binding through tenant_news.access().
     pages['news'] = pages['instructions']
+    from tenant_employee_defaults import published_section_allowed
+    for page in ('news', 'instructions'):
+        pages[page] = pages[page] and published_section_allowed(policy, page)
     for page, module in {'tasks': 'tasks', 'customers': 'customers', 'companies': 'companies',
                          'deals': 'deals', 'dialogs': 'dialogs', 'support': 'support'}.items():
         if policy.has_scoped_access(module):
@@ -134,13 +137,16 @@ def access_snapshot(profile):
         'native_crm_actions': _native_actions(policy),
         'access_scopes': policy.member_settings.get('access_scopes', {}),
         'department_id': str(profile.get('department_id') or ''),
+        'employee_access_defaults': policy.policies.get('employee_access_defaults'),
     }
     version = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(',', ':'),
                                        ensure_ascii=True).encode()).hexdigest()
     from tenant_scoped_access import SCOPE_ACTION_CATALOG, scoped_access_enabled, applicable_scope_levels
-    enabled = scoped_access_enabled()
+    from tenant_employee_defaults import default_deny
+    enabled = scoped_access_enabled() or default_deny(policy)
     return {'version': version,
             'scoped_access_enabled': enabled,
+            'default_deny': default_deny(policy),
             'scope_catalog': {k: list(v) for k, v in SCOPE_ACTION_CATALOG.items()} if enabled else {},
             'scope_levels': ['none', 'self', 'department', 'all'],
             'action_scope_levels': {k: {a: list(applicable_scope_levels(k, a)) for a in v} for k, v in SCOPE_ACTION_CATALOG.items()} if enabled else {},

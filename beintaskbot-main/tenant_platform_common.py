@@ -28,16 +28,16 @@ def _role(value: str, *, owner: bool = False) -> str:
     return value if value in {"admin", "manager", "operator", "worker", "master"} else "operator"
 
 
-def _permissions(value, role: str) -> list[str]:
-    # Roles provide sensible defaults. The owner may still grant a smaller
-    # custom set of ordinary workspace modules to a manager or worker.
+def _permissions(value, role: str, *, deny_unset=False) -> list[str]:
+    # Activated tenants require explicit grants; other tenants retain their
+    # existing creation defaults. The owner is never restricted.
     if role == "owner":
         return list(_ROLE_PERMISSIONS["owner"])
     modules = {permission for values in _ROLE_PERMISSIONS.values() for permission in values}
     allowed = modules | {f'{module}:{action}' for module in modules
                          for action in ('view','create','update','delete','assign','manage')}
     if not isinstance(value, list):
-        return list(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["operator"]))
+        return [] if deny_unset else list(_ROLE_PERMISSIONS.get(role, ["tasks"]))
     requested = [str(item) for item in value if str(item) in allowed]
     if role == "master":
         requested = [item for item in requested if item == "hot_orders" or item.startswith('hot_orders:')]

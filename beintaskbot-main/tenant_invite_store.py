@@ -25,7 +25,8 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     email = str(invited_email or '').strip().casefold()
     if email and (len(email)>254 or '@' not in email or any(ch.isspace() for ch in email)):
         raise TenantPlatformError('Email ünvanını düzgün yazın.')
-    selected_permissions = _permissions(permissions, selected_role)
+    from tenant_employee_defaults import default_deny
+    selected_permissions = _permissions(permissions, selected_role, deny_unset=default_deny(TenantPolicy(current)))
     if current.get('role') != 'owner' and (selected_role in {'admin','owner'} or set(selected_permissions)-set(current.get('permissions') or [])):
         raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində dəvət yarada bilər.')
     token = secrets.token_urlsafe(24)
@@ -37,6 +38,13 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_scoped_access_store import read_access_profile
+            current = read_access_profile(cur, tenant_id, owner_id, lock=True)
+            if not _may_manage(current):
+                raise TenantPlatformError('İcazə yoxdur.')
+            selected_permissions = _permissions(permissions, selected_role, deny_unset=default_deny(TenantPolicy(current)))
+            if current.get('role') != 'owner' and (selected_role in {'admin','owner'} or set(selected_permissions)-set(current.get('permissions') or [])):
+                raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində dəvət yarada bilər.')
             # Keep previously sent links valid until they are used or expire.
             # This matters when an administrator opens the settings page again
             # and creates a replacement link before the employee taps the first
@@ -53,6 +61,22 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
             "expires_at": expires.isoformat()}
 
 
+def _lock_invite_tenant(cur, token_hash):
+    # Resolve without locking the invite, then fence the company before any
+    # invite/account/member write. The audited permissions transition takes
+    # this same tenant row FOR UPDATE before snapshotting memberships.
+    cur.execute('SELECT tenant_id FROM saas_tenant_invites WHERE token_hash=%s', (token_hash,))
+    invite = cur.fetchone()
+    if not invite:
+        raise TenantPlatformError('Dəvət linki etibarlı deyil.')
+    tenant = str(invite['tenant_id'])
+    cur.execute('SELECT status FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
+    company = cur.fetchone()
+    if not company or company['status'] != 'active':
+        raise TenantPlatformError('İcazə yoxdur.')
+    return tenant
+
+
 def accept_email_invite(*, token: str, actor_id: int, email: str, display_name: str = '',
                         credential_fingerprint: str | None = None, source_session: dict | None = None) -> dict:
     """Accept with current account authentication; activation is not mailbox proof."""
@@ -64,6 +88,7 @@ def accept_email_invite(*, token: str, actor_id: int, email: str, display_name: 
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            tenant = _lock_invite_tenant(cur, token_hash)
             if source_session is not None:
                 _lock_source_session(cur, actor_id, source_session)
             if credential_fingerprint is not None:
@@ -79,7 +104,7 @@ def accept_email_invite(*, token: str, actor_id: int, email: str, display_name: 
             cur.execute('''SELECT i.*,t.name AS tenant_name FROM saas_tenant_invites i JOIN saas_tenants t ON t.id=i.tenant_id
                            WHERE i.token_hash=%s FOR UPDATE OF i''',(token_hash,))
             invite=cur.fetchone()
-            if not invite or invite.get('accepted_at') or invite.get('expires_at')<=datetime.now(timezone.utc):
+            if not invite or str(invite['tenant_id']) != tenant or invite.get('accepted_at') or invite.get('expires_at')<=datetime.now(timezone.utc):
                 raise TenantPlatformError('Dəvət linki etibarlı deyil və ya müddəti bitib.')
             # Company-managed credentials do not prove the employee owns the
             # assigned mailbox. Do not use them to enter another workspace.
@@ -115,9 +140,10 @@ def request_invite_acceptance(*, token: str, telegram_id: int, display_name: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            tenant = _lock_invite_tenant(cur, token_hash)
             cur.execute("SELECT * FROM saas_tenant_invites WHERE token_hash = %s FOR UPDATE", (token_hash,))
             invite = cur.fetchone()
-            if not invite:
+            if not invite or str(invite['tenant_id']) != tenant:
                 raise TenantPlatformError("Dəvət linki etibarlı deyil. Administratorla əlaqə saxlayın.")
             if invite.get("accepted_at"):
                 raise TenantPlatformError("Bu dəvət linki artıq istifadə olunub.")
@@ -196,14 +222,22 @@ def decide_invite_request(*, tenant_id: str, owner_id: int, request_id: str, app
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_scoped_access_store import read_access_profile
+            current = read_access_profile(cur, tenant_id, owner_id, lock=True)
+            if not _may_manage(current):
+                raise TenantPlatformError('İcazə yoxdur.')
             cur.execute("""
-                SELECT r.*, i.display_name AS card_name, i.role, i.permissions, i.created_by
+                SELECT r.*, i.display_name AS card_name, i.role, i.permissions, i.created_by,
+                       i.expires_at AS invite_expires_at, i.accepted_at AS invite_accepted_at
                 FROM saas_tenant_invite_requests r JOIN saas_tenant_invites i ON i.id = r.invite_id
                 WHERE r.id = %s AND r.tenant_id = %s::uuid FOR UPDATE
             """, (rid, tenant_id))
             request = cur.fetchone()
             if not request or request["status"] != "pending":
                 raise TenantPlatformError("Sorğu artıq işlənib və ya tapılmadı.")
+            if approve and (request['invite_accepted_at'] is not None
+                            or request['invite_expires_at'] <= datetime.now(timezone.utc)):
+                raise TenantPlatformError('Dəvət linki etibarlı deyil və ya müddəti bitib.')
             if current.get('role') != 'owner' and request.get('role') in {'owner','admin'}:
                 raise TenantPlatformError('Administrator sahib və ya administrator rolunu təsdiqləyə bilməz.')
             if approve:

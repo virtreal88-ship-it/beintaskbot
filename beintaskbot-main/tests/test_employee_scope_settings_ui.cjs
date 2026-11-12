@@ -45,5 +45,21 @@ const change=(b,node,value)=>{assert(node);node.value=value;node.dispatchEvent(n
    const form=edit(b);b.f.writeResult={status:409,data:{success:false,code:'member_settings_conflict',fields:{access_settings:'version_conflict'}}};change(b,form.querySelector('[data-access-module=tasks][data-access-scope=view]'),'self');submit(b,form);await settle();assert.equal(form.querySelector('[data-access-module=tasks][data-access-scope=view]').value,'self','Conflict retains draft');assert.equal(writes(b).length,1);
   }finally{b.close()}
  }
+ {
+  const b=await mount({role:'owner',row:{...row,permission_modules:['linear','hot_orders','settings','finance','dialogs'],explicit_permissions:['linear:view','legacy:retained']}});try{
+   const form=edit(b),controls=[...form.querySelectorAll('[data-permission]')];
+   assert.deepEqual(controls.map(n=>n.value),['linear','hot_orders'],'Only nonmatrix, non-owner-only modules get coarse controls');
+   assert(controls[0].indeterminate,'Partial Linear grant stays partial until explicitly changed');
+   submit(b,form);await settle();assert.equal(writes(b).length,0,'Untouched coarse grants are preserved');
+   controls[0].checked=false;controls[0].dispatchEvent(new b.w.Event('change',{bubbles:true}));
+   controls[1].checked=true;controls[1].dispatchEvent(new b.w.Event('change',{bubbles:true}));
+   change(b,form.querySelector('[data-access-module=tasks][data-access-scope=delete]'),'self');
+   submit(b,form);await settle();
+   assert.deepEqual(writes(b)[0].body.changes,{permission_changes:{linear:false,hot_orders:true},access_settings:{expected_version:'scoped-v1',changes:{scopes:{tasks:{delete:'self'}}}}});
+  }finally{b.close()}
+ }
+ {
+  const b=await mount({role:'owner',row:{...row,role:'owner',permission_modules:['linear','hot_orders']}});try{const form=edit(b);assert([...form.querySelectorAll('[data-permission]')].every(n=>n.disabled),'Owner coarse grants are protected')}finally{b.close()}
+ }
  console.log('PASS scoped matrix RU/AZ/EN, independent CRUD, legacy preservation, department selection/create, source slot, owner protection and conflict draft');
 })().catch(error=>{console.error(error.stack);process.exitCode=1});

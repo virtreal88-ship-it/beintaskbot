@@ -20,7 +20,7 @@ def read_access_profile(cur, tenant_id, actor_id, lock=False):
     if lock:
         cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
             WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
-            ORDER BY policy_key FOR SHARE''', (str(tenant_id), ['members', 'modules']))
+            ORDER BY policy_key FOR SHARE''', (str(tenant_id), ['employee_access_defaults', 'members', 'modules']))
         cur.fetchall()
     cur.execute('''SELECT * FROM saas_tenant_members
         WHERE tenant_id=%s::uuid AND telegram_id=%s''' + suffix, (str(tenant_id), int(actor_id)))

@@ -47,6 +47,26 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
     def payload(response):
         return json.loads(response.text)
 
+    async def test_default_deny_requires_owner_origin_context_and_exact_digest(self):
+        data = {'action': 'preview_employee_default_deny', 'expected_tenant_id': 'company', 'expected_user_id': 1}
+        with patch('tenant_employee_defaults_store.transition', return_value={'digest': 'a'*64, 'applied': False}) as apply:
+            response = await self.api['members'](self.request(data=data))
+            self.assertEqual(response.status, 200)
+            apply.assert_called_once_with(tenant_id='company', owner_id=1, expected_digest=None)
+            apply.reset_mock()
+            bad = self.request(data=data); bad.headers = {'Origin': 'https://foreign.test'}
+            self.assertEqual((await self.api['members'](bad)).status, 403)
+            self.assertEqual((await self.api['members'](self.request(data={**data, 'expected_tenant_id':'other'}))).status, 409)
+            self.assertEqual((await self.api['members'](self.request(data={**data, 'action':'apply_employee_default_deny'}))).status, 400)
+            apply.assert_not_called()
+            response = await self.api['members'](self.request(data={**data, 'action':'apply_employee_default_deny', 'expected_digest':'a'*64}))
+            self.assertEqual(response.status, 200)
+            apply.assert_called_once_with(tenant_id='company', owner_id=1, expected_digest='a'*64)
+            apply.reset_mock()
+            self.member.return_value = {**self.profile, 'role':'admin', 'permissions':['employees']}
+            self.assertEqual((await self.api['members'](self.request(data=data))).status, 403)
+            apply.assert_not_called()
+
     async def test_all_owner_routes_guard_before_storage(self):
         self.member.return_value = None
         self.assertEqual((await self.api["members"](self.request("GET"))).status, 403)

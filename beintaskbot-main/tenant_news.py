@@ -61,11 +61,11 @@ def member_published(session: dict, *, after: str | None = None) -> dict:
     with _connect() as conn:
         ensure_observer_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT m.active,t.status AS tenant_status FROM saas_tenant_members m
-              JOIN saas_tenants t ON t.id=m.tenant_id
-              WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
-            member = cur.fetchone()
-            if not member or member['active'] is not True or member['tenant_status'] != 'active':
+            from tenant_scoped_access_store import read_access_profile
+            from tenant_employee_defaults import published_section_allowed
+            from tenant_policy import TenantPolicy
+            current = read_access_profile(cur, tenant, user, lock=True)
+            if not current or not published_section_allowed(TenantPolicy(current), 'news'):
                 raise TenantLinearError('İcazə yoxdur.', 403)
             condition = ' AND (published_at,id)<(%s,%s::uuid)' if point else ''
             cur.execute("SELECT * FROM saas_linear_news WHERE tenant_id=%s::uuid AND status='published'"

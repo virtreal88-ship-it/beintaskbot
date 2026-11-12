@@ -65,3 +65,28 @@ def test_foreign_pipeline_is_not_granted(cards):
         workflow.save_tenant_workflow_config(tenant_id=A,owner_id=11,
             member_pipeline_changes=[{**change(),'pipeline_ids':['foreign']}])
     assert policy(cards)==before
+
+
+@pytest.mark.parametrize('payload', [
+    {'employee_access_defaults': {'deny_unset': False}},
+    {' employee_access_defaults': {'deny_unset': False}},
+    {'employee_access_defaults': {'deny_unset': True}, 'employee_access_defaults ': {'deny_unset': False}},
+])
+def test_default_deny_cannot_be_disabled_by_workflow_or_alias(cards, payload):
+    with cards['factory']() as conn:
+        conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s,'employee_access_defaults','{\"deny_unset\":true}')", (A,))
+    with pytest.raises(workflow.TenantPlatformError, match='employee_default_deny_requires_audited_transition'):
+        workflow.save_tenant_workflow_config(tenant_id=A,owner_id=11,policies=payload)
+    with cards['factory']() as conn:
+        assert conn.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s AND policy_key='employee_access_defaults'", (A,)).fetchone()['value'] == {'deny_unset': True}
+
+
+def test_disabled_engine_probe_leaves_new_connection_transaction_idle(cards, monkeypatch):
+    import tenant_platform_core as core
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'false')
+    with cards['factory']() as existing:
+        dsn = existing.info.dsn
+    monkeypatch.setattr(core, '_database_url', lambda: dsn)
+    with core._connect() as conn:
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        assert conn.execute('SELECT 1 AS ok').fetchone()['ok'] == 1
