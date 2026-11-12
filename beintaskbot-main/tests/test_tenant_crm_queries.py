@@ -104,7 +104,7 @@ class CRMQueries(unittest.TestCase):
     def test_kommo_tasks_follow_employee_created_deal_even_without_pipeline_assignment(self):
         sql,values=task_filters(tenant_id='a',scope={'kind':'kommo','pipelines':[],'kommo_user_id':501})
         self.assertIn("d.raw->>'created_by_id'=%s",sql)
-        self.assertEqual(values,['a','501','501'])
+        self.assertEqual(values,['a','501','501','501'])
 
     def test_kommo_deal_creator_is_included_without_expanding_other_pipeline_access(self):
         sql,values=deal_filters(tenant_id='a',scope=[],creator_id=501)
