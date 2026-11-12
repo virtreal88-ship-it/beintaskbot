@@ -144,6 +144,8 @@ class ElevenTTDStream:
         self.empty_audio_frames=0;self.odd_audio_frames=0
         self.first_text_at=None;self.first_pcm_at=None
         self._text_submitted=asyncio.Event();self._pending_receive=None
+        self._shutdown_close_requested=False;self._provider_final_received=False
+        self._transport_close_confirmed=False
 
     def start(self):
         if self.task is not None:raise ValueError('tts_started')
@@ -169,24 +171,45 @@ class ElevenTTDStream:
         self.cancelled=True
         if self.task is not None and not self.task.done() and self._started and not self._cleaning:self.task.cancel()
 
+    def close_gracefully(self):
+        """Close an active provider stream with the documented terminal command."""
+        if self.finished or self.cancelled:return False
+        if self.task is None or self.task.done() or self.socket is None:
+            self.cancel_now()
+            return False
+        self._shutdown_close_requested=True
+        self.cancelled=True
+        self._text_ready.set()
+        return True
+
     async def wait_closed(self):
         if self.task is not None:await asyncio.shield(self.task)
+        if (self._shutdown_close_requested and not self._provider_final_received and
+            not self._transport_close_confirmed):
+            self.close_unconfirmed=True
         if self.close_unconfirmed:raise ValueError('tts_close_unconfirmed')
 
     def _current(self):
         return not self.cancelled and not self._cleaning and self.is_current(self.epoch)
 
-    async def _send(self,event):
+    async def _send(self,event,*,allow_shutdown_close=False):
         # Every text/flush operation may incur cost. Recheck the same live
         # identity, scoped authority and exact fenced lease before each send.
-        if not self._current():raise asyncio.CancelledError()
+        if allow_shutdown_close:
+            if (not self._shutdown_close_requested or event!={'close_socket':True} or
+                self.socket is None):raise ValueError('tts_shutdown_command_invalid')
+        elif self._shutdown_close_requested or not self._current():raise asyncio.CancelledError()
         try:await self.guard.assert_live(self.guard.scope,self.guard.session_id)
         except (TenantLinearError,PilotAdmissionError):raise ValueError('tts_admission_rejected') from None
-        if not self._current():raise asyncio.CancelledError()
+        if allow_shutdown_close:
+            if not self._shutdown_close_requested:raise ValueError('tts_shutdown_command_invalid')
+        elif self._shutdown_close_requested:return False
+        elif not self._current():raise asyncio.CancelledError()
         inputs=event.get('inputs')
         if isinstance(inputs,list):self.attempted_chars+=sum(len(item['text']) for item in inputs)
         await self.socket.send_json(event)
         if isinstance(inputs,list):self._text_submitted.set()
+        elif allow_shutdown_close:self._text_submitted.set()
 
     async def _write(self):
         pending=''
@@ -208,6 +231,15 @@ class ElevenTTDStream:
                 await self._send({'inputs':[{'text':text,'voice_id':VOICE_ID}], 'flush':True})
         deadline=None
         while True:
+            if self._shutdown_close_requested:
+                # The provider may still hold text already accepted by its
+                # socket. Discard only local, unsent text and request its
+                # documented terminal frame; never submit more user-visible
+                # answer text during teardown.
+                self._text_buffer.clear();pending=''
+                self._close_socket_started=True
+                await self._send({'close_socket':True},allow_shutdown_close=True)
+                return
             if not self._text_buffer and not self._input_finished:
                 self._text_ready.clear()
                 if not self._text_buffer and not self._input_finished:
@@ -294,6 +326,7 @@ class ElevenTTDStream:
                 if event.get('is_final') is True:
                     if len(pending)%2:raise ValueError('tts_audio_unaligned_final')
                     if pending:await send_audio(len(pending))
+                    self._provider_final_received=True
                     return
         finally:
             # In particular on a PCM timeout, leave the pending aiohttp read
@@ -323,10 +356,16 @@ class ElevenTTDStream:
                     except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
             stage='send'
             await writer
-            stage='receive'
-            try:await asyncio.wait_for(asyncio.shield(reader),FINAL_DRAIN_TIMEOUT)
-            except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
-            result='done'
+            if self._shutdown_close_requested:
+                # A user ending the whole session does not need to wait for
+                # buffered speech to finish playing. The WebSocket close
+                # handshake below can prove the provider session is closed.
+                result='cancelled'
+            else:
+                stage='receive'
+                try:await asyncio.wait_for(asyncio.shield(reader),FINAL_DRAIN_TIMEOUT)
+                except asyncio.TimeoutError:raise ValueError('tts_timeout') from None
+                result='done'
         except asyncio.CancelledError:
             self.cancelled=True;result='cancelled'
         except Exception as error:
@@ -345,7 +384,9 @@ class ElevenTTDStream:
                 if not writer.done():writer.cancel()
                 await asyncio.gather(writer,return_exceptions=True)
             if self.socket is not None:
-                try:await self.socket.close()
+                try:
+                    await self.socket.close()
+                    self._transport_close_confirmed=True
                 except Exception:failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             if reader is not None:
                 if not reader.done():reader.cancel()
@@ -354,6 +395,9 @@ class ElevenTTDStream:
                 if not self._pending_receive.done():self._pending_receive.cancel()
                 await asyncio.gather(self._pending_receive,return_exceptions=True)
             self.finished=True
+            if (self._shutdown_close_requested and not self._provider_final_received and
+                not self._transport_close_confirmed):
+                failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             first_ms=(int(min(max(self.first_pcm_at-self.first_text_at,0),600)*1000)
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
             _LOG.info('realtime_tts_activity provider=elevenlabs_ali attempted_chars=%d pcm_bytes=%d '

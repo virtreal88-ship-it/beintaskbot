@@ -85,7 +85,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.sockets[0].emit({type:'audio_done',item_id:'assistant-3'}));
  await page.waitForFunction(()=>window.voiceEvents.some(x=>x.type==='played_all'&&x.item_id==='assistant-3'));
  await page.waitForFunction(()=>document.querySelector('[data-copilot-voice] [role=status]')?.textContent==='Говорите, AI слушает');
- const closeButton=voice.getByRole('button',{name:'Завершить сессию'});
+ const closeButton=voice.getByRole('button',{name:'Завершить разговор'});
+ assert.equal(await closeButton.isVisible(),true,'the full-screen shell always exposes its session close control');
  assert.equal(await closeButton.locator('svg').count(),1,'session close uses a labelled cross icon');
  await closeButton.focus();
  await page.keyboard.press('Enter');
