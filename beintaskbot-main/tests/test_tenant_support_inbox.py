@@ -246,6 +246,50 @@ def manual(**values):
         'developer_confirmed':True,**values})
 
 
+def test_support_copilot_sla_validation_and_owner_policy(db,monkeypatch):
+    import tenant_support_copilot as copilot
+    monkeypatch.setattr(copilot,'_connect',lambda:db)
+    hours={'urgent':1,'high':4,'normal':24,'low':72}
+    saved=copilot.save_sla_policy(PROFILE,{'response_hours':hours})
+    assert saved['response_hours']==hours
+    assert copilot.read_sla_policy(PROFILE)['response_hours']==hours
+    ticket=manual()['ticket']['id']
+    store.update(PROFILE,ticket,{'priority':'high'})
+    queue=store.listing(PROFILE,status='attention')
+    assert queue['attention_count']==1
+    assert queue['tickets'][0]['id']==ticket
+    assert queue['tickets'][0]['response_due_at_effective']
+    with pytest.raises(TenantLinearError):copilot.save_sla_policy({'tenant_id':A,'telegram_id':999,'role':'owner'},{'response_hours':hours})
+    for invalid in ({**hours,'urgent':0},{**hours,'urgent':True},{'urgent':1}):
+        with pytest.raises(TenantLinearError):copilot._validated_hours(invalid)
+    with pytest.raises(TenantLinearError):store.update(PROFILE,ticket,{'priority':[]})
+
+
+def test_support_copilot_recommendations_use_only_published_company_sources_and_resolved_cases(db,monkeypatch):
+    import tenant_support_copilot as copilot
+    monkeypatch.setattr(copilot,'_connect',lambda:db)
+    previous=manual()['ticket']['id']
+    store.update(PROFILE,previous,{'description':'Internet outage in the shop','next_steps':'Restarted router','status':'resolved'})
+    current=manual()['ticket']['id']
+    store.update(PROFILE,current,{'description':'Internet outage at the counter'})
+    source_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,content_hash,created_by) VALUES(%s::uuid,%s::uuid,'Network support','text','Internet outage troubleshooting: restart the router','hash',11)",(source_id,A))
+    db.execute("INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content) VALUES(%s::uuid,%s::uuid,0,'Internet outage troubleshooting: restart the router')",(A,source_id));db.commit()
+    inactive_id=str(uuid.uuid4());foreign_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by) VALUES(%s::uuid,%s::uuid,'Unpublished','text','Internet outage troubleshooting',FALSE,'inactive',11)",(inactive_id,A))
+    db.execute("INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content) VALUES(%s::uuid,%s::uuid,0,'Internet outage troubleshooting')",(A,inactive_id))
+    db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,content_hash,created_by) VALUES(%s::uuid,%s::uuid,'Other tenant','text','Internet outage troubleshooting','foreign',22)",(foreign_id,B))
+    db.execute("INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content) VALUES(%s::uuid,%s::uuid,0,'Internet outage troubleshooting')",(B,foreign_id));db.commit()
+    result=copilot.recommendations(PROFILE,current)
+    assert result['read_only'] is True
+    assert result['knowledge'][0]['title']=='Network support'
+    assert result['knowledge'][0]['source_ref']['source_id']==source_id
+    assert {item['source_ref']['source_id'] for item in result['knowledge']}=={source_id}
+    assert result['similar_cases'][0]['case_id']==previous
+    assert result['evidence_coverage']['attachments_in_scope']==0
+    assert 'не гарантированная причина' in result['notice']
+
+
 def test_case_developer_assignment_is_tenant_scoped_and_separate_from_crm_assignee(db,monkeypatch):
     from tenant_dialog_consultations import schema as consultation_schema,developer_marker
     import tenant_dialog_consultations as flow

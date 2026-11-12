@@ -33,6 +33,8 @@ Yalnız bu mətn sahələrindən ibarət JSON qaytar: description (problemin qı
 summary (yalnız təsdiqlənən faktlar və kontekst), suggestions (əməkdaşın artıq təklifləri; müştəri və agent sözlərini fərqləndir),
 next_steps (əməkdaşın yoxlamalı və ya etməli olduğu konkret addımlar), risk_assessment (risk əlamətləri, onların sübutu və sahibin diqqət etməli olduğu məsələlər),
 reply_draft (müştəriyə göndərilməmiş, qısa cavab qaralaması).
+priority_suggestion (yalnız low, normal, high və ya urgent), priority_reason (prioriteti əsaslandıran qısa faktlar).
+Prioriteti yalnız mənbədə aydın görünən təsir və təcililiyə görə seç; sübut zəifdirsə normal seç. SLA müddəti vəd etmə.
 Riskləri fakt kimi təqdim etmə: sübutu və qeyri-müəyyənliyi ayır; sübut yoxdursa, ciddi risk barədə nəticə uydurma.
 Reply_draft yalnız təqdim olunan sübutlarla dəstəklənən məlumatdan istifadə etməlidir. Əmin cavab yoxdursa, uyğun dildə
 dəqiqləşdirici sual ver və ya əməkdaşın yoxlayacağını bildir; problemin həll olunduğunu, geri ödənişi və ya müddəti vəd etmə.
@@ -217,11 +219,11 @@ def finish(item, result, usage):
                   suggestions=CASE WHEN suggestions=%s THEN %s ELSE suggestions END,
                   next_steps=CASE WHEN next_steps=%s THEN %s ELSE next_steps END,
                   risk_assessment=CASE WHEN risk_assessment=%s THEN %s ELSE risk_assessment END,
-                  reply_draft=%s,
+                  reply_draft=%s,priority_suggestion=%s,priority_reason=%s,
                   summary_state='completed',summary_agent_binding=%s,summary_scope_hash=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND id=%s::uuid AND summary_state='generating'
-                  RETURNING description,summary,suggestions,next_steps,risk_assessment,reply_draft''',
-                  (item['original']['description'],result['description'],result['summary'],item['original']['suggestions'],result['suggestions'],item['original']['next_steps'],result['next_steps'],item['original']['risk_assessment'],result['risk_assessment'],result['reply_draft'],item['agent_binding'],item['scope_hash'],tenant,ticket_id))
+                  RETURNING description,summary,suggestions,next_steps,risk_assessment,reply_draft,priority_suggestion,priority_reason''',
+                  (item['original']['description'],result['description'],result['summary'],item['original']['suggestions'],result['suggestions'],item['original']['next_steps'],result['next_steps'],item['original']['risk_assessment'],result['risk_assessment'],result['reply_draft'],result['priority_suggestion'],result['priority_reason'],item['agent_binding'],item['scope_hash'],tenant,ticket_id))
                 applied=cur.fetchone()
                 if not applied:result=None
             else:
@@ -291,6 +293,12 @@ def summarize(tenant, ticket_id, profile=None, retry=False, command=None):
                 raise ValueError('Invalid risk assessment')
             result['risk_assessment'] = str(parsed.get('risk_assessment') or '')[:4000]
             result['reply_draft'] = str(parsed.get('reply_draft') or '')[:4000]
+            priority = parsed.get('priority_suggestion', 'normal')
+            priority_reason = parsed.get('priority_reason', '')
+            if not isinstance(priority,str) or priority not in {'low','normal','high','urgent'} or not isinstance(priority_reason,str):
+                raise ValueError('Invalid priority suggestion')
+            result['priority_suggestion'] = priority
+            result['priority_reason'] = priority_reason[:1000]
             language_code = item['summary_language'].get('language')
             incomplete_media = item['summary_language'].get('media_incomplete') is True
             incomplete_history = truncated or item['scope_metadata']['message_count'] > len(lines)

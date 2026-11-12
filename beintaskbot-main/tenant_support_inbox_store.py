@@ -12,6 +12,7 @@ from tenant_platform import _connect
 from tenant_support_access import policy_access, predicate, require, require_create, mutation_result
 
 STATUSES = {'new', 'waiting', 'in_progress', 'resolved'}
+PRIORITIES = {'low', 'normal', 'high', 'urgent'}
 
 
 def public(row):
@@ -305,6 +306,9 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
  t.assigned_developer_channel_id::text AS assigned_developer_channel_id,
  t.assigned_developer_conversation_id,COALESCE(NULLIF(dc.display_name,''),NULLIF(dc.contact_name,'')) AS assigned_developer_name,
+ CASE WHEN t.response_due_manual THEN t.response_due_at
+      WHEN sla.response_hours ? t.priority THEN t.created_at + make_interval(hours=>(sla.response_hours->>t.priority)::integer)
+      ELSE NULL END AS response_due_at_effective,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
  NOT ai_legacy_blocked(t.tenant_id,t.channel_id::text,t.conversation_id) AS unambiguous
  FROM saas_support_tickets t
@@ -320,6 +324,7 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
  LEFT JOIN saas_connect_conversations dc ON dc.tenant_id=t.tenant_id
    AND dc.connect_channel_id=t.assigned_developer_channel_id AND dc.conversation_id=t.assigned_developer_conversation_id
+ LEFT JOIN saas_support_sla_policies sla ON sla.tenant_id=t.tenant_id
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
    WHERE tenant_id=t.tenant_id AND kommo_lead_id=c.lead_id AND channel='connect:'||t.channel_id::text
    ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1) lm ON TRUE'''
@@ -346,7 +351,7 @@ def eligible_members(cur, tenant):
 
 
 def listing(profile, status='unresolved', assignee='', offset=0, search='', channel_id=''):
-    if status not in STATUSES | {'unresolved','all'}:
+    if status not in STATUSES | {'unresolved','all','attention'}:
         raise TenantLinearError('Некорректный статус.')
     offset = max(0, min(int(offset), 1000000))
     with _connect() as conn:
@@ -357,6 +362,12 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             where, args = ['t.tenant_id=%s::uuid', scope_sql], [tenant, *scope_args]
             if status == 'unresolved':
                 where.append("t.status<>'resolved'")
+            elif status == 'attention':
+                where.append("t.status<>'resolved' AND (t.priority IN ('urgent','high') OR "
+                    "(CASE WHEN t.response_due_manual THEN t.response_due_at "
+                    "WHEN sla.response_hours ? t.priority THEN t.created_at + make_interval(hours=>(sla.response_hours->>t.priority)::integer) "
+                    "ELSE NULL END)<=now()+interval '4 hours' OR "
+                    "(t.status='waiting' AND t.assigned_to IS NULL AND t.updated_at<now()-interval '4 hours'))")
             elif status != 'all':
                 where.append('t.status=%s'); args.append(status)
             if assignee == 'unassigned':
@@ -368,7 +379,10 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             if channel_id:
                 where.append('t.channel_id=%s::uuid');args.append(identifier(channel_id))
             cur.execute(_SELECT + ' WHERE ' + ' AND '.join(where) + ''' ORDER BY
-              (t.status<>'resolved') DESC,(t.source='ai_handoff') DESC,(t.status='waiting') DESC,t.created_at,t.id LIMIT 51 OFFSET %s''', (*args,offset))
+              (t.status<>'resolved') DESC,(t.priority='urgent') DESC,(t.priority='high') DESC,
+              (CASE WHEN t.response_due_manual THEN t.response_due_at
+                    WHEN sla.response_hours ? t.priority THEN t.created_at + make_interval(hours=>(sla.response_hours->>t.priority)::integer)
+                    ELSE NULL END) ASC NULLS LAST,(t.source='ai_handoff') DESC,(t.status='waiting') DESC,t.created_at,t.id LIMIT 51 OFFSET %s''', (*args,offset))
             rows = cur.fetchall()
             # Assignee options are mutation context, not a support-read grant
             # to enumerate the company roster. Only expose them when this page
@@ -382,18 +396,35 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             members = eligible_members(cur, tenant) if editable else []
             cur.execute("SELECT count(*) AS total FROM saas_support_tickets t WHERE t.tenant_id=%s::uuid AND t.status<>'resolved' AND " + scope_sql,(tenant,*scope_args))
             unresolved_count=int(cur.fetchone()['total'])
+            cur.execute("""SELECT count(*) AS total FROM saas_support_tickets t
+              LEFT JOIN saas_support_sla_policies sla ON sla.tenant_id=t.tenant_id
+              WHERE t.tenant_id=%s::uuid AND t.status<>'resolved' AND """+scope_sql+""" AND
+                (t.priority IN ('urgent','high') OR
+                 (CASE WHEN t.response_due_manual THEN t.response_due_at
+                       WHEN sla.response_hours ? t.priority THEN t.created_at + make_interval(hours=>(sla.response_hours->>t.priority)::integer)
+                       ELSE NULL END)<=now()+interval '4 hours' OR
+                 (t.status='waiting' AND t.assigned_to IS NULL AND t.updated_at<now()-interval '4 hours'))""",
+              (tenant,*scope_args))
+            attention_count=int(cur.fetchone()['total'])
             if policy.action_scope('support','view') is None:
                 cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
             else:
                 cur.execute('SELECT ch.connect_channel_id::text AS id,ch.name FROM saas_connect_channels ch WHERE ch.tenant_id=%s::uuid AND EXISTS(SELECT 1 FROM saas_support_tickets t WHERE t.tenant_id=ch.tenant_id AND t.channel_id=ch.connect_channel_id AND '+scope_sql+') ORDER BY ch.name',(tenant,*scope_args))
             channels=[dict(row) for row in cur.fetchall()]
             safe_rows=[_attach_verified_contact_identity(cur,tenant,row) for row in rows[:50]]
+            sla_policy=None
+            if policy.profile.get('role')=='owner':
+                cur.execute('SELECT response_hours FROM saas_support_sla_policies WHERE tenant_id=%s::uuid',(tenant,))
+                configured=cur.fetchone() or {}
+                sla_policy=configured.get('response_hours') or {}
     ticket_rows=[_ticket_public(row,policy) for row in safe_rows]
     for row in ticket_rows:
         row.pop('reply_draft',None)
         row.pop('risk_assessment',None)
-    return {'tickets': ticket_rows, 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
-            'next_offset': offset+50 if len(rows)>50 else None}
+    result={'tickets': ticket_rows, 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
+            'attention_count':attention_count,'next_offset': offset+50 if len(rows)>50 else None}
+    if sla_policy is not None:result['sla_policy']=sla_policy
+    return result
 
 
 def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=None):
@@ -672,10 +703,12 @@ def create(profile, data):
 
 
 def update(profile, ticket_id, data):
-    if set(data)-{'status','assigned_to','description','next_steps','suggestions','risk_assessment','assigned_developer_channel_id','assigned_developer_conversation_id'}:
+    if set(data)-{'status','assigned_to','description','next_steps','suggestions','risk_assessment','priority','response_due_at','assigned_developer_channel_id','assigned_developer_conversation_id'}:
         raise TenantLinearError('Некорректные поля обращения.')
     if 'status' in data and data['status'] not in STATUSES:
         raise TenantLinearError('Некорректный статус.')
+    if 'priority' in data and (not isinstance(data['priority'], str) or data['priority'] not in PRIORITIES):
+        raise TenantLinearError('Некорректный приоритет.')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -708,6 +741,16 @@ def update(profile, ticket_id, data):
                 _authorize(cur,{'tenant_id':tenant,'telegram_id':assigned})
             fields, args = [], []
             for key, value in data.items():
+                if key=='response_due_at':
+                    if value is None or value=='':
+                        fields.extend(['response_due_at=%s','response_due_manual=%s']);args.extend([None,False]);continue
+                    if not isinstance(value,str) or len(value)>60:
+                        raise TenantLinearError('Некорректный срок ответа.')
+                    from datetime import datetime
+                    try:value=datetime.fromisoformat(value.replace('Z','+00:00'))
+                    except ValueError:raise TenantLinearError('Некорректный срок ответа.') from None
+                    if value.tzinfo is None:raise TenantLinearError('Для срока ответа требуется часовой пояс.')
+                    fields.extend(['response_due_at=%s','response_due_manual=%s']);args.extend([value,True]);continue
                 fields.append(key+'=%s')
                 if key=='assigned_to': value = int(value) if value is not None else None
                 elif key=='assigned_developer_channel_id': value = identifier(value) if value is not None else None

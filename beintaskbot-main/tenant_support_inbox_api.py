@@ -30,6 +30,12 @@ def handler(member_from_request, origin, logger, resource):
                     result=await asyncio.to_thread(available_case_media,profile,request.match_info['ticket_id'],request.query.get('before'))
                 elif resource=='ticket_messages':
                     result=await asyncio.to_thread(available_case_messages,profile,request.match_info['ticket_id'],request.query.get('before'))
+                elif resource=='ticket_recommendations':
+                    from tenant_support_copilot import recommendations
+                    result=await asyncio.to_thread(recommendations,profile,request.match_info['ticket_id'])
+                elif resource=='sla_policy':
+                    from tenant_support_copilot import read_sla_policy
+                    result=await asyncio.to_thread(read_sla_policy,profile)
                 else:
                     options={}
                     if 'notification_id' in request.query:
@@ -58,6 +64,9 @@ def handler(member_from_request, origin, logger, resource):
                     result = await asyncio.to_thread(create,profile,payload)
                 elif resource=='ticket' and request.method=='PATCH':
                     result = await asyncio.to_thread(update,profile,request.match_info['ticket_id'],payload)
+                elif resource=='sla_policy' and request.method=='PUT':
+                    from tenant_support_copilot import save_sla_policy
+                    result=await asyncio.to_thread(save_sla_policy,profile,payload)
                 elif resource=='ticket_attachments' and request.method=='POST' and set(payload)=={'message_ids'}:
                     result = await asyncio.to_thread(attach_case_media,profile,request.match_info['ticket_id'],payload['message_ids'])
                 elif resource=='ticket_messages' and request.method=='POST' and set(payload)=={'message_ids'}:
