@@ -222,6 +222,7 @@ test('voice screen uses its animated orb as the only response interruption contr
  try{
   const orb=screen.querySelector('[data-voice-orb]');assert.equal(orb.tagName,'BUTTON');assert.equal(orb.disabled,true);
   const close=screen.querySelector('[data-voice-close]');assert.ok(close,'the full-screen close control exists before voice scripts mount');
+  assert.equal(screen.querySelector('.tenant-voice-mic-indicator'),null,'header has no misleading, nonfunctional second microphone control');
   assert.equal(close.hidden,false);assert.equal(close.getAttribute('aria-label'),'Завершить разговор');
   assert.equal(screen.querySelector('.voice-session-talk'),null,'no separate Stop/interrupt button is rendered');
  }finally{await screen.disposeVoice();dom.window.close();}
