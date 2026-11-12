@@ -38,6 +38,7 @@ def test_kommo_funnel_scope_is_authority_independent_of_native_deal_rights(monke
 def test_empty_matrix_keeps_legacy_customer_only_read(monkeypatch,enabled):
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED',str(enabled).lower())
     p=manager_profile();p['permissions']=['customers']
+    p['workflow']['policies'][0]['value']['20']['pipeline_ids']=['10']
     routes,c=api(p)
     assert asyncio.run(routes['deals'](Request())).status==200
     c.list_deals.assert_called_once()
