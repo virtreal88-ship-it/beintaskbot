@@ -55,6 +55,9 @@ jobs:
           tests/test_campaign_start_diagnostics.py
           tests/test_knowledge_center_request_contract.py
           tests/test_read_timing.py
+          tests/test_tenant_deal_api.py
+          tests/test_tenant_crm_repository.py
+          tests/test_tenant_crm_queries.py
           tests/test_operator_list_performance.py
           tests/test_tenant_chat_attachments.py
           tests/test_connect_channel_isolation.py::test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread
