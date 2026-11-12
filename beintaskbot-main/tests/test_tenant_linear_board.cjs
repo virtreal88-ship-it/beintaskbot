@@ -26,14 +26,15 @@ const document={activeElement:null,getElementById:$,head,querySelector:selector=
   querySelectorAll:selector=>selector==='.view'?[$('view-linear')]:selector==='.nav button'?[$('tlNav')]:[],
   addEventListener:(name,listener)=>events[name]=listener};
 const person=(tenant='company-a',role='worker',user=20)=>({member:{tenant_id:tenant,telegram_id:user,role,permissions:['linear']},capabilities:{modules:{linear:true}}});
-let profile=person(),deferred=null,fail=true,uuid=0;const requests=[],posts=[],session=new Map(),local=new Map(),pages=[];
+let profile=person(),deferred=null,fail=true,uuid=0;const postReplies=[];const requests=[],posts=[],session=new Map(),local=new Map(),pages=[];
 const reply=(data,status=200)=>({ok:status===200,status,json:async()=>data});
 const row={id:'issue',identifier:'BS-1',url:'https://linear.app/acme/BS-1',title:'<Private title>',account:'<Customer>',operator:'operator',description:'text',body:'<Details>',priority:2,
   state:{id:'done',name:'Done'},project:{name:'Project'},createdAt:'2026-10-08T10:00:00Z',updatedAt:'old',
   capabilities:{can_edit:false,can_change_status:false,buttons:[{id:'pass',label:'Test olundu',require_reason:false}]}};
 async function fetch(url,options={}){requests.push(url);if(url.endsWith('/me'))return reply(profile);
   if(url.includes('/risks/'))throw new Error('Linear must not request risk reviews');
-  if(options.body){posts.push(JSON.parse(options.body));return reply(fail?{success:false,error:'Uncertain'}:{success:true,issue_id:'issue'},fail?503:200);}
+  if(options.body){posts.push(JSON.parse(options.body));if(postReplies.length)return postReplies.shift();return reply(fail?{success:false,error:'Uncertain'}:{success:true,issue_id:'issue'},fail?503:200);}
+  if(url.includes('catalog=1'))return reply({success:true,states:[{id:'done',name:'Done'},{id:'target',name:'Target'}],config_version:'cfg'});
   if(pages.length)return pages.shift();
   if(deferred){const saved=deferred;deferred=null;return saved;}
   return reply({success:true,issues:[row,{...row,id:'accountless',identifier:'BS-2',account:'',state:{id:'testiq',name:'Testiq'}},{...row,id:'account-placeholder',identifier:'BS-3',account:'Account göstərilməyib',state:{id:'testiq',name:'Testiq'}}],statuses:[{id:'testiq',name:'Testiq',position:10},{id:'triage',name:'Triage',position:20},{id:'done',name:'Done',position:30}],tenant_id:profile.member.tenant_id,user_id:20,config_version:'cfg',capabilities:{can_create:false},pageInfo:{hasNextPage:!url.includes('&after='),endCursor:'cursor'}});
@@ -79,6 +80,21 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   $('tlTaskSave').click();await flush();await flush();assert.equal(posts.length,1);assert.equal(session.size,1);
   $('tlTaskSave').click();await flush();await flush();assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);
   fail=false;$('tlTaskSave').click();await flush();await flush();assert.equal(session.size,0);assert(!$('tlTaskModal').classList.contains('show'));
+  assert.equal($('tlRecover'),undefined,'separate pending-request button removed');
+  row.capabilities.can_change_status=true;await $('tlRefresh').click();
+  const statusTarget={closest:selector=>selector==='[data-issue]'?card:selector==='[data-status]'?{}:null};
+  await $('tlBoard').onclick({target:statusTarget});await flush();$('tlNewState').value='target';
+  fail=true;$('tlTaskSave').click();await flush();await flush();
+  const stale=posts.at(-1);assert.equal(stale.action,'status');assert.equal(session.size,1);
+  postReplies.push(reply({success:true,issue_id:'issue',recovery:'status_review_required',target_is_current:false}));
+  $('tlTaskSave').click();await flush();await flush();
+  assert.deepEqual(posts.at(-1),stale,'old request payload stays immutable');
+  assert.equal(session.size,0);assert(!$('tlTaskModal').classList.contains('show'));
+  assert($('tlBoardNotice').textContent.includes('təkrar göndərilmədən bağlandı'));
+  const count=posts.length;await $('tlBoard').onclick({target:statusTarget});await flush();
+  assert.equal(posts.length,count,'recovery and opening a fresh action never automatically mutate');
+  $('tlNewState').value='target';fail=false;$('tlTaskSave').click();await flush();await flush();
+  assert.notEqual(posts.at(-1).request_id,stale.request_id,'fresh status requires new explicit confirmation');
   let resolve;deferred=new Promise(r=>resolve=r);const loading=$('tlRefresh').click();
   profile=person('company-b');pages.push(page([]));events['tenant-profile']({detail:profile});resolve(reply({success:true,issues:[row],tenant_id:'company-a',user_id:20,config_version:'cfg',capabilities:{},pageInfo:{}}));await loading;await flush();
   assert(!$('tlBoard').innerHTML.includes('Private'));assert.equal($('tlRefresh').disabled,false);
