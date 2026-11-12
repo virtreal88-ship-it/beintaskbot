@@ -85,6 +85,7 @@ ASSETS = (
     ('/assets/tenant-ai-expert-editor.js', 'tenant-ai-expert-editor.js', 'no-store'),
     ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-ai-business-analyst.js', 'tenant-ai-business-analyst.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-ai-analytics.js', 'tenant-ai-analytics.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-ai-business-analyst.css', 'tenant-ai-business-analyst.css', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-ai-teams.js', 'tenant-ai-teams.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-ai-teams.css', 'tenant-ai-teams.css', 'no-cache, max-age=0, must-revalidate'),

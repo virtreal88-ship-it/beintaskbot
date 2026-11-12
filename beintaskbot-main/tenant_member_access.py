@@ -14,7 +14,7 @@ PAGE_MODULES = {
     'tasks': 'tasks', 'customers': 'customers', 'companies': 'customers',
     'deals': 'deals', 'employees': 'employees', 'dialogs': 'dialogs',
     'support': 'support', 'night_report': 'night_report',
-    'ai_agents': 'ai_agents', 'ai_dashboard': 'ai_agents',
+    'ai_agents': 'ai_agents', 'ai_dashboard': 'ai_agents', 'ai_analytics': 'ai_agents',
     'ai_administrator': 'ai_agents', 'ai_teams': 'ai_agents',
     'knowledge_center': 'ai_agents', 'support_cases': 'ai_agents',
     'ai_testing': 'ai_agents', 'hot_orders': 'hot_orders',
@@ -54,6 +54,7 @@ def page_capabilities(profile):
     pages['approvals'] = role in {'owner', 'admin'} and any(
         modules.get(key) for key in ('tasks', 'hot_orders', 'deals'))
     pages['ai_administrator'] = role == 'owner' and modules['ai_agents']
+    pages['ai_analytics'] = role == 'owner' and modules['ai_agents']
     for page in ('ai_dashboard', 'support_cases'):
         pages[page] = role in {'owner', 'admin'} and modules['ai_agents']
     # Published catalog reads admit any active tenant member, including one
