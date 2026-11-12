@@ -818,7 +818,7 @@ def test_authenticated_flow_rejects_ambiguous_or_wrong_typed_lookup_without_side
     assert _state(f) == before and f['provider'].calls == []
 
 
-def test_confirmed_external_receipt_remains_honest_after_scope_revocation_without_private_task(task_flow):
+def test_employee_created_external_task_remains_visible_after_pipeline_scope_revocation(task_flow):
     f = task_flow
     cookie = f['session'].issue(A, 82)
     command = _external_command(executor=82)
@@ -834,9 +834,12 @@ def test_confirmed_external_receipt_remains_honest_after_scope_revocation_withou
             workflows.save_tenant_workflow_config(tenant_id=A, owner_id=11,
                 pipelines=[{'pipeline_id': '10', 'name': 'Pipeline 10', 'owner_telegram_id': 11}], policies={'members': {}})
             status, checked = await _get(http, cookie, 'kommo', actor=82, extra={'request_id': command['request_id']})
-            assert status == 200 and checked['command'] == {'request_id': command['request_id'], 'source': 'kommo', 'state': 'created', 'task_id': task_id, 'task': None, 'cache_state': 'unavailable'}, checked
-            status, unavailable = await _get(http, cookie, 'kommo', actor=82, extra={'task_id': task_id})
-            assert status == 404 and not unavailable.get('task'), unavailable
+            assert status == 200 and checked['command']['state'] == 'created', checked
+            assert checked['command']['task_id'] == task_id
+            assert checked['command']['task'] is not None
+            assert checked['command']['cache_state'] == 'available'
+            status, visible_task = await _get(http, cookie, 'kommo', actor=82, extra={'task_id': task_id})
+            assert status == 200 and visible_task['task']['id'] == task_id, visible_task
             with f['factory']() as conn:
                 conn.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
             status, denied = await _get(http, cookie, 'kommo', actor=82, extra={'request_id': command['request_id']})

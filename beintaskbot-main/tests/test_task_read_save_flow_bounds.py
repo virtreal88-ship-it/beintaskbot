@@ -203,7 +203,8 @@ def test_task_reader_never_combines_old_pipeline_owner_with_new_stage_visibility
             status, result = await _get(http, cookie, 'kommo', actor=82)
             assert status == 200, result
             assert writes == [True]
-            assert [row['id'] for row in result['tasks']] == ['501']
+            assert result['tasks'] == []
+            assert result['shown'] == 0 and result['has_more'] is False
             assert 'FORBIDDEN' not in str(result)
     asyncio.run(scenario())
     assert f['provider'].calls == []
