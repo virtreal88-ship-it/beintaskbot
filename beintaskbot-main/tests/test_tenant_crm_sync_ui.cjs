@@ -2,13 +2,18 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(path.join(__dirname, '../docs/tenant-crm-sync.js'), 'utf8');
 const app = fs.readFileSync(path.join(__dirname, '../docs/tenant-app.html'), 'utf8');
+const kommo = fs.readFileSync(path.join(__dirname, '../docs/tenant-kommo-settings.js'), 'utf8');
 new vm.Script(source);
 assert(app.includes('/assets/tenant-crm-sync.js'));
 assert(app.includes('tenant-crm-sync-complete'));
 assert(app.includes('loadDeals(false)'));
 assert(app.includes('loadTasks(false)'));
-assert(app.includes('externalCrmSyncPanel'));
-assert(app.includes('Sinxronizasiya standart olaraq söndürülüb'));
+assert(!app.includes('id="externalCrmSyncPanel"'), 'CRM sync policy is no longer a separate integrations-page section');
+assert(kommo.includes('tkCrmSyncHost'), 'CRM sync policy is mounted inside the Kommo integration card');
+assert(source.includes("provider==='kommo'") && source.includes("profile?.role==='owner'"));
+assert(source.includes("'/api/platform/crm/external-sync'"));
+assert(source.includes("syncText(directions[value])")&&source.includes("syncText(fieldNames[field])"), 'sync form labels follow the selected UI language');
+assert(source.includes('syncResult)renderSync({result:syncResult})'), 'language changes preserve the current unsaved form draft');
 
 function setup() {
   const listeners = {}, events = [], boxes = [], anchors = [], timers = new Map();

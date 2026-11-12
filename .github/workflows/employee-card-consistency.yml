@@ -110,6 +110,7 @@ jobs:
           tests/test_tenant_support_inbox.py::test_employee_rights_round_trip_preserves_hidden_and_legacy_grants
       - name: Current employee forms and retained navigation lifecycle
         run: |
+          node tests/test_kommo_relocation_runtime.cjs
           node tests/test_employee_card_ui.cjs
           node tests/test_employee_settings_ui.cjs
           node tests/test_employee_access_settings_ui.cjs
