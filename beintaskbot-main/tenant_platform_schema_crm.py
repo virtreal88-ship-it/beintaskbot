@@ -6,6 +6,7 @@ from tenant_crm_native_schema import migrate_native_contacts
 from tenant_crm_relation_schema import migrate_relation_schema
 from tenant_crm_scalar_schema import migrate_scalar_schema
 from tenant_crm_sync_history_schema import migrate_history_indexes
+from tenant_beinsystems_operator_schema import migrate_operator_identity_links
 
 def migrate_crm_schema(cur) -> None:
     migrate_crm_identity_schema(cur)
@@ -13,6 +14,7 @@ def migrate_crm_schema(cur) -> None:
     migrate_relation_schema(cur)
     migrate_scalar_schema(cur)
     migrate_history_indexes(cur)
+    migrate_operator_identity_links(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,

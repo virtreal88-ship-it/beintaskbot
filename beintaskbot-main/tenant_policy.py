@@ -5,7 +5,7 @@ from tenant_hot_order_policy import HotOrderPolicy, validate_hot_order_settings
 
 
 ROLE_PERMISSIONS = {
-    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support', 'night_report'],
+    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support', 'night_report', 'operator_data'],
     'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support'],
     'manager': ['deals', 'tasks', 'customers', 'dialogs', 'support'],
     'operator': ['tasks'],
@@ -126,7 +126,7 @@ class TenantPolicy:
         endpoints. New endpoints can require an explicit action grant; owners
         keep tenant-wide authority and inactive memberships fail closed.
         """
-        allowed_actions = {'view', 'create', 'update', 'delete', 'assign', 'manage'}
+        allowed_actions = {'view', 'create', 'update', 'delete', 'assign', 'manage', 'link'}
         if action not in allowed_actions or self.profile.get('active') is False:
             return False
         if self.profile.get('role') == 'owner':

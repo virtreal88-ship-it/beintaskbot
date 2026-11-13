@@ -16,7 +16,7 @@ from tenant_employee_policy import employee_action_allowed, employee_target_allo
 # The employee editor intentionally exposes only these stable product grants.
 # Other stored grants (including known legacy modules) are retained verbatim
 # when an employee card is updated; an older client must never erase them.
-_EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
+_EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support", "operator_data:view", "operator_data:link"}
 _RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
 _CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers', 'permission_changes', 'work_settings', 'access_settings', 'department_id', 'kommo_settings'}
 _GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}

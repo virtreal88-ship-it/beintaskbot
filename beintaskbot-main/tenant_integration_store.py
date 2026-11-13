@@ -25,14 +25,32 @@ def list_integrations(*, tenant_id: str, telegram_id: int) -> list[dict]:
             cur.execute("SELECT provider, status, account_domain, metadata, connected_at, updated_at FROM saas_tenant_integrations WHERE tenant_id = %s::uuid ORDER BY provider", (tenant_id,))
             rows = cur.fetchall()
     result = []
+    from tenant_beinsystems_operator_access import is_operator_workspace
     for row in rows:
         item = dict(row)
+        if item.get("provider") == "beinsystems_operator" and not is_operator_workspace(tenant_id):
+            continue
+        if item.get("provider") == "beinsystems_operator":
+            item = {
+                "provider": "beinsystems_operator",
+                "status": str(item.get("status") or "not_connected"),
+                "account_domain": "",
+                "metadata": {},
+                "connected_at": item.get("connected_at"),
+                "updated_at": item.get("updated_at"),
+            }
         for key in ("connected_at", "updated_at"):
             if item.get(key):
                 item[key] = item[key].isoformat()
         if not isinstance(item.get("metadata"), dict):
             item["metadata"] = {}
         result.append(item)
+    if is_operator_workspace(tenant_id) and not any(
+            row.get("provider") == "beinsystems_operator" for row in result):
+        result.append({
+            "provider": "beinsystems_operator", "status": "not_connected",
+            "account_domain": "", "metadata": {}, "connected_at": None, "updated_at": None,
+        })
 
     # Keep the private manual credential separate from the public OAuth row.
     # Expose one Kommo connection, preferring the official integration whenever
@@ -65,7 +83,11 @@ def disconnect_integration(*, tenant_id: str, owner_id: int, provider: str, auth
     if not admitted({"tenant_id":tenant_id,"telegram_id":owner_id}, str(provider or "").strip().casefold()) and (not current or current.get("role") != "owner"):
         raise TenantPlatformError("İcazə yoxdur.")
     provider = str(provider or "").strip().casefold()
-    if provider not in {"kommo", "kommo_manual", "beinsystems", "waba", "telegram", "push"}:
+    if provider == "beinsystems_operator":
+        from tenant_beinsystems_operator_access import is_operator_workspace
+        if not is_operator_workspace(tenant_id):
+            raise TenantPlatformError("Bu inteqrasiya idarə edilmir.")
+    if provider not in {"kommo", "kommo_manual", "beinsystems", "beinsystems_operator", "waba", "telegram", "push"}:
         raise TenantPlatformError("Bu inteqrasiya idarə edilmir.")
     with _connect() as conn:
         _ensure_schema(conn)

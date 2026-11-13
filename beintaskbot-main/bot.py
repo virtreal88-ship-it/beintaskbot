@@ -70,6 +70,18 @@ from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handle
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
 from tenant_bein_api import handler as tenant_bein_handler
+from tenant_beinsystems_operator_api import (
+    integration_handler as tenant_operator_integration_handler,
+    accounts_handler as tenant_operator_accounts_handler,
+    links_handler as tenant_operator_links_handler,
+    revoke_handler as tenant_operator_revoke_handler,
+    dialog_context_handler as tenant_operator_dialog_context_handler,
+    account_data_handler as tenant_operator_account_data_handler,
+    ticket_draft_handler as tenant_operator_ticket_draft_handler,
+    employee_users_handler as tenant_operator_employee_users_handler,
+    employee_links_handler as tenant_operator_employee_links_handler,
+    employee_link_revoke_handler as tenant_operator_employee_link_revoke_handler,
+)
 from tenant_web_assets import register_assets
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -18804,6 +18816,36 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     bein_api = tenant_bein_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get("/api/platform/integrations/beinsystems", bein_api)
     app_web.router.add_post("/api/platform/integrations/beinsystems", bein_api)
+    operator_integration_api = tenant_operator_integration_handler(
+        _tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get("/api/platform/integrations/beinsystems-operator", operator_integration_api)
+    app_web.router.add_post("/api/platform/integrations/beinsystems-operator", operator_integration_api)
+    app_web.router.add_post("/api/platform/operator/accounts",
+        tenant_operator_accounts_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_get("/api/platform/operator/links",
+        tenant_operator_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/links",
+        tenant_operator_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/links/{link_id}/revoke",
+        tenant_operator_revoke_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-users",
+        tenant_operator_employee_users_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_get("/api/platform/operator/employee-links",
+        tenant_operator_employee_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-links",
+        tenant_operator_employee_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-links/{link_id}/revoke",
+        tenant_operator_employee_link_revoke_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_get("/api/platform/operator/dialog-context",
+        tenant_operator_dialog_context_handler(_tenant_member_from_request, logger))
+    app_web.router.add_post("/api/platform/operator/account-info",
+        tenant_operator_account_data_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, "account_info"))
+    app_web.router.add_post("/api/platform/operator/profile-users",
+        tenant_operator_account_data_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, "profile_users"))
+    app_web.router.add_post("/api/platform/operator/tasks",
+        tenant_operator_account_data_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, "task_list"))
+    app_web.router.add_post("/api/platform/operator/task-draft",
+        tenant_operator_ticket_draft_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_get("/api/platform/crm/deals", deal_api["deals"])
     app_web.router.add_get('/api/platform/crm/sync', deal_api["sync_status"])
     app_web.router.add_route('*','/api/platform/crm/external-sync',tenant_crm_sync_policy_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,logger))
