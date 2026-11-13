@@ -25,8 +25,13 @@ def gate(monkeypatch):
 @pytest.mark.parametrize('provider',sorted(access.PROVIDERS))
 @pytest.mark.parametrize('action',['view','create','update','delete'])
 @pytest.mark.parametrize('scope,expected',[('none',False),('self',False),('department',True),('all',True)])
-def test_owner_responsibility_matrix(provider,action,scope,expected):
-    assert access.allowed(profile({action:scope}),RESOURCE,provider,action) is expected
+def test_owner_responsibility_matrix(provider,action,scope,expected,monkeypatch):
+    if provider == 'beinsystems_operator':
+        monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', TENANT)
+    # Operator connection/link administration is intentionally owner-managed;
+    # only its read surface follows delegated integration scopes.
+    scoped_expected = expected and not (provider == 'beinsystems_operator' and action != 'view')
+    assert access.allowed(profile({action:scope}),RESOURCE,provider,action) is scoped_expected
     if scope != 'all':
         assert not access.allowed(profile({action:scope},department_id='other'),RESOURCE,provider,action)
 
