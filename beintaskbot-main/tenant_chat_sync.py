@@ -16,10 +16,8 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
     async def authorize() -> tuple[dict, dict]:
         current = await asyncio.to_thread(member, tenant, int(profile['telegram_id']))
         deal = await asyncio.to_thread(get_deal, tenant_id=tenant, kommo_lead_id=lead_id)
-        if not current or current.get('tenant_status') != 'active' or not TenantPolicy(current).can_access_deal(deal):
+        if not current or current.get('tenant_status') != 'active' or not TenantPolicy(current).can_read_kommo_chat(deal):
             raise TenantPlatformError('Çat tarixçəsi üçün icazəniz yoxdur.')
-        if TenantPolicy(current).action_scope('dialogs','view') not in (None,'all'):
-            raise TenantPlatformError('Источник переписки требует отдельной проверки прав.')
         return current, deal
 
     await authorize()
@@ -28,6 +26,8 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
     for talk, messages in conversations:
         for raw in messages:
             item = normalize(raw, str(raw.get('origin') or channel(talk)))
+            if str(item.get('channel') or '').startswith('connect:'):
+                raise TenantPlatformError('Источник сообщения не относится к Kommo.')
             key = item['external_id']
             if key in seen:
                 # Cache keys are lead/message, not lead/chat/message. Conflicts
@@ -38,7 +38,7 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
             seen[key] = item; normalized.append(item)
     current, deal = await authorize()
     live = await request(tenant, 'GET', f'leads/{lead_id}')
-    if int(live.get('id') or 0) != lead_id or not TenantPolicy(current).can_access_deal({**live, 'tenant_id':tenant}):
+    if int(live.get('id') or 0) != lead_id or not TenantPolicy(current).can_read_kommo_chat({**live, 'tenant_id':tenant}):
         raise TenantPlatformError('Sövdələşmənin vərəqi və ya mərhələsi dəyişib.')
     if normalized:
         await asyncio.to_thread(upsert_messages, tenant_id=tenant, kommo_lead_id=lead_id, messages=normalized)
@@ -48,4 +48,5 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
             await asyncio.to_thread(upsert_deals, tenant_id=tenant, deals=[{
                 **deal, 'last_message':latest.get('body') or '', 'last_message_at':latest.get('happened_at'),
                 'channel':latest.get('channel') or '', 'raw':deal.get('raw') or {}}])
-    return await asyncio.to_thread(list_messages, tenant_id=tenant, kommo_lead_id=lead_id)
+    cached = await asyncio.to_thread(list_messages, tenant_id=tenant, kommo_lead_id=lead_id)
+    return [row for row in cached if not str(row.get('channel') or '').startswith('connect:')]

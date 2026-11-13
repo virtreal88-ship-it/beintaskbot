@@ -1,9 +1,9 @@
 """Employee source scopes. Existing connections are never assigned by migration.
 
 Only Connect has an immutable, tenant-verified source identifier in this
-application. Kommo self/department is deliberately unavailable until its source
-identity and employee mapping have been approved, rather than guessed from a
-channel label or a deal's responsible user.
+application. General Kommo source actions still require explicit broad access;
+read-only deal information uses the separately verified Kommo pipeline boundary,
+never a guessed channel label or a deal's responsible user.
 """
 import json
 import uuid
@@ -184,13 +184,30 @@ def validate_activation(cur,tenant,scopes):
     validate_access_scopes(scopes)
 
 
+def require_kommo_lead_read(cur, tenant, policy, lead, deal=None):
+    """Authorize a concrete provider deal, never a channel label or shared token."""
+    if deal is None:
+        cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE',
+                    (tenant, int(lead)))
+        deal = cur.fetchone()
+    if str(tenant) != str(policy.profile.get('tenant_id')) or not policy.can_read_kommo_chat(deal):
+        raise TenantLinearError('Сделка недоступна по назначенным воронкам Kommo.', 403)
+    cur.execute('SELECT connect_channel_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND lead_id=%s',
+                (tenant, int(lead)))
+    if cur.fetchone():
+        raise TenantLinearError('Переписка Connect требует доступа к её источнику.', 403)
+
+
 def require_lead(cur,tenant,policy,lead,action='view'):
     """Guard older lead-based readers without inheriting CRM permissions."""
     if scope(policy,action) is None:return
     cur.execute('''SELECT connect_channel_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND lead_id=%s''',(tenant,int(lead)))
     row=cur.fetchone()
-    require_source(cur,tenant,policy,'connect' if row else 'kommo',str(row['connect_channel_id']) if row else '',action)
+    if not row and action == 'view':
+        require_kommo_lead_read(cur,tenant,policy,lead)
+    else:
+        require_source(cur,tenant,policy,'connect' if row else 'kommo',str(row['connect_channel_id']) if row else '',action)
 
 
 def independent_ai_allowed(policy,*,management=False):
@@ -218,7 +235,7 @@ def filter_group(cur,tenant,policy,group):
     return group
 
 
-def lead_message_filter(cur,tenant,policy,lead,*,column='channel'):
+def lead_message_filter(cur,tenant,policy,lead,*,column='channel',kommo_deal=None):
     """Bind old lead-only APIs to the route's channel, even for corrupt cache rows.
 
     saas_connect_conversations has UNIQUE(lead_id), so this legacy route has
@@ -227,6 +244,9 @@ def lead_message_filter(cur,tenant,policy,lead,*,column='channel'):
     A lead ID does not prove a message source. The channel expression is an
     internal constant and the only embedded identity is a validated DB UUID.
     """
+    if kommo_deal is not None:
+        require_kommo_lead_read(cur,tenant,policy,lead,kommo_deal)
+        return column+" NOT LIKE 'connect:%%'"
     if scope(policy) is None:return 'TRUE'
     cur.execute('''SELECT connect_channel_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND lead_id=%s''',(tenant,int(lead)))
@@ -235,5 +255,5 @@ def lead_message_filter(cur,tenant,policy,lead,*,column='channel'):
         source=str(uuid.UUID(str(row['connect_channel_id'])))
         require_source(cur,tenant,policy,'connect',source)
         return column+"='connect:"+source+"'"
-    require_source(cur,tenant,policy,'kommo')
+    require_kommo_lead_read(cur,tenant,policy,lead)
     return column+" NOT LIKE 'connect:%%'"

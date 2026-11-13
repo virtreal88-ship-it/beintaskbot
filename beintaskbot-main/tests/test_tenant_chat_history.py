@@ -37,7 +37,7 @@ class Store(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.policy=Mock();self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
+        self.policy=Mock();self.policy.can_read_kommo_chat.return_value=False;self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
         self.module=loaders.load('tenant_chat_history_store',{'_connect':self.connect,'ensure_schema':Mock(),
             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda _:self.policy},
             {'tenant_platform','tenant_chat_history_schema','tenant_policy'})

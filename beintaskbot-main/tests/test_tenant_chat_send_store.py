@@ -115,3 +115,46 @@ class Store(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class PipelineBoundary(unittest.TestCase):
+    """Even a broad dialog send grant cannot cross Kommo pipeline boundaries."""
+    def setUp(self):
+        Store.setUp(self)
+        from tenant_policy import TenantPolicy
+        self.module.authority.__globals__['TenantPolicy'] = TenantPolicy
+        self.env = patch.dict('os.environ', {'TENANT_SCOPED_ACCESS_ENABLED': 'true'})
+        self.env.start(); self.addCleanup(self.env.stop)
+        self.person.update(role='operator', permissions=[], modules={}, workflow={
+            'pipelines': [{'pipeline_id': 10}, {'pipeline_id': 11}],
+            'policies': {'members': {'20': {'pipeline_ids': ['10'],
+                'access_scopes': {'dialogs': {'view': 'none', 'update': 'all'}}}}}})
+        self.authority_rows[1] = {'tenant_id': TENANT, 'kommo_lead_id': 7, 'pipeline_id': 10}
+
+    reserve = Store.reserve
+
+    def test_assigned_pipeline_and_existing_update_grant_permit_reservation(self):
+        self.assertEqual(self.reserve()['connection'], ['client.kommo.com', 'version'])
+
+    def test_other_pipeline_is_denied_even_with_update_all(self):
+        self.authority_rows[1]['pipeline_id'] = 11
+        with self.assertRaises(TenantLinearError): self.reserve()
+        self.assertFalse(any('INSERT INTO saas_chat_send_receipts' in c.args[0] for c in self.cur.execute.call_args_list))
+
+    def test_read_grant_does_not_create_update_permission(self):
+        self.person['workflow']['policies']['members']['20']['access_scopes']['dialogs']['update'] = 'none'
+        with self.assertRaises(TenantLinearError): self.reserve()
+
+    def test_dispatch_rechecks_revoked_pipeline_before_callback(self):
+        item = self.reserve()
+        self.person['workflow']['policies']['members']['20']['pipeline_ids'] = []
+        self.cur.fetchone.side_effect = self.authority_rows
+        callback = Mock()
+        with self.assertRaises(TenantLinearError): self.module.dispatch_guarded(item, {}, callback)
+        callback.assert_not_called()
+
+    def test_upload_live_move_is_denied_before_credentials_return(self):
+        item = self.reserve()
+        self.cur.fetchone.side_effect = self.authority_rows
+        with self.assertRaises(TenantLinearError):
+            self.module.upload_credentials(item, {'id': 7, 'pipeline_id': 11})

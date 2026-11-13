@@ -459,3 +459,23 @@ def test_one_assignment_does_not_expose_unmapped_sources(scoped):
     assert sender.authority(db.cursor(),person,41)[1]==['connect',CA,'client']
     with pytest.raises(TenantLinearError):dialogs.history(person,'connect',43,C2,'client')
     with pytest.raises(TenantLinearError):sender.authority(db.cursor(),person,43)
+
+
+def test_kommo_pipeline_history_is_independent_and_filters_mixed_sources(scoped,monkeypatch):
+    db,person=scoped
+    import tenant_chat_history_store as history
+    monkeypatch.setattr(history,'_connect',lambda:db)
+    settings={'33':{'pipeline_ids':['10'],'access_scopes':{
+        'dialogs':{'view':'none','update':'none'},'deals':{'view':'none','update':'none'}}}}
+    db.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id) VALUES(%s::uuid,'10')",(A,))
+    db.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s::uuid,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",(A,json.dumps(settings)))
+    for lead,pipeline in ((701,10),(702,11)):
+        db.execute('INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,pipeline_id) VALUES(%s::uuid,%s,%s)',(A,lead,pipeline))
+        for suffix,channel in (('provider','whatsapp'),('mixed','connect:'+CA)):
+            db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming',%s)",(str(uuid.uuid4()),A,lead,str(lead)+suffix,channel,suffix))
+    db.commit()
+    assert [m['body'] for m in history.page(person,701)['messages']]==['provider']
+    with pytest.raises(TenantLinearError):history.page(person,702)
+    with pytest.raises(TenantLinearError):history.page(person,41)
+    db.execute('UPDATE saas_crm_deals SET pipeline_id=11 WHERE tenant_id=%s::uuid AND kommo_lead_id=701',(A,));db.commit()
+    with pytest.raises(TenantLinearError):history.page(person,701)

@@ -34,7 +34,7 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
             deal = cur.fetchone()
             policy = TenantPolicy(profile)
             selected_scope=policy.action_scope('dialogs','view')
-            allowed = selected_scope!='none' if selected_scope is not None else policy.legacy_allows('dialogs') if is_connect else policy.can_access_deal(deal)
+            allowed = (selected_scope!='none' if selected_scope is not None else policy.legacy_allows('dialogs')) if is_connect else policy.can_read_kommo_chat(deal)
             if not allowed:
                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)
             cur.execute('''SELECT id,external_id,channel,direction,body,media_url,message_type,raw FROM saas_crm_messages
@@ -65,8 +65,10 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                 if raw.get('conversationId') and raw['conversationId'] != route['conversation_id']:
                     raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)
                 return {'provider': 'connect', 'row': dict(row), 'route': route, 'message_id': reference}
-            from tenant_dialog_access import require_source
-            require_source(cur,tenant,policy,'kommo','','view')
+            from tenant_dialog_access import require_kommo_lead_read
+            require_kommo_lead_read(cur,tenant,policy,lead,deal)
+            if str(row.get('channel') or '').startswith('connect:'):
+                raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)
             cur.execute('''SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations
               WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE''', (tenant,))
             connection = cur.fetchone()

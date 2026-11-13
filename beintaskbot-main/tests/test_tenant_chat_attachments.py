@@ -83,10 +83,10 @@ class Storage(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.policy=Mock();self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None
+        self.policy=Mock();self.policy.profile=SESSION;self.policy.can_read_kommo_chat.return_value=True;self.policy.action_scope.return_value=None
         self.module=loaders.load('tenant_chat_attachment_store',{'_connect':self.connect,'_read_tenant_workflow':Mock(return_value={}),
             '_fernet':Mock(),'TenantPolicy':lambda _:self.policy},{'tenant_platform','tenant_policy'})
-        self.cur.fetchone.side_effect=[{**SESSION,'active':True,'tenant_status':'active'}, {'tenant_id':TENANT},ROW,ITEM['connection']]
+        self.cur.fetchone.side_effect=[{**SESSION,'active':True,'tenant_status':'active'}, {'tenant_id':TENANT},ROW,None,ITEM['connection']]
 
     def test_resource_queries_have_company_and_message_identity(self):
         self.assertEqual(self.module.load(SESSION,7,'msg'),ITEM)
@@ -95,7 +95,7 @@ class Storage(unittest.TestCase):
         self.assertTrue(all('tenant_id=%s::uuid' in call.args[0] for call in calls))
 
     def test_revocation_blocks_before_message_or_connection(self):
-        self.policy.can_access_deal.return_value=False
+        self.policy.can_read_kommo_chat.return_value=False
         with self.assertRaises(TenantLinearError):self.module.load(SESSION,7,'msg')
         self.assertEqual(self.cur.execute.call_count,2)
 

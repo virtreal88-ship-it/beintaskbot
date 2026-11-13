@@ -91,6 +91,9 @@ def test_legacy_chat_fallback_cannot_use_customers_grant(monkeypatch):
     from tenant_chat_api import ChatApiContext, handlers as chat_handlers
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     p=profile();get=Mock();messages=Mock();sync=AsyncMock()
+    # A customers grant alone is not a Kommo assignment. Assigned-pipeline
+    # history is covered separately and intentionally ignores native scopes.
+    p['workflow']['policies']['members']['20']['pipeline_ids']=[]
     c=ChatApiContext(member=Mock(return_value=p),policy=TenantPolicy,get_deal=get,
         list_messages=messages,sync_chat=sync,platform_error=PlatformError,logger=Mock())
     response=asyncio.run(chat_handlers(c)['chat'](Request({'lead_id':'7','refresh':'1'})))

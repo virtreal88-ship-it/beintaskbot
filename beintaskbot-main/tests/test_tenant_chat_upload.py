@@ -89,9 +89,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.mark=Mock(return_value=({},{}))
         self.mod=load('tenant_chat_upload_service',{'dispatch_guarded':lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs),'reserve':self.reserve,'upload_credentials':Mock(return_value={'access_token':'key'}),
             'mark_sending':self.mark,'finish':self.finish,'resolve_route':self.route,'upload':self.upload,'send':self.send,
-            'TenantPolicy':lambda _:SimpleNamespace(action_scope=lambda *args:None,can_access_deal=lambda deal:deal['pipeline_id']==10)},
+            'TenantPolicy':lambda _:SimpleNamespace(action_scope=lambda *args:None,can_read_kommo_chat=lambda deal:deal['pipeline_id']==10)},
             {'tenant_chat_send_store','tenant_chat_send_policy','tenant_chat_upload_provider','tenant_chat_send_provider','tenant_policy'})
-        self.provider=AsyncMock(side_effect=[{'drive_url':'https://drive-g.kommo.com'},{'id':7,'pipeline_id':10}])
+        self.provider=AsyncMock(side_effect=[{'drive_url':'https://drive-g.kommo.com'},{'id':7,'pipeline_id':10},{'id':7,'pipeline_id':10}])
 
     async def invoke(self):
         return await self.mod.run({},self.command,BODY,self.provider,Mock(),Mock())
@@ -108,7 +108,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.finish.assert_called_once_with(self.item,'accepted','message')
 
     async def test_changed_deal_blocks_message_after_upload(self):
-        self.provider.side_effect=[{'drive_url':'drive'},{'id':7,'pipeline_id':11}]
+        self.provider.side_effect=[{'drive_url':'drive'},{'id':7,'pipeline_id':10},{'id':7,'pipeline_id':11}]
         with self.assertRaises(TenantLinearError):await self.invoke()
         self.send.assert_not_called();self.finish.assert_called_once_with(self.item,'blocked')
 

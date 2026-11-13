@@ -21,13 +21,15 @@ async def run(session, command, content, request, wait_slot, logger):
         async with asyncio.timeout(45):
             await resolve_route(tenant, command['lead_id'], request)
             account = await request(tenant, 'GET', 'account', params={'with': 'drive_url'})
-        credentials = await asyncio.to_thread(upload_credentials, item)
-        attachment = await asyncio.to_thread(upload, account.get('drive_url'), credentials['access_token'], command['file'], content)
+            before_upload = await request(tenant, 'GET', f"leads/{command['lead_id']}")
+        credentials = await asyncio.to_thread(upload_credentials, item, before_upload)
+        attachment = await asyncio.to_thread(dispatch_guarded, item, credentials,
+            lambda current: upload(account.get('drive_url'), current['access_token'], command['file'], content))
         async with asyncio.timeout(45):
             route = await resolve_route(tenant, command['lead_id'], request)
             live = await request(tenant, 'GET', f"leads/{command['lead_id']}")
         profile, credentials = await asyncio.to_thread(mark_sending, item, {**route, 'attachment': attachment})
-        if int(live.get('id') or 0) != command['lead_id'] or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({**live,'tenant_id':tenant})):
+        if int(live.get('id') or 0) != command['lead_id'] or not TenantPolicy(profile).can_read_kommo_chat({**live,'tenant_id':tenant}):
             raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
         started = True
         message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, command['text'], wait_slot, attachment=attachment)
