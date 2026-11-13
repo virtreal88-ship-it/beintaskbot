@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'beintaskbot-main/tenant_connect_api.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tests/test_connect_group_echo_facts.py'
+      - 'beintaskbot-main/tests/test_connect_group_history.py'
       - 'beintaskbot-main/tests/test_connect_webhook_executor.py'
       - '.github/workflows/connect-webhook-isolation.yml'
   push:
@@ -46,3 +49,5 @@ jobs:
           tests/test_tenant_ai_agents_api_diagnostics.py
           tests/test_connect_channel_isolation.py::test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread
           tests/test_connect_group_history.py::test_read_snapshot_selects_the_captured_copy_on_the_open_channel
+          tests/test_connect_group_echo_facts.py
+          tests/test_connect_group_history.py::test_signed_echo_enriches_local_send_for_group_dedup
