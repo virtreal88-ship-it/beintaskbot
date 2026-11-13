@@ -128,7 +128,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(payload["password"], "operator-password")
         self.assertRegex(payload["uniqDeviceId"], r"^device_[0-9a-f]{39}$")
         self.assertEqual(fake.request.get_header("Origin"), "https://auth.beinsystems.az")
-        self.assertEqual(fake.request.get_header("Referer"), "https://auth.beinsystems.az/")
+        self.assertEqual(fake.request.get_header("Referer"),
+                         "https://auth.beinsystems.az/?redirect_uri=https%3A%2F%2Foperator.beinsystems.az%2F")
         self.assertIsNone(fake.request.get_header("Authorization"))
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
 

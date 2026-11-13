@@ -12,6 +12,7 @@ import re
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlencode
 
 from cryptography.fernet import InvalidToken
 
@@ -27,6 +28,9 @@ MAX_RESPONSE_BYTES = 1_000_000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
 AUTH_API_BASE_URL = "https://auth-api.beinsystems.az"
+AUTH_LOGIN_PAGE_URL = "https://auth.beinsystems.az/?" + urlencode({
+    "redirect_uri": "https://operator.beinsystems.az/",
+})
 READ_ENDPOINTS = {
     "me": ("/user/me", set()),
     "accounts": ("/user/accounts", {"search"}),
@@ -187,9 +191,9 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
         method="POST",
         headers={
             "Content-Type": "application/json", "Accept": "application/json",
-            # Match the same-origin browser request made by Bein ID.
+            # Keep the Operator module's redirect context from the Bein ID page.
             "Origin": "https://auth.beinsystems.az",
-            "Referer": "https://auth.beinsystems.az/",
+            "Referer": AUTH_LOGIN_PAGE_URL,
         },
     )
     transport = opener or build_opener(_NoRedirect())
