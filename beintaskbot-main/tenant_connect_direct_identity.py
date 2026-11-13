@@ -52,7 +52,10 @@ def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     verified = (complete and phone_jid(jid) and lid.endswith('@lid')
                 and (current == lid or phone_jid(current) == phone_jid(jid)))
     if complete and not verified:
-        conflict = True
+        # The pair contradicts this event's own route, so it cannot add any
+        # aliases. Keep the established route and report the conflict before
+        # taking locks or consulting persisted identities.
+        return conversation, True
     aliases = _aliases(current)
     if verified and not conflict:
         aliases |= _aliases(jid) | {lid}
