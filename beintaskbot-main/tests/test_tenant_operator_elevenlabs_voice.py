@@ -11,7 +11,7 @@ from aiohttp import web
 from tenant_operator_elevenlabs_voice import (ElevenTTDStream,VOICE_ID,_credential_valid,
                                               _TTDProviderError,_log_tts_failure)
 from tenant_operator_realtime_wire import (SyntheticHybridRealtimeWire,AiohttpRealtimeSocket,
-                                            _connect_websocket,_new_owned_session)
+                                            SafeRealtimeFailure,_connect_websocket,_new_owned_session)
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_voice_session import Session
 from tenant_operator_voice_pilot import PilotAdmission
@@ -151,6 +151,28 @@ class TTDStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(socket.closed)
         self.assertTrue(stream.final_before_close_send_return)
         self.assertTrue(any(event.get('close_socket') for event in socket.sent))
+
+    async def test_documented_final_frame_confirms_close_without_peer_close_code(self):
+        class FinalAckSocket(TTDSocket):
+            def __init__(self):
+                super().__init__()
+                self.owned_session=type('OwnedSession',(),{'closed':False})()
+            async def close(self):
+                self.closed=True;self.owned_session.closed=True
+                raise SafeRealtimeFailure('websocket_close_unconfirmed',close_code='none',
+                                          transport_kind='unknown')
+        guard=Guard();socket=FinalAckSocket();events=asyncio.Queue()
+        async def connector(*_):return socket
+        stream=ElevenTTDStream(guard,object(),1,lambda _epoch:True,events.put,connector=connector).start()
+        stream.feed('Synthetic final close acknowledgment.')
+        stream.finish_input()
+        self.assertEqual((await asyncio.wait_for(events.get(),2))[:2],('audio',1))
+        self.assertEqual(await asyncio.wait_for(events.get(),2),('done',1,None))
+        await stream.wait_closed()
+        self.assertTrue(stream._provider_final_received)
+        self.assertTrue(stream._provider_final_close_confirmed)
+        self.assertFalse(stream._transport_close_confirmed)
+        self.assertFalse(stream.close_unconfirmed)
 
     async def test_streams_russian_and_azerbaijani_and_logs_only_aggregates(self):
         for phrase in ('Привет, как дела?', 'Salam, məni eşidirsən?'):

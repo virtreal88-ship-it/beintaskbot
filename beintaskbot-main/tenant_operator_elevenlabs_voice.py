@@ -147,7 +147,7 @@ class ElevenTTDStream:
         self.first_text_at=None;self.first_pcm_at=None
         self._text_submitted=asyncio.Event();self._pending_receive=None
         self._shutdown_close_requested=False;self._provider_final_received=False
-        self._transport_close_confirmed=False
+        self._transport_close_confirmed=False;self._provider_final_close_confirmed=False
 
     def start(self):
         if self.task is not None:raise ValueError('tts_started')
@@ -391,9 +391,24 @@ class ElevenTTDStream:
                     self._transport_close_confirmed=True
                 except BaseException as close_error:
                     from tenant_operator_realtime_wire import SafeRealtimeFailure
-                    diagnostic=close_error if isinstance(close_error,SafeRealtimeFailure) else ValueError('tts_close_unconfirmed')
-                    _log_tts_failure('close',diagnostic,self.epoch)
-                    failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
+                    owned_session=getattr(self.socket,'owned_session',None)
+                    # TTD's documented is_final frame acknowledges that
+                    # close_socket flushed its remaining audio and closed the
+                    # provider connection. Aiohttp can still lack the peer's
+                    # WebSocket close code after that terminal frame. Accept
+                    # that narrow case only after the owned client session is
+                    # closed; cancellation without is_final remains fail-closed.
+                    final_acknowledged_close=(
+                        self._provider_final_received and
+                        isinstance(close_error,SafeRealtimeFailure) and
+                        close_error.diagnostic_code=='websocket_close_unconfirmed' and
+                        getattr(owned_session,'closed',False) is True)
+                    if final_acknowledged_close:
+                        self._provider_final_close_confirmed=True
+                    else:
+                        diagnostic=close_error if isinstance(close_error,SafeRealtimeFailure) else ValueError('tts_close_unconfirmed')
+                        _log_tts_failure('close',diagnostic,self.epoch)
+                        failure='tts_close_unconfirmed';result='error';self.close_unconfirmed=True
             if reader is not None:
                 if not reader.done():reader.cancel()
                 await asyncio.gather(reader,return_exceptions=True)
@@ -408,8 +423,11 @@ class ElevenTTDStream:
                       if self.first_pcm_at is not None and self.first_text_at is not None else -1)
             _LOG.info('realtime_tts_activity provider=elevenlabs_ali attempted_chars=%d pcm_bytes=%d '
                       'stream_epoch=%d pcm_chunks=%d empty_audio_frames=%d odd_audio_frames=%d '
-                      'first_text_to_pcm_ms=%d final_before_close_send_return=%s',
+                      'first_text_to_pcm_ms=%d final_before_close_send_return=%s provider_final_received=%s '
+                      'provider_final_close_confirmed=%s transport_close_confirmed=%s',
                       min(self.attempted_chars,MAX_RESPONSE_CHARS),min(self.audio_bytes,MAX_AUDIO_BYTES),self.epoch,
                       min(self.pcm_chunks,10**9),min(self.empty_audio_frames,10**6),
-                      min(self.odd_audio_frames,10**6),first_ms,self.final_before_close_send_return)
+                      min(self.odd_audio_frames,10**6),first_ms,self.final_before_close_send_return,
+                      self._provider_final_received,self._provider_final_close_confirmed,
+                      self._transport_close_confirmed)
             await self.emit((result,self.epoch,failure))
