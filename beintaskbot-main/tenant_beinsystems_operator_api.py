@@ -83,7 +83,10 @@ def integration_handler(member: Callable, origin: str, logger):
                 return _json_response({"integration": await asyncio.to_thread(operator.status, profile)})
             data = await _body(request, profile, origin)
             action = str(data.get("action") or "").strip().lower()
-            if action == "connect" and set(data) == {"action", "token"}:
+            if action == "login" and set(data) == {"action", "login", "password"}:
+                value = await asyncio.to_thread(
+                    operator.connect_with_password, profile, data["login"], data["password"])
+            elif action == "connect" and set(data) == {"action", "token"}:
                 value = await asyncio.to_thread(operator.save_token, profile, data["token"])
             elif action == "test" and set(data) == {"action"}:
                 value = await asyncio.to_thread(operator.verify_connection, profile)

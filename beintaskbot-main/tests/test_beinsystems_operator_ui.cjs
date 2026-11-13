@@ -39,16 +39,18 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(password.type,'password');
   login.value='operator-login';
   password.value='operator-password';
-  panel.querySelector('[data-token]').value='sso-jwt';
   const save=panel.querySelector('[data-save]');
   await save.onclick({currentTarget:save});
   const posted=JSON.parse(requests.at(-1).options.body);
   assert.deepEqual(posted,{
-    action:'connect',token:'sso-jwt',
+    action:'login',login:'operator-login',password:'operator-password',
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
   });
-  assert(!JSON.stringify(requests).includes('operator-password'));
-  assert(panel.textContent.includes('Эти поля не отправляются и не сохраняются'));
+  assert.equal(password.value,'','password input is cleared immediately after submission');
+  assert.equal(requests.filter(row=>String(row.options.body||'').includes('operator-password')).length,1,
+    'credentials are sent only to the authenticated same-origin login endpoint');
+  assert(!panel.querySelector('[data-token]'),'the SSO token is obtained by the server instead of pasted manually');
+  assert(panel.textContent.includes('Пароль используется только для получения токена и не сохраняется'));
   await new Promise(resolve=>setTimeout(resolve,0));
   const memberSelect=panel.querySelector('[data-employee-member]');
   assert.equal(memberSelect.options.length,2);
@@ -68,7 +70,6 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
   });
   assert(panel.textContent.includes('staff-account/operator.login'));
-  assert(!JSON.stringify(requests).includes('operator-password'));
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);
@@ -76,5 +77,5 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(readOnlyPanel.querySelector('[data-link-controls]').hidden,true);
   assert.equal(readOnlyPanel.querySelector('[data-operator-password]'),null);
   window.close();
-  console.log('PASS: Operator login/password fields are present and never submitted without an auth contract');
+  console.log('PASS: Operator login/password fields connect through SSO and clear the password input');
 })().catch(error=>{window.close();console.error(error);process.exitCode=1;});
