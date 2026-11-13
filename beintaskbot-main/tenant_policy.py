@@ -324,14 +324,16 @@ class TenantPolicy:
             modules['support'] = support_view != 'none' if support_view is not None else self.legacy_allows('support')
         from tenant_employee_policy import employee_action_allowed
         from tenant_scoped_access import scoped_access_enabled
+        pages = page_capabilities(self.profile)
         capabilities = {'can_create_employees': employee_action_allowed(self.profile, 'create'),
                 'employee_creation_scoped': scoped_access_enabled(),
                 'can_view_employees': employee_action_allowed(self.profile, 'view'),
                 'can_update_employees': employee_action_allowed(self.profile, 'update'),
                 'modules': modules,
-                'pages': page_capabilities(self.profile),
+                'pages': pages,
                 'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
+                'kommo_deals': self.kommo_access() and pages['deals'],
                 'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),

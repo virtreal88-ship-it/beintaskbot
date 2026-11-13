@@ -272,3 +272,34 @@ def test_member_page_visibility_never_grants_other_company_deal_access():
     person['workflow']['policies']['members']['20']['page_visibility'] = {'deals': True}
     policy = TenantPolicy(person)
     assert not policy.can_access_deal({'tenant_id': 'company-b', 'pipeline_id': 10, 'status_id': 100})
+
+
+def test_kommo_pipeline_grant_survives_native_deal_denial(monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    person = profile(permissions=[], modules={})
+    person['workflow']['pipelines'] = [{'pipeline_id': '10', 'active': True},
+                                       {'pipeline_id': '11', 'active': True}]
+    settings = person['workflow']['policies']['members']['20']
+    settings.update(pipeline_ids=['10'], access_scopes={'deals': {
+        action: 'none' for action in ('view', 'create', 'update', 'delete')}})
+    caps = TenantPolicy(person).public_capabilities()
+    assert caps['kommo_deals'] is True
+    assert caps['pages']['deals'] is True
+    assert caps['modules']['deals'] is False
+    assert not any(caps['actions']['deals'].values())
+    assert caps['kommo_pipeline_scope'] == [{'pipeline_id': 10, 'status_ids': []}]
+    assert not TenantPolicy(person).can_access_kommo_deal(
+        {'tenant_id': 'company-a', 'pipeline_id': 11})
+    settings['pipeline_ids'] = []
+    caps = TenantPolicy(person).public_capabilities()
+    assert caps['kommo_deals'] is False
+    assert caps['pages']['deals'] is False
+
+
+def test_unassigned_admin_default_deny_does_not_bootstrap_kommo(monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    person = profile(role='admin', permissions=[], modules={})
+    person['workflow']['policies']['employee_access_defaults'] = {'deny_unset': True}
+    caps = TenantPolicy(person).public_capabilities()
+    assert caps['pages']['deals'] is False
+    assert caps['kommo_deals'] is False
