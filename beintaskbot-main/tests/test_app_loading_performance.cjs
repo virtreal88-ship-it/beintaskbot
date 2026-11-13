@@ -8,11 +8,12 @@ const profile={success:true,member:{tenant_id:'00000000-0000-0000-0000-000000000
 const response=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
 class CustomEvent extends Event{constructor(type,options={}){super(type);this.detail=options.detail;}}
 function coordinator(){
- const requests=[],document=new EventTarget(),window=new EventTarget();let clock=1000,reloads=0;
+ const requests=[],document=new EventTarget(),window=new EventTarget();let clock=1000,reloads=0,authInvalidations=0;
+ document.addEventListener('tenant-auth-invalid',()=>authInvalidations++);
  const location={href:'https://fixture.test/app',origin:'https://fixture.test',reload:()=>reloads++};
  window.fetch=(url,options)=>{const task=deferred();requests.push({url:String(url),options,...task});return task.promise;};
  vm.runInNewContext(read('docs/tenant-request-coordinator.js'),{window,document,location,URL,Headers,CustomEvent,Date:{now:()=>clock}});
- return {window,document,requests,advance:ms=>clock+=ms,reloads:()=>reloads,emit:data=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:data}))};
+ return {window,document,requests,advance:ms=>clock+=ms,reloads:()=>reloads,authInvalidations:()=>authInvalidations,emit:data=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:data}))};
 }
 async function requestTests(){
  const c=coordinator(),f=(...args)=>c.window.fetch(...args);
@@ -25,10 +26,13 @@ async function requestTests(){
  c.requests.at(-1).resolve(response({success:true,result:{dialogs:[]}}));await Promise.all([first,same]);
  const again=f('/api/platform/ai/dialogs?search=a');assert.equal(c.requests.length,4,'dialog responses are never cached by fetch');c.requests.at(-1).resolve(response({},500));await again;
  const retry=f('/api/platform/ai/dialogs?search=a');assert.equal(c.requests.length,5);c.requests.at(-1).resolve(response({}));await retry;
+ const operatorLogin=f('/api/platform/integrations/beinsystems-operator',{method:'POST',body:'{}'});
+ c.requests.at(-1).resolve(new Response(JSON.stringify({success:false,error:'Operator rejected the credentials'}),{status:401,headers:{'Content-Type':'application/json','X-Tenant-Auth-Source':'operator'}}));
+ assert.equal((await operatorLogin).status,401);assert.equal(c.authInvalidations(),0,'Operator SSO rejection must not invalidate the Beintaskbot session');
  const old=f('/api/platform/ai/dialogs?search=old');const oldCheck=assert.rejects(old,/scope changed/);c.emit({...profile,member:{...profile.member,permissions:[]}});c.requests.at(-1).resolve(response({}));await oldCheck;
  const slow=f('/api/platform/ai/dialogs/history?lead_id=1');const mutation=f('/api/platform/ai/dialogs/read',{method:'POST',body:'{}'});
  c.requests.at(-1).resolve(response({success:true}));await mutation;c.requests.at(-2).resolve(response({success:true}));await (await slow).json();
- const denied=f('/api/platform/me');const deniedCheck=assert.rejects(denied,/scope changed/);c.requests.at(-1).resolve(response({},401));await deniedCheck;
+ const denied=f('/api/platform/me');const deniedCheck=assert.rejects(denied,/scope changed/);c.requests.at(-1).resolve(response({},401));await deniedCheck;assert.equal(c.authInvalidations(),1,'Beintaskbot authentication failures still invalidate the session');
  const reauth=f('/api/platform/me');c.requests.at(-1).resolve(response(profile));await reauth;
  const afterHeaders=f('/api/platform/ai/dialogs/history?lead_id=2');
  let bodyResolve;const stream=new ReadableStream({start(controller){bodyResolve=()=>{controller.enqueue(new TextEncoder().encode('{"success":true}'));controller.close();};}});

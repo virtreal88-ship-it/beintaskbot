@@ -96,9 +96,15 @@ def integration_handler(member: Callable, origin: str, logger):
                 raise operator.OperatorError("Операция Operator некорректна.")
             return _json_response({"integration": value})
         except operator.OperatorError as error:
+            headers = {"Cache-Control": "no-store"}
+            if error.status == 401:
+                # The auth failure came from Operator's SSO/API, not from the
+                # Beintaskbot session. The shared browser coordinator uses this
+                # marker to keep the current workspace and settings panel alive.
+                headers["X-Tenant-Auth-Source"] = "operator"
             return web.json_response({"success": False, "error": str(error)},
                                      status=error.status,
-                                     headers={"Cache-Control": "no-store"})
+                                     headers=headers)
         except Exception:
             logger.exception("Operator integration settings failed")
             return web.json_response({"success": False, "error": "Не удалось обновить подключение Operator."},

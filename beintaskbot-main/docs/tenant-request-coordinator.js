@@ -22,6 +22,10 @@
   }
   let revalidation=null;
   function pendingAuth(){document.dispatchEvent(new CustomEvent('tenant-auth-pending'));}
+  function isTenantAuthFailure(response,url){
+    return (response.status===401&&response.headers?.get('X-Tenant-Auth-Source')!=='operator')||
+      (url.pathname==='/api/platform/me'&&response.status===403);
+  }
   function revalidateProfile(){
     if(revalidation)return revalidation;
     pendingAuth();reset();
@@ -40,13 +44,13 @@
     const url=new URL(typeof input==='string'?input:input?.url||String(input),location.href);
     const method=String(options.method||input?.method||'GET').toUpperCase();
     if(url.origin!==location.origin||!url.pathname.startsWith('/api/platform/'))return nativeFetch(input,options);
-    if(method!=='GET'){if(['/api/platform/logout','/api/platform/workspace/switch'].includes(url.pathname))invalidateAuth();else clearReads();return nativeFetch(input,options).then(response=>{clearReads();if(response.status===401||(url.pathname==='/api/platform/me'&&response.status===403))invalidateAuth();return response;});}
+    if(method!=='GET'){if(['/api/platform/logout','/api/platform/workspace/switch'].includes(url.pathname))invalidateAuth();else clearReads();return nativeFetch(input,options).then(response=>{clearReads();if(isTenantAuthFailure(response,url))invalidateAuth();return response;});}
     // Requests with cancellation or custom authorization cannot share another caller's lifetime.
     const headers=new Headers(options.headers||input?.headers||{});
     if(headers.get('content-type')==='application/json')headers.delete('content-type');
     const share=typeof input==='string'&&!options.signal&&!headers.has('authorization')&&options.credentials!=='omit'&&(
       url.pathname==='/api/platform/me'||/^\/api\/platform\/ai\/(dialogs|agents)(\/|$)/.test(url.pathname)||/^\/api\/platform\/crm\/native\/(tasks|deals|contacts|companies)$/.test(url.pathname));
-    if(!share)return nativeFetch(input,options).then(response=>{if(response.status===401||(url.pathname==='/api/platform/me'&&response.status===403))invalidateAuth();return response;});
+    if(!share)return nativeFetch(input,options).then(response=>{if(isTenantAuthFailure(response,url))invalidateAuth();return response;});
     const isProfile=url.pathname==='/api/platform/me',key=JSON.stringify([url.href,options.credentials||'same-origin',[...headers.entries()].sort(),options.mode||'cors',options.redirect||'follow',options.integrity||'',options.referrer||'',options.referrerPolicy||'']);
     if(isProfile&&profileResponse&&profileKey===key&&Date.now()<profileUntil)return Promise.resolve(scopedResponse(profileResponse.clone(),generation));
     let request=pending.get(key);
@@ -54,7 +58,7 @@
       const version=generation;
       request=nativeFetch(input,{...options,cache:'no-store'}).then(async response=>{
         if(version!==generation)throw new Error('Request scope changed');
-        if(response.status===401||(url.pathname==='/api/platform/me'&&response.status===403)){invalidateAuth();return response;}
+        if(isTenantAuthFailure(response,url)){invalidateAuth();return response;}
         // Only the short bootstrap burst reuses a completed profile; later visits reauthorize.
         if(isProfile&&response.ok){
           const data=await response.clone().json().catch(()=>null);

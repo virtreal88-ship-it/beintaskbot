@@ -1,8 +1,10 @@
 import json
+import asyncio
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import tenant_beinsystems_operator as operator
+import tenant_beinsystems_operator_api as operator_api
 import tenant_beinsystems_operator_access as access
 import tenant_beinsystems_operator_ai_tools as ai_tools
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
@@ -48,6 +50,21 @@ class FakeCursor:
 
 
 class BeinSystemsOperatorTests(unittest.TestCase):
+    def test_operator_login_401_is_marked_as_provider_auth_failure(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(lambda _request: profile, "https://crm.example", MagicMock())
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                 "action": "login", "login": "operator", "password": "bad-password",
+             })), \
+             patch.object(operator, "connect_with_password", side_effect=operator.OperatorError(
+                 "Operator не принял логин и пароль.", 401)):
+            response = asyncio.run(handler(request))
+        self.assertEqual(response.status, 401)
+        self.assertEqual(response.headers["X-Tenant-Auth-Source"], "operator")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     def test_public_connection_status_does_not_expose_link_generation_or_credentials(self):
         with patch.dict("os.environ", {access.API_BASE_URL_ENV: "https://operator.example/api"}):
             result = operator._public({"status": "connected", "secrets": b"secret",
