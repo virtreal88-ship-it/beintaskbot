@@ -21,7 +21,7 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else result=options.method==='POST'
-    ?{success:true,integration:{status:'configured',api_ready:true}}
+    ?{success:true,integration:{status:JSON.parse(options.body).action==='login'?'connected':'configured',api_ready:true}}
     :{success:true,integration:{status:'not_connected',api_ready:true}};
   return {ok:true,json:async()=>result};
 };
@@ -37,6 +37,14 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const password=panel.querySelector('[data-operator-password]');
   assert.equal(login.type,'text');
   assert.equal(password.type,'password');
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const memberSelect=panel.querySelector('[data-employee-member]');
+  assert.equal(memberSelect.options.length,2);
+  const confirmEmployee=panel.querySelector('[data-confirm-employee]');
+  await confirmEmployee.onclick({currentTarget:confirmEmployee});
+  assert(panel.textContent.includes('Сначала подключите Operator'));
+  assert.equal(requests.filter(row=>row.path==='/api/platform/operator/employee-links'&&row.options.method==='POST').length,0,
+    'employee mapping is blocked until the Operator connection is verified');
   login.value='operator-login';
   password.value='operator-password';
   const save=panel.querySelector('[data-save]');
@@ -51,18 +59,18 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     'credentials are sent only to the authenticated same-origin login endpoint');
   assert(!panel.querySelector('[data-token]'),'the SSO token is obtained by the server instead of pasted manually');
   assert(panel.textContent.includes('Пароль используется только для получения токена и не сохраняется'));
-  await new Promise(resolve=>setTimeout(resolve,0));
-  const memberSelect=panel.querySelector('[data-employee-member]');
-  assert.equal(memberSelect.options.length,2);
+  await confirmEmployee.onclick({currentTarget:confirmEmployee});
+  assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
   memberSelect.value='42';
   panel.querySelector('[data-employee-account]').value='staff-account';
   panel.querySelector('[data-employee-evidence]').value='Owner matched staff account';
   const loadUsers=panel.querySelector('[data-load-employee-users]');
+  await confirmEmployee.onclick({currentTarget:confirmEmployee});
+  assert(panel.textContent.includes('Выберите пользователя Operator'));
   await loadUsers.onclick({currentTarget:loadUsers});
   const userSelect=panel.querySelector('[data-employee-user]');
   assert.equal(userSelect.options.length,2);
   userSelect.value='operator.login';
-  const confirmEmployee=panel.querySelector('[data-confirm-employee]');
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
   const employeePost=requests.filter(row=>row.path==='/api/platform/operator/employee-links'&&row.options.method==='POST').at(-1);
   assert.deepEqual(JSON.parse(employeePost.options.body),{
