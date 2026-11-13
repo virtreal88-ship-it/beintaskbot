@@ -294,3 +294,12 @@ def test_kommo_pipeline_grant_survives_native_deal_denial(monkeypatch):
     caps = TenantPolicy(person).public_capabilities()
     assert caps['kommo_deals'] is False
     assert caps['pages']['deals'] is False
+
+
+def test_unassigned_admin_default_deny_does_not_bootstrap_kommo(monkeypatch):
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    person = profile(role='admin', permissions=[], modules={})
+    person['workflow']['policies']['employee_access_defaults'] = {'deny_unset': True}
+    caps = TenantPolicy(person).public_capabilities()
+    assert caps['pages']['deals'] is False
+    assert caps['kommo_deals'] is False

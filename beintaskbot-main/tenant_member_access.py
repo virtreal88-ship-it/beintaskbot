@@ -76,7 +76,8 @@ def page_capabilities(profile):
                 (('view','create','update') if module=='support' else CRUD_ACTIONS))
             if page == 'deals':
                 # Native scopes do not revoke a separately assigned Kommo pipeline.
-                pages[page] = pages[page] or policy.kommo_access()
+                pages[page] = pages[page] or (policy.kommo_access() and bool(
+                    policy.member_settings.get('pipeline_ids') or policy.kommo_user_id()))
             if page == 'tasks':
                 # The assigned-task exception needs an entry point even when
                 # every generic task scope is none. The API limits that feed
