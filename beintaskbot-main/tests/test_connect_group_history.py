@@ -228,3 +228,30 @@ def test_group_context_retains_safe_staff_and_ai_provenance(history_db,monkeypat
     lines,_=context_lines(ctx,own)
     assert [line['speaker'] for line in lines]==['EMPLOYEE','ASSISTANT','CLIENT']
     assert [line['provenance']['statement_origin'] for line in lines]==['employee_statement_unverified','prior_ai_statement_unverified','customer_statement']
+
+@pytest.mark.parametrize('echo_first',[True,False])
+def test_signed_echo_enriches_local_send_for_group_dedup(history_db,monkeypatch,echo_first):
+    import tenant_connect_transport as transport
+    d=history_db
+    monkeypatch.setattr(transport,'_verify_signature',lambda *args:True)
+    mid=str(uuid.uuid4())
+    raw={'source':'connect','status':'pending','verified_employee_id':11}
+    d.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at,raw)
+      VALUES(%s::uuid,%s::uuid,1001,%s,%s,'outgoing','Owner','same','text',NOW(),%s::jsonb)''',
+      (str(uuid.uuid4()),A,'connect:'+mid,'connect:'+CA,json.dumps(raw)));d.commit()
+    event={'id':str(uuid.uuid4()),'type':'message.outbound.observed','data':{'id':mid,'channelId':CA,'conversationId':G,'externalMessageId':'SHARED123','participantJid':'994500000001@s.whatsapp.net','fromMe':True,'source':'connect','status':'sent','type':'text','text':'same'}}
+    def echo():
+        assert transport.ingest(json.dumps(event).encode(),'test',event)
+    if echo_first:echo()
+    add(d,1,CB,event='SHARED123')
+    if not echo_first:echo()
+    echo()
+    values=dialogs.history(PROFILE,'connect',1001,CA,G)['messages']
+    assert len(values)==1 and values[0]['direction']=='outgoing'
+    assert len(values[0]['sources'])==2
+    saved=d.execute('SELECT raw,author_name FROM saas_crm_messages WHERE external_id=%s',('connect:'+mid,))[0]
+    assert saved['author_name']=='Owner' and saved['raw']['verified_employee_id']==11
+    assert saved['raw']['status']=='sent'
+    with d.cursor() as cur:
+        scoped=page(cur,A,G,channel_ids=[CB])
+    assert len(scoped)==1 and scoped[0]['direction']=='incoming'

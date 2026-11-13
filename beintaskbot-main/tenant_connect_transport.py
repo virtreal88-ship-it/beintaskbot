@@ -39,6 +39,32 @@ class ConnectWebhookError(TenantPlatformError):
         self.status = status
 
 
+def _group_echo_facts(data, stored, channel, conversation):
+    """Enrich only an exact, signed provider receipt; never guess identities."""
+    if not conversation.endswith('@g.us') or data.get('_crm_signed_outbound_receipt') is not True or data.get('fromMe') is False:
+        return {}
+    provider=data.get('externalMessageId')
+    if not isinstance(provider,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider):
+        return {}
+    facts={'channelId':channel,'conversationId':conversation,'externalMessageId':provider}
+    participant=data.get('participantJid')
+    if isinstance(participant,str) and re.fullmatch(r'[0-9]{5,22}@(s[.]whatsapp[.]net|lid)',participant):
+        facts['participantJid']=participant
+        pair=data.get('participantIdentity')
+        if isinstance(pair,dict) and re.fullmatch(r'[0-9]{5,22}@lid',str(pair.get('lid',''))) and re.fullmatch(r'[0-9]{5,22}@s[.]whatsapp[.]net',str(pair.get('jid',''))) and participant in (pair['lid'],pair['jid']):
+            facts['participantIdentity']={'lid':pair['lid'],'jid':pair['jid']}
+    previous=stored.get('raw') or {}
+    if (data.get('channelId') != channel or data.get('conversationId') != conversation or
+            (stored.get('message_type') and data.get('type') and stored['message_type'] != data['type']) or
+            any(previous.get(k) not in (None,'',v) for k,v in facts.items())):
+        raise ConnectWebhookError('message_receipt_conflict','Connect receipt identity mismatch.',409)
+    ranks={'pending':0,'sent':1,'delivered':2,'read':3}
+    status=data.get('status')
+    if status in ('sent','delivered','read') and ranks.get(status,0)>ranks.get(previous.get('status'),0):
+        facts['status']=status
+    return facts
+
+
 class ConnectPreflightError(TenantPlatformError):
     """Known refusal returned before a customer voice provider submission."""
     def __init__(self, code: str):
@@ -984,12 +1010,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,%s,'',%s::timestamptz,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO NOTHING
-                  RETURNING id,author_name,raw,kommo_lead_id,channel''',
+                  RETURNING id,author_name,raw,kommo_lead_id,channel,message_type''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
                 message_inserted = stored is not None
                 if not message_inserted:
-                    cur.execute('''SELECT id,author_name,raw,kommo_lead_id,channel FROM saas_crm_messages
+                    cur.execute('''SELECT id,author_name,raw,kommo_lead_id,channel,message_type FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND external_id=%s''', (tenant,external))
                     stored = cur.fetchone()
                 from tenant_connect_dialog_equivalence import lead_members
@@ -1002,6 +1028,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 if stored and not message_inserted:
                     facts={key:data[key] for key in ('externalMessageId','quotedExternalMessageId','id','originClientMessageId','clientMessageId')
                            if isinstance(data.get(key),str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',data[key])}
+                    facts.update(_group_echo_facts(data,stored,channel_id,conversation))
                     if facts:
                         facts['_crm_signed_outbound_receipt']=data.get('_crm_signed_outbound_receipt') is True
                         if data.get('_crm_signed_outbound_receipt') is True:
