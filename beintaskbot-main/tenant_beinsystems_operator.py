@@ -163,6 +163,7 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
     authentication response bodies are never logged or stored.
     """
     username = str(login or "").strip()
+    original_username = username
     secret = str(password or "")
     if (not username or len(username) > 240
             or any(ord(char) < 32 for char in username)
@@ -198,7 +199,12 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
             raw = response.read(MAX_AUTH_RESPONSE_BYTES + 1)
     except HTTPError as exc:
         if exc.code in (400, 401, 403):
-            raise OperatorError("Operator не принял логин и пароль.", 401) from None
+            detail = _auth_error_detail(
+                _read_auth_error(exc), original_username, username, secret)
+            message = f"Operator отклонил вход (HTTP {exc.code})."
+            if detail:
+                message += f" Ответ Operator: {detail}"
+            raise OperatorError(message, 401) from None
         if exc.code == 429:
             raise OperatorError("Operator ограничил попытки входа. Повторите позже.", 429) from None
         raise OperatorError("Сервис авторизации Operator временно недоступен.", 503) from None
@@ -215,8 +221,42 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
     if (not isinstance(result, dict) or result.get("success") is not True
             or not isinstance(token, str) or not token.strip()
             or len(token) > 8192 or any(ord(char) < 32 for char in token)):
-        raise OperatorError("Operator не выдал токен. Проверьте логин и пароль.", 401)
+        detail = _auth_error_detail(result, original_username, username, secret)
+        message = "Operator не выдал токен. Проверьте логин и пароль."
+        if detail:
+            message += f" Ответ Operator: {detail}"
+        raise OperatorError(message, 401)
     return token.strip()
+
+
+def _read_auth_error(error):
+    """Read a bounded provider error body in memory; never log or persist it."""
+    try:
+        raw = error.read(MAX_AUTH_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_AUTH_RESPONSE_BYTES:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _auth_error_detail(payload, *secrets):
+    """Expose only the provider's short message/error, with submitted secrets removed."""
+    if not isinstance(payload, dict):
+        return ""
+    detail = next((payload.get(key) for key in ("message", "error")
+                   if isinstance(payload.get(key), str) and payload.get(key).strip()), "")
+    detail = re.sub(r"[\x00-\x1f\x7f]+", " ", detail)
+    detail = " ".join(detail.split())
+    for secret in sorted({str(value or "") for value in secrets}, key=len, reverse=True):
+        if secret:
+            detail = re.sub(re.escape(secret), "[скрыто]", detail, flags=re.IGNORECASE)
+    detail = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [скрыто]", detail)
+    detail = re.sub(
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
+        "[токен скрыт]", detail,
+    )
+    return detail[:240]
 
 
 def connect_with_password(profile, login, password):
