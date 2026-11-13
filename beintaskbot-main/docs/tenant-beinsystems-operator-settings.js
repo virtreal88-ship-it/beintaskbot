@@ -68,7 +68,10 @@
         finally { button.disabled = false; }
       };
       $(panel,'[data-save]').onclick = event => {
-        if (state.configured && !window.confirm('Обновление подключения сделает старые привязки Operator устаревшими. Продолжить?')) return;
+        if (state.configured && !window.confirm('Обновление подключения сделает старые привязки Operator устаревшими. Продолжить?')) {
+          $(panel,'[data-operator-password]').value = '';
+          return;
+        }
         const login = $(panel,'[data-operator-login]').value.trim();
         let password = $(panel,'[data-operator-password]').value;
         $(panel,'[data-operator-password]').value = '';
