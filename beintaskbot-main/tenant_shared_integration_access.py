@@ -15,7 +15,7 @@ from tenant_scoped_access import allows_owned_resource, profile_actor, scoped_ac
 from tenant_scoped_access_store import read_access_profile
 
 _ADMISSION = ContextVar('shared_integration_admission', default=None)
-PROVIDERS = frozenset({'kommo', 'kommo_manual', 'beinsystems', 'linear', 'connect', 'chat_ai'})
+PROVIDERS = frozenset({'kommo', 'kommo_manual', 'beinsystems', 'beinsystems_operator', 'linear', 'connect', 'chat_ai'})
 LEGACY_ROLES = {'connect': {'owner', 'admin'}, 'chat_ai': {'owner', 'admin'}}
 
 
@@ -59,6 +59,12 @@ def owner_resource(cur, current):
 def allowed(current, resource, provider, action):
     if action not in {'view', 'create', 'update', 'delete'} or provider not in PROVIDERS:
         return False
+    if provider == 'beinsystems_operator':
+        from tenant_beinsystems_operator_access import is_operator_workspace
+        if not is_operator_workspace(current.get('tenant_id')):
+            return False
+        if action != 'view' and current.get('role') != 'owner':
+            return False
     if current.get('active') is not True or current.get('tenant_status') != 'active':
         return False
     if current.get('role') == 'owner':
@@ -214,6 +220,10 @@ def project_status(cur, current, rows):
         by_provider.setdefault(provider, {'provider': provider, 'status': 'not_connected'})
     result = []
     for provider, row in by_provider.items():
+        if provider == 'beinsystems_operator':
+            from tenant_beinsystems_operator_access import is_operator_workspace
+            if not is_operator_workspace(current.get('tenant_id')):
+                continue
         actions = {action: allowed(current, resource, provider, action)
                    for action in ('view', 'create', 'update', 'delete')}
         # Even managers never receive arbitrary metadata from bootstrap. Each

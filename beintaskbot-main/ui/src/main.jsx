@@ -260,6 +260,28 @@ const integrationCatalog = [
       },
     },
   },
+  {
+    id: "beinsystems_operator",
+    name: "BeinSystems Operator",
+    mark: "O",
+    color: "#155E75",
+    privateProvider: true,
+    section: "integrations",
+    copy: {
+      ru: {
+        category: "Поддержка BeinSystems",
+        description: "Приватный доступ к Operator для рабочего пространства BeinSystems.",
+      },
+      az: {
+        category: "BeinSystems dəstəyi",
+        description: "BeinSystems iş sahəsi üçün Operator-a məxfi giriş.",
+      },
+      en: {
+        category: "BeinSystems support",
+        description: "Private Operator access for the BeinSystems workspace.",
+      },
+    },
+  },
 ];
 
 function mount(id, node) {
@@ -1349,10 +1371,13 @@ function IntegrationMarketplace() {
     },
   };
   const tx = (key) => localeCopy[language]?.[key] || localeCopy.en[key];
-  const items = integrationCatalog.map((item) => ({
-    ...item,
-    ...(item.copy?.[language] || item.copy?.en),
-  }));
+  const visibleProviders = new Set((profile?.integrations || []).map((row) => row.provider));
+  const items = integrationCatalog
+    .filter((item) => !item.privateProvider || visibleProviders.has(item.id))
+    .map((item) => ({
+      ...item,
+      ...(item.copy?.[language] || item.copy?.en),
+    }));
   const categories = [
     tx("all"),
     ...new Set(items.map((item) => item.category)),
@@ -1367,7 +1392,8 @@ function IntegrationMarketplace() {
   );
   const choose = (item) => {
     setSelected(item);
-    setTab(item.id === "connect" ? "settings" : "connection");
+    setTab(item.id === "connect" || (item.id === "beinsystems_operator" && profile?.member?.role === "owner")
+      ? "settings" : "connection");
     setError("");
     setNotice("");
     if (item.id === "beinsystems") {
