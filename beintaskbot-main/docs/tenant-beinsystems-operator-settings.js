@@ -140,6 +140,9 @@
       $(panel,'[data-confirm-employee]').onclick = async event => {
         const button=event.currentTarget;button.disabled=true;message.textContent=text.waiting;
         try {
+          if (state.status !== 'connected') throw new Error('Сначала подключите Operator и проверьте подключение.');
+          if (!/^[1-9][0-9]*$/.test(employeeMember.value)) throw new Error('Выберите сотрудника Beintaskbot.');
+          if (!employeeUser.value) throw new Error('Выберите пользователя Operator из загруженного списка.');
           const result=await request('/api/platform/operator/employee-links',{
             member_telegram_id:Number(employeeMember.value),account:$(panel,'[data-employee-account]').value.trim(),
             login:employeeUser.value,evidence:$(panel,'[data-employee-evidence]').value.trim(),

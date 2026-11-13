@@ -60,12 +60,36 @@ def migrate_operator_identity_links(cur) -> None:
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_rate_limits (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       actor_telegram_id BIGINT NOT NULL CHECK(actor_telegram_id>0),
-      endpoint TEXT NOT NULL CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list')),
+      endpoint TEXT NOT NULL CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login')),
       bucket_start TIMESTAMPTZ NOT NULL,
       request_count INTEGER NOT NULL CHECK(request_count>0),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY(tenant_id,actor_telegram_id,endpoint,bucket_start)
     )''')
+    # The table may already exist from an earlier release with a narrower
+    # endpoint constraint. Keep startup migration idempotent while allowing
+    # the credential login limiter to record its own endpoint.
+    cur.execute('''DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='saas_beinsystems_operator_rate_limits'::regclass
+          AND conname='saas_beinsystems_operator_rate_limits_endpoint_check'
+          AND pg_get_constraintdef(oid) NOT LIKE '%auth_login%'
+      ) THEN
+        ALTER TABLE saas_beinsystems_operator_rate_limits
+          DROP CONSTRAINT saas_beinsystems_operator_rate_limits_endpoint_check;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='saas_beinsystems_operator_rate_limits'::regclass
+          AND conname='saas_beinsystems_operator_rate_limits_endpoint_check'
+          AND pg_get_constraintdef(oid) LIKE '%auth_login%'
+      ) THEN
+        ALTER TABLE saas_beinsystems_operator_rate_limits
+          ADD CONSTRAINT saas_beinsystems_operator_rate_limits_endpoint_check
+          CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login'));
+      END IF;
+    END $$''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_employee_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL,

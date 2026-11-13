@@ -177,13 +177,19 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
     payload = {
         "login": username,
         "password": secret,
-        "uniqDeviceId": str(device_id or ("device_" + uuid.uuid4().hex)),
+        "uniqDeviceId": str(device_id or (
+            "device_" + uuid.uuid4().hex + uuid.uuid4().hex[:7])),
     }
     request = Request(
         AUTH_API_BASE_URL.rstrip("/") + "/auth/login",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json", "Accept": "application/json",
+            # Match the same-origin browser request made by Bein ID.
+            "Origin": "https://auth.beinsystems.az",
+            "Referer": "https://auth.beinsystems.az/",
+        },
     )
     transport = opener or build_opener(_NoRedirect())
     try:
@@ -244,8 +250,9 @@ def connect_with_password(profile, login, password):
                 raise OperatorError("Слишком много попыток подключения. Повторите через минуту.", 429)
         conn.commit()
 
-    device_id = "device_" + uuid.uuid5(
-        uuid.NAMESPACE_URL, "beintaskbot:" + PROVIDER + ":" + tenant).hex
+    device_seed = "beintaskbot:" + PROVIDER + ":" + tenant
+    device_id = "device_" + uuid.uuid5(uuid.NAMESPACE_URL, device_seed).hex + \
+        uuid.uuid5(uuid.NAMESPACE_DNS, device_seed).hex[:7]
     token = _authenticate_operator(login, password, device_id=device_id)
     me = _request_operator("me", {}, token=token, base_url=base_url)
     if (not isinstance(me, dict) or not me
@@ -537,9 +544,9 @@ def confirm_employee_link(profile, *, member_telegram_id, account, login,
         actor = int(profile.get("telegram_id"))
         member_id = int(member_telegram_id)
     except (TypeError, ValueError, AttributeError):
-        raise OperatorError("Сотрудник Beintaskbot не распознан.") from None
+        raise OperatorError("Выберите сотрудника Beintaskbot из списка рабочего пространства.") from None
     if member_id <= 0:
-        raise OperatorError("Сотрудник Beintaskbot не распознан.")
+        raise OperatorError("Выберите сотрудника Beintaskbot из списка рабочего пространства.")
     account = str(account or "").strip()
     login = str(login or "").strip()
     evidence = str(evidence_summary or "").strip()
