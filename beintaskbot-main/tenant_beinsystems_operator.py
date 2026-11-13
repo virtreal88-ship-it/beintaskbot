@@ -396,6 +396,184 @@ def profile_users_payload(response):
     return result
 
 
+def _operator_owner(profile, cur):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    current = _current_profile(cur, tenant, actor)
+    if current.get("role") != "owner":
+        raise OperatorError("Связывать сотрудников с Operator может только владелец workspace.", 403)
+    return tenant, actor, current
+
+
+def operator_employee_users(profile, account):
+    """List explicitly selectable Operator logins for the owner-managed staff map."""
+    tenant = _tenant(profile)
+    account = str(account or "").strip()
+    if not account or len(account) > 240 or any(ord(char) < 32 for char in account):
+        raise OperatorError("Укажите корректный Operator account.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            _, _, _ = _operator_owner(profile, cur)
+            integration = _operator_row(cur, tenant)
+            if not integration or integration.get("status") != "connected":
+                raise OperatorError("Сначала проверьте подключение Operator.")
+    response = read(profile, "profile_users", {"account": account})
+    return profile_users_payload(response)
+
+
+def confirm_employee_link(profile, *, member_telegram_id, account, login,
+                          evidence_summary):
+    """Map one active Beintaskbot employee to an exact listed account/login pair."""
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+        member_id = int(member_telegram_id)
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Сотрудник Beintaskbot не распознан.") from None
+    if member_id <= 0:
+        raise OperatorError("Сотрудник Beintaskbot не распознан.")
+    account = str(account or "").strip()
+    login = str(login or "").strip()
+    evidence = str(evidence_summary or "").strip()
+    if (not account or not login or len(account) > 240 or len(login) > 240
+            or any(ord(char) < 32 for char in account + login)
+            or len(evidence) < 8 or len(evidence) > 500):
+        raise OperatorError("Выберите Operator account и пользователя, укажите основание проверки.")
+
+    # The list is read with the configured restricted Operator JWT. Never trust
+    # a login supplied only by the browser.
+    listed = operator_employee_users(profile, account)
+    if not any(item["login"] == login for item in listed):
+        raise OperatorError("Пользователь Operator отсутствует в выбранном аккаунте.", 409)
+
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Связывать сотрудников с Operator может только владелец workspace.", 403)
+            integration = _operator_row(cur, tenant, lock=True)
+            metadata = integration.get("metadata") if integration and isinstance(integration.get("metadata"), dict) else {}
+            generation = str(metadata.get("generation") or "")
+            instance = str(metadata.get("connection_instance_id") or "")
+            if not generation or not instance or not integration or integration.get("status") != "connected":
+                raise OperatorError("Подключение Operator изменилось. Повторите проверку.", 409)
+            cur.execute("""SELECT active FROM saas_tenant_members
+              WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE""", (tenant, member_id))
+            member = cur.fetchone()
+            if not member or member.get("active") is not True:
+                raise OperatorError("Сотрудник Beintaskbot неактивен или не найден.", 404)
+            cur.execute("""SELECT id,operator_account,operator_login,version,verified_at
+              FROM saas_beinsystems_operator_employee_links
+              WHERE tenant_id=%s::uuid AND connection_generation=%s
+                AND connection_instance_id=%s::uuid AND member_telegram_id=%s
+                AND revoked_at IS NULL FOR UPDATE""", (tenant, generation, instance, member_id))
+            existing = cur.fetchone()
+            if existing and existing["operator_account"] == account and existing["operator_login"] == login:
+                row = existing
+            else:
+                cur.execute("""SELECT 1 FROM saas_beinsystems_operator_employee_links
+                  WHERE tenant_id=%s::uuid AND connection_generation=%s AND operator_account=%s
+                    AND operator_login=%s AND member_telegram_id<>%s AND revoked_at IS NULL""",
+                  (tenant, generation, account, login, member_id))
+                if cur.fetchone():
+                    raise OperatorError("Этот Operator-пользователь уже связан с другим сотрудником.", 409)
+                if existing:
+                    cur.execute("""UPDATE saas_beinsystems_operator_employee_links
+                      SET revoked_at=now(),version=version+1,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL""",
+                      (tenant, str(existing["id"])))
+                cur.execute("""INSERT INTO saas_beinsystems_operator_employee_links
+                  (id,tenant_id,connection_instance_id,connection_generation,member_telegram_id,
+                   operator_account,operator_login,verification_basis,evidence_summary,verified_by)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,'manual_operator_user_selection',%s,%s)
+                  RETURNING id,operator_account,operator_login,version,verified_at""",
+                  (str(uuid.uuid4()), tenant, instance, generation, member_id, account, login, evidence, actor))
+                row = cur.fetchone()
+                cur.execute("""INSERT INTO saas_tenant_audit_events
+                  (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                  VALUES(%s,%s::uuid,%s,'operator_employee_link_confirmed','employee',%s,%s::jsonb)""",
+                  (str(uuid.uuid4()), tenant, actor, str(member_id),
+                   _json({"operator_account": account, "operator_login": login,
+                          "generation": generation, "basis": "manual_operator_user_selection"})))
+        conn.commit()
+    return {"id": str(row["id"]), "member_telegram_id": member_id,
+            "account": row["operator_account"], "login": row["operator_login"],
+            "status": "confirmed", "version": int(row["version"]),
+            "verified_at": row["verified_at"].isoformat()}
+
+
+def employee_links(profile):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            _operator_owner(profile, cur)
+            integration = _operator_row(cur, tenant)
+            metadata = integration.get("metadata") if integration and isinstance(integration.get("metadata"), dict) else {}
+            generation = str(metadata.get("generation") or "")
+            instance = str(metadata.get("connection_instance_id") or "")
+            cur.execute("""SELECT l.id,l.member_telegram_id,l.operator_account,l.operator_login,
+                l.connection_generation,l.connection_instance_id::text,l.verification_basis,
+                l.evidence_summary,l.verified_by,l.verified_at,l.revoked_at,l.version,m.active
+              FROM saas_beinsystems_operator_employee_links l
+              LEFT JOIN saas_tenant_members m ON m.tenant_id=l.tenant_id
+                AND m.telegram_id=l.member_telegram_id
+              WHERE l.tenant_id=%s::uuid
+              ORDER BY l.updated_at DESC LIMIT 200""", (tenant,))
+            rows = cur.fetchall()
+    result = []
+    for row in rows:
+        current = (not row["revoked_at"] and row["connection_generation"] == generation
+                   and row["connection_instance_id"] == instance and row["active"] is True)
+        result.append({"id": str(row["id"]), "member_telegram_id": int(row["member_telegram_id"]),
+            "account": row["operator_account"], "login": row["operator_login"],
+            "status": "confirmed" if current else "stale" if not row["revoked_at"] else "revoked",
+            "evidence": row["evidence_summary"], "verified_by": int(row["verified_by"]),
+            "verified_at": row["verified_at"].isoformat(), "revoked_at": row["revoked_at"].isoformat() if row["revoked_at"] else None,
+            "version": int(row["version"])})
+    return result
+
+
+def revoke_employee_link(profile, link_id):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+        ident = str(uuid.UUID(str(link_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Связь Operator не найдена.", 404) from None
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            _operator_owner(profile, cur)
+            cur.execute("""UPDATE saas_beinsystems_operator_employee_links
+              SET revoked_at=now(),version=version+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL
+              RETURNING member_telegram_id,operator_account,operator_login,version""", (tenant, ident))
+            row = cur.fetchone()
+            if row:
+                cur.execute("""INSERT INTO saas_tenant_audit_events
+                  (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                  VALUES(%s,%s::uuid,%s,'operator_employee_link_revoked','employee',%s,%s::jsonb)""",
+                  (str(uuid.uuid4()), tenant, actor, str(row["member_telegram_id"]),
+                   _json({"operator_account": row["operator_account"], "operator_login": row["operator_login"],
+                          "version": int(row["version"])})))
+        conn.commit()
+    if not row:
+        raise OperatorError("Связь Operator не найдена.", 404)
+    return {"id": ident, "member_telegram_id": int(row["member_telegram_id"]),
+            "account": row["operator_account"], "login": row["operator_login"],
+            "status": "revoked", "version": int(row["version"])}
+
+
 def confirm_account_link(profile, *, local_entity_type, local_entity_id,
                          external_account, evidence_summary,
                          verification_basis="manual_operator_review"):

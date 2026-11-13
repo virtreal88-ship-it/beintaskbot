@@ -187,6 +187,78 @@ def revoke_handler(member: Callable, origin: str, logger):
     return endpoint
 
 
+def employee_users_handler(member: Callable, origin: str, logger):
+    async def endpoint(request: web.Request):
+        profile = _profile(member, request)
+        if not profile:
+            return web.json_response({"success": False, "error": "Интеграция недоступна."},
+                                     status=404, headers={"Cache-Control": "no-store"})
+        try:
+            data = await _body(request, profile, origin)
+            if set(data) != {"account"}:
+                raise operator.OperatorError("Укажите Operator account.")
+            users = await asyncio.to_thread(operator.operator_employee_users, profile, data["account"])
+            return _json_response({"users": users})
+        except operator.OperatorError as error:
+            return web.json_response({"success": False, "error": str(error)}, status=error.status,
+                                     headers={"Cache-Control": "no-store"})
+        except Exception:
+            logger.exception("Operator employee user list failed")
+            return web.json_response({"success": False, "error": "Список пользователей Operator временно недоступен."},
+                                     status=503, headers={"Cache-Control": "no-store"})
+    return endpoint
+
+
+def employee_links_handler(member: Callable, origin: str, logger):
+    async def endpoint(request: web.Request):
+        profile = _profile(member, request)
+        if not profile:
+            return web.json_response({"success": False, "error": "Интеграция недоступна."},
+                                     status=404, headers={"Cache-Control": "no-store"})
+        try:
+            if request.method == "GET":
+                links = await asyncio.to_thread(operator.employee_links, profile)
+                return _json_response({"links": links})
+            data = await _body(request, profile, origin)
+            if set(data) != {"member_telegram_id", "account", "login", "evidence"}:
+                raise operator.OperatorError("Поля связи сотрудника с Operator некорректны.")
+            link = await asyncio.to_thread(operator.confirm_employee_link, profile,
+                member_telegram_id=data["member_telegram_id"], account=data["account"],
+                login=data["login"], evidence_summary=data["evidence"])
+            return _json_response({"link": link}, status=201)
+        except operator.OperatorError as error:
+            return web.json_response({"success": False, "error": str(error)}, status=error.status,
+                                     headers={"Cache-Control": "no-store"})
+        except Exception:
+            logger.exception("Operator employee identity link operation failed")
+            return web.json_response({"success": False, "error": "Не удалось обработать связь сотрудника с Operator."},
+                                     status=503, headers={"Cache-Control": "no-store"})
+    return endpoint
+
+
+def employee_link_revoke_handler(member: Callable, origin: str, logger):
+    async def endpoint(request: web.Request):
+        profile = _profile(member, request)
+        if not profile:
+            return web.json_response({"success": False, "error": "Интеграция недоступна."},
+                                     status=404, headers={"Cache-Control": "no-store"})
+        try:
+            data = await _body(request, profile, origin)
+            if data:
+                raise operator.OperatorError("Операция некорректна.")
+            link = await asyncio.to_thread(operator.revoke_employee_link, profile,
+                                           request.match_info["link_id"])
+            return _json_response({"link": link})
+        except operator.OperatorError as error:
+            return web.json_response({"success": False, "error": str(error)}, status=error.status,
+                                     headers={"Cache-Control": "no-store"})
+        except Exception:
+            logger.exception("Operator employee identity link revoke failed")
+            return web.json_response({"success": False, "error": "Не удалось отозвать связь сотрудника с Operator."},
+                                     status=503, headers={"Cache-Control": "no-store"})
+    return endpoint
+
+
 def dialog_context_handler(member: Callable, logger):
     async def endpoint(request: web.Request):
         profile = _profile(member, request)

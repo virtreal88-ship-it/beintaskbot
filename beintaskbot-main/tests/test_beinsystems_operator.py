@@ -167,6 +167,10 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIn("local_entity_type='company' AND external_entity_type='account' ", sql)
         self.assertIn("local_entity_type='support_ticket' AND external_entity_type='account' ", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_rate_limits", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_employee_links", sql)
+        self.assertIn("FOREIGN KEY(tenant_id,member_telegram_id)", sql)
+        self.assertIn("saas_operator_active_member_link_idx", sql)
+        self.assertIn("saas_operator_active_staff_identity_idx", sql)
 
 
 if __name__ == "__main__":

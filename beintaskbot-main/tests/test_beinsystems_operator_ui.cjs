@@ -7,11 +7,20 @@ const dom=new JSDOM('<!doctype html><div id="integrationSettingsHost"></div>',{
 });
 const {window}=dom;
 let viewDemand,requests=[];
+let employeeLinks=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
 window.confirm=()=>true;
 window.fetch=async(path,options={})=>{
   requests.push({path,options});
-  const result=options.method==='POST'
+  let result;
+  if(path==='/api/platform/members')result={success:true,members:[{telegram_id:42,display_name:'Workspace operator',role:'operator',active:true}]};
+  else if(path==='/api/platform/operator/employee-users')result={success:true,users:[{login:'operator.login',bindable:true}]};
+  else if(path==='/api/platform/operator/employee-links'&&options.method==='POST'){
+    const body=JSON.parse(options.body);employeeLinks=[{id:'link-1',member_telegram_id:body.member_telegram_id,account:body.account,login:body.login,status:'confirmed'}];
+    result={success:true,link:employeeLinks[0]};
+  }
+  else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
+  else result=options.method==='POST'
     ?{success:true,integration:{status:'configured',api_ready:true}}
     :{success:true,integration:{status:'not_connected',api_ready:true}};
   return {ok:true,json:async()=>result};
@@ -40,6 +49,26 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   });
   assert(!JSON.stringify(requests).includes('operator-password'));
   assert(panel.textContent.includes('Эти поля не отправляются и не сохраняются'));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const memberSelect=panel.querySelector('[data-employee-member]');
+  assert.equal(memberSelect.options.length,2);
+  memberSelect.value='42';
+  panel.querySelector('[data-employee-account]').value='staff-account';
+  panel.querySelector('[data-employee-evidence]').value='Owner matched staff account';
+  const loadUsers=panel.querySelector('[data-load-employee-users]');
+  await loadUsers.onclick({currentTarget:loadUsers});
+  const userSelect=panel.querySelector('[data-employee-user]');
+  assert.equal(userSelect.options.length,2);
+  userSelect.value='operator.login';
+  const confirmEmployee=panel.querySelector('[data-confirm-employee]');
+  await confirmEmployee.onclick({currentTarget:confirmEmployee});
+  const employeePost=requests.filter(row=>row.path==='/api/platform/operator/employee-links'&&row.options.method==='POST').at(-1);
+  assert.deepEqual(JSON.parse(employeePost.options.body),{
+    member_telegram_id:42,account:'staff-account',login:'operator.login',evidence:'Owner matched staff account',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+  });
+  assert(panel.textContent.includes('staff-account/operator.login'));
+  assert(!JSON.stringify(requests).includes('operator-password'));
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);

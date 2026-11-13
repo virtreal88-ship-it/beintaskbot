@@ -78,6 +78,9 @@ from tenant_beinsystems_operator_api import (
     dialog_context_handler as tenant_operator_dialog_context_handler,
     account_data_handler as tenant_operator_account_data_handler,
     ticket_draft_handler as tenant_operator_ticket_draft_handler,
+    employee_users_handler as tenant_operator_employee_users_handler,
+    employee_links_handler as tenant_operator_employee_links_handler,
+    employee_link_revoke_handler as tenant_operator_employee_link_revoke_handler,
 )
 from tenant_web_assets import register_assets
 from tenant_hot_orders import (
@@ -18825,6 +18828,14 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_operator_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_post("/api/platform/operator/links/{link_id}/revoke",
         tenant_operator_revoke_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-users",
+        tenant_operator_employee_users_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_get("/api/platform/operator/employee-links",
+        tenant_operator_employee_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-links",
+        tenant_operator_employee_links_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_post("/api/platform/operator/employee-links/{link_id}/revoke",
+        tenant_operator_employee_link_revoke_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_get("/api/platform/operator/dialog-context",
         tenant_operator_dialog_context_handler(_tenant_member_from_request, logger))
     app_web.router.add_post("/api/platform/operator/account-info",
