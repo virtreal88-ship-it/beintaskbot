@@ -42,6 +42,8 @@ jobs:
           node tests/test_hidden_panel_loading.cjs
           node tests/test_app_loading_performance.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          node tests/test_kommo_board_columns.mjs
+          node tests/test_kommo_board_ui.cjs
           node tests/test_tenant_app_syntax.cjs
           node tests/test_tenant_dialog_avatar_queue.cjs
           node tests/test_tenant_operator_auto_refresh_ui.cjs
@@ -56,6 +58,8 @@ jobs:
           tests/test_knowledge_center_request_contract.py
           tests/test_read_timing.py
           tests/test_tenant_deal_api.py
+          tests/test_kommo_board_catalog.py
+          tests/test_tenant_deal_board_preferences.py
           tests/test_tenant_crm_repository.py
           tests/test_tenant_crm_queries.py
           tests/test_operator_list_performance.py

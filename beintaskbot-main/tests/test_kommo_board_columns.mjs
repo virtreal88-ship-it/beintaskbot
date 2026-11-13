@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {dealColumns} from '../ui/src/deal-columns.js';
+const catalog = [{pipeline_id:1,name:'One',stages:[{stage_id:20,name:'New'},{stage_id:10,name:'Empty'}]}, {pipeline_id:2,name:'Two',stages:[{stage_id:20,name:'New'}]}];
+const rows = [{kommo_lead_id:1,pipeline_id:1,status_id:20,stage_name:'New'}];
+const result = dealColumns(rows,catalog);
+assert.deepEqual(result.map(x=>x.key),['1:20','1:10','2:20']);
+assert.equal(result[1].rows.length,0);
+assert.equal(result[2].rows.length,0);
+assert.equal(result[0].rows[0], rows[0]);
+assert.deepEqual(dealColumns(rows,catalog,['1:20']).map(x=>x.key),['1:10','2:20']);
+assert.equal(dealColumns([],catalog).length,3);
+assert.equal(dealColumns([],catalog,['1:20','1:10','2:20']).length,0);
+assert.equal(catalog[0].stages[0].rows,undefined);
+assert.equal(dealColumns([{pipeline_id:9,status_id:2}],catalog).at(-1).key,'9:2');
+console.log('PASS all stages, order, duplicate names, personal hidden keys, own-created fallback');
