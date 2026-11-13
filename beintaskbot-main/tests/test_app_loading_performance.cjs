@@ -128,6 +128,24 @@ async function dialogReloadTests(){
  const leave=setup('dialogs',row(3));try{leave.w.document.getElementById('view-dialogs').classList.remove('active');leave.emit('tenant-view',{view:'linear'});await tick();assert.equal(leave.histories().length,0,'navigation away cancels scheduled restore');}finally{leave.w.close();}
  console.log('PASS reload: no stale session replay, scoped explicit history, newer navigation, clean editable search');
 }
+async function kommoPipelineBootstrapTests(){
+ for(const allowed of [true,false]){
+  const {w,requests}=browser('deals');
+  try{
+   const main=[...w.document.scripts].find(script=>script.textContent.includes('const savedView=sessionStorage')).textContent;
+   w.eval(main);
+   const person={...profile,member:{...profile.member,role:'operator',permissions:[]},capabilities:{modules:{deals:false,customers:false},kommo_deals:allowed,pages:{deals:allowed,profile:true},actions:{deals:{view:false,create:false,update:false,delete:false}}}};
+   requests[0].resolve(response(person));await settle();
+   const deals=()=>requests.filter(r=>new URL(r.url,'https://fixture.test').pathname==='/api/platform/crm/deals');
+   assert.equal(deals().length,allowed?1:0,'Kommo loading follows provider capability, not native CRM permissions');
+   assert.equal(requests.some(r=>r.url==='/api/platform/crm/native/deals'),false,'pipeline grant must not load native deals');
+   if(allowed){deals()[0].resolve(response({success:true,deals:[{kommo_lead_id:7,pipeline_id:10,name:'Assigned pipeline deal',contact_name:'Synthetic customer'}],total:1}));await settle();assert.ok(w.document.getElementById('dealsList').textContent.includes('Synthetic customer'),'authorized Kommo row is rendered');}
+   w.document.getElementById('dealsRefresh').click();await settle();
+   assert.equal(deals().length,allowed?2:0,'manual refresh follows provider capability');
+  }finally{w.close();}
+ }
+ console.log('PASS Kommo pipeline-only bootstrap and refresh, native CRM remains denied');
+}
 async function bootstrapTests(){
  const b=browser('tasks'),{w,requests}=b;
  try{
@@ -355,4 +373,4 @@ async function caseResolverNavigationTests(){
  console.log('PASS case resolver: saved-route suppression, anchor, errors, no stale restore, cancellation, navigation, scope changes and focus retry');
 }
 
-(async()=>{await requestTests();await agentTests();await dialogTests();await dialogReloadTests();await bootstrapTests();await defaultDialogsLandingTests();await linearRouterReloadTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();await caseResolverNavigationTests();})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{await requestTests();await agentTests();await dialogTests();await dialogReloadTests();await kommoPipelineBootstrapTests();await bootstrapTests();await defaultDialogsLandingTests();await linearRouterReloadTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();await caseResolverNavigationTests();})().catch(error=>{console.error(error);process.exitCode=1;});

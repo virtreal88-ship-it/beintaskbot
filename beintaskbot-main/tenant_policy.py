@@ -332,6 +332,7 @@ class TenantPolicy:
                 'pages': page_capabilities(self.profile),
                 'actions': action_capabilities(self.profile),
                 'deal_board': self.deal_board(),
+                'kommo_deals': self.kommo_access(),
                 'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),
