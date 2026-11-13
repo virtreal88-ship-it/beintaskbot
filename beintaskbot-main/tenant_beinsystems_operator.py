@@ -24,7 +24,9 @@ from tenant_platform_core import (
 from tenant_policy import TenantPolicy
 
 MAX_RESPONSE_BYTES = 1_000_000
+MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
+AUTH_API_BASE_URL = "https://auth-api.beinsystems.az"
 READ_ENDPOINTS = {
     "me": ("/user/me", set()),
     "accounts": ("/user/accounts", {"search"}),
@@ -110,7 +112,7 @@ def status(profile):
     return _public(row)
 
 
-def save_token(profile, token):
+def save_token(profile, token, *, verified=False):
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -125,6 +127,7 @@ def save_token(profile, token):
         raise OperatorError("Проверьте служебный токен Operator.")
     instance_id = str(uuid.uuid4())
     generation = str(uuid.uuid4())
+    status_value = "connected" if verified else "configured"
     encrypted = _fernet().encrypt(_json({
         "tenant_id": tenant, "provider": PROVIDER, "token": clean,
         "connection_instance_id": instance_id,
@@ -139,17 +142,118 @@ def save_token(profile, token):
             cur.execute(
                 """INSERT INTO saas_tenant_integrations
                   (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
-                VALUES (%s::uuid,%s,'configured',%s,%s::jsonb,%s,NULL,now())
+                VALUES (%s::uuid,%s,%s,%s,%s::jsonb,%s,
+                  CASE WHEN %s THEN now() ELSE NULL END,now())
                 ON CONFLICT (tenant_id,provider) DO UPDATE SET
-                  status='configured',account_domain=EXCLUDED.account_domain,
+                  account_domain=EXCLUDED.account_domain,
                   metadata=EXCLUDED.metadata,secrets=EXCLUDED.secrets,
-                  connected_at=NULL,updated_at=now()
+                  status=EXCLUDED.status,connected_at=EXCLUDED.connected_at,updated_at=now()
                 RETURNING status,metadata,connected_at,updated_at""",
-                (tenant, PROVIDER, api_base_url(), _json(metadata), encrypted),
+                (tenant, PROVIDER, status_value, api_base_url(), _json(metadata), encrypted, verified),
             )
             row = cur.fetchone()
         conn.commit()
     return _public(row)
+
+
+def _authenticate_operator(login, password, *, device_id=None, opener=None):
+    """Use the same HTTPS login endpoint used by the Operator web application.
+
+    Only the returned SSO token is persisted by the caller. Passwords and
+    authentication response bodies are never logged or stored.
+    """
+    username = str(login or "").strip()
+    secret = str(password or "")
+    if (not username or len(username) > 240
+            or any(ord(char) < 32 for char in username)
+            or not secret or len(secret) > 512):
+        raise OperatorError("Укажите корректный логин и пароль Operator.")
+
+    # Match the live SSO login page: a bare account name means its admin login;
+    # email, phone, and fully qualified logins are passed through unchanged.
+    phone = re.fullmatch(r"\+?[0-9]{9,15}", re.sub(r"\s+", "", username))
+    if "@" not in username and not phone:
+        username = "admin@" + username
+    payload = {
+        "login": username,
+        "password": secret,
+        "uniqDeviceId": str(device_id or ("device_" + uuid.uuid4().hex)),
+    }
+    request = Request(
+        AUTH_API_BASE_URL.rstrip("/") + "/auth/login",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    transport = opener or build_opener(_NoRedirect())
+    try:
+        response = transport.open(request, timeout=REQUEST_TIMEOUT_SECONDS)
+        with response:
+            raw = response.read(MAX_AUTH_RESPONSE_BYTES + 1)
+    except HTTPError as exc:
+        if exc.code in (400, 401, 403):
+            raise OperatorError("Operator не принял логин и пароль.", 401) from None
+        if exc.code == 429:
+            raise OperatorError("Operator ограничил попытки входа. Повторите позже.", 429) from None
+        raise OperatorError("Сервис авторизации Operator временно недоступен.", 503) from None
+    except (URLError, TimeoutError, OSError):
+        raise OperatorError("Сервис авторизации Operator временно недоступен.", 503) from None
+    if len(raw) > MAX_AUTH_RESPONSE_BYTES:
+        raise OperatorError("Ответ сервиса авторизации Operator слишком большой.", 502)
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise OperatorError("Сервис авторизации Operator вернул неизвестный ответ.", 502) from None
+    data = result.get("data") if isinstance(result, dict) else None
+    token = data.get("token") if isinstance(data, dict) else None
+    if (not isinstance(result, dict) or result.get("success") is not True
+            or not isinstance(token, str) or not token.strip()
+            or len(token) > 8192 or any(ord(char) < 32 for char in token)):
+        raise OperatorError("Operator не выдал токен. Проверьте логин и пароль.", 401)
+    return token.strip()
+
+
+def connect_with_password(profile, login, password):
+    """Authenticate against Operator SSO, validate the JWT, then store it."""
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+    base_url = api_base_url()
+    if not base_url:
+        raise OperatorError("Адрес Operator API не задан в серверной конфигурации.")
+
+    # Bound authentication attempts per owner and minute. No login or password
+    # is written to this rate-limit record.
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+            cur.execute("""INSERT INTO saas_beinsystems_operator_rate_limits
+              (tenant_id,actor_telegram_id,endpoint,bucket_start,request_count)
+              VALUES(%s::uuid,%s,'auth_login',date_trunc('minute',now()),1)
+              ON CONFLICT(tenant_id,actor_telegram_id,endpoint,bucket_start)
+              DO UPDATE SET request_count=saas_beinsystems_operator_rate_limits.request_count+1,
+                updated_at=now() RETURNING request_count""", (tenant, actor))
+            if int(cur.fetchone()["request_count"]) > 5:
+                raise OperatorError("Слишком много попыток подключения. Повторите через минуту.", 429)
+        conn.commit()
+
+    device_id = "device_" + uuid.uuid5(
+        uuid.NAMESPACE_URL, "beintaskbot:" + PROVIDER + ":" + tenant).hex
+    token = _authenticate_operator(login, password, device_id=device_id)
+    me = _request_operator("me", {}, token=token, base_url=base_url)
+    if (not isinstance(me, dict) or not me
+            or (me.get("status") is not None and str(me.get("status")).casefold() != "success")):
+        raise OperatorError("Полученный токен не прошёл проверку в Operator API.", 401)
+    # Re-check owner/workspace after remote calls, then encrypt and store only
+    # the validated SSO token.
+    return save_token(profile, token, verified=True)
 
 
 def disconnect(profile):

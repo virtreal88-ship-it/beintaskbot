@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import tenant_beinsystems_operator as operator
 import tenant_beinsystems_operator_access as access
@@ -84,6 +84,56 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(fake.request.get_header("Authorization"), "Bearer secret-jwt")
         self.assertEqual(json.loads(fake.request.data), {"search": "client"})
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
+
+    def test_operator_sso_login_uses_site_auth_contract_and_returns_only_token(self):
+        fake = FakeOpener({"success": True, "data": {"token": "sso-jwt"}})
+        with patch.object(operator, "build_opener", return_value=fake):
+            token = operator._authenticate_operator("beinsystems-account", "operator-password")
+        payload = json.loads(fake.request.data)
+        self.assertEqual(token, "sso-jwt")
+        self.assertEqual(fake.request.full_url,
+                         "https://auth-api.beinsystems.az/auth/login")
+        self.assertEqual(fake.request.get_method(), "POST")
+        self.assertEqual(payload["login"], "admin@beinsystems-account")
+        self.assertEqual(payload["password"], "operator-password")
+        self.assertRegex(payload["uniqDeviceId"], r"^device_[0-9a-f]{32}$")
+        self.assertIsNone(fake.request.get_header("Authorization"))
+        self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
+
+    def test_operator_sso_login_does_not_expose_auth_error_body(self):
+        fake = FakeOpener({"success": False, "message": "operator-password rejected"})
+        with patch.object(operator, "build_opener", return_value=fake):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._authenticate_operator("user@example.com", "operator-password")
+        self.assertNotIn("operator-password", str(raised.exception))
+        self.assertEqual(raised.exception.status, 401)
+
+    def test_connect_with_password_persists_only_a_verified_token(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        cursor.fetchone.return_value = {"request_count": 1}
+        connection.cursor.return_value = cursor
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "api_base_url", return_value="https://operator.example/v1"), \
+             patch.object(operator, "_authenticate_operator", return_value="sso-jwt") as authenticate, \
+             patch.object(operator, "_request_operator", return_value={
+                 "status": "success", "data": {"login": "operator", "role": "operator"},
+             }) as verify, \
+             patch.object(operator, "save_token", return_value={"status": "connected"}) as save:
+            result = operator.connect_with_password(profile, "operator", "raw-password")
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(authenticate.call_args.args, ("operator", "raw-password"))
+        self.assertTrue(authenticate.call_args.kwargs["device_id"].startswith("device_"))
+        verify.assert_called_once_with("me", {}, token="sso-jwt", base_url="https://operator.example/v1")
+        save.assert_called_once_with(profile, "sso-jwt", verified=True)
 
     def test_adapter_rejects_undocumented_mutations_and_short_search(self):
         with self.assertRaises(operator.OperatorError):
