@@ -1,6 +1,7 @@
 import json
 import asyncio
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import tenant_beinsystems_operator as operator
@@ -29,6 +30,9 @@ class FakeResponse:
     def read(self, size=-1):
         return self.payload[:size]
 
+    def close(self):
+        pass
+
 
 class FakeOpener:
     def __init__(self, payload):
@@ -39,6 +43,15 @@ class FakeOpener:
     def open(self, request, timeout):
         self.request, self.timeout = request, timeout
         return self.response
+
+
+class FakeHTTPErrorOpener:
+    def __init__(self, status, payload):
+        self.status = status
+        self.response = FakeResponse(payload)
+
+    def open(self, request, timeout):
+        raise HTTPError(request.full_url, self.status, "Unauthorized", None, self.response)
 
 
 class FakeCursor:
@@ -119,12 +132,27 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIsNone(fake.request.get_header("Authorization"))
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
 
-    def test_operator_sso_login_does_not_expose_auth_error_body(self):
+    def test_operator_sso_login_redacts_credentials_from_auth_error(self):
         fake = FakeOpener({"success": False, "message": "operator-password rejected"})
         with patch.object(operator, "build_opener", return_value=fake):
             with self.assertRaises(operator.OperatorError) as raised:
                 operator._authenticate_operator("user@example.com", "operator-password")
         self.assertNotIn("operator-password", str(raised.exception))
+        self.assertIn("rejected", str(raised.exception))
+        self.assertEqual(raised.exception.status, 401)
+
+    def test_operator_http_auth_error_shows_redacted_provider_reason(self):
+        fake = FakeHTTPErrorOpener(401, {
+            "message": "Device check failed for user@example.com / operator-password",
+        })
+        with patch.object(operator, "build_opener", return_value=fake):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._authenticate_operator("user@example.com", "operator-password")
+        message = str(raised.exception)
+        self.assertIn("HTTP 401", message)
+        self.assertIn("Device check failed", message)
+        self.assertNotIn("user@example.com", message)
+        self.assertNotIn("operator-password", message)
         self.assertEqual(raised.exception.status, 401)
 
     def test_connect_with_password_persists_only_a_verified_token(self):
