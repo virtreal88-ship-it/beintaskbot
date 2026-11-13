@@ -31,10 +31,11 @@ def page(session: dict, lead_id: object, cursor: str = '', limit: object = 120) 
             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead))
             deal=cur.fetchone()
             from tenant_dialog_access import scope,require_source,sql_filter
-            if scope(policy) is None and not policy.can_access_deal(deal):
+            if scope(policy) is None and not policy.can_read_kommo_chat(deal) and not policy.can_access_deal(deal):
                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
             from tenant_dialog_access import lead_message_filter
-            source_guard=lead_message_filter(cur,tenant,policy,lead)
+            source_guard=lead_message_filter(cur,tenant,policy,lead,
+                kommo_deal=deal if policy.can_read_kommo_chat(deal) else None)
             condition = ' AND (COALESCE(happened_at,created_at),external_id)<(%s::timestamptz,%s)' if position else ''
             values = [tenant, lead, *(position or ()), size + 1]
             cur.execute('''SELECT external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,

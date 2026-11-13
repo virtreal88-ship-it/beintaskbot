@@ -21,6 +21,8 @@ def _can_read(context: ChatApiContext, profile: dict | None) -> bool:
     if not profile:
         return False
     policy = context.policy(profile)
+    if policy.kommo_access():
+        return True
     if policy.action_scope("dialogs","view") is not None:
         return policy.action_scope("dialogs","view")!="none"
     return policy.can_read_legacy_crm()
@@ -39,14 +41,27 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
         if lead_id <= 0:
             return web.json_response(
                 {"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
-        if context.policy(profile).action_scope('dialogs','view') is not None:
+        if context.policy(profile).kommo_access() or context.policy(profile).action_scope('dialogs','view') is not None:
             # The old lead-only reader cannot inherit a deal grant to bypass
             # source restrictions. Reuse the current transactional page reader.
             from tenant_chat_history_store import page
             from tenant_linear_policy import TenantLinearError
             try:
                 result=await asyncio.to_thread(page,profile,lead_id)
-                return web.json_response({'success':True,**result,'stale':False,'warning':''})
+                warning = ''
+                if str(request.rel_url.query.get('refresh') or '').casefold() in {'1','true','yes'}:
+                    deal = await asyncio.to_thread(context.get_deal, tenant_id=profile['tenant_id'], kommo_lead_id=lead_id)
+                    if context.policy(profile).can_read_kommo_chat(deal):
+                        try:
+                            await context.sync_chat(profile,lead_id)
+                        except context.platform_error as error:
+                            warning = str(error)
+                        except Exception:
+                            context.logger.exception('Kommo chat refresh failed')
+                            warning = 'Çat tarixçəsi yenilənmədi. Son saxlanmış tarixçə göstərilir.'
+                        # Re-authorize after the provider call, including membership revocation.
+                        result=await asyncio.to_thread(page,profile,lead_id)
+                return web.json_response({'success':True,**result,'stale':bool(warning),'warning':warning})
             except TenantLinearError as error:
                 return web.json_response({'success':False,'error':str(error)},status=error.status)
         deal = await asyncio.to_thread(

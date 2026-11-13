@@ -61,9 +61,9 @@ class Sync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.member=Mock(return_value={**SESSION,'tenant_status':'active'})
         self.deal=Mock(return_value={'tenant_id':TENANT,'kommo_lead_id':7})
-        self.list=Mock(return_value=['cached']);self.messages=Mock();self.deals=Mock()
+        self.list=Mock(return_value=[{'body': 'cached'}]);self.messages=Mock();self.deals=Mock()
         self.reader=AsyncMock(return_value=[(talk(1),page(1)['messages']),(talk(2),page(2)['messages'])])
-        self.policy=Mock();self.policy.can_access_deal.return_value=True
+        self.policy=Mock();self.policy.can_read_kommo_chat.return_value=True
         self.module=loaders.load('tenant_chat_sync',{'read_conversations':self.reader,
             'TenantPolicy':lambda _:self.policy,'TenantPlatformError':TenantLinearError},
             {'tenant_chat_reader','tenant_policy','tenant_platform'})
@@ -74,7 +74,7 @@ class Sync(unittest.IsolatedAsyncioTestCase):
         return await self.module.sync(SESSION,7,self.request,self.member,self.deal,self.list,self.messages,self.deals,self.normalize,lambda _:'fallback')
 
     async def test_multiple_talks_single_batch_exact_origins(self):
-        self.assertEqual(await self.run_sync(),['cached'])
+        self.assertEqual(await self.run_sync(),[{'body': 'cached'}])
         batch=self.messages.call_args.kwargs
         self.assertEqual(batch['tenant_id'],TENANT);self.assertEqual(len(batch['messages']),2)
         self.assertEqual(batch['messages'][0]['channel'],'instagram')
@@ -91,10 +91,10 @@ class Sync(unittest.IsolatedAsyncioTestCase):
         self.messages.assert_not_called();self.request.assert_not_awaited()
 
     async def test_live_move_or_wrong_lead_blocks_cache(self):
-        self.policy.can_access_deal.side_effect=[True,True,False]
+        self.policy.can_read_kommo_chat.side_effect=[True,True,False]
         with self.assertRaises(TenantLinearError):await self.run_sync()
         self.messages.assert_not_called()
-        self.policy.can_access_deal.side_effect=None;self.request.return_value={'id':8}
+        self.policy.can_read_kommo_chat.side_effect=None;self.request.return_value={'id':8}
         with self.assertRaises(TenantLinearError):await self.run_sync()
         self.messages.assert_not_called()
 
@@ -114,3 +114,55 @@ class Sync(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class KommoPipelineSync(unittest.IsolatedAsyncioTestCase):
+    """Provider reads are scoped by assigned pipelines, not native CRUD."""
+    def setUp(self):
+        Sync.setUp(self)
+        from tenant_policy import TenantPolicy
+        self.person = {**SESSION, 'active': True, 'tenant_status': 'active',
+            'role': 'operator', 'permissions': [], 'modules': {}, 'workflow': {
+                'pipelines': [{'pipeline_id': 1, 'active': True}, {'pipeline_id': 2, 'active': True}],
+                'policies': {'members': {str(SESSION['telegram_id']): {
+                    'pipeline_ids': ['1'], 'access_scopes': {'dialogs': {'view': 'none', 'update': 'none'}}}}}}}
+        self.member.return_value = self.person
+        self.deal.return_value = {'tenant_id': TENANT, 'kommo_lead_id': 7, 'pipeline_id': 1}
+        self.module.sync.__globals__['TenantPolicy'] = TenantPolicy
+
+    run_sync = Sync.run_sync
+
+    async def test_pipeline_read_with_native_denial(self):
+        await self.run_sync()
+        self.messages.assert_called_once()
+
+    async def test_foreign_pipeline_and_connect_cached_records_never_read(self):
+        for deal in [{'tenant_id': TENANT, 'pipeline_id': 2},
+                     {'tenant_id': 'other', 'pipeline_id': 1},
+                     {'tenant_id': TENANT, 'pipeline_id': 1, 'raw': {'source': 'connect'}}]:
+            self.deal.return_value = deal
+            with self.assertRaises(TenantLinearError): await self.run_sync()
+        self.reader.assert_not_awaited(); self.messages.assert_not_called()
+
+    async def test_live_pipeline_move_never_caches(self):
+        self.request.return_value = {'id': 7, 'pipeline_id': 2}
+        with self.assertRaises(TenantLinearError): await self.run_sync()
+        self.messages.assert_not_called()
+
+    async def test_pipeline_revocation_during_provider_read(self):
+        import copy
+        revoked = copy.deepcopy(self.person)
+        revoked['workflow']['policies']['members'][str(SESSION['telegram_id'])]['pipeline_ids'] = []
+        self.member.side_effect = [self.person, revoked]
+        with self.assertRaises(TenantLinearError): await self.run_sync()
+        self.messages.assert_not_called(); self.request.assert_not_awaited()
+
+    async def test_mixed_cache_only_returns_kommo_rows(self):
+        self.list.return_value = [{'body': 'Kommo', 'channel': 'instagram'},
+                                  {'body': 'private Connect', 'channel': 'connect:channel'}]
+        self.assertEqual(await self.run_sync(), [{'body': 'Kommo', 'channel': 'instagram'}])
+
+    async def test_provider_cannot_claim_connect_origin(self):
+        self.normalize = lambda raw, channel: {'external_id': raw['id'], 'channel': 'connect:channel'}
+        with self.assertRaises(TenantLinearError): await self.run_sync()
+        self.messages.assert_not_called()

@@ -23,7 +23,7 @@ class Import(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.auth=Mock(return_value='connection')
         self.member=Mock(return_value={**SESSION,'active':True,'tenant_status':'active'})
-        self.write=Mock();self.policy=Mock();self.policy.can_access_deal.return_value=True
+        self.write=Mock();self.policy=Mock();self.policy.can_read_kommo_chat.return_value=True
         self.module=load('tenant_chat_import_service',{'TenantPolicy':lambda profile:self.policy}, {'tenant_policy'})
         self.request=AsyncMock(side_effect=[{'talks':[talk(1)]},page(1),{'id':7}])
         self.normalize=lambda row,channel:{'external_id':row['id'],'channel':channel,'body':'Salam'}
@@ -80,9 +80,14 @@ class Import(unittest.IsolatedAsyncioTestCase):
         self.member.return_value={**SESSION,'active':True,'tenant_status':'active'}
         self.request.side_effect=[{'talks':[talk(1)]},page(1),{'id':8}]
         with self.assertRaises(TenantLinearError):await self.run_import()
-        self.policy.can_access_deal.return_value=False
+        self.policy.can_read_kommo_chat.return_value=False
         self.request.side_effect=[{'talks':[talk(1)]},page(1),{'id':7}]
         with self.assertRaises(TenantLinearError):await self.run_import()
+        self.write.assert_not_called()
+
+    async def test_provider_cannot_claim_connect_origin(self):
+        self.normalize=lambda row,channel: {'external_id': row['id'], 'channel': 'connect:channel'}
+        with self.assertRaises(TenantLinearError): await self.run_import()
         self.write.assert_not_called()
 
     async def test_catalog_change_rejects_cursor_before_message_fetch(self):
@@ -107,12 +112,13 @@ class Store(unittest.TestCase):
     def setUp(self):
         self.conn=MagicMock();self.conn.__enter__.return_value=self.conn
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.policy=Mock();self.policy.can_access_deal.return_value=True
+        self.policy=Mock();self.policy.can_read_kommo_chat.return_value=True
+        self.policy.profile = {'tenant_id': TENANT}
         self.module=load('tenant_chat_import_store',{'_connect':Mock(return_value=self.conn),'_ensure_schema':Mock(),
             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda profile:self.policy}, {'tenant_platform','tenant_policy'})
 
     def test_no_credentials_selected_and_all_queries_tenant_scoped(self):
-        self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},{'kommo_lead_id':7},
+        self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},{'kommo_lead_id':7},None,
                                       {'account_domain':'company.kommo.com','connected_at':'date'}]
         self.assertEqual(self.module.authorize(SESSION,7),'company.kommo.com:date')
         for call in self.cur.execute.call_args_list:
@@ -124,7 +130,7 @@ class Store(unittest.TestCase):
                      [{'active':True,'tenant_status':'active'},None,None]]:
             self.cur.fetchone.side_effect=rows
             with self.assertRaises(TenantLinearError):self.module.authorize(SESSION,7)
-        self.policy.can_access_deal.return_value=False
+        self.policy.can_read_kommo_chat.return_value=False
         self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},None]
         with self.assertRaises(TenantLinearError):self.module.authorize(SESSION,7)
 

@@ -217,6 +217,13 @@ class TenantPolicy:
         creator = self.kommo_user_id()
         return bool(creator and positive_id(raw.get('created_by_id') or raw.get('created_by')) == creator)
 
+    def can_read_kommo_chat(self, deal: dict | None) -> bool:
+        """Provider deal information is independent of native CRM/dialog scopes."""
+        raw = (deal or {}).get('raw')
+        return bool(self.profile.get('active') is True
+                    and not (isinstance(raw, dict) and raw.get('source') == 'connect')
+                    and self.can_access_kommo_deal(deal))
+
     def kommo_task_scope(self) -> dict:
         return {'kind': 'all'} if self.privileged else {'kind': 'kommo', 'pipelines': self.kommo_pipeline_scope(), 'marker': self.task_marker(), 'kommo_user_id': self.kommo_user_id()}
 

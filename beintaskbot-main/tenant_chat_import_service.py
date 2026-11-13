@@ -54,11 +54,13 @@ async def run(session: dict, lead: int, cursor: str, request, authorize, current
         more = continuation(payload) or len(page) == PAGE_SIZE
         if more and (not page or number == MAX_PAGE): raise fail()
         batch = [normalize(row, str(row.get('origin') or channel(talk))) for row in seen.values()]
+        if any(str(row.get('channel') or '').startswith('connect:') for row in batch):
+            raise TenantLinearError('Источник сообщения не относится к Kommo.', 403)
         live = await request(tenant, 'GET', f'leads/{lead}')
     if await asyncio.to_thread(authorize, session, lead) != connection:
         raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
     member = await asyncio.to_thread(current_member, tenant, int(session['telegram_id']))
-    if not member or member.get('active') is not True or member.get('tenant_status') != 'active' or int(live.get('id') or 0) != lead or not TenantPolicy(member).can_access_deal({**live, 'tenant_id': tenant}):
+    if not member or member.get('active') is not True or member.get('tenant_status') != 'active' or int(live.get('id') or 0) != lead or not TenantPolicy(member).can_read_kommo_chat({**live, 'tenant_id': tenant}):
         raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
     if batch: await asyncio.to_thread(upsert, tenant_id=tenant, kommo_lead_id=lead, messages=batch)
     next_index, next_page = (index, number + 1) if more else (index + 1, 1)

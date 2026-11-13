@@ -14,6 +14,9 @@ class Policy:
     def __init__(self, profile):
         self.profile = profile
 
+    def kommo_access(self):
+        return False
+
     def action_scope(self, module, action):
         return None
 

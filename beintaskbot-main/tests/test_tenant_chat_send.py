@@ -92,7 +92,7 @@ class Service(unittest.IsolatedAsyncioTestCase):
             'dispatch_guarded': lambda item, credentials, callback, *args, **kwargs: callback(credentials, *args, **kwargs),
             'reserve': self.reserve, 'finish': self.finish, 'mark_sending': self.mark, 'send': self.send,
             'command': command, 'resolve_route': self.route,
-            'TenantPolicy': lambda person: SimpleNamespace(action_scope=lambda *args: None, can_access_deal=lambda lead: lead['pipeline_id'] == 10)},
+            'TenantPolicy': lambda person: SimpleNamespace(action_scope=lambda *args: None, can_read_kommo_chat=lambda lead: lead['pipeline_id'] == 10)},
             {'tenant_chat_send_policy', 'tenant_chat_send_store', 'tenant_chat_send_provider', 'tenant_policy'})
 
     async def run_send(self):

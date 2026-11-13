@@ -38,8 +38,8 @@ async def run(session, data, request, wait_slot, logger):
                 route = await resolve_route(tenant, lead_id, request)
                 live = await request(tenant, 'GET', f'leads/{lead_id}')
             profile, credentials = await asyncio.to_thread(mark_sending, item, route)
-            if int(live.get('id') or 0) != lead_id or (TenantPolicy(profile).action_scope('dialogs','update') is None and not TenantPolicy(profile).can_access_deal({
-                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id})):
+            if int(live.get('id') or 0) != lead_id or not TenantPolicy(profile).can_read_kommo_chat({
+                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
                 raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
         external_started = True
         message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send_connect, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, item['command']['text'], wait_slot)

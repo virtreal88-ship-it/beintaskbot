@@ -11,7 +11,7 @@ class Review(unittest.TestCase):
     def setUp(self):
         self.connect=MagicMock(); self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
-        self.policy=Mock(privileged=True); self.policy.allows.return_value=True; self.policy.can_access_deal.return_value=True
+        self.policy=Mock(privileged=True); self.policy.action_scope.return_value=None; self.policy.allows.return_value=True; self.policy.can_access_deal.return_value=True
         self.module=loaders.load('tenant_chat_review_store', {'_connect':self.connect, 'ensure_schema':Mock(),
             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda _:self.policy},
             {'tenant_platform','tenant_chat_review_schema','tenant_policy'})

@@ -22,10 +22,11 @@ def authorize(session: dict, lead: int) -> str:
                 raise TenantLinearError('İcazə yoxdur.', 403)
             policy = TenantPolicy({**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)})
             cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL', (tenant, lead))
-            if not policy.can_access_deal(cur.fetchone()):
+            deal = cur.fetchone()
+            if not deal:
                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
-            from tenant_dialog_access import require_lead
-            require_lead(cur,tenant,policy,lead)
+            from tenant_dialog_access import require_kommo_lead_read
+            require_kommo_lead_read(cur,tenant,policy,lead,deal=deal)
             cur.execute("SELECT account_domain,connected_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected'", (tenant,))
             integration = cur.fetchone()
             if not integration or not integration.get('account_domain'):

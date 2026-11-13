@@ -31,6 +31,8 @@ def authority(cur, session, lead_id):
         raise TenantLinearError('Исходный Connect-канал недоступен; отправка через другой канал запрещена.',409)
     if scope(policy,'update') is None and (not policy.allows('deals') or not policy.can_access_deal(deal)):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
+    if not policy.can_read_kommo_chat(deal):
+        raise TenantLinearError('Сделка недоступна по назначенным воронкам Kommo.', 403)
     require_source(cur,tenant,policy,'kommo','','update')
     cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
     integration = cur.fetchone()
@@ -126,7 +128,7 @@ def mark_sending(item, route):
     return profile, credentials
 
 
-def upload_credentials(item):
+def upload_credentials(item, live_deal=None):
     """Fresh authority before upload, without claiming message sending."""
     with _connect() as conn:
         ensure_schema(conn)
@@ -135,6 +137,9 @@ def upload_credentials(item):
                 {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
+            if live_deal is not None and (int(live_deal.get('id') or 0) != item['command']['lead_id']
+                    or not TenantPolicy(profile).can_read_kommo_chat({**live_deal, 'tenant_id': item['key'][0]})):
+                raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
             tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])))
             if not isinstance(tokens, dict) or not isinstance(tokens.get('access_token'), str) or not tokens['access_token']:
                 raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
@@ -239,7 +244,8 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
     by the provider cannot be recalled; receipts retain that ordering.
     """
     from tenant_scoped_access import scoped_access_enabled
-    if not scoped_access_enabled():return callback(expected_credentials,*args,**kwargs)
+    if not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
+        return callback(expected_credentials,*args,**kwargs)
     with _connect() as conn:
         with conn.cursor() as cur:
             profile,connection,integration=authority(cur,
