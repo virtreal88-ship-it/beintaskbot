@@ -32,6 +32,18 @@ def verified_phone_jid(cur, tenant, channel, conversation):
     return next(iter(phones)) if len(phones) == 1 else ''
 
 
+def established_canonical_conversation(cur, tenant, channel, conversation):
+    """Return a prior route for this identity without accepting new pair data."""
+    current = direct_identity(conversation)
+    if not current:
+        return ''
+    cur.execute('''SELECT DISTINCT canonical_conversation_id FROM saas_connect_direct_identities
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=ANY(%s::text[])''',
+      (tenant, channel, sorted(_aliases(current))))
+    targets = {str(row['canonical_conversation_id']) for row in cur.fetchall()}
+    return next(iter(targets)) if len(targets) == 1 else ''
+
+
 def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     """Resolve and reserve identities inside the caller's message transaction.
 
@@ -52,7 +64,10 @@ def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     verified = (complete and phone_jid(jid) and lid.endswith('@lid')
                 and (current == lid or phone_jid(current) == phone_jid(jid)))
     if complete and not verified:
-        conflict = True
+        # The pair contradicts this event's own route, so it cannot add any
+        # aliases. Keep the established route and report the conflict before
+        # taking locks or consulting persisted identities.
+        return conversation, True
     aliases = _aliases(current)
     if verified and not conflict:
         aliases |= _aliases(jid) | {lid}

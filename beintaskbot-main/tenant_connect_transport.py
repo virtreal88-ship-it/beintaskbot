@@ -867,6 +867,14 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
+            if identity_conflict:
+                # A contradictory event cannot add aliases, but it also must
+                # not split a route that this exact incoming identity already
+                # had. Preserve only a unique, previously confirmed mapping.
+                from tenant_connect_direct_identity import established_canonical_conversation
+                established = established_canonical_conversation(cur, tenant, channel_id, conversation)
+                if established:
+                    conversation = established
             provider_conversation=conversation
             if not identity_conflict and metadata.get('kind')!='group' and _direct_identity(conversation):
                 from tenant_connect_owner_identity import route as owner_route

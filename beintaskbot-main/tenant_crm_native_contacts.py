@@ -243,20 +243,28 @@ def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_i
     # two channels.  Hashing is database-local and exposes no identity.
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                 (str(tenant_id) + ':wa:' + number,))
-    cur.execute("""SELECT c.id,c.display_name,c.phone,c.email
+    cur.execute("""SELECT c.id,c.display_name,c.phone,c.email,c.archived_at
         FROM saas_crm_native_contact_identities i
         JOIN saas_crm_native_contacts c ON c.tenant_id=i.tenant_id AND c.id=i.contact_id
         WHERE i.tenant_id=%s::uuid AND i.identity_type='whatsapp_phone' AND i.identity_value=%s
-          AND c.archived_at IS NULL FOR UPDATE OF c""", (tenant_id, number))
+        FOR UPDATE OF c""", (tenant_id, number))
     row = cur.fetchone()
+    # A durable identity that points to an archived record must not silently
+    # be reassigned to a new CRM contact. Require an explicit recovery action.
+    if row is not None and row.get('archived_at') is not None:
+        return None
     if row is None:
-        # Adopt a pre-existing contact with the same verified number before
-        # creating a new one. Names are deliberately excluded from matching.
+        # Adopt a pre-existing contact only when the number identifies exactly
+        # one active row. A shared number is evidence for candidate discovery,
+        # not proof that the first matching contact owns this conversation.
         cur.execute("""SELECT id,display_name,phone,email FROM saas_crm_native_contacts
             WHERE tenant_id=%s::uuid AND archived_at IS NULL
               AND regexp_replace(phone,'[^0-9]','','g')=%s
-            ORDER BY created_at,id LIMIT 1 FOR UPDATE""", (tenant_id, number))
-        row = cur.fetchone()
+            ORDER BY created_at,id LIMIT 2 FOR UPDATE""", (tenant_id, number))
+        matches = cur.fetchall()
+        if len(matches) > 1:
+            return None
+        row = matches[0] if matches else None
     if row is None:
         name = str(display_name or '').strip()[:180] or number
         ident = str(uuid.uuid4())
@@ -275,10 +283,23 @@ def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_i
         (tenant_id, number))
     identity = cur.fetchone()
     ident = str(identity['contact_id'])
+    # Never rewrite an established route to another contact merely because a
+    # later event supplied a matching phone. Conflicts need explicit review.
+    cur.execute("""SELECT contact_id FROM saas_crm_native_contact_conversations
+        WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s::uuid
+          AND conversation_id=%s FOR UPDATE""", (tenant_id, channel, conversation))
+    route = cur.fetchone()
+    if route is not None and str(route['contact_id']) != ident:
+        return None
     cur.execute("""INSERT INTO saas_crm_native_contact_conversations
         (tenant_id,provider,channel_id,conversation_id,contact_id,first_message_id)
         VALUES(%s::uuid,'connect',%s::uuid,%s,%s::uuid,%s)
-        ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
-        SET contact_id=EXCLUDED.contact_id""",
+        ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO NOTHING""",
         (tenant_id, channel, conversation, ident, str(message_id or '')[:240]))
+    cur.execute("""SELECT contact_id FROM saas_crm_native_contact_conversations
+        WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s::uuid
+          AND conversation_id=%s""", (tenant_id, channel, conversation))
+    route = cur.fetchone()
+    if not route or str(route['contact_id']) != ident:
+        return None
     return ident
