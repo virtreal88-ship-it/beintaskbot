@@ -43,13 +43,13 @@ def migrate_operator_identity_links(cur) -> None:
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_operator_active_profile_user_idx
       ON saas_beinsystems_operator_links(tenant_id,connection_generation,
         external_scope_id,external_id)
-      WHERE revoked_at IS NULL AND external_entity_type='profile_user''')
+      WHERE revoked_at IS NULL AND external_entity_type='profile_user' ''')
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_operator_active_company_account_idx
       ON saas_beinsystems_operator_links(tenant_id,connection_generation,external_id)
-      WHERE revoked_at IS NULL AND local_entity_type='company' AND external_entity_type='account''')
+      WHERE revoked_at IS NULL AND local_entity_type='company' AND external_entity_type='account' ''')
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_operator_active_case_account_idx
       ON saas_beinsystems_operator_links(tenant_id,connection_generation,local_entity_id)
-      WHERE revoked_at IS NULL AND local_entity_type='support_ticket' AND external_entity_type='account''')
+      WHERE revoked_at IS NULL AND local_entity_type='support_ticket' AND external_entity_type='account' ''')
     cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_active_local_identity_idx
       ON saas_beinsystems_operator_links(tenant_id,connection_generation,
         local_entity_type,local_entity_id,verified_at DESC)

@@ -163,6 +163,9 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIn("saas_operator_active_profile_user_idx", sql)
         self.assertIn("saas_operator_active_company_account_idx", sql)
         self.assertIn("saas_operator_active_case_account_idx", sql)
+        self.assertIn("external_entity_type='profile_user' ", sql)
+        self.assertIn("local_entity_type='company' AND external_entity_type='account' ", sql)
+        self.assertIn("local_entity_type='support_ticket' AND external_entity_type='account' ", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_rate_limits", sql)
 
 
