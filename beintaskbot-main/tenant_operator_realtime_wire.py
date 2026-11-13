@@ -26,6 +26,7 @@ CANCEL_RACE_DEADLINE=2
 _LOG=logging.getLogger(__name__)
 _TTD_RECOVERABLE_FAILURES=frozenset({'tts_provider_error','tts_timeout','tts_audio_invalid',
                                      'provider_event_invalid','tts_ended_early'})
+_TTD_TERMINAL_CLOSE_FAILURES=frozenset({'tts_close_unconfirmed','tts_admission_rejected'})
 
 # Only stable provider machine codes that are useful to the operator may reach
 # logs. Unknown codes are deliberately collapsed to ``provider_error``.
@@ -34,6 +35,7 @@ SAFE_PROVIDER_ERROR_CODES=frozenset({
     'invalid_request_error','session_expired','input_audio_buffer_commit_empty',
     'input_audio_buffer_empty','audio_unintelligible','input_audio_transcription_failed',
 })
+_SAFE_PROVIDER_CLOSE_COMPONENTS=frozenset({'openai_realtime','elevenlabs_ttd'})
 
 
 class SafeRealtimeFailure(ValueError):
@@ -98,8 +100,9 @@ async def _require_live_admission(guard,scope=None,session_id=None):
 
 class AiohttpRealtimeSocket:
     """Bounded JSON adapter around an already-open aiohttp WebSocket."""
-    def __init__(self,ws,owned_session=None):
-        self.ws=ws;self.owned_session=owned_session;self._close_task=None
+    def __init__(self,ws,owned_session=None,*,component='openai_realtime'):
+        if component not in _SAFE_PROVIDER_CLOSE_COMPONENTS:raise ValueError('provider_component_invalid')
+        self.ws=ws;self.owned_session=owned_session;self.component=component;self._close_task=None
 
     async def send_json(self,event):
         if not isinstance(event,dict):raise ValueError('wire_event_invalid')
@@ -142,20 +145,31 @@ class AiohttpRealtimeSocket:
         return await asyncio.shield(self._close_task)
 
     async def _close_owned(self):
+        close_error=None
         try:
-            await asyncio.wait_for(self.ws.close(),CLOSE_DEADLINE)
+            try:await asyncio.wait_for(self.ws.close(),CLOSE_DEADLINE)
+            except BaseException as error:close_error=error
         finally:
             if self.owned_session is not None:
-                await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
+                try:await asyncio.wait_for(self.owned_session.close(),CLOSE_DEADLINE)
+                except BaseException as error:
+                    if close_error is None:close_error=error
         # aiohttp marks a socket closed even when the peer never replies and
         # close() internally catches an error. Only a valid peer close frame,
         # with no recorded transport exception, confirms clean shutdown.
         code=self.ws.close_code
         valid_code=(isinstance(code,int) and not isinstance(code,bool) and
                     ((1000<=code<=1014 and code not in (1004,1005,1006)) or 3000<=code<=4999))
-        if not self.ws.closed or not valid_code or self.ws.exception() is not None:
-            raise ValueError('wire_close_unconfirmed')
-        if self.owned_session is not None and not self.owned_session.closed:raise ValueError('wire_session_close_unconfirmed')
+        transport_error=close_error or self.ws.exception()
+        transport_kind=_safe_transport_kind(transport_error)
+        session_closed=self.owned_session is None or self.owned_session.closed
+        if close_error is not None or not self.ws.closed or not valid_code or transport_error is not None or not session_closed:
+            safe_code=code if valid_code else 'none'
+            _LOG.warning('realtime_provider_close_unconfirmed provider=%s stage=transport_close '
+                         'code=websocket_close_unconfirmed close_code=%s transport_kind=%s',
+                         self.component,safe_code,transport_kind)
+            raise SafeRealtimeFailure('websocket_close_unconfirmed',close_code=safe_code,
+                                      transport_kind=transport_kind) from None
 
 
 async def _open_openai_socket(api_key,owner):
@@ -176,7 +190,7 @@ async def _open_openai_socket(api_key,owner):
             _LOG.warning('realtime_provider_connect_failed stage=websocket_upgrade error=%s status=%s',kind,status)
         await owner._close_opening_session()
         raise
-    socket=AiohttpRealtimeSocket(ws,owned_session=session)
+    socket=AiohttpRealtimeSocket(ws,owned_session=session,component='openai_realtime')
     owner.socket=socket
     # A timed-out or stalled network upgrade can complete after this worker
     # has lost its distributed lease. Recheck after the upgrade, before the
@@ -894,6 +908,13 @@ class _HybridRealtimeMixin:
     def _handle_hybrid_tts(self,event):
         kind,epoch,payload=event
         active=self._hybrid_active
+        stream=next((item for item in reversed(self._hybrid_streams)
+                     if getattr(item,'epoch',None)==epoch),None)
+        if (kind not in ('audio','done','cancelled') and
+            (payload in _TTD_TERMINAL_CLOSE_FAILURES or
+             getattr(stream,'close_unconfirmed',False))):
+            raise ValueError(payload if payload in _TTD_TERMINAL_CLOSE_FAILURES
+                             else 'tts_close_unconfirmed')
         if active is None or active['epoch']!=epoch:return
         if kind=='audio':
             if active['cancelled']:return
@@ -907,10 +928,6 @@ class _HybridRealtimeMixin:
                 return
             active['tts_done']=True;self._hybrid_finish_if_ready()
         else:
-            if (payload in ('tts_close_unconfirmed','tts_admission_rejected') or
-                getattr(active.get('stream'),'close_unconfirmed',False)):
-                raise ValueError(payload if payload in ('tts_close_unconfirmed','tts_admission_rejected')
-                                 else 'tts_close_unconfirmed')
             self._fail_hybrid_audio(active,payload if payload in _TTD_RECOVERABLE_FAILURES else 'tts_provider_error')
 
     async def receive(self):
@@ -951,28 +968,34 @@ class _HybridRealtimeMixin:
         await asyncio.shield(self._hybrid_close_task)
 
     async def _close_hybrid(self):
-        self._hybrid_closing=True;self._cancel_hybrid_response(graceful=True)
-        for stream in self._hybrid_streams:self._close_hybrid_stream(stream,graceful=True)
+        self._hybrid_closing=True;self._cancel_hybrid_response()
+        # X, tab loss, and worker shutdown are cancellations. ElevenLabs'
+        # close_socket command flushes buffered text into more audio; reserve
+        # that command for natural completion and close every live transport.
+        for stream in self._hybrid_streams:self._close_hybrid_stream(stream)
         # Drain a bounded queue so a completing reader cannot hold cleanup.
         while not self._hybrid_events.empty():self._hybrid_events.get_nowait()
         readers=[task for task in (self._hybrid_openai_task,self._hybrid_tts_task) if task is not None]
         # An active aiohttp receive must remain alive through the OpenAI close
         # handshake: cancelling it first makes aiohttp record a false 1006.
         if self._hybrid_tts_task is not None and not self._hybrid_tts_task.done():self._hybrid_tts_task.cancel()
-        cleanup=[stream.wait_closed() for stream in self._hybrid_streams]
-        cleanup.append(super().close())
-        results=await asyncio.gather(*cleanup,return_exceptions=True)
+        ttd_close=asyncio.gather(*(stream.wait_closed() for stream in self._hybrid_streams),
+                                 return_exceptions=True)
+        openai_close=asyncio.create_task(super().close())
+        ttd_results,openai_result=await asyncio.gather(ttd_close,openai_close,return_exceptions=True)
         for task in (self._hybrid_openai_task,self._hybrid_tts_task):
             if task is not None and task not in readers:readers.append(task)
         for task in readers:
             if not task.done():task.cancel()
         if readers:await asyncio.gather(*readers,return_exceptions=True)
-        stream_count=len(self._hybrid_streams)
         # Reader errors are drained above, but do not mean a transport is
         # still open: only the corresponding close operations can prove that.
-        if (any(isinstance(result,BaseException) for result in results[:stream_count]) or
-            isinstance(results[-1],BaseException)):
+        if any(isinstance(result,BaseException) for result in ttd_results):
             raise ValueError('tts_close_unconfirmed')
+        if isinstance(openai_result,BaseException):
+            result=openai_result
+            if isinstance(result,SafeRealtimeFailure):raise result
+            raise ValueError('openai_close_unconfirmed') from None
 
 
 class SyntheticHybridRealtimeWire(_HybridRealtimeMixin,_RealtimeWire):

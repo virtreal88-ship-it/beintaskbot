@@ -37,7 +37,7 @@
     orb?.setAttribute('data-state',state);
     if(orb){const canInterrupt=state==='responding';orb.disabled=!canInterrupt;orb.setAttribute('aria-label',canInterrupt?(options.language==='az'?'Cavabı kəs və danış':'Перебить ответ и говорить'):(options.language==='az'?'AI səsli söhbəti dinləyir':'Анимация голосового разговора с AI'));}
     const status=controls?.querySelector('[role=status]');
-    if(state==='idle'&&endRequested&&status&&!/не подтверж|təsdiqlənmədi|not confirmed/i.test(status.textContent||''))section.hidden=true;
+    if(state==='idle'&&endRequested&&status&&!/не подтверд|təsdiqləməyib|not confirmed/i.test(status.textContent||''))section.hidden=true;
     if(state==='idle')endRequested=false;
     try{options.onState?.(state);}catch(_){}
   };
@@ -94,7 +94,7 @@
         connect:callback=>win.connectExperimentalCopilotVoice(options.socketPath,callback),
         lifecycle:document,interruptTarget:section.querySelector('[data-voice-orb]'),language:options.language,duplex:true,onState:setVoiceState,
         onDismiss:()=>{section.hidden=true;},
-        onIdle:()=>{setVoiceState('idle');if(!disposed)options.onIdle?.();},
+        onIdle:outcome=>{setVoiceState('idle');if(!disposed)options.onIdle?.(outcome);},
       });
       controls?.addEventListener('click',event=>{if(event.target.closest?.('.voice-session-end'))endRequested=true;},true);
       return controller;

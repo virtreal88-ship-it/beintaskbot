@@ -509,11 +509,11 @@ class HybridOpenAILoopbackCleanupTest(unittest.IsolatedAsyncioTestCase):
         try:
             stop.set();await asyncio.wait_for(closed.wait(),2)
             await asyncio.gather(reading,return_exceptions=True)
-            with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+            with self.assertRaisesRegex(ValueError,'websocket_close_unconfirmed'):
                 await asyncio.wait_for(wire.close(),3)
             self.assertEqual(ws.close_code,1006)
-            self.assertTrue(ttd.graceful and ttd.closed)
-            self.assertFalse(ttd.cancelled)
+            self.assertTrue(ttd.cancelled and ttd.closed)
+            self.assertFalse(ttd.graceful)
         finally:
             if not reading.done():reading.cancel()
             await asyncio.gather(reading,return_exceptions=True)
@@ -701,13 +701,12 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         await self.start_response()
         await self.openai.incoming.put(self.text_event('response.output_text.delta',delta='Hello, synthetic voice!'))
         self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'response.output_audio.delta')
-        socket=self.ttd_sockets[0];send_json=socket.send_json
-        async def observe_shutdown(event):
-            if event.get('close_socket'):
-                self.assertFalse(self.policy._closed)
-                await self.policy.assert_live(self.scope,self.session_id)
-            await send_json(event)
-        socket.send_json=observe_shutdown
+        socket=self.ttd_sockets[0];close=socket.close
+        async def observe_shutdown():
+            self.assertFalse(self.policy._closed)
+            await self.policy.assert_live(self.scope,self.session_id)
+            await close()
+        socket.close=observe_shutdown
         released=[]
         async def release(scope,fence):
             self.assertTrue(self.openai.closed and socket.closed)
@@ -723,7 +722,48 @@ class HybridBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await session._finish_end('user_end'))
         self.assertTrue(self.policy._closed)
         self.assertEqual(released,[(self.scope,1)])
-        self.assertTrue(any(event.get('close_socket') is True for event in socket.sent))
+        self.assertFalse(any(event.get('close_socket') is True for event in socket.sent),
+                         'session stop cancels TTD instead of flushing buffered speech')
+
+    def test_late_unconfirmed_close_from_interrupted_tts_epoch_is_fatal(self):
+        old=type('OldStream',(),{'epoch':1,'close_unconfirmed':True})()
+        self.wire._hybrid_streams.append(old)
+        self.wire._hybrid_active={'epoch':2,'cancelled':False,'tts_done':False,'response_done':None,
+                                  'response_id':'current','item_id':'item-current','stream':None}
+        try:
+            with self.assertRaisesRegex(ValueError,'tts_close_unconfirmed'):
+                self.wire._handle_hybrid_tts(('error',1,'tts_provider_error'))
+            self.assertEqual(self.wire._hybrid_active['epoch'],2,
+                             'a stale TTS close failure ends the session without mutating the new response')
+        finally:
+            self.wire._hybrid_streams.remove(old);self.wire._hybrid_active=None
+
+    async def test_close_x_cancels_active_ttd_without_flushing_and_closes_both_providers(self):
+        await self.start_response()
+        await self.openai.incoming.put(self.text_event('response.output_text.delta',delta='Buffered answer text'))
+        await asyncio.wait_for(self.wire.receive(),2)
+        stream=self.wire._hybrid_active['stream'];socket=self.ttd_sockets[0]
+        await asyncio.wait_for(self.wire.close(),2)
+        self.assertTrue(stream.cancelled and socket.closed and self.openai.closed)
+        self.assertFalse(any(event.get('close_socket') is True for event in socket.sent))
+
+    async def test_close_during_silence_confirms_openai_without_creating_ttd_stream(self):
+        await asyncio.wait_for(self.wire.close(),2)
+        self.assertTrue(self.openai.closed)
+        self.assertEqual(self.ttd_sockets,[])
+
+    async def test_close_after_barge_in_drains_previously_interrupted_ttd(self):
+        await self.start_response()
+        await self.openai.incoming.put(self.text_event('response.output_text.delta',delta='Interrupted answer'))
+        await asyncio.wait_for(self.wire.receive(),2)
+        stream=self.wire._hybrid_active['stream'];socket=self.ttd_sockets[0]
+        await self.openai.incoming.put({'type':'input_audio_buffer.speech_started'})
+        self.assertEqual((await asyncio.wait_for(self.wire.receive(),2))['type'],'input_audio_buffer.speech_started')
+        await asyncio.wait_for(stream.wait_closed(),2)
+        self.assertTrue(stream.cancelled and socket.closed)
+        await asyncio.wait_for(self.wire.close(),2)
+        self.assertTrue(self.openai.closed)
+        self.assertFalse(any(event.get('close_socket') is True for event in socket.sent))
 
     async def test_speech_started_preempts_ready_audio_with_pending_reader(self):
         await self.start_response()

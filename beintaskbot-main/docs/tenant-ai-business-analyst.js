@@ -135,10 +135,10 @@
             if(currentVoiceButton)currentVoiceButton.disabled=voiceStarting||voiceState==='active';
             if(currentSettingsButton)currentSettingsButton.disabled=voiceStarting||voiceState==='active';
           },
-          onIdle:()=>{voiceWasStarted=true;voiceState='ended';
+          onIdle:outcome=>{voiceWasStarted=true;voiceState=outcome?.confirmed===true?'ended':'idle';
             const currentCopy=lang(),currentStatus=host.querySelector('.analyst-voice-status');
             const currentVoiceButton=host.querySelector('.analyst-voice-button'),currentSettingsButton=host.querySelector('.analyst-settings-button');
-            if(currentStatus)currentStatus.textContent=currentCopy.voiceEnded;
+            if(currentStatus)currentStatus.textContent=outcome?.confirmed===true?currentCopy.voiceEnded:(outcome?.reason||currentCopy.voiceFailed);
             if(currentVoiceButton)currentVoiceButton.disabled=false;if(currentSettingsButton)currentSettingsButton.disabled=false;}
         });
         if(!voiceSection||await voiceSection.startVoice?.()!==true)throw Error('voice_unavailable');voiceWasStarted=true;

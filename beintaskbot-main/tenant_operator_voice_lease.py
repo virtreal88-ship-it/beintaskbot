@@ -59,6 +59,8 @@ class VoiceSessionLease:
         self.conversation = str(conversation)
         self.actor = actor
         self.fence = None
+        self._release_task=None
+        self._released_fence=None
 
     def _transaction(self, operation, fence=None):
         try:
@@ -178,7 +180,8 @@ class VoiceSessionLease:
         if scope != self.scope or self.fence is not None:
             raise TenantLinearError('Область голосового сеанса не совпадает.',403)
         fence=await asyncio.to_thread(self._transaction,'claim')
-        if fence is not None:self.fence=fence
+        if fence is not None:
+            self.fence=fence;self._release_task=None;self._released_fence=None
         return fence
 
     async def assert_current(self, scope, fence):
@@ -195,19 +198,47 @@ class VoiceSessionLease:
             raise TenantLinearError('Открытие голосового сеанса не подтверждено.',409)
         return True
 
-    async def release(self, scope, fence):
-        if scope != self.scope or self.fence is None or fence != self.fence:
-            return False
-        for attempt in range(3):
+    @staticmethod
+    def _consume_release_task(task):
+        try:task.exception()
+        except BaseException:pass
+
+    async def _release_owned(self, fence):
+        # The database operation is advisory-locked, exact-fenced and
+        # idempotent: after a lost commit response it confirms the same closed
+        # row on retry. Keep this bounded retry task alive even if the browser
+        # disconnects or the caller's shutdown deadline expires.
+        attempts=6
+        for attempt in range(attempts):
             try:
                 released=await asyncio.to_thread(self._transaction,'release',fence)
             except TenantLinearError:
-                if attempt == 2:
+                if attempt+1==attempts:
+                    _LOG.warning('realtime_voice_lease_release_result outcome=retry_exhausted attempts=%d',attempts)
                     raise
-                await asyncio.sleep(.1 * (2 ** attempt))
+                await asyncio.sleep(.1*(2**attempt))
                 continue
             if released:
                 self.fence=None
+                self._released_fence=fence
+                _LOG.info('realtime_voice_lease_release_result outcome=confirmed attempts=%d',attempt+1)
                 return True
+            _LOG.warning('realtime_voice_lease_release_result outcome=compare_and_set_mismatch attempts=%d',attempt+1)
             return False
         return False
+
+    async def release(self, scope, fence):
+        if scope != self.scope:
+            return False
+        if self.fence is not None and fence!=self.fence:return False
+        if self.fence is None and fence!=self._released_fence:return False
+        task=self._release_task
+        # Reconfirm even a completed local success against Postgres. The row
+        # may already belong to a newer fence, in which case a late duplicate
+        # release must not claim success for (or mutate) that new lease.
+        if task is not None and task.done():task=None
+        if task is None:
+            task=asyncio.create_task(self._release_owned(fence))
+            task.add_done_callback(self._consume_release_task)
+            self._release_task=task
+        return await asyncio.shield(task)
