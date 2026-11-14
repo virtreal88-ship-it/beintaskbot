@@ -86,7 +86,7 @@ def test_external_cap_and_marker_scope_preserve_lossless_exact_id_outside_window
             assert exact['task']['kommo_lead_id'] == lead_id
             assert exact['task']['source'] == 'kommo'
             status, personal = await _get(http, operator_cookie, 'kommo', actor=83)
-            assert status == 200 and personal['scope'] == 'marker'
+            assert status == 200 and personal['scope'] == 'kommo'
             assert [row['id'] for row in personal['tasks']] == ['502']
             assert personal['shown'] == 1 and personal['has_more'] is False
     asyncio.run(scenario())
@@ -237,7 +237,7 @@ def test_task_reader_waits_for_real_member_revision_then_retries_current_denial(
                         break
                     await asyncio.sleep(.02)
                 assert blocked, 'The real RR reader must wait at the held membership SHARE fence'
-                holder.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
+                holder.execute("UPDATE saas_tenant_members SET active=false WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
                 holder.commit()
                 status, result = await asyncio.wait_for(request, 8)
                 assert status == 403 and result['error'] == 'task_forbidden', result

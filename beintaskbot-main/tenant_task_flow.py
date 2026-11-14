@@ -158,11 +158,12 @@ def authority_key(profile):
 def _sources(policy):
     native = policy.profile.get('active') is not False if scoped_access_enabled() else policy.allows_action('tasks','view')
     external = policy.kommo_task_access()
+    external_write = external and policy.allows('tasks')
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
         complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
-        dict(source='kommo', view=external, create=external, update=False,
-            complete=external, archive=False, sync=external and policy.privileged)]
+        dict(source='kommo', view=external, create=external_write, update=False,
+            complete=external_write, archive=False, sync=external_write and policy.privileged)]
 
 
 def _native_where(profile):
@@ -268,7 +269,7 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None):
         if not next(item for item in sources if item['source'] == selected)['view']:
             raise TaskFlowError('task_forbidden', 403)
         scope = (policy.action_scope('tasks','view') or ('tenant' if policy.privileged else 'personal')) if selected == 'native' else (
-            'tenant' if policy.task_scope()['kind'] == 'all' else policy.task_scope()['kind'])
+            'tenant' if policy.kommo_task_scope()['kind'] == 'all' else policy.kommo_task_scope()['kind'])
         result = dict(source=selected, sources=sources, scope=scope, limit=100 if selected == 'native' else 200)
         if request_id:
             result['command'] = _command(cur, current, selected, request_id)
