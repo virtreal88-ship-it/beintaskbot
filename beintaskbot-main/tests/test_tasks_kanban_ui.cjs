@@ -5,7 +5,7 @@ const dom=new JSDOM('<html><body><div id="tasksList"></div></body></html>',{url:
 const w=dom.window,d=w.document;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}};w.tenantViewDemand={watch(){}};w.tenantI18n={language:'ru'};
 let opened=[],writes=0;w.fetch=()=>{writes++;throw Error('Unexpected request')};
 const tick=()=>new Promise(r=>setTimeout(r,30));async function until(f){for(let i=0;i<100;i++){if(f())return;await tick()}assert(f(),'UI did not settle')}
-const button=t=>[...d.querySelectorAll('button')].find(n=>n.textContent===t);
+const button=t=>[...d.querySelectorAll('button')].find(n=>(n.getAttribute('aria-label')||n.textContent)===t);
 const rows=[{id:'1',text:'Example [CRM:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]',deal_title:'Deal',due_at:new Date().toISOString(),status:'open'},{id:'2',text:'Completed',status:'completed'},{id:'3',text:'No due',status:'open'}];
 const settings={source:'kommo',complete:false,onOpen:id=>opened.push(id)};
 (async()=>{w.eval(fs.readFileSync('docs/tenant-chakra-ui.js','utf8'));w.tenantChakraCRM.renderTasks(rows,settings);await until(()=>d.querySelector('[data-task-kanban]'));
