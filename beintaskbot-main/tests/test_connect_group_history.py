@@ -255,3 +255,42 @@ def test_signed_echo_enriches_local_send_for_group_dedup(history_db,monkeypatch,
     with d.cursor() as cur:
         scoped=page(cur,A,G,channel_ids=[CB])
     assert len(scoped)==1 and scoped[0]['direction']=='incoming'
+
+
+def test_synchronous_group_receipt_collapses_cross_channel_copy_without_echo(history_db,monkeypatch):
+    import tenant_connect_transport as transport
+    d=history_db
+    monkeypatch.setattr(transport,'_connect',lambda:d)
+    monkeypatch.setattr(transport,'_schema',lambda _:None)
+    # AI author avoids unrelated human-control writes in this persistence test.
+    # The receipt contract is identical for any authorized caller.
+    receipt={'channelId':CA,'conversationId':G,'externalMessageId':'CONFIRMED_SEND',
+        'fromMe':True,'status':'sent','_crm_group_send_receipt':True,'participantJid':'994500000001@s.whatsapp.net'}
+    transport.record_outbound(A,1001,{'channel_id':CA,'conversation_id':G},'synthetic','local-send',author='AI Agent',receipt=receipt)
+    add(d,1,CB,event='CONFIRMED_SEND',body='synthetic')
+    with d.cursor() as cur: rows=page(cur,A,G)
+    assert len(rows)==1 and rows[0]['direction']=='outgoing' and rows[0]['raw']['status']=='sent'
+    assert len(rows[0]['sources'])==2
+    assert len(d.execute("SELECT id FROM saas_crm_messages WHERE kommo_lead_id IN (1001,1002)"))==2
+    # Same text with another provider event still remains independent.
+    add(d,2,CB,event='OTHER_EVENT',body='synthetic')
+    with d.cursor() as cur: assert len(page(cur,A,G))==2
+    # A repeated local receipt is idempotent and never regresses delivery.
+    d.execute("UPDATE saas_crm_messages SET raw=raw||'{\"status\":\"read\"}'::jsonb WHERE external_id='connect:local-send'");d.commit()
+    transport.record_outbound(A,1001,{'channel_id':CA,'conversation_id':G},'synthetic','local-send',author='AI Agent',receipt=receipt)
+    assert d.execute("SELECT raw FROM saas_crm_messages WHERE external_id='connect:local-send'")[0]['raw']['status']=='read'
+
+
+def test_sync_receipt_after_earlier_lid_echo_preserves_proven_alias(history_db,monkeypatch):
+    import tenant_connect_transport as transport
+    d=history_db;monkeypatch.setattr(transport,'_connect',lambda:d);monkeypatch.setattr(transport,'_schema',lambda _:None)
+    jid='994500000001@s.whatsapp.net';lid='888888@lid'
+    add(d,1,CA,event='SYNC_EVENT',participant=lid,direction='outgoing',raw_patch={'participantIdentity':{'lid':lid,'jid':jid},'status':'delivered'})
+    receipt={'channelId':CA,'conversationId':G,'externalMessageId':'SYNC_EVENT','fromMe':True,'_crm_group_send_receipt':True,'participantJid':jid}
+    transport.record_outbound(A,1001,{'channel_id':CA,'conversation_id':G},'synthetic','stored_1',author='AI Agent',receipt=receipt)
+    raw=d.execute("SELECT raw FROM saas_crm_messages WHERE external_id='connect:stored_1'")[0]['raw']
+    assert raw['participantJid']==lid and raw['status']=='delivered'
+    add(d,2,CB,event='SYNC_EVENT',participant=jid)
+    with d.cursor() as cur:assert len(page(cur,A,G))==1
+    d.execute("UPDATE saas_crm_messages SET direction='incoming' WHERE external_id='connect:stored_1'");d.commit()
+    with pytest.raises(transport.TenantPlatformError):transport.record_outbound(A,1001,{'channel_id':CA,'conversation_id':G},'synthetic','stored_1',author='AI Agent',receipt=receipt)

@@ -51,3 +51,4 @@ jobs:
           tests/test_connect_group_history.py::test_read_snapshot_selects_the_captured_copy_on_the_open_channel
           tests/test_connect_group_echo_facts.py
           tests/test_connect_group_history.py::test_signed_echo_enriches_local_send_for_group_dedup
+          tests/test_connect_group_history.py::test_synchronous_group_receipt_collapses_cross_channel_copy_without_echo

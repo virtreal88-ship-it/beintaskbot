@@ -42,9 +42,11 @@ async def run(session, data, request, wait_slot, logger):
                 **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
                 raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
         external_started = True
-        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send_connect, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, item['command']['text'], wait_slot)
+        message_id = await asyncio.to_thread(dispatch_guarded, item, credentials, send_connect, item['command']['text'], item['command']['request_id'], return_receipt=True, **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(dispatch_guarded, item, credentials, send, route, item['command']['text'], wait_slot)
+        receipt = message_id.get('receipt') if isinstance(message_id,dict) else None
+        if isinstance(message_id,dict): message_id=message_id['message_id']
         if is_connect and not scoped_quote:
-            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, author=profile.get('display_name') or str(profile['telegram_id']), actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
+            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, author=profile.get('display_name') or str(profile['telegram_id']), actor=profile['telegram_id'], **({'receipt':receipt} if receipt else {}), **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
         await asyncio.to_thread(finish, item, 'accepted', message_id)
         return {'state':'accepted','message_id':message_id,'origin':route['origin'],**(await _quoted_status(item,message_id) if scoped_quote else {})}
     except TenantLinearError:

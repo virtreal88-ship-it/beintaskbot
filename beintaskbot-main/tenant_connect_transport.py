@@ -39,6 +39,21 @@ class ConnectWebhookError(TenantPlatformError):
         self.status = status
 
 
+def _keep_verified_group_participant(previous, facts):
+    """Keep an existing spelling only when this exact event proves its alias."""
+    old,new=previous.get('participantJid'),facts.get('participantJid')
+    if not old or not new or old==new:return facts
+    if not previous.get('externalMessageId') or previous.get('externalMessageId')!=facts.get('externalMessageId'):return facts
+    pairs=[value for value in (previous.get('participantIdentity'),facts.get('participantIdentity')) if value]
+    if not pairs or any(value!=pairs[0] for value in pairs):return facts
+    pair=pairs[0]
+    if (isinstance(pair,dict) and re.fullmatch(r'[0-9]{5,22}@lid',str(pair.get('lid','')))
+        and re.fullmatch(r'[0-9]{5,22}@s[.]whatsapp[.]net',str(pair.get('jid','')))
+        and {old,new}=={pair['lid'],pair['jid']}):
+        return {**facts,'participantJid':old}
+    return facts
+
+
 def _group_echo_facts(data, stored, channel, conversation):
     """Enrich only an exact, signed provider receipt; never guess identities."""
     if not conversation.endswith('@g.us') or data.get('_crm_signed_outbound_receipt') is not True or data.get('fromMe') is False:
@@ -54,6 +69,7 @@ def _group_echo_facts(data, stored, channel, conversation):
         if isinstance(pair,dict) and re.fullmatch(r'[0-9]{5,22}@lid',str(pair.get('lid',''))) and re.fullmatch(r'[0-9]{5,22}@s[.]whatsapp[.]net',str(pair.get('jid',''))) and participant in (pair['lid'],pair['jid']):
             facts['participantIdentity']={'lid':pair['lid'],'jid':pair['jid']}
     previous=stored.get('raw') or {}
+    facts=_keep_verified_group_participant(previous,facts)
     if (data.get('channelId') != channel or data.get('conversationId') != conversation or
             (stored.get('message_type') and data.get('type') and stored['message_type'] != data['type']) or
             any(previous.get(k) not in (None,'',v) for k,v in facts.items())):
@@ -1289,7 +1305,7 @@ def quoted_once_scope(tenant,channel):
     return str(tenant)==QUOTED_ONCE_TENANT and str(channel)==QUOTED_ONCE_CHANNEL
 
 
-def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None) -> str:
+def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None, return_receipt=False):
     from tenant_ai_group_coordination import group_jid
     if group_jid(route.get('conversation_id')):
         # Group sends must use Connect's synchronous at-most-once path. The
@@ -1297,7 +1313,7 @@ def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=No
         # Evolution sendText after a lost response can post the same group
         # message twice because Evolution has no idempotency key.
         result=send_group_with_receipt(route,text,client_message_id,quoted_message_id=quoted_message_id)
-        return result['message_id']
+        return result if return_receipt else result['message_id']
     body = {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id}
     if quoted_message_id: body['quotedExternalMessageId']=quoted_message_id
     endpoint='/quoted-once' if quoted_message_id and quoted_once_scope(route.get('tenant_id'),route['channel_id']) else '/messages'
@@ -1363,7 +1379,19 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     # Without a usable provider receipt the caller must quarantine the outcome.
     if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):
         raise TenantPlatformError('Connect group provider receipt is unavailable.')
-    return {'message_id':str(result['id']),'external_message_id':external}
+    receipt=result.get('groupReceipt')
+    facts={}
+    if isinstance(receipt,dict) and receipt.get('protocol')=='group-send-v1':
+        if (result.get('channelId')!=route['channel_id'] or result.get('conversationId')!=route['conversation_id']
+                or result.get('clientMessageId')!=key or result.get('direction')!='outgoing'
+                or result.get('type')!=payload['type'] or receipt.get('fromMe') is not True):
+            raise TenantPlatformError('Connect group receipt scope mismatch.')
+        facts={'channelId':route['channel_id'],'conversationId':route['conversation_id'],
+          'externalMessageId':external,'fromMe':True,'status':'sent','_crm_group_send_receipt':True}
+        participant=receipt.get('participantJid')
+        if isinstance(participant,str) and re.fullmatch(r'[1-9][0-9]{5,14}@s[.]whatsapp[.]net',participant):
+            facts['participantJid']=participant
+    return {'message_id':str(result['id']),'external_message_id':external,**({'receipt':facts} if facts else {})}
 
 
 def send_consultation_with_receipt(route, text, request_id):
@@ -1579,7 +1607,18 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     return message_id
 
 
-def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None, quoted_message_id=None) -> None:
+def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None, quoted_message_id=None, receipt=None) -> None:
+    facts={}
+    if receipt is not None:
+        if (not isinstance(receipt,dict) or receipt.get('_crm_group_send_receipt') is not True
+            or receipt.get('channelId')!=route['channel_id'] or receipt.get('conversationId')!=route['conversation_id']
+            or not route['conversation_id'].endswith('@g.us') or receipt.get('fromMe') is not True
+            or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',str(receipt.get('externalMessageId') or ''))):
+            raise TenantPlatformError('Connect group receipt scope mismatch.')
+        facts={key:receipt[key] for key in ('channelId','conversationId','externalMessageId','fromMe','_crm_group_send_receipt')}
+        facts['status']='sent'
+        if re.fullmatch(r'[1-9][0-9]{5,14}@s[.]whatsapp[.]net',str(receipt.get('participantJid') or '')):
+            facts['participantJid']=receipt['participantJid']
     with _connect() as conn:
         if author != 'AI Agent':
             from tenant_ai_agents_schema import ensure_schema
@@ -1592,8 +1631,25 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
-                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
+                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**facts,**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
             saved=cur.fetchone()
+            if not saved and facts:
+                # An optional webhook can win the insert race. Enrich only
+                # this exact route/Connect id and preserve its authorship.
+                cur.execute('''SELECT id,raw,channel,kommo_lead_id,message_type,direction FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND external_id=%s FOR UPDATE''',(tenant,'connect:'+external_id))
+                existing=cur.fetchone()
+                if (not existing or existing['channel']!='connect:'+route['channel_id']
+                        or int(existing['kommo_lead_id'])!=int(lead_id) or existing['message_type']!='text' or existing['direction']!='outgoing'):
+                    raise TenantPlatformError('Connect group receipt scope mismatch.')
+                old=existing.get('raw') or {}
+                facts=_keep_verified_group_participant(old,facts)
+                if any(old.get(key) not in (None,'',value) for key,value in facts.items()
+                       if key not in {'status','_crm_group_send_receipt'}):
+                    raise TenantPlatformError('Connect group receipt identity mismatch.')
+                update={**facts,'status':old.get('status') if old.get('status') in {'delivered','read'} else 'sent'}
+                cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+                            (_json(update),tenant,str(existing['id'])))
             if author != 'AI Agent' and saved:
                 from tenant_ai_agent_connect import mark_operator_reply
                 mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
