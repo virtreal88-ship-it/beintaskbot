@@ -86,7 +86,7 @@ def test_external_cap_and_marker_scope_preserve_lossless_exact_id_outside_window
             assert exact['task']['kommo_lead_id'] == lead_id
             assert exact['task']['source'] == 'kommo'
             status, personal = await _get(http, operator_cookie, 'kommo', actor=83)
-            assert status == 200 and personal['scope'] == 'marker'
+            assert status == 200 and personal['scope'] == 'kommo'
             assert [row['id'] for row in personal['tasks']] == ['502']
             assert personal['shown'] == 1 and personal['has_more'] is False
     asyncio.run(scenario())

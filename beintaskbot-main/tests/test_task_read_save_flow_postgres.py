@@ -843,7 +843,8 @@ def test_employee_created_external_task_remains_visible_after_pipeline_scope_rev
             with f['factory']() as conn:
                 conn.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
             status, denied = await _get(http, cookie, 'kommo', actor=82, extra={'request_id': command['request_id']})
-            assert status == 403 and 'command' not in denied, denied
+            assert status == 200 and denied['command']['state'] == 'created', denied
+            assert denied['command']['task_id'] == task_id
             assert f['provider'].calls == calls
     asyncio.run(scenario())
 
@@ -907,3 +908,29 @@ def test_native_same_request_uuid_across_tenants_has_independent_actor_bound_rec
             assert status == 200 and other_actor['command']['state'] == 'not_confirmed' and other_actor['command']['task_id'] is None
     asyncio.run(scenario())
     assert f['provider'].calls == []
+
+
+def test_kommo_pipeline_read_survives_native_permission_denial_without_write_grants(task_flow):
+    f = task_flow
+    with f['factory']() as conn:
+        conn.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
+        conn.execute("INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,pipeline_id,status_id,name) VALUES(%s::uuid,202,20,201,'Other funnel')", (A,))
+        conn.execute("INSERT INTO saas_crm_tasks(tenant_id,kommo_task_id,kommo_lead_id,text) VALUES(%s::uuid,503,202,'Other funnel task')", (A,))
+    cookie = f['session'].issue(A, 82)
+    before = _state(f)
+    async def scenario():
+        async with TestClient(TestServer(_app(f))) as http:
+            status, page = await _get(http, cookie, 'kommo', actor=82)
+            assert status == 200 and page['scope'] == 'kommo', page
+            assert [row['id'] for row in page['tasks']] == ['501']
+            assert 'B PRIVATE' not in json.dumps(page)
+            actions = next(row for row in page['sources'] if row['source'] == 'kommo')
+            assert actions['view'] is True
+            assert all(actions[key] is False for key in ('create', 'update', 'complete', 'archive', 'sync'))
+            status, detail = await _get(http, cookie, 'kommo', actor=82, extra={'task_id': '501'})
+            assert status == 200 and detail['task']['id'] == '501'
+            for task_id in ('502', '503'):
+                status, denied = await _get(http, cookie, 'kommo', actor=82, extra={'task_id': task_id})
+                assert status == 404 and 'task' not in denied
+    asyncio.run(scenario())
+    assert _state(f) == before and f['provider'].calls == []

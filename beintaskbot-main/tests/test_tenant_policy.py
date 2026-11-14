@@ -46,6 +46,18 @@ class TenantPolicyTests(unittest.TestCase):
         self.assertFalse(policy.kommo_access())
         self.assertTrue(policy.kommo_task_access())
 
+    def test_kommo_task_read_is_independent_of_native_task_grants(self):
+        person = profile('worker')
+        person['permissions'] = []
+        person['modules']['tasks'] = False
+        person['workflow']['policies'][0]['value']['20'].update(pipeline_ids=['10'], kommo_user_id=None)
+        policy = TenantPolicy(person)
+        self.assertFalse(policy.allows('tasks'))
+        self.assertTrue(policy.kommo_task_access())
+        self.assertEqual(policy.kommo_task_scope()['pipelines'], [{'pipeline_id':10, 'status_ids':[100]}])
+        person['active'] = False
+        self.assertFalse(TenantPolicy(person).kommo_task_access())
+
     def test_cross_tenant_deal_is_denied_even_to_owner(self):
         self.assertFalse(TenantPolicy(profile('owner')).can_access_deal({'tenant_id':'company-b','pipeline_id':10,'status_id':100}))
 
