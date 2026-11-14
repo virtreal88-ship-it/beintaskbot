@@ -9,7 +9,7 @@ from tenant_linear_policy import TenantLinearError
 SLOTS = asyncio.Semaphore(2)
 
 
-def handler(member_from_request, origin, provider, wait_slot, logger):
+def handler(member_from_request, origin, provider, wait_slot, logger, *, runner=run):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
@@ -52,7 +52,7 @@ def handler(member_from_request, origin, provider, wait_slot, logger):
                     command = prepare(data, part.filename, part.headers.get('Content-Type','').split(';')[0], content)
                     if await reader.next() is not None:
                         raise ValueError()
-                result = await run(session, command, content, provider, wait_slot, logger)
+                result = await runner(session, command, content, provider, wait_slot, logger)
             return web.json_response({'success':True, **result}, headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error),'keep_request':getattr(error,'keep_request',False)},status=error.status,headers=headers)

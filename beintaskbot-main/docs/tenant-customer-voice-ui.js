@@ -54,6 +54,7 @@
     if(!same(session))return;
     const snap=session.recorder.snapshot(), entry=session.entry, receipt=session.receipt, recording=['requesting','recording','stopping'].includes(snap.state);
     const unstored=snap.state==='ready'&&!entry;
+    session.host.dataset.voiceBusy=String(recording||unstored||!!entry||session.saving);
     session.mic.hidden=!session.maySend||recording||unstored||!!entry||session.saving;
     session.stop.hidden=snap.state!=='recording';session.cancel.hidden=!recording;
     session.discard.hidden=!entry||entry.state!=='draft';session.send.hidden=!session.maySend||!entry||entry.state!=='draft';
