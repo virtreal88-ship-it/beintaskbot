@@ -10,6 +10,7 @@ ASSETS = (
     ('/app/pwa-icon-512.png', 'icon-512.png', 'public, max-age=86400'),
     ('/app/apple-touch-icon.png', 'apple-touch-icon.png', 'public, max-age=86400'),
     ('/assets/tenant-pwa.js', 'tenant-pwa.js', 'no-store'),
+    ('/assets/tenant-mobile-crm-toolbar.js', 'tenant-mobile-crm-toolbar.js', 'no-store'),
     ('/assets/tenant-horizontal-scroll.js', 'tenant-horizontal-scroll.js', 'no-cache'),
     ('/app/instructions', 'tenant-instructions.html', 'no-store'),
     ('/app/ai-instructor', 'tenant-ai-instructor.html', 'no-store'),
