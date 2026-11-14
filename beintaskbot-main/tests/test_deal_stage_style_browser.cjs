@@ -28,7 +28,7 @@ assert.equal(await editable.evaluate(n=>getComputedStyle(n).borderRadius),'9999p
 assert.equal(await editable.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(224, 247, 232)');
 assert((await editable.boundingBox()).height>=44);
 assert(await editable.evaluate(n=>n.getBoundingClientRect().right<=innerWidth));
-assert((await editable.boundingBox()).y>(await page.getByText('Editable client',{exact:true}).boundingBox()).y);
+assert((await editable.boundingBox()).y>(await page.locator('#editableDeal').getByText('Editable client',{exact:true}).first().boundingBox()).y);
 await page.evaluate(()=>tenantChakraCRM.renderNativeDeals([{id:'n',title:'Native',pipeline_id:'p',stage_id:'a'}],{tenantId:'a',userId:1,workflows:[{pipeline_id:'p',stage_id:'a',stage_name:'Open'},{pipeline_id:'p',stage_id:'b',stage_name:'Closed'}]}));
 await page.locator('[data-native-deal-card] [data-deal-stage-badge]').waitFor();
 assert.equal(await page.locator('[data-native-deal-card] [data-deal-stage-badge]').textContent(),'Open');
