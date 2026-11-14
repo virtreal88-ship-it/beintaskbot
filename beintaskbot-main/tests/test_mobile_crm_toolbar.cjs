@@ -1,4 +1,5 @@
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom'),fs=require('fs'),assert=require('assert/strict');
+assert(fs.readFileSync('tenant_web_assets.py','utf8').includes("('/assets/tenant-mobile-crm-toolbar.js', 'tenant-mobile-crm-toolbar.js', 'no-store')"));
 const html=fs.readFileSync('docs/tenant-app.html','utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
 const dom=new JSDOM(html,{url:'https://test.invalid/app',runScripts:'outside-only'}),w=dom.window,d=w.document;
 let changed;const media={matches:true,addEventListener:(event,fn)=>changed=fn};w.matchMedia=()=>media;

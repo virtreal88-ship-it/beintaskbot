@@ -2,12 +2,13 @@
 ((root, make) => {
   if (typeof module === 'object' && module.exports) module.exports = make;
   else root.createTenantVoiceStore = make;
-})(typeof window === 'object' ? window : globalThis, function createTenantVoiceStore(indexedDB = globalThis.indexedDB) {
+})(typeof window === 'object' ? window : globalThis, function createTenantVoiceStore(indexedDB = globalThis.indexedDB, namespace = 'voice') {
+  if (!['voice','media'].includes(namespace)) throw new Error('unsupported_store_namespace');
   let opened;
   function db() {
     if (!indexedDB) return Promise.reject(new Error('voice_storage_unavailable'));
     if (!opened) opened = new Promise((resolve, reject) => {
-      const request = indexedDB.open('beintaskbot-customer-voice', 3);
+      const request = indexedDB.open('beintaskbot-customer-'+namespace, 3);
       request.onupgradeneeded = () => {
         const upgrade=request.transaction;
         if (!request.result.objectStoreNames.contains('drafts')) request.result.createObjectStore('drafts', {keyPath:'key'});
@@ -67,7 +68,7 @@
           const state=next?.state||'unknown';
           // Keep an uncertain recording locally for review, but only as a receipt.
           // The UI never exposes the send action for receipts, so this cannot retry it.
-          const blob=state==='unknown'?(next?.blob??old.blob??null):null;
+          const blob=state==='unknown'&&namespace==='voice'?(next?.blob??old.blob??null):null;
           receipts.put({...old,...(next||{}),receiptKey:JSON.stringify([key,id]),key,request_id:id,state,blob});
           if(next&&next!==null)drafts.delete(key);
         }
@@ -150,6 +151,15 @@
   return { get: key => transact('readonly', store => store.get(key)),
     createDraft: entry => change(entry.key, old => old ? undefined : entry),
     epoch,activeEpoch,createScopedDraft,ownerVersion,activate,
+    claimScoped: async (key,id,tenant,user,expected,caption) => {
+      const database=await db();return new Promise((resolve,reject)=>{
+        let claimed=false;const tx=database.transaction(['drafts','epochs'],'readwrite'),drafts=tx.objectStore('drafts'),epochs=tx.objectStore('epochs');
+        const owner=epochs.get('active-owner'),version=epochs.get(JSON.stringify([tenant,user])),entry=drafts.get(key);
+        entry.onsuccess=()=>{const old=entry.result;if(owner.result!==JSON.stringify([tenant,user])||(version.result||0)!==expected||old?.request_id!==id||old.state!=='draft')return;drafts.put({...old,caption:typeof caption==='string'?caption:old.caption,state:'sending'});claimed=true;};
+        tx.oncomplete=()=>resolve(claimed);tx.onabort=tx.onerror=()=>reject(new Error('voice_storage_unavailable'));
+      });
+    },
+    updateDraftCaption: (key,id,caption) => change(key,old=>old?.request_id===id&&old.state==='draft'&&typeof caption==='string'?{...old,caption}:undefined),
     claim: (key, id) => change(key, old => old?.request_id===id && old.state==='draft' ? {...old,state:'sending'} : undefined),
     markUnknown: (key, id) => receiptChange(key,id,old=>old.state==='sending'?{...old,state:'unknown',blob:null}:undefined),
     releaseDraft: (key, id, nextId) => change(key, old => old?.request_id===id && old.state==='sending' ? {...old,request_id:nextId,state:'draft'} : undefined),

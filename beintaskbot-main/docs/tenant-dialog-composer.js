@@ -26,6 +26,8 @@
     const refresh=()=>{
       if(!active||active.actions!==actions||!actions.isConnected)return;
       const mic=actions.querySelector('.operator-voice-mic');if(mic&&mic.dataset.composerDelegate!=='true')mic.dataset.composerDelegate='true';
+      const media=!hasPending(send)&&window.tenantCustomerMedia?.action();
+      if(media){primary.dataset.action='media';primary.textContent='↑';primary.title=media.label;primary.setAttribute('aria-label',media.label);primary.disabled=media.disabled;return;}
       const pending=hasPending(send);
       const useSend=!!input.value.trim()||pending;
       primary.dataset.action=useSend?'send':'voice';
@@ -47,12 +49,13 @@
     observer.observe(input,{attributes:true,attributeFilter:['disabled']});
     if(panel)observer.observe(panel,{attributes:true,attributeFilter:['hidden']});
     input.addEventListener('input',refresh);
-    primary.onclick=()=>{refresh();if(primary.disabled)return;const target=primary.dataset.action==='send'?send:actions.querySelector('.operator-voice-mic');target?.click();refresh();};
+    primary.onclick=()=>{refresh();if(primary.disabled)return;if(primary.dataset.action==='media'){window.tenantCustomerMedia?.action()?.run();return;}const target=primary.dataset.action==='send'?send:actions.querySelector('.operator-voice-mic');target?.click();refresh();};
     ai.onclick=()=>{if(ai.disabled)return;const opening=menu.hidden;menu.hidden=!opening;ai.setAttribute('aria-expanded',String(opening));if(opening)menu.querySelector('button:not(:disabled)')?.focus();};
     refresh();
   }
   const style=document.createElement('style');style.textContent=`.operator-composer{position:relative}.operator-composer-actions [data-composer-delegate=true]{display:none!important}.operator-composer-actions #operatorComposerPrimary{display:grid;place-items:center;margin-left:auto;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border-radius:50%;background:var(--brand);color:var(--on-brand,#fff);font-size:22px}.operator-composer-actions #operatorAIActionMenu{min-width:44px;min-height:44px;font-weight:700}.operator-composer-ai-menu{position:absolute;z-index:25;left:8px;bottom:calc(100% + 6px);max-width:calc(100% - 16px);padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}.operator-composer-ai-menu[hidden]{display:none!important}.operator-composer-actions .operator-composer-ai-menu button.operator-icon-action{display:flex;width:auto;max-width:100%;min-height:44px;height:auto;text-align:left;gap:9px;padding:9px 12px;white-space:normal}.operator-composer-ai-menu svg,.operator-composer-ai-menu .operator-voice-wave{flex:none}.operator-ai-action-caption{font-size:14px}.operator-composer-actions #operatorComposerPrimary:disabled{opacity:.5}`;document.head.append(style);
   document.addEventListener('tenant-chat-attachments-ready',attach);
+  document.addEventListener('tenant-composer-media',()=>active?.refresh());
   document.addEventListener('tenant-chat-close',clear);
   document.addEventListener('tenant-auth-invalid',clear);
   document.addEventListener('pointerdown',event=>{if(active&&!active.menu.contains(event.target)&&!active.ai.contains(event.target))close(false);});

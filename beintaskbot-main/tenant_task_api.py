@@ -8,6 +8,7 @@ from tenant_task_flow import (TaskFlowError, query as flow_query, read as read_f
     current_profile, external_options, execution_profiles, authority_key)
 from tenant_task_commands import TaskCommandUnavailable
 from tenant_policy import TenantPolicy
+from tenant_task_titles import TaskTypeTitles
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ async def _object_body(request: web.Request) -> dict:
 
 
 def handlers(context: TaskApiContext) -> dict[str, Callable]:
+    titles = TaskTypeTitles(context.crm_request)
     def intent(request, profile):
         params = request.rel_url.query
         return flow_query(request, profile or {}, required=params.get('flow') == '1')
@@ -84,6 +86,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                     raise TaskFlowError('task_invalid_query')
                 result = await asyncio.to_thread(read_flow, profile, source=params.get('source'),
                     task_id=params.get('task_id'), request_id=params.get('request_id'))
+                await titles.enrich(profile['tenant_id'], result)
                 return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
             if 'expected_tenant_id' in params:
                 profile = await asyncio.to_thread(current_profile, profile or {})
