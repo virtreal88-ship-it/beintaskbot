@@ -611,18 +611,18 @@ function DealTable({ rows = [], customer = false, onOpen }) {
 
 function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets = [], moveSources = [], completionApproval = false, moveContext }) {
   const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
-  const drag=useRef(null),busy=useRef(false),movingDeal=useRef(''),revision=useRef(0),alive=useRef(true);
-  useEffect(()=>{setDisplayRows(previous=>rows.map(row=>String(row.kommo_lead_id)===movingDeal.current?(previous.find(item=>String(item.kommo_lead_id)===movingDeal.current)||row):row));},[rows]);
-  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;movingDeal.current='';busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
+  const drag=useRef(null),busy=useRef(false),moveSnapshots=useRef(new Map()),revision=useRef(0),alive=useRef(true);
+  useEffect(()=>{setDisplayRows(previous=>rows.map(row=>{const key=String(row.kommo_lead_id),snapshot=moveSnapshots.current.get(key);if(!snapshot)return row;if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision===snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision&&row.source_revision!==snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}return snapshot.row||previous.find(item=>String(item.kommo_lead_id)===key)||row;}));},[rows]);
+  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;moveSnapshots.current.clear();busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
   const targets=row=>moveSources.some(s=>String(s.pipeline_id)===String(row.pipeline_id)&&String(s.stage_id)===String(row.status_id))?moveTargets.filter(t=>String(t.pipeline_id)===String(row.pipeline_id)):[];
   const movable=row=>!!moveContext&&canIdentifyKommoDeal(row)&&!busy.current&&targets(row).length>0&&!!(row.raw?.updated_at||row.source_updated_at);
   const move=async(row,stage)=>{
     if(!movable(row)||String(row.status_id)===String(stage)||!targets(row).some(t=>String(t.stage_id)===String(stage)))return;
-    const serial=revision.current;busy.current=true;movingDeal.current=String(row.kommo_lead_id);setPending(String(row.kommo_lead_id));setMoveError('');
-    setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?{...item,status_id:stage}:item));
-    try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current)setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?result:item));}
-    catch(e){if(alive.current&&serial===revision.current){setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?row:item));setMoveError(e.message);}}
-    finally{if(alive.current&&serial===revision.current){busy.current=false;movingDeal.current='';setPending('');}}
+    const serial=revision.current,key=String(row.kommo_lead_id),optimistic={...row,status_id:stage};busy.current=true;moveSnapshots.current.set(key,{row:optimistic,confirmed:false,sourceRevision:''});setPending(key);setMoveError('');
+    setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?optimistic:item));
+    try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current){moveSnapshots.current.set(key,{row:result,confirmed:true,sourceRevision:result.source_revision});setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?result:item));}}
+    catch(e){if(alive.current&&serial===revision.current){moveSnapshots.current.delete(key);setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?row:item));setMoveError(e.message);}}
+    finally{if(alive.current&&serial===revision.current){busy.current=false;setPending('');}}
   };
   const groups = useMemo(() => dealColumns(displayRows, catalog, hidden), [displayRows, catalog, hidden]);
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
