@@ -2,6 +2,7 @@
 (() => {
   let profile, timer, generation = 0, watching = false;
   const boxes = {};
+  const notified = new Map();
   const fullButtons = [];
   for (const [id, resource] of [['tasksRefresh','tasks'],['dealsRefresh','deals']]) {
     const anchor = document.getElementById(id);
@@ -52,19 +53,20 @@
       const completed = [];
       for (const job of data.jobs || []) {
         if (job.status === 'queued' || job.status === 'running') {
-          active = true;
+          active = true;notified.delete(job.resource);
           display(job.resource, `Kommo fonda yenilənir… ${job.pages_done || 0} səhifə yükləndi. Saxlanmış siyahı göstərilir.`);
         } else if (job.status === 'failed') {
           display(job.resource, 'Sinxronizasiya dayandı. Kommo bağlantısını yoxlayın və Yenilə düyməsini basın.');
         } else if (job.status === 'done') {
           display(job.resource, 'Kommo məlumatları yeniləndi.');
-          completed.push(job.resource);
+          const stamp=JSON.stringify([job.started_at,job.finished_at,job.updated_at]);
+          if(notified.get(job.resource)!==stamp)completed.push({resource:job.resource,stamp});
         }
       }
       watching = active;
-      if (!active && completed.length) document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete', {
-        detail: {resources:completed, tenant_id:profile.tenant_id}
-      }));
+      if (!active && completed.length){for(const item of completed)notified.set(item.resource,item.stamp);document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete', {
+        detail: {resources:completed.map(item=>item.resource), tenant_id:profile.tenant_id}
+      }));}
     } catch (_) {
       if (epoch !== generation) return;
       watching = false;
@@ -77,6 +79,8 @@
     generation++; watching = true; clearTimeout(timer); poll(generation);
   }
   window.tenantCrmSyncWatch = start;
+  window.addEventListener('pagehide',()=>{generation++;watching=false;clearTimeout(timer);});
+  window.addEventListener('pageshow',event=>{if(event.persisted&&profile)start();});
   let syncPanel=null,syncStatus=null,syncSequence=0,syncResult=null,syncSaving=false;
   const syncWords={ru:{heading:'Синхронизация CRM',intro:'Настройте направление обмена контактами и сделками между Beintaskbot и CRM. По умолчанию синхронизация выключена. Старая история автоматически не импортируется.',contact:'Контакты',deal:'Сделки',provider:'CRM-система',direction:'Направление обмена',disabled:'Выключена',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'В обе стороны',save:'Сохранить правила синхронизации',loading:'Загружаем правила синхронизации…',ready:'Готово. Синхронизация начнётся только после включения направления.',saved:'Правила сохранены. Существующие записи CRM не изменены.',loadError:'Не удалось загрузить правила синхронизации.',saveError:'Не удалось сохранить правила синхронизации.',connection:'Подключение',queue:'В очереди',failed:'С ошибкой',conflicts:'Неразрешённые расхождения',empty:'нет',name:'Имя',phone:'Телефон',email:'Email',title:'Название сделки',pipeline_id:'Воронка продаж',stage_id:'Этап',contact_id:'Контакт',description:'Описание'},az:{heading:'CRM məlumatlarının sinxronizasiyası',intro:'Beintaskbot və CRM arasında kontakt və sövdələşmələrin mübadilə istiqamətini seçin. Standart olaraq sinxronizasiya söndürülüb. Köhnə tarixçə avtomatik idxal edilmir.',contact:'Əlaqələr',deal:'Sövdələşmələr',provider:'CRM sistemi',direction:'Məlumatın istiqaməti',disabled:'Söndürülüb',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'İki istiqamətli',save:'Sinxronizasiya qaydalarını saxla',loading:'Sinxronizasiya qaydaları yüklənir…',ready:'Hazırdır. Sinxronizasiya yalnız istiqamət aktiv ediləndə işləyir.',saved:'Qaydalar saxlanıldı. Mövcud CRM yazıları dəyişdirilmədi.',loadError:'Sinxronizasiya qaydalarını yükləmək olmadı.',saveError:'Sinxronizasiya qaydalarını saxlamaq olmadı.',connection:'Bağlantı',queue:'Növbə',failed:'Uğursuz',conflicts:'Həll olunmamış uyğunsuzluqlar',empty:'boş',name:'Ad',phone:'Telefon',email:'Email',title:'Sövdələşmənin adı',pipeline_id:'Satış vərəqi',stage_id:'Mərhələ',contact_id:'Əlaqə',description:'Təsvir'},en:{heading:'CRM data sync',intro:'Choose how contacts and deals move between Beintaskbot and CRM. Sync is off by default. Older history is not imported automatically.',contact:'Contacts',deal:'Deals',provider:'CRM system',direction:'Sync direction',disabled:'Off',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'Both directions',save:'Save sync rules',loading:'Loading sync rules…',ready:'Ready. Sync runs only after a direction is enabled.',saved:'Rules saved. Existing CRM records were not changed.',loadError:'Could not load sync rules.',saveError:'Could not save sync rules.',connection:'Connection',queue:'Queue',failed:'Failed',conflicts:'Unresolved conflicts',empty:'empty',name:'Name',phone:'Phone',email:'Email',title:'Deal title',pipeline_id:'Sales pipeline',stage_id:'Stage',contact_id:'Contact',description:'Description'}};
   const syncText=key=>(syncWords[window.tenantI18n?.language]||syncWords.az)[key]||key;
@@ -135,7 +139,7 @@
     catch(error){if(valid())setSyncStatus(error.message||syncText('saveError'));}finally{if(valid()){syncSaving=false;panel.querySelectorAll('input,select,button').forEach(node=>node.disabled=false);}}
   }
   document.addEventListener('tenant-profile',event=>{
-    generation++;clearTimeout(timer);watching=false;const next=event.detail.member;const changed=profile?.tenant_id!==next?.tenant_id||profile?.telegram_id!==next?.telegram_id||profile?.role!==next?.role;profile=next;if(changed){syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;}
+    generation++;clearTimeout(timer);watching=false;const next=event.detail.member;const changed=profile?.tenant_id!==next?.tenant_id||profile?.telegram_id!==next?.telegram_id||profile?.role!==next?.role;profile=next;if(changed){notified.clear();syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;}
     for(const button of fullButtons)button.hidden=!['owner','admin'].includes(profile?.role);
     for(const resource of Object.keys(boxes))display(resource,'');
     const modules=event.detail.capabilities?.modules||{};if(modules.tasks||modules.deals||modules.customers)start();

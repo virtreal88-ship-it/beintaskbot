@@ -26,7 +26,7 @@ function setup() {
     dispatchEvent(event) { events.push(event); }
   };
   const requests = [];
-  const context = {document, window:{}, CustomEvent:class { constructor(type, options) {this.type=type;this.detail=options.detail;} },
+  const context = {document, window:{addEventListener(name,handler){listeners[name]=handler;}}, CustomEvent:class { constructor(type, options) {this.type=type;this.detail=options.detail;} },
     fetch: async (url, options) => {requests.push({url, options}); const value=responses.shift();return await value;},
     setTimeout:fn=>{timers.set(++next,fn);return next;}, clearTimeout:id=>timers.delete(id)};
   vm.runInNewContext(source, context);
@@ -50,6 +50,8 @@ const flush = () => new Promise(resolve=>setImmediate(resolve));
   assert(s.requests.every(r=>r.url==='/api/platform/crm/sync' && !r.options.method));
   assert(s.boxes.filter(box=>box.type==='button').every(button=>button.hidden));
 
+  s.push(s.reply([{resource:'tasks',status:'done',pages_done:3}]));s.context.window.tenantCrmSyncWatch();await flush();assert.equal(s.events.length,1,'same completed snapshot emits once');
+  s.push(s.reply([{resource:'tasks',status:'done',pages_done:3,finished_at:'new'}]));s.context.window.tenantCrmSyncWatch();await flush();assert.equal(s.events.length,2,'new completed run emits again');
   const admin = setup();admin.push(admin.reply([]));admin.profile('company-a','admin');await flush();
   const full = admin.boxes.find(box=>box.type==='button');assert(full&&!full.hidden);
   admin.push(admin.reply([]));admin.push(admin.reply([{resource:'tasks',status:'queued'}]));

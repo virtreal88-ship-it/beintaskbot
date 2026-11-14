@@ -479,7 +479,12 @@ function TasksTable({ rows = [], settings = {} }) {
 function TasksView({ rows = [], settings = {} }) {
   const [mode, setMode] = useState('kanban');
   const [now, setNow] = useState(() => new Date());
-  useEffect(() => {const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer);}, []);
+  useEffect(() => {
+    let timer;
+    const resume = () => {clearInterval(timer);const host=document.getElementById(settings.target || 'tasksList');if(!document.hidden&&host?.closest('.view')?.classList.contains('active'))timer=setInterval(()=>setNow(new Date()),60000);};
+    resume();document.addEventListener('tenant-view',resume);document.addEventListener('visibilitychange',resume);
+    return () => {clearInterval(timer);document.removeEventListener('tenant-view',resume);document.removeEventListener('visibilitychange',resume);};
+  }, [settings.target]);
   const c = taskBoardLabels[window.tenantI18n?.language] || taskBoardLabels.az;
   const groups = taskColumns(rows, now);
   return <Box data-task-view={mode} minW="0">
@@ -635,10 +640,13 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   useEffect(() => {
     if (customer) return;
     alive.current = true;
-    const changed = () => load();
+    const scope = profile => JSON.stringify([profile?.member, profile?.capabilities, profile?.role_permissions]);
+    let identity = scope(window.tenantProfileSnapshot);
+    const changed = event => {const next = scope(event.detail);if (next !== identity) {identity = next;setDraft([]);load();}};
+    const invalid = () => {identity = '';generation.current++;setData(null);setDraft([]);setOpen(false);setSaving(false);setError('');};
     const relabel = () => setLanguage(document.documentElement.lang || "az");
-    load(); document.addEventListener("tenant-profile", changed); document.addEventListener("tenant-language", relabel);
-    return () => {alive.current = false; generation.current++; document.removeEventListener("tenant-profile", changed); document.removeEventListener("tenant-language", relabel);};
+    load(); document.addEventListener("tenant-profile", changed); document.addEventListener("tenant-auth-invalid", invalid); document.addEventListener("tenant-language", relabel);
+    return () => {alive.current = false; generation.current++; document.removeEventListener("tenant-profile", changed); document.removeEventListener("tenant-auth-invalid", invalid); document.removeEventListener("tenant-language", relabel);};
   }, [customer]);
   const copy = dealColumnCopy[language] || dealColumnCopy.az;
   const save = async () => {
