@@ -36,7 +36,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.evaluate(()=>{window.keptPlayer=document.querySelector('audio.operator-native-audio');window.keptPlayer.currentTime=2;window.keptPlayer.play();});
     const mediaCalls=()=>calls.filter(c=>c.path.endsWith('/crm/chat/attachment')).length;
     assert.equal(mediaCalls(),1);
-    await page.locator('#operatorCopilotToggle').click();
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();
     const panel=page.locator('#operatorCopilot'),prompt=page.locator('#operatorCopilotPrompt');
     await prompt.fill('Private question for this conversation');
     if(width<=900)await page.locator('#operatorCopilotBackdrop').click({position:{x:2,y:2},force:true});else await page.locator('#operatorConversationHeader').click({position:{x:2,y:2},force:true});
@@ -71,7 +71,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:window.tenantProfileSnapshot})));
     assert.equal(await panel.isVisible(),true);assert.equal(await prompt.inputValue(),'Private question for this conversation');
     await page.evaluate(()=>window.tenantAppNavigate('tasks',true));assert.equal(await panel.isVisible(),false,'actual view navigation hides its overlay');
-    await page.evaluate(()=>window.tenantAppNavigate('dialogs',true));await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation');
+    await page.evaluate(()=>window.tenantAppNavigate('dialogs',true));await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation');
     if(width<=900){
       // A smaller visual viewport models the space left by the on-screen keyboard.
       await page.setViewportSize({width,height:500});await prompt.focus();await page.waitForFunction(()=>Math.abs(document.getElementById('operatorCopilot').getBoundingClientRect().height-(visualViewport.height-16))<=1);
@@ -82,29 +82,29 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
       assert.ok(geometry.prompt.width>250&&geometry.ask.bottom<=geometry.panel.bottom,JSON.stringify(geometry));
       await page.goBack();await panel.waitFor({state:'hidden'});
       assert.ok(await page.locator('#chatRows').isVisible(),'first Back closes the helper, keeps the conversation');
-      await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation');
+      await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation');
     }
     await page.locator('#operatorCopilotClose').click();await panel.waitFor({state:'hidden'});
     if(width<=900)await page.waitForFunction(()=>!history.state?.operatorHelper);
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));
-    await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation','closed panel keeps its draft during refresh');
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation','closed panel keeps its draft during refresh');
     // Late history for this dialog cannot overwrite the new dialog or transfer its draft.
     holdCopilot=new Promise(resolve=>{releaseCopilot=resolve;});await page.locator('#operatorCopilotAsk').click();
     holdHistory=new Promise(resolve=>{releaseHistory=resolve;});
     await page.evaluate(route=>{window.pendingHistory=window.tenantOperator.openDialog(route,true);},dialog);
     const second={...dialog,lead_id:42,conversation_id:'994500009999@s.whatsapp.net'};
     await page.evaluate(route=>window.tenantOperator.openDialog(route,true),second);
-    await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'','different dialog starts with its own draft');
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'','different dialog starts with its own draft');
     const answered=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/dialogs/copilot'));releaseCopilot();await answered;releaseHistory();await page.evaluate(()=>window.pendingHistory);
     assert.equal(await page.locator('#operatorCopilotResult').innerText(),'','late AI result cannot enter another dialog');
     assert.equal(await page.evaluate(()=>window.tenantOperator.currentDialog.lead_id),42);
     await page.evaluate(route=>window.tenantOperator.openDialog(route,true),dialog);
-    await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation','returning to this dialog restores only its own in-memory draft');
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation','returning to this dialog restores only its own in-memory draft');
     await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-invalid')));
     assert.equal(await page.locator('#operatorCopilot').count(),0,'logout removes private UI');
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:window.tenantProfileSnapshot})));
     await page.evaluate(route=>window.tenantOperator.openDialog(route,true),dialog);
-    await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'','logout destroys retained helper drafts');
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'','logout destroys retained helper drafts');
     if(width<=900){
       // The profile restoration above can still have a list refresh in flight.
       // Its legitimate appendNewMessages request must finish before measuring
