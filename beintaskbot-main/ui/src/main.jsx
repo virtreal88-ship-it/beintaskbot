@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import "./app-shell.js";
 import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
+import {DealStageBadge} from "./deal-stage-badge.jsx";
 import { AIDashboard } from "./ai-dashboard.jsx";
 import {
   Badge,
@@ -563,7 +564,8 @@ function TasksView({ rows = [], settings = {} }) {
   </Box>;
 }
 
-function DealTable({ rows = [], customer = false, onOpen }) {
+function DealTable({ rows = [], customer = false, onOpen, catalog = [] }) {
+  const stages = new Map(dealColumns(rows, catalog).map(stage => [stage.key, stage]));
   if (!rows.length) return <Empty>Bu filtr üzrə məlumat tapılmadı.</Empty>;
   return (
     <Card.Root
@@ -601,7 +603,7 @@ function DealTable({ rows = [], customer = false, onOpen }) {
                   </Text>
                 </Table.Cell>
                 <Table.Cell>
-                  <StatusBadge>{deal.stage_name || "Mərhələ"}</StatusBadge>
+                  <DealStageBadge name={stages.get(`${deal.pipeline_id}:${deal.status_id}`)?.name || deal.stage_name || "Mərhələ"} appearance={stages.get(`${deal.pipeline_id}:${deal.status_id}`).appearance}/>
                 </Table.Cell>
                 <Table.Cell maxW="330px">
                   <Text truncate color="app.muted">
@@ -639,7 +641,7 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
   return (
     <Box>{completionApproval&&<Text fontSize="sm" color="app.muted">{document.documentElement.lang==='ru'?'Для успешного завершения используйте «Завершить сделку»: требуется подтверждение.':document.documentElement.lang==='en'?'Use Complete deal for successful completion: approval is required.':'Uğurlu tamamlamaq üçün «Sövdələşməni tamamla» istifadə edin: təsdiq tələb olunur.'}</Text>}{moveError&&<Text role="alert">{moveError}</Text>}<Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
-      {groups.map(({key, pipeline, name: stage, rows: items}) => (
+      {groups.map(({key, pipeline, name: stage, appearance, rows: items}) => (
         <Box
           key={key}
           data-kommo-stage-key={key}
@@ -651,8 +653,8 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
           borderRadius="xl"
           p="3"
         >
-          <Flex align="center" justify="space-between" mb="3">
-            <Box><Text fontSize="xs" color="app.muted">{pipeline}</Text><Heading size="sm">{stage}</Heading></Box>
+          <Flex data-deal-stage-header="" align="center" justify="space-between" mb="3" pb="3" borderBottomWidth="2px" borderColor={appearance.color} gap="2">
+            <Box minW="0"><Text fontSize="xs" color="app.muted">{pipeline}</Text><Heading size="sm" overflowWrap="anywhere">{stage}</Heading></Box>
             <Badge borderRadius="full">{items.length}</Badge>
           </Flex>
           <Stack gap="3">
@@ -671,7 +673,8 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
                 onClick={() => onOpen?.(deal.kommo_lead_id)}
               >
                 <Card.Body p="4">
-                  <Text fontWeight="600">{deal.contact_name || deal.name}</Text>
+                  <DealStageBadge name={stage} appearance={appearance}/>
+                  <Text fontWeight="600" mt="2">{deal.contact_name || deal.name}</Text>
                   {!!moveContext&&targets(deal).length>0&&<Box onClick={event=>event.stopPropagation()}><select aria-label={document.documentElement.lang==='ru'?'Изменить этап':document.documentElement.lang==='en'?'Change stage':'Mərhələni dəyiş'} disabled={!!pending||!canIdentifyKommoDeal(deal)} title={!canIdentifyKommoDeal(deal)?(document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'):undefined} value={deal.status_id} onChange={event=>move(deal,event.target.value)} style={{width:'100%',minHeight:44}}>{catalog.filter(p=>String(p.pipeline_id)===String(deal.pipeline_id)).flatMap(p=>(p.stages||[]).filter(t=>String(t.stage_id)===String(deal.status_id)||targets(deal).some(a=>String(a.stage_id)===String(t.stage_id))).map(t=><option key={t.stage_id} value={t.stage_id}>{t.name}</option>))}</select>{!canIdentifyKommoDeal(deal)&&<Text fontSize="xs" color="app.muted">{document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'}</Text>}<button type="button" disabled={!movable(deal)} aria-label={document.documentElement.lang==='ru'?'Перенести сделку':document.documentElement.lang==='en'?'Move deal':'Sövdələşməni daşı'} style={{touchAction:'none',minHeight:44}} onPointerDown={event=>{if(event.pointerType==='mouse'||!movable(deal))return;drag.current=deal;event.currentTarget.setPointerCapture(event.pointerId);}} onPointerCancel={()=>{drag.current=null;}} onPointerUp={event=>{const row=drag.current;drag.current=null;if(!row||event.pointerType==='mouse')return;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-kommo-stage-key]')?.dataset.kommoStageKey;if(target&&target.startsWith(String(row.pipeline_id)+':'))move(row,target.slice(target.indexOf(':')+1));}}>↔</button></Box>}
                   <Text fontSize="sm" color="app.muted">
                     {deal.phone || "Telefon yoxdur"}
@@ -751,7 +754,7 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   return <Stack gap="3">
     {controlsTarget ? createPortal(controls, controlsTarget) : controls}
     {error && <Box role="alert"><Text color="red.500">{error}</Text>{!open && <Button onClick={load}>{copy.retry}</Button>}</Box>}
-    {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen} moveTargets={data?.move_stage_targets || []} moveSources={data?.move_stage_sources || []} completionApproval={data?.move_stage_completion_requires_approval===true} moveContext={data?.move_context}/> : <DealTable rows={rows} onOpen={onOpen}/>}
+    {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen} moveTargets={data?.move_stage_targets || []} moveSources={data?.move_stage_sources || []} completionApproval={data?.move_stage_completion_requires_approval===true} moveContext={data?.move_context}/> : <DealTable rows={rows} onOpen={onOpen} catalog={catalog}/>}
     <Dialog.Root finalFocusEl={() => columnTrigger.current} open={open} onOpenChange={e => {if (!saving) setOpen(e.open);}} placement="center" size="sm">
       <Portal><Dialog.Backdrop/><Dialog.Positioner><Dialog.Content bg="app.surface" color="app.ink">
         <Dialog.Header><Dialog.Title>{copy.columns}</Dialog.Title></Dialog.Header>
