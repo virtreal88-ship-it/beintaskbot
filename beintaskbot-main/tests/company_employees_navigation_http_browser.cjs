@@ -228,7 +228,11 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
           await openProfile();
           await page.locator('.app-sidebar-header .app-icon-button').click();
           assert.equal(await page.locator('body').getAttribute('data-sidebar'), 'collapsed');
-          await entry.click();
+          await page.locator('.app-avatar-button').click();
+          await page.locator('#appUserMenu [data-app-open=settings]').click();
+          const employeeSettingsTab = page.locator('[data-settings-page=employees]');
+          if (await employeeSettingsTab.isVisible()) await employeeSettingsTab.click();
+          else await page.locator('#view-employees.active').waitFor();
           await visibleStaff(tenantA);
         }
         await page.reload();
