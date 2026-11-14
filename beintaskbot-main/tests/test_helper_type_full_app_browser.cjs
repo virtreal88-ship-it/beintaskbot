@@ -47,13 +47,13 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.waitForFunction(()=>!document.querySelector('.dialog-consultation-overlay'));
     assert.equal(calls.some(call=>/\/dispatch$/.test(call.path)),false,'cancel and source switch never send');
     await page.evaluate(conversation=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,conversation_id:conversation}),dialog.conversation_id);
-    await page.locator('#operatorCopilotToggle').click();
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();
     assert.equal(await page.locator('#dialogHelperType').inputValue(),'Helper');
     assert.equal(await page.evaluate(()=>document.activeElement.id),'dialogHelperType','opening starts at the assistant type, avoiding prompt autofocus scrolling');
     await page.locator('[data-copilot-mode=instruction]').click();
     assert.equal(await page.locator('[data-template-use]').count(),12);
     await page.keyboard.press('Escape');
-    await page.locator('#operatorCopilotToggle').click();
+    await page.locator('#operatorAIActionMenu').click();await page.locator('#operatorAIActionChoices #operatorCopilotToggle').click();
     const assertVisibleControls=async stage=>{
      const geometry=await page.evaluate(()=>{
       const panel=document.getElementById('operatorCopilot').getBoundingClientRect(),type=document.getElementById('dialogHelperType').getBoundingClientRect(),close=document.getElementById('operatorCopilotClose').getBoundingClientRect();
