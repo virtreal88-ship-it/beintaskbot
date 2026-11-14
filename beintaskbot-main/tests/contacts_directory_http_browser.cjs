@@ -339,11 +339,15 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
       assert.equal(await page.locator('[data-contact-key]').count(),0);
       assert((await page.locator('#customersList').innerText()).includes('No matches'));
       await search('');
+      const retainedCount=await page.locator('#customerCount').innerText();
+      await page.evaluate(()=>{window.retainedContactRow=document.querySelector('[data-contact-key]');});
       await control('fault');
       await page.locator('#customersRefresh').click();
-      await page.locator('#contactsRetry').waitFor();
-      assert.equal(await page.locator('#customerCount').innerText(),'—');
-      await page.locator('#contactsRetry').click();
+      await page.waitForFunction(()=>document.getElementById('customersNotice').classList.contains('show')&&document.getElementById('customersList').getAttribute('aria-busy')==='false');
+      assert.equal(await page.locator('#customerCount').innerText(),retainedCount,'Network failure keeps the last authorized count');
+      assert(await page.evaluate(()=>retainedContactRow.isConnected),'Network failure keeps the mounted authorized row');
+      assert.equal(await page.locator('[data-contact-key]').count(),50);
+      await page.locator('#customersRefresh').click();
       await settled();
       assert.equal(await page.locator('[data-contact-key]').count(),50);
     } else {

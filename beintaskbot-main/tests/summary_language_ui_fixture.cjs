@@ -1,9 +1,9 @@
 /* Local-only HTTP boundary for the actual company/support/candidate UI modules. */
-function installSummaryLanguageFixture({role='owner',view='profile',tenant='language-tenant',user=11,durable=null}={}){
+function installSummaryLanguageFixture({role='owner',view='settings',tenant='language-tenant',user=11,durable=null}={}){
   const w=window,d=document,clone=value=>JSON.parse(JSON.stringify(value));
   w.alert=()=>{};w.confirm=()=>true;w.scrollTo=()=>{};w.tenantViewDemand={watch(){}};
   w.tenantProfileSnapshot={member:{tenant_id:tenant,telegram_id:user,role,active:true,permissions:['support','dialogs']},capabilities:{modules:{support:true,dialogs:true,ai_agents:true}}};
-  w.tenantCanAccessCompanySettings=()=>w.tenantProfileSnapshot.member?.role==='owner'&&w.tenantProfileSnapshot.member?.active!==false;
+  w.tenantCanAccessCompanySettings=()=>w.tenantProfileSnapshot?.member?.active===true&&['owner','admin'].includes(w.tenantProfileSnapshot.member.role);
   const ticket={id:'a0000000-0000-4000-8000-000000000001',lead_id:41,channel_id:'client-channel',conversation_id:'client-conversation',contact_name:'Test customer',channel_name:'WhatsApp',description:'Saved employee description',summary:'Saxlanmış AZ xülasəsi 49,9992 — Printer PRO',suggestions:'Saved suggestions',next_steps:'Saved next steps',summary_state:'completed',summary_current:true,summary_available:true,summary_hash:'a'.repeat(64),summary_language:{language:'az',method:'customer_detected',policy_version:2,policy_source:'company',detector_version:1,media_incomplete:true},status:'waiting',agent_id:'agent',ai_state:'human',created_at:'2026-11-02T10:00:00Z'};
   const candidate={id:'b0000000-0000-4000-8000-000000000002',version:3,title:'Сохранённый RU кейс',symptoms:['Проблема клиента'],cause:{status:'unknown',text:''},resolution_steps:['Проверить кабель'],operator_actions:['Проверил соединение'],outcome:{status:'unknown',text:'Ожидается проверка',message_ids:[]},case_kind:'technical',resolution_method:'chat',status:'pending_review',content_language:'ru',language_selection:{language:'ru',method:'customer_detected',policy_version:2,media_incomplete:false},source_message_ids:[],route:{provider:'connect',lead_id:41,channel_id:'client-channel',conversation_id:'client-conversation'},can_approve:false,approval_block_reason:'confirmation_required'};
   const f=w.languageFixture={calls:[],policy:{mode:'legacy',version:0,fallback_language:'az',fixed_language:null,source:'legacy'},ticket,candidate,history:[],policyError:false,regenOutcome:'ok',holdRegen:false,generationCalls:0,results:{},improveLanguage:'en',summaryReads:0,pendingByActor:{}};
@@ -11,7 +11,7 @@ function installSummaryLanguageFixture({role='owner',view='profile',tenant='lang
   const actor=()=>w.tenantProfileSnapshot.member.tenant_id+':'+w.tenantProfileSnapshot.member.telegram_id,pending=()=>f.pendingByActor[actor()]||null;
   f.snapshot=()=>clone({tenant,ticket:f.ticket,policy:f.policy,history:f.history,results:f.results,pendingByActor:f.pendingByActor,generationCalls:f.generationCalls});
   const ok=value=>({ok:true,status:200,json:async()=>clone(value)}),wrapped=result=>ok({success:true,result}),failure=(status,error)=>({ok:false,status,json:async()=>({success:false,error})});
-  w.tenantAppNavigate=target=>{d.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+target));d.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:target}}));};
+  w.tenantAppNavigate=target=>{target=target==='settings'?'profile':target;d.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+target));d.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:target}}));};
   d.querySelectorAll('.nav [data-view]').forEach(button=>button.onclick=()=>w.tenantAppNavigate(button.dataset.view));w.tenantAppNavigate(view);
   w.fetch=async(url,init={})=>{
     const parsed=new URL(String(url),w.location),path=parsed.pathname,body=init.body?JSON.parse(init.body):null,method=init.method||'GET';f.calls.push({path,url:String(url),method,body});

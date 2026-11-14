@@ -1,5 +1,5 @@
 import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
-import { NativeDealBoard } from "./native-deal-board.jsx";
+import { NativeDealBoard, dealProfileScope } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
@@ -517,7 +517,12 @@ function TasksView({ rows = [], settings = {} }) {
     catch {setMoveError(copy.error);}
     finally {setBusy(false);}
   };
-  useEffect(() => {const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer);}, []);
+  useEffect(() => {
+    let timer;
+    const resume = () => {clearInterval(timer);const host=document.getElementById(settings.target || 'tasksList');if(!document.hidden&&host?.closest('.view')?.classList.contains('active'))timer=setInterval(()=>setNow(new Date()),60000);};
+    resume();document.addEventListener('tenant-view',resume);document.addEventListener('visibilitychange',resume);
+    return () => {clearInterval(timer);document.removeEventListener('tenant-view',resume);document.removeEventListener('visibilitychange',resume);};
+  }, [settings.target]);
   const c = taskBoardLabels[window.tenantI18n?.language] || taskBoardLabels.az;
   const groups = taskColumns(rows, now);
   return <Box data-task-view={mode} minW="0">
@@ -608,7 +613,7 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
   const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
   const drag=useRef(null),busy=useRef(false),revision=useRef(0),alive=useRef(true);
   useEffect(()=>{setDisplayRows(rows);},[rows]);
-  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;busy.current=false;setPending('');setDisplayRows([]);};document.addEventListener('tenant-profile',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
+  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
   const targets=row=>moveSources.some(s=>String(s.pipeline_id)===String(row.pipeline_id)&&String(s.stage_id)===String(row.status_id))?moveTargets.filter(t=>String(t.pipeline_id)===String(row.pipeline_id)):[];
   const movable=row=>!!moveContext&&canIdentifyKommoDeal(row)&&!busy.current&&targets(row).length>0&&!!(row.raw?.updated_at||row.source_updated_at);
   const move=async(row,stage)=>{
@@ -706,10 +711,13 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   useEffect(() => {
     if (customer) return;
     alive.current = true;
-    const changed = () => load();
+    const scope = profile => JSON.stringify([profile?.member, profile?.capabilities, profile?.role_permissions]);
+    let identity = scope(window.tenantProfileSnapshot);
+    const changed = event => {const next = scope(event.detail);if (next !== identity) {identity = next;setDraft([]);load();}};
+    const invalid = () => {identity = '';generation.current++;setData(null);setDraft([]);setOpen(false);setSaving(false);setError('');};
     const relabel = () => setLanguage(document.documentElement.lang || "az");
-    load(); document.addEventListener("tenant-profile", changed); document.addEventListener("tenant-language", relabel);
-    return () => {alive.current = false; generation.current++; document.removeEventListener("tenant-profile", changed); document.removeEventListener("tenant-language", relabel);};
+    load(); document.addEventListener("tenant-profile", changed); document.addEventListener("tenant-auth-invalid", invalid); document.addEventListener("tenant-language", relabel);
+    return () => {alive.current = false; generation.current++; document.removeEventListener("tenant-profile", changed); document.removeEventListener("tenant-auth-invalid", invalid); document.removeEventListener("tenant-language", relabel);};
   }, [customer]);
   const copy = dealColumnCopy[language] || dealColumnCopy.az;
   const save = async () => {
