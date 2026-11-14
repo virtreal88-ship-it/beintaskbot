@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./app-shell.js";
+import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
 import { AIDashboard } from "./ai-dashboard.jsx";
 import {
@@ -473,6 +474,28 @@ function TasksTable({ rows = [], settings = {} }) {
       })}
     </Flex>
   </Card.Root>;
+}
+
+function TasksView({ rows = [], settings = {} }) {
+  const [mode, setMode] = useState('kanban');
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer);}, []);
+  const c = taskBoardLabels[window.tenantI18n?.language] || taskBoardLabels.az;
+  const groups = taskColumns(rows, now);
+  return <Box data-task-view={mode} minW="0">
+    <Flex role="group" aria-label={c.view} gap="2" mb="4" wrap="wrap">
+      {['kanban', 'table'].map(value => <Button key={value} size="sm" minH="44px" aria-pressed={mode === value} variant={mode === value ? 'solid' : 'outline'} onClick={() => setMode(value)}>{c[value]}</Button>)}
+    </Flex>
+    {mode === 'table' ? <TasksTable rows={rows} settings={settings}/> : !rows.length ? <Empty>{settings.empty || c.empty}</Empty> :
+      <Flex data-task-kanban="" data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3" scrollSnapType="x proximity">
+        {groups.map(group => <Box key={group.key} data-task-column={group.key} flex="1 0 280px" minW="min(280px, 82vw)" maxW="360px" scrollSnapAlign="start">
+          <Box textAlign="center" py="3" mb="3" borderBottomWidth="2px" borderColor={group.key === 'overdue' ? 'red.400' : group.key === 'today' ? 'green.400' : 'app.line'}>
+            <Heading size="sm">{c[group.key]}</Heading><Text fontSize="sm" color="app.muted">{c.count}: {group.rows.length}</Text>
+          </Box>
+          <Stack gap="2">{group.rows.length ? group.rows.map(task => <Box key={String(task.id || task.kommo_task_id)} data-task-card=""><TasksTable rows={[task]} settings={settings}/></Box>) : <Text textAlign="center" fontSize="sm" color="app.muted" py="4">{c.empty}</Text>}</Stack>
+        </Box>)}
+      </Flex>}
+  </Box>;
 }
 
 function DealTable({ rows = [], customer = false, onOpen }) {
@@ -2565,7 +2588,7 @@ function NotificationPreferencesHub() {
 }
 
 window.tenantChakraCRM = {
-  renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksTable rows={rows} settings={settings} />),
+  renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksView rows={rows} settings={settings} />),
   renderDeals: (target, rows, customer, onOpen) =>
     mount(
       target,

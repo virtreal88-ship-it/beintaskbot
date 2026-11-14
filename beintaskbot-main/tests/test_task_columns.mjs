@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {taskColumns} from '../ui/src/task-columns.js';
+process.env.TZ='Asia/Baku';
+const rows=[['overdue','2026-11-13T19:59:59Z'],['today','2026-11-13T20:00:00Z'],['tomorrow','2026-11-14T20:00:00Z'],['upcoming','2026-11-20T20:00:00Z'],['later','2026-11-21T20:00:00Z'],['undated',null],['undated','invalid'],['completed','2026-11-10T00:00:00Z']].map(([expected,due_at],id)=>({id,expected,due_at,status:expected==='completed'?'completed':'open'}));
+let groups=taskColumns(rows,new Date('2026-11-14T06:00:00Z'));
+assert.equal(groups.flatMap(g=>g.rows).length,rows.length);
+for(const g of groups)for(const row of g.rows)assert.equal(g.key,row.expected);
+assert.equal(taskColumns([],new Date()).length,4);
+process.env.TZ='America/New_York';
+groups=taskColumns([{id:1,due_at:'2026-03-09T04:00:00Z'}],new Date('2026-03-08T06:00:00Z'));
+assert.equal(groups.find(g=>g.rows.length).key,'tomorrow');
+console.log('PASS calendar boundaries, Baku midnight, DST, completed, missing/invalid dates, no dropped rows');
