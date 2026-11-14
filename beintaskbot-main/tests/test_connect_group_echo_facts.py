@@ -56,8 +56,7 @@ def test_sync_receipt_keeps_evidence_without_echo(monkeypatch):
     value['groupReceipt'].pop('participantJid')
     assert 'participantJid' not in transport.send(route,'synthetic',request,return_receipt=True)['receipt']
 
-@pytest.mark.asyncio
-async def test_manual_send_persists_receipt_then_caches_only_message_id(monkeypatch):
+def test_manual_send_persists_receipt_then_caches_only_message_id(monkeypatch):
     from unittest.mock import Mock
     import tenant_chat_send_service as service
     item={'key':('tenant',11,'request'),'command':{'lead_id':1,'text':'synthetic','request_id':'request'},'connection':['connect',C,G]}
@@ -69,7 +68,8 @@ async def test_manual_send_persists_receipt_then_caches_only_message_id(monkeypa
     monkeypatch.setattr(service,'dispatch_guarded',dispatch)
     record=Mock();finish=Mock()
     monkeypatch.setattr(service,'record_connect_outbound',record);monkeypatch.setattr(service,'finish',finish)
-    result=await service.run({},item['command'],None,None,Mock())
+    import asyncio
+    result=asyncio.run(service.run({},item['command'],None,None,Mock()))
     assert result=={'state':'accepted','message_id':'connect-id','origin':'connect'}
     assert dispatch.call_count==1 and dispatch.call_args.kwargs['return_receipt'] is True
     assert record.call_args.kwargs['receipt']==receipt
