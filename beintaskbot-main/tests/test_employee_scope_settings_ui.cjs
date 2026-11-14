@@ -9,7 +9,7 @@ const change=(b,node,value)=>{assert(node);node.value=value;node.dispatchEvent(n
   const b=await mount({role:'owner',language,row});try{
    let opened;b.d.addEventListener('tenant-member-card-open',e=>opened=e.detail);
    const form=edit(b);
-   assert.equal(form.querySelectorAll('[role=tab]').length,2);
+   assert.equal(form.querySelectorAll('[role=tab]').length,3);
    assert.equal(form.querySelectorAll('[data-access-action],[data-permission],[data-access-page]').length,0,'No competing broad, boolean, or visibility editor');
    const section=form.querySelector('.staff-scope-matrix');assert(section);
    assert.equal(section.querySelectorAll('[data-access-scope]').length,19);
