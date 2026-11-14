@@ -67,6 +67,7 @@ ASSETS = (
     ('/assets/tenant-microphone-lease.js', 'tenant-microphone-lease.js', 'no-store'),
     ('/assets/tenant-customer-voice-store.js', 'tenant-customer-voice-store.js', 'no-store'),
     ('/assets/tenant-customer-voice-ui.js', 'tenant-customer-voice-ui.js', 'no-store'),
+    ('/assets/tenant-dialog-composer.js', 'tenant-dialog-composer.js', 'no-store'),
     ('/assets/tenant-copilot-voice-audio.js', 'tenant-copilot-voice-audio.js', 'no-store'),
     ('/assets/tenant-copilot-voice-controller.js', 'tenant-copilot-voice-controller.js', 'no-store'),
     ('/assets/tenant-copilot-voice-channel.js', 'tenant-copilot-voice-channel.js', 'no-store'),

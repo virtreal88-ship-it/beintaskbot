@@ -7,6 +7,8 @@ on:
       - 'beintaskbot-main/docs/tenant-microphone-lease.js'
       - 'beintaskbot-main/docs/tenant-customer-voice-store.js'
       - 'beintaskbot-main/docs/tenant-customer-voice-ui.js'
+      - 'beintaskbot-main/docs/tenant-dialog-composer.js'
+      - 'beintaskbot-main/tests/test_dialog_composer*'
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
       - 'beintaskbot-main/tenant_customer_voice.py'
@@ -64,3 +66,6 @@ jobs:
       - run: node .voice-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - run: node -e "require('fs').appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.voice-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
       - run: NODE_PATH=.voice-test-deps/node_modules node tests/test_customer_voice_browser.cjs
+      - run: npm install --prefix .support-test-deps --no-save jsdom@26 playwright@1.62.1
+      - run: node tests/test_dialog_composer.cjs
+      - run: node tests/test_dialog_composer_browser.cjs
