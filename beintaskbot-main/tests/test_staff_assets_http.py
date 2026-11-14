@@ -18,8 +18,8 @@ class StaffAssets(unittest.IsolatedAsyncioTestCase):
                 if tag=='script':self.urls.append(attrs.get('src',''))
                 if tag=='link':self.urls.append(attrs.get('href',''))
         refs=References();refs.feed((ROOT/'docs/tenant-app.html').read_text(encoding='utf-8'))
-        urls=[url for url in refs.urls if 'tenant-members-ui.' in url]
-        self.assertEqual(len(urls),2)
+        urls=[url for url in refs.urls if 'tenant-members-ui.' in url or 'tenant-ai-dashboard.css' in url]
+        self.assertEqual(len(urls),3)
         app=web.Application();register_assets(app)
         async with TestClient(TestServer(app)) as client:
             for url in urls:
