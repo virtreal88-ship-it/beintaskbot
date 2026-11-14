@@ -12,7 +12,8 @@ from tenant_platform_core import _connect
 from tenant_policy import TenantPolicy
 from tenant_scoped_access import scoped_access_enabled, ACTIVE_TENANT_STATUSES
 from tenant_workflow_store import _read_tenant_workflow
-from tenant_crm_queries import task_filters
+from tenant_crm_queries import task_filters, deal_filters
+from tenant_crm_native_access import scoped_sql
 from tenant_native_task_access import read_where, capabilities as task_capabilities
 
 
@@ -162,7 +163,7 @@ def _sources(policy):
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
         complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
-        dict(source='kommo', view=external, create=external_write, update=False,
+        dict(source='kommo', view=external, create=external_write, update=False, reschedule=external,
             complete=external_write, archive=False, sync=external_write and policy.privileged)]
 
 
@@ -182,13 +183,12 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
             where += " AND (t.text ILIKE %s ESCAPE '\\' OR d.title ILIKE %s ESCAPE '\\')"
             args.extend([needle, needle])
-        sql = '''SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
+        sql = '''SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,
           t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
           t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
           t.tenant_id,t.access_responsible_id,owner.department_id AS access_responsible_department_id
           FROM saas_crm_native_tasks t
           JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
-          LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=t.tenant_id AND c.id=t.contact_id
           LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
           LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
           WHERE '''+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
@@ -200,23 +200,67 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
             where += " AND text ILIKE %s ESCAPE '\\'"
             args.append(needle)
-        sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at
+        sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at,raw
           FROM saas_crm_tasks WHERE '''+where+' ORDER BY completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
     if limit is not None:
         sql += ' LIMIT %s'; args.append(limit)
     cur.execute(sql, args)
+    selected_rows = cur.fetchall()
+    from tenant_kommo_board_provenance import revisions
+    proof = revisions(cur,profile['tenant_id'],'tasks',[row['kommo_task_id'] for row in selected_rows],expected_raw={str(row['kommo_task_id']):row.get('raw') for row in selected_rows}) if source=='kommo' else {}
     result = []
-    for row in cur.fetchall():
+    for row in selected_rows:
         row = dict(row)
         if source == 'kommo':
             row.update(id=str(row['kommo_task_id']), status='completed' if row['completed'] else 'open')
             row['kommo_task_id'] = str(row['kommo_task_id'])
+            row['source_revision'] = proof.get(row['kommo_task_id'])
+            row.pop('raw',None)
             row['kommo_lead_id'] = str(row['kommo_lead_id']) if row.get('kommo_lead_id') else None
         if source == 'native':
             row['capabilities'] = task_capabilities(TenantPolicy(profile), row, profile['telegram_id'])
         row['source'] = source
         result.append(public(row))
+    _task_customers(cur, profile, source, result)
     return result
+
+
+def _task_customers(cur, profile, source, rows):
+    """One bounded snapshot lookup; task visibility never grants contact/deal access.
+
+    Marker/creator-owned Kommo tasks may reference deals outside the employee's
+    pipelines. Keep those tasks visible but do not disclose that deal's client.
+    Native customer fields use the exact same scope as the contact directory.
+    """
+    for row in rows:
+        row['contact_name'] = ''
+        row['phone'] = ''
+    key = 'contact_id' if source == 'native' else 'kommo_lead_id'
+    ids = list({row[key] for row in rows if row.get(key)})
+    if not ids:
+        return
+    if source == 'native':
+        predicate, args = scoped_sql(profile, 'customers', 'view', 'c')
+        cur.execute(f"""SELECT c.id,c.display_name AS contact_name,c.phone
+          FROM saas_crm_native_contacts c WHERE c.tenant_id=%s::uuid
+          AND c.id=ANY(%s::uuid[]) AND c.archived_at IS NULL AND ({predicate})""",
+          [profile['tenant_id'], ids, *args])
+    else:
+        policy = TenantPolicy(profile)
+        predicate, args = deal_filters(tenant_id=profile['tenant_id'],
+            scope=None if policy.privileged else policy.kommo_pipeline_scope(),
+            creator_id=policy.kommo_user_id())
+        cur.execute("""SELECT kommo_lead_id AS id,contact_name,phone,name AS deal_title
+          FROM saas_crm_deals WHERE """+predicate+' AND kommo_lead_id=ANY(%s::bigint[])',
+          [*args, ids])
+    customers = {str(item['id']): dict(item) for item in cur.fetchall()}
+    for row in rows:
+        customer = customers.get(str(row.get(key)))
+        if customer:
+            row['contact_name'] = customer.get('contact_name') or ''
+            row['phone'] = customer.get('phone') or ''
+            if source == 'kommo':
+                row['deal_title'] = customer.get('deal_title') or ''
 
 
 def _command(cur, profile, source, request_id):

@@ -3,7 +3,7 @@ import asyncio
 from datetime import date, datetime
 from uuid import UUID
 from aiohttp import web
-from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options,set_deal_company_link
+from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options,set_deal_company_link,move_deal_stage
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
@@ -67,7 +67,7 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
             # Resolve a valid operation before choosing its permission. An
             # item-only archive on the collection must never fall through to
             # create under a delete grant.
-            allowed_actions = (None, 'update', 'archive') if deal_id else (None, 'create')
+            allowed_actions = (None, 'update', 'archive', 'move_stage') if deal_id else (None, 'create')
             if action not in allowed_actions:
                 return web.json_response({'success': False, 'error': 'invalid_action'}, status=400)
             permission_action='delete' if action=='archive' else ('create' if not deal_id else 'update')
@@ -76,8 +76,18 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
             if data.get('action')=='archive' and deal_id:
                 result=await asyncio.to_thread(archive_deal,tenant_id,deal_id,actor_id=actor)
                 return web.json_response({'success':True,'archived':result})
+            if action == 'move_stage':
+                if set(data) != {'action', 'stage_id', 'expected_updated_at'}:
+                    raise ValueError('invalid stage fields')
+                if not {'expected_tenant_id', 'expected_user_id'} <= set(request.query):
+                    raise CRMContextError('contacts_context_changed', 409)
+                result = await asyncio.to_thread(move_deal_stage, tenant_id, deal_id,
+                    data['stage_id'], expected_updated_at=data['expected_updated_at'], actor_id=actor)
+            else:
+                result = None
             fields={k:data.get(k) for k in ('title','pipeline_id','stage_id','contact_id','responsible_id','channel_id','conversation_id','description')}
-            if deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields,actor_id=actor)
+            if action == 'move_stage': pass
+            elif deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields,actor_id=actor)
             else: result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'),actor_id=actor)
             if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
             try:

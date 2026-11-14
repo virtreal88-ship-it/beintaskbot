@@ -40,7 +40,7 @@
     if(!current(scope))throw staleError();
     if(!response.ok || !data || typeof data!=='object' || Array.isArray(data) || data.success!==true){
       const code=typeof data?.code==='string'?data.code:typeof data?.error==='string'&&/^[a-z_]{1,80}$/.test(data.error)?data.error:'task_unavailable';
-      const error=Object.assign(new Error(code),{status:response.status,unknown:method!=='GET'&&(response.status>=500||response.ok||!data||data.success!==false||data.retry_same_request===true),code});
+      const error=Object.assign(new Error(code),{status:response.status,keepRequest:data?.keep_request,unknown:method!=='GET'&&(response.status>=500||response.ok||!data||data.success!==false||data.retry_same_request===true),code});
       if(method!=='GET'&&(response.status===403||response.status===409&&code==='task_context_changed'))void proveAccess();
       throw error;
     }
@@ -81,20 +81,65 @@
   const cleanText = value => String(value||'').replace(/\n?\[CRM:[a-f0-9]{32}\]/g,'');
   function rowValid(source,row){return row&&row.source===source&&typeof row.id==='string'&&taskId(source,row.id)&&['open','completed'].includes(row.status)&&typeof row.text==='string';}
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleString(window.tenantI18n?.language||'az',{dateStyle:'medium',timeStyle:'short'}) : text().none;
-  function filtered(source){const query=$('taskSearch').value.toLocaleLowerCase().trim(),status=$('taskStatus').value;return rows[source].rows.filter(row=>(status==='all'||row.status===status)&&(!query||[cleanText(row.text),row.deal_title,row.responsible_name].some(value=>String(value||'').toLocaleLowerCase().includes(query))));}
+  function filtered(source){const query=$('taskSearch').value.toLocaleLowerCase().trim(),status=$('taskStatus').value;return rows[source].rows.filter(row=>(status==='all'||row.status===status)&&(!query||[cleanText(row.text),row.deal_title,row.responsible_name,row.contact_name,row.phone].some(value=>String(value||'').toLocaleLowerCase().includes(query))));}
   function renderSource(source){
     const state=rows[source],target=source==='native'?'nativeTasksList':'tasksList',notice=$(source==='native'?'nativeTasksNotice':'tasksNotice'),c=text(),selected=filtered(source);
     const phase=!allowed()?'auth':state.phase;
     notice.textContent=phase==='stale'?c.stale:phase==='error'?c.error:phase==='forbidden'?c.denied:'';notice.classList.toggle('show',!!notice.textContent);
     const empty=phase==='loading'||phase==='idle'?c.loading:phase==='auth'?c.auth:phase==='forbidden'?c.denied:phase==='error'?c.error:state.rows.length?c.noMatches:c.empty;
     const rendered=['ready','stale'].includes(phase)?selected:[];
-    const settings={target,source,labels:c,empty,complete:sourceActions(source).complete===true,onOpen:id=>open(source,id),onEdit:id=>edit(id),onState:(id,action)=>changeState(id,action)};
+    const settings={target,source,labels:c,empty,canMove:row=>(source==='kommo'?sourceActions(source).reschedule===true&&typeof row.source_revision==='string'&&!!row.source_revision:taskActions(source,row,sourceActions(source)).update===true)&&!pendingMove(source,row.id),moveNeedsSync:row=>source==='kommo'&&sourceActions(source).reschedule===true&&!row.source_revision,pendingMove:row=>!!pendingMove(source,row.id),onCheckMove:id=>checkMove(source,id),onMove:(id,due)=>moveDue(source,id,due),complete:sourceActions(source).complete===true,onOpen:id=>open(source,id),onEdit:id=>edit(id),onState:(id,action)=>changeState(id,action)};
     if(window.tenantChakraCRM?.renderTasks)window.tenantChakraCRM.renderTasks(rendered,settings);
-    else $(target).innerHTML=rendered.length?rendered.map(row=>`<div class="task-flow-row"><div><button class="task-flow-open" data-task-flow-open="${esc(row.id)}">${esc(cleanText(row.text))}</button><p class="sub">${esc(row.deal_title||'')} ${esc(row.responsible_name||'')}</p><p class="sub">${esc(date(row.due_at))}</p></div><div><span class="badge">${esc(c[row.status])}</span>${source==='kommo'&&row.status==='open'&&sourceActions(source).complete===true?(Number.isSafeInteger(Number(row.id))?`<button class="outline" data-task-complete="${esc(row.id)}">${esc(c.complete)}</button>`:`<p class="sub">${esc(c.unsafeComplete)}</p>`):''}</div></div>`).join(''):`<div class="empty">${esc(empty)}</div>`;
+    else $(target).innerHTML=rendered.length?rendered.map(row=>`<div class="task-flow-row"><div><button class="task-flow-open" data-task-flow-open="${esc(row.id)}">${esc(cleanText(row.text))}</button><p class="sub">${esc([row.contact_name,row.phone].filter(Boolean).join(' · '))}</p><p class="sub">${esc(row.deal_title||'')} ${esc(row.responsible_name||'')}</p><p class="sub">${esc(date(row.due_at))}</p></div><div><span class="badge">${esc(c[row.status])}</span>${source==='kommo'&&row.status==='open'&&sourceActions(source).complete===true?(Number.isSafeInteger(Number(row.id))?`<button class="outline" data-task-complete="${esc(row.id)}">${esc(c.complete)}</button>`:`<p class="sub">${esc(c.unsafeComplete)}</p>`):''}</div></div>`).join(''):`<div class="empty">${esc(empty)}</div>`;
     $(target).querySelectorAll('[data-task-flow-open]').forEach(button=>button.onclick=()=>open(source,button.dataset.taskFlowOpen));
     $(source==='native'?'nativeTaskCount':'kommoTaskCount').textContent=state.page&&allowed()?c.count.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length)).replace('{limit}',String(state.page.limit))+(state.page.has_more?' · '+c.more:''):'';
   }
   function render(){const c=text();document.querySelectorAll('[data-task-flow-label]').forEach(node=>node.textContent=c[node.dataset.taskFlowLabel]||'');$('nativeTaskCreate').textContent='+ '+c.create;$('nativeTaskCreate').disabled=!allowed()||!['native','kommo'].some(canEnter);for(const option of $('taskStatus').options)option.textContent=c[option.value];for(const source of ['native','kommo'])renderSource(source);translateModal();renderSync();renderSourcePicker();}
+  function moveStorageKey(source,id){const who=identity();return `task-deadline:${who.expected_tenant_id}:${who.expected_user_id}:${source}:${id}`;}
+  function pendingMove(source,id){try{const value=JSON.parse(sessionStorage.getItem(moveStorageKey(source,id))||'null');return value&&uuid(value.request_id)&&value.task_id===id&&typeof value.due_at==='string'?value:null;}catch{return null;}}
+  function applyMoveReceipt(result,command,scope){
+    if(!current(scope))throw staleError();
+    if(typeof result.source_revision!=='string'||!result.source_revision||result.state!=='confirmed'||result.source!=='kommo'||result.task_id!==command.task_id||result.request_id!==command.request_id||new Date(result.due_at).getTime()!==new Date(command.due_at).getTime())throw Object.assign(new Error('board_outcome_unknown'),{unknown:true});
+    sessionStorage.removeItem(moveStorageKey('kommo',command.task_id));
+    rows.kommo.rows=rows.kommo.rows.map(row=>row.id===command.task_id?{...row,due_at:result.due_at,source_revision:result.source_revision}:row);rows.kommo.phase='ready';renderSource('kommo');
+  }
+  async function moveKommoDue(task,due,scope){
+    if(typeof task.source_revision!=='string'||!task.source_revision)throw new Error('board_sync_required');
+    if(!due||new Date(due).getTime()<=Date.now())throw new Error('invalid_due');
+    const command={request_id:crypto.randomUUID(),task_id:task.id,expected_due_at:task.due_at||null,due_at:due,source_revision:task.source_revision};
+    const storage=moveStorageKey('kommo',task.id);
+    // Save the original command before sending. An ambiguous response offers
+    // read-only verification, never another PATCH under a fresh command ID.
+    sessionStorage.setItem(storage,JSON.stringify(command));
+    try{const result=await api('/api/platform/crm/tasks/reschedule',{method:'POST',scope,body:command});applyMoveReceipt(result,command,scope);}
+    catch(error){if(current(scope)&&!error.unknown&&!error.stale)sessionStorage.removeItem(storage);throw error;}
+    finally{if(current(scope))renderSource('kommo');}
+  }
+  async function checkMove(source,id){
+    const command=pendingMove(source,id),scope=capture();if(source!=='kommo'||!command||!allowed()||activeSource!==source)return;
+    try{const result=await api('/api/platform/crm/tasks/reschedule?'+new URLSearchParams({request_id:command.request_id}),{scope});applyMoveReceipt(result,command,scope);const box=$('tasksFlowNotice');box.textContent='';box.classList.remove('show');}
+    catch(error){if(current(scope)){if(error.keepRequest===false){sessionStorage.removeItem(moveStorageKey(source,id));renderSource(source);}const box=$('tasksFlowNotice');box.textContent=error.keepRequest===false?text().conflict:text().unknown;box.classList.add('show');}}
+  }
+  const movingTasks = new Set();
+  async function moveDue(source,id,due){
+    const scope=capture(),state=rows[source],lock=scope.key+':'+source+':'+id;
+    const task=state?.rows.find(row=>row.id===id);
+    if(!['native','kommo'].includes(source)||activeSource!==source||!current(scope)||!visible()||!task||task.status!=='open'||(source==='kommo'?sourceActions(source).reschedule!==true:taskActions(source,task,sourceActions(source)).update!==true)||movingTasks.has(lock))throw new Error('task_forbidden');
+    if(due!==null&&(typeof due!=='string'||Number.isNaN(new Date(due).getTime())))throw new Error('invalid_due');
+    if(pendingMove(source,id))throw new Error('board_outcome_unknown');
+    movingTasks.add(lock);
+    // Keep cards and filters in place while saving. CAS prevents overwriting a
+    // newer edit; never resubmit an ambiguous write automatically.
+    ++state.serial;state.promise=null;
+    try{
+      if(source==='kommo'){await moveKommoDue(task,due,scope);return;}
+      const result=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id),{method:'POST',scope,body:{action:'update',due_at:due,expected_updated_at:task.updated_at,...identity()}});
+      const saved=result.task;
+      if(!saved||saved.id!==id||!saved.updated_at||(due===null?saved.due_at!==null:new Date(saved.due_at).getTime()!==new Date(due).getTime()))throw Object.assign(new Error('invalid_receipt'),{unknown:true});
+      if(current(scope)){state.rows=state.rows.map(row=>row.id===id?{...row,...saved,source}:row);state.phase='ready';renderSource(source);}
+    }catch(error){if(current(scope)){const box=$('tasksFlowNotice');box.textContent=error.unknown?text().unknown:error.status===409?text().conflict:text().writeDenied;box.classList.add('show');}throw error;}
+    finally{movingTasks.delete(lock);}
+  }
   async function refreshSource(source,{force=false}={}){
     const state=rows[source];if(!allowed()||!visible()||routeTarget()?.error)return;if(state.promise&&!force)return state.promise;
     const serial=++state.serial,scope=capture();state.phase='loading';renderSource(source);

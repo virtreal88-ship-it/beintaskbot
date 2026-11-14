@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 from tenant_crm_repository import CRMRepository
 
 
@@ -63,8 +63,11 @@ class CRMStorage(unittest.TestCase):
 
     def test_count_and_page_share_connection_and_identical_filters(self):
         self.cur.fetchone.return_value = {'total': 3}
-        self.cur.fetchall.return_value = [{'id': 1, 'created_at': datetime(2026, 10, 9, tzinfo=timezone.utc)}]
-        rows, total = self.store.list_deals(tenant_id='a', scope=[], limit=1000, offset=-2)
+        self.cur.fetchall.return_value = [{'kommo_lead_id': 1, 'raw': {}, 'created_at': datetime(2026, 10, 9, tzinfo=timezone.utc)}]
+        with patch('tenant_kommo_board_provenance.revisions',return_value={'1':'a'*64}) as proof:
+            rows, total = self.store.list_deals(tenant_id='a', scope=[], limit=1000, offset=-2)
+        proof.assert_called_once_with(self.cur,'a','leads',[1],expected_raw={'1':{}})
+        self.assertEqual(rows[0]['source_revision'],'a'*64)
         self.assertEqual(total, 3)
         self.assertEqual(rows[0]['created_at'], '2026-10-09T00:00:00+00:00')
         self.connect.assert_called_once()

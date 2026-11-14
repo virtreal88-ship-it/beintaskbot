@@ -45,4 +45,8 @@ def preferences(*, tenant_id: str, actor_id: int, hidden=None) -> dict:
                         updated_by=%s,updated_at=now()''',
                     (tenant_id, actor_key, value, int(actor_id), actor_key, actor_key, actor_key, value, int(actor_id)))
             conn.commit()
-    return {'catalog': catalog, 'hidden_stage_keys': saved}
+    from tenant_kommo_deal_move import stage_choices
+    return {'catalog': catalog, 'hidden_stage_keys': saved,
+        'move_stage_targets':stage_choices(current), 'move_stage_sources':stage_choices(current,target=False),
+        'move_stage_completion_requires_approval':policy.requires_deal_approval(),
+        'move_context':{'tenant_id':str(tenant_id),'user_id':str(actor_id)}}

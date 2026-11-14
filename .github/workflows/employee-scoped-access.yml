@@ -138,6 +138,10 @@ jobs:
           tests/test_tenant_crm_external_sync.py
           tests/test_crm_native_deals.py
           tests/test_crm_native_deal_api.py
+          tests/test_native_deal_stage_move.py
+          tests/test_native_deal_stage_move_postgres.py
+          tests/test_native_deal_stage_move_native_postgres.py
+          tests/test_kommo_deal_move.py
           tests/test_crm_native_contacts.py
           tests/test_crm_native_api.py
           tests/test_tenant_ai_native_crm_actions.py
@@ -158,6 +162,9 @@ jobs:
           tests/test_crm_sync_history.py
           tests/test_crm_sync_history_postgres.py
           tests/test_crm_import_provenance.py
+          tests/test_kommo_board_provenance.py
+          tests/test_kommo_board_provenance_postgres.py
+          tests/test_kommo_board_provenance_native_postgres.py
           tests/test_crm_import_provenance_postgres.py
           tests/test_crm_import_provenance_fences_postgres.py
           tests/test_tenant_crm_sync.py
