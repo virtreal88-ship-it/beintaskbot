@@ -235,6 +235,18 @@ def _task_customers(cur, profile, source, rows):
     for row in rows:
         row['contact_name'] = ''
         row['phone'] = ''
+        row['deal_readable'] = False
+    if source == 'native':
+        deal_ids = list({row['deal_id'] for row in rows if row.get('deal_id')})
+        if deal_ids:
+            predicate, args = scoped_sql(profile, 'deals', 'view', 'd')
+            cur.execute(f"""SELECT d.id FROM saas_crm_native_deals d
+              WHERE d.tenant_id=%s::uuid AND d.id=ANY(%s::uuid[])
+              AND d.archived_at IS NULL AND ({predicate})""",
+              [profile['tenant_id'], deal_ids, *args])
+            readable = {str(item['id']) for item in cur.fetchall()}
+            for row in rows:
+                row['deal_readable'] = str(row.get('deal_id')) in readable
     key = 'contact_id' if source == 'native' else 'kommo_lead_id'
     ids = list({row[key] for row in rows if row.get(key)})
     if not ids:
@@ -260,6 +272,7 @@ def _task_customers(cur, profile, source, rows):
             row['contact_name'] = customer.get('contact_name') or ''
             row['phone'] = customer.get('phone') or ''
             if source == 'kommo':
+                row['deal_readable'] = True
                 row['deal_title'] = customer.get('deal_title') or ''
 
 

@@ -83,15 +83,28 @@
   function rowValid(source,row){return row&&row.source===source&&typeof row.id==='string'&&taskId(source,row.id)&&['open','completed'].includes(row.status)&&typeof row.text==='string';}
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleString(window.tenantI18n?.language||'az',{dateStyle:'medium',timeStyle:'short'}) : text().none;
   function filtered(source){const query=$('taskSearch').value.toLocaleLowerCase().trim(),status=$('taskStatus').value;return rows[source].rows.filter(row=>(status==='all'||row.status===status)&&(!query||[cleanText(row.text),row.deal_title,row.responsible_name,row.contact_name,row.phone].some(value=>String(value||'').toLocaleLowerCase().includes(query))));}
+  function linkedDeal(source,row){
+    if(!allowed()||row?.deal_readable!==true)return null;
+    const id=String(source==='native'?row.deal_id||'':row.kommo_lead_id||'');
+    return (source==='native'?uuid(id):/^[1-9]\d*$/.test(id))?id:null;
+  }
+  function openLinkedDeal(source,id){
+    const row=rows[source]?.rows.find(row=>String(row.id)===String(id)),deal=linkedDeal(source,row);
+    if(!deal)return;
+    // Existing card readers re-authorize against current server scope.
+    if(source==='native')window.tenantContactsBridge?.openEntity('deal',deal);
+    else window.tenantContactsBridge?.openLegacyDeal(deal);
+  }
   function renderSource(source){
     const state=rows[source],target=source==='native'?'nativeTasksList':'tasksList',notice=$(source==='native'?'nativeTasksNotice':'tasksNotice'),c=text(),selected=filtered(source);
     const phase=!allowed()?'auth':state.phase;
     notice.textContent=phase==='stale'?c.stale:phase==='error'?c.error:phase==='forbidden'?c.denied:'';notice.classList.toggle('show',!!notice.textContent);
     const empty=phase==='loading'||phase==='idle'?c.loading:phase==='auth'?c.auth:phase==='forbidden'?c.denied:phase==='error'?c.error:state.rows.length?c.noMatches:c.empty;
     const rendered=['ready','stale'].includes(phase)?selected:[];
-    const settings={target,source,labels:c,empty,canMove:row=>(source==='kommo'?sourceActions(source).reschedule===true&&typeof row.source_revision==='string'&&!!row.source_revision:taskActions(source,row,sourceActions(source)).update===true)&&!pendingMove(source,row.id),moveNeedsSync:row=>source==='kommo'&&sourceActions(source).reschedule===true&&!row.source_revision,pendingMove:row=>!!pendingMove(source,row.id),onCheckMove:id=>checkMove(source,id),onMove:(id,due)=>moveDue(source,id,due),complete:sourceActions(source).complete===true,onOpen:id=>open(source,id),onEdit:id=>edit(id),onState:(id,action)=>changeState(id,action)};
+    const settings={target,source,labels:c,canOpenDeal:row=>!!linkedDeal(source,row),onOpenDeal:id=>openLinkedDeal(source,id),empty,canMove:row=>(source==='kommo'?sourceActions(source).reschedule===true&&typeof row.source_revision==='string'&&!!row.source_revision:taskActions(source,row,sourceActions(source)).update===true)&&!pendingMove(source,row.id),moveNeedsSync:row=>source==='kommo'&&sourceActions(source).reschedule===true&&!row.source_revision,pendingMove:row=>!!pendingMove(source,row.id),onCheckMove:id=>checkMove(source,id),onMove:(id,due)=>moveDue(source,id,due),complete:sourceActions(source).complete===true,onOpen:id=>open(source,id),onEdit:id=>edit(id),onState:(id,action)=>changeState(id,action)};
     if(window.tenantChakraCRM?.renderTasks)window.tenantChakraCRM.renderTasks(rendered,settings);
-    else $(target).innerHTML=rendered.length?rendered.map(row=>`<div class="task-flow-row"><div><button class="task-flow-open" data-task-flow-open="${esc(row.id)}">${esc(cleanText(row.text))}</button><p class="sub">${esc([row.contact_name,row.phone].filter(Boolean).join(' · '))}</p><p class="sub">${esc(row.deal_title||'')} ${esc(row.responsible_name||'')}</p><p class="sub">${esc(date(row.due_at))}</p></div><div><span class="badge">${esc(c[row.status])}</span>${source==='kommo'&&row.status==='open'&&sourceActions(source).complete===true?(Number.isSafeInteger(Number(row.id))?`<button class="outline" data-task-complete="${esc(row.id)}">${esc(c.complete)}</button>`:`<p class="sub">${esc(c.unsafeComplete)}</p>`):''}</div></div>`).join(''):`<div class="empty">${esc(empty)}</div>`;
+    else $(target).innerHTML=rendered.length?rendered.map(row=>`<div class="task-flow-row"><div><button class="task-flow-open" data-task-flow-open="${esc(row.id)}">${esc(cleanText(row.text))}</button><p class="sub">${linkedDeal(source,row)&&[row.contact_name,row.phone].some(Boolean)?`<button type="button" class="task-flow-open" data-task-deal-open="${esc(row.id)}" title="${esc(c.deal)}">${esc([row.contact_name,row.phone].filter(Boolean).join(' · '))}</button>`:esc([row.contact_name,row.phone].filter(Boolean).join(' · '))}</p><p class="sub">${esc(row.deal_title||'')} ${esc(row.responsible_name||'')}</p><p class="sub">${esc(date(row.due_at))}</p></div><div><span class="badge">${esc(c[row.status])}</span>${source==='kommo'&&row.status==='open'&&sourceActions(source).complete===true?(Number.isSafeInteger(Number(row.id))?`<button class="outline" data-task-complete="${esc(row.id)}">${esc(c.complete)}</button>`:`<p class="sub">${esc(c.unsafeComplete)}</p>`):''}</div></div>`).join(''):`<div class="empty">${esc(empty)}</div>`;
+    if(!window.tenantChakraCRM?.renderTasks)$(target).querySelectorAll('[data-task-deal-open]').forEach(button=>button.onclick=()=>openLinkedDeal(source,button.dataset.taskDealOpen));
     $(target).querySelectorAll('[data-task-flow-open]').forEach(button=>button.onclick=()=>open(source,button.dataset.taskFlowOpen));
     $(source==='native'?'nativeTaskCount':'kommoTaskCount').textContent=state.page&&allowed()?c.count.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length)).replace('{limit}',String(state.page.limit))+(state.page.has_more?' · '+c.more:''):'';
   }
