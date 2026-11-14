@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/company-employees-entry.yml'
       - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-mobile-crm-toolbar.js'
+      - 'beintaskbot-main/tests/test_mobile_crm_toolbar*.cjs'
       - 'beintaskbot-main/docs/tenant-members-ui.js'
       - 'beintaskbot-main/docs/tenant-view-demand.js'
       - 'beintaskbot-main/docs/tenant-workspace.js'
@@ -87,6 +89,8 @@ jobs:
           node tests/test_task_columns.mjs
           node tests/test_tasks_kanban_ui.cjs
           node tests/test_tasks_kanban_browser.cjs
+          node tests/test_mobile_crm_toolbar.cjs
+          node tests/test_mobile_crm_toolbar_browser.cjs
           node tests/test_native_deal_board_browser.cjs
           node tests/test_task_move_browser.cjs
           node tests/test_kommo_deal_board_ui.cjs
