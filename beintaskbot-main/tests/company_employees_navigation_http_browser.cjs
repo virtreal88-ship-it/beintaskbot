@@ -102,11 +102,8 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       assert.equal(response.status(), 403);
       assert.equal('members' in await response.json(), false);
     } else {
-      await openSidebar();
-      const entry = page.locator('#settingsFamilyNav');
-      const group = page.locator('[data-group=company]');
-      if (!(await entry.isVisible())) await group.locator('.app-nav-group-title').click();
-      await entry.click();
+      await page.locator('.app-avatar-button').click();
+      await page.locator('#appUserMenu [data-app-open=settings]').click();
       const staffTab = page.locator('[data-settings-page=employees]');
       if (await staffTab.isVisible()) await staffTab.click();
       else if (!(await page.locator('#view-employees').evaluate(node => node.classList.contains('active')))) {
@@ -117,8 +114,12 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       if (actor !== 11) {
         assert.equal(await page.evaluate(() => tenantProfileSnapshot.capabilities.modules.settings), false);
         await page.locator('.app-avatar-button').click();
-        assert.equal(await page.locator('[data-app-open=settings]').isVisible(), false, 'Employee access grants no Settings access');
-        await page.keyboard.press('Escape');
+        const settingsItem = page.locator('#appUserMenu [data-app-open=settings]');
+        assert.equal(await settingsItem.isVisible(), true, 'Employee management permission grants its permitted Settings tab');
+        await settingsItem.click();
+        await page.locator('#view-employees.active').waitFor();
+        assert.equal(await page.locator('[data-settings-page=employees]').isVisible(), true);
+        assert.equal(await page.locator('[data-settings-page=integrations]').isVisible(), false, 'Employee access does not grant company Integrations');
       }
       if (mode === 'minute_resume') {
         // Use wall-clock time and the real built app, not synthetic profile
@@ -227,7 +228,11 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
           await openProfile();
           await page.locator('.app-sidebar-header .app-icon-button').click();
           assert.equal(await page.locator('body').getAttribute('data-sidebar'), 'collapsed');
-          await entry.click();
+          await page.locator('.app-avatar-button').click();
+          await page.locator('#appUserMenu [data-app-open=settings]').click();
+          const employeeSettingsTab = page.locator('[data-settings-page=employees]');
+          if (await employeeSettingsTab.isVisible()) await employeeSettingsTab.click();
+          else await page.locator('#view-employees.active').waitFor();
           await visibleStaff(tenantA);
         }
         await page.reload();

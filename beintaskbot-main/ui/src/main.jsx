@@ -2267,6 +2267,7 @@ function SettingsHub() {
   const [data, setData] = useState(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
+  const [language, setLanguage] = useState(window.tenantI18n?.language || "az");
   const [account, setAccount] = useState({
       first_name: "",
       last_name: "",
@@ -2297,8 +2298,24 @@ function SettingsHub() {
     }
   };
   useEffect(() => {
+    const relabel = () => setLanguage(window.tenantI18n?.language || "az");
+    document.addEventListener("tenant-language", relabel);
+    return () => document.removeEventListener("tenant-language", relabel);
+  }, []);
+  useEffect(() => {
     load();
   }, []);
+  const copy = ({
+    ru: {
+      title: "Личный профиль", description: "Вход через Telegram и email в одной учётной записи.", first: "Имя", last: "Фамилия", phone: "Телефон", login: "Логин", avatar: "Ссылка на аватар HTTPS", emailMissing: "Email не подключён", verified: "подтверждён", save: "Сохранить профиль", addEmail: "Подключить email", emailPrompt: "Введите email", emailSent: "Ссылка для подтверждения email отправлена.", workspace: "Рабочее пространство компании", workspaceDescription: "Выбирайте только среди компаний, к которым у вас есть доступ.", switchWorkspace: "Сменить компанию", sessions: "Активные сеансы", sessionsDescription: "Завершайте сеансы, которыми больше не пользуетесь.", thisDevice: "Это устройство", otherDevice: "Другое устройство", close: "Завершить", noSessions: "Сохранённых сеансов нет.", roles: {owner:"Владелец",admin:"Администратор",manager:"Менеджер",worker:"Сотрудник"}
+    },
+    en: {
+      title: "Personal profile", description: "Telegram and email sign-in can use the same account.", first: "First name", last: "Last name", phone: "Phone", login: "Login", avatar: "Avatar HTTPS URL", emailMissing: "Email is not connected", verified: "verified", save: "Save profile", addEmail: "Connect email", emailPrompt: "Enter your email address", emailSent: "Email verification link sent.", workspace: "Company workspace", workspaceDescription: "Choose only from companies where you are a member.", switchWorkspace: "Switch company", sessions: "Active sessions", sessionsDescription: "End sign-ins you no longer use.", thisDevice: "This device", otherDevice: "Other device", close: "End session", noSessions: "No saved sessions.", roles: {owner:"Owner",admin:"Administrator",manager:"Manager",worker:"Employee"}
+    },
+    az: {
+      title: "Şəxsi hesab", description: "Telegram və email girişi eyni hesabda işləyə bilər.", first: "Ad", last: "Soyad", phone: "Telefon", login: "Login", avatar: "Avatar HTTPS URL", emailMissing: "Email qoşulmayıb", verified: "təsdiqlənib", save: "Profili saxla", addEmail: "Email qoş", emailPrompt: "Email ünvanınızı daxil edin", emailSent: "Email təsdiq keçidi göndərildi.", workspace: "Şirkət iş sahəsi", workspaceDescription: "Seçim yalnız sizin aktiv üzvlükləriniz arasından edilir.", switchWorkspace: "İş sahəsini dəyiş", sessions: "Aktiv sessiyalar", sessionsDescription: "İstifadə edilməyən girişləri bağlayın.", thisDevice: "Bu cihaz", otherDevice: "Digər cihaz", close: "Bağla", noSessions: "Saxlanmış sessiya tapılmadı.", roles: {owner:"Sahib",admin:"Administrator",manager:"Menecer",worker:"İcraçı"}
+    }
+  })[language] || {title:"Personal profile",description:"",first:"First name",last:"Last name",phone:"Phone",login:"Login",avatar:"Avatar HTTPS URL",emailMissing:"Email is not connected",verified:"verified",save:"Save profile",addEmail:"Connect email",emailPrompt:"Enter your email address",emailSent:"Verification link sent.",workspace:"Company workspace",workspaceDescription:"",switchWorkspace:"Switch company",sessions:"Active sessions",sessionsDescription:"",thisDevice:"This device",otherDevice:"Other device",close:"End session",noSessions:"No saved sessions.",roles:{}};
   if (loading)
     return (
       <Flex py="14" justify="center">
@@ -2351,43 +2368,41 @@ function SettingsHub() {
     <Stack gap="6" mt="5">
       <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
         <Card.Header>
-          <Card.Title>Şəxsi hesab</Card.Title>
-          <Card.Description>
-            Telegram və email girişləri eyni hesabda işləyə bilər
-          </Card.Description>
+          <Card.Title>{copy.title}</Card.Title>
+          <Card.Description>{copy.description}</Card.Description>
         </Card.Header>
         <Card.Body>
           <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap="3">
             <Input
-              placeholder="Ad"
+              placeholder={copy.first}
               value={account.first_name || ""}
               onChange={(e) =>
                 setAccount({ ...account, first_name: e.target.value })
               }
             />
             <Input
-              placeholder="Soyad"
+              placeholder={copy.last}
               value={account.last_name || ""}
               onChange={(e) =>
                 setAccount({ ...account, last_name: e.target.value })
               }
             />
             <Input
-              placeholder="Telefon"
+              placeholder={copy.phone}
               value={account.phone || ""}
               onChange={(e) =>
                 setAccount({ ...account, phone: e.target.value })
               }
             />
             <Input
-              placeholder="Login"
+              placeholder={copy.login}
               value={account.login || ""}
               onChange={(e) =>
                 setAccount({ ...account, login: e.target.value })
               }
             />
             <Input
-              placeholder="Avatar HTTPS URL"
+              placeholder={copy.avatar}
               value={account.avatar_url || ""}
               onChange={(e) =>
                 setAccount({ ...account, avatar_url: e.target.value })
@@ -2395,32 +2410,32 @@ function SettingsHub() {
             />
             <Text alignSelf="center" fontSize="sm" color="app.muted">
               {account.email
-                ? `${account.email}${account.verified ? " · təsdiqlənib" : ""}`
-                : "Email qoşulmayıb"}
+                ? `${account.email}${account.verified ? ` · ${copy.verified}` : ""}`
+                : copy.emailMissing}
             </Text>
           </Grid>
-          <Flex mt="3" gap="2">
+          <Flex mt="3" gap="2" wrap="wrap" minW="0">
             <Button colorPalette="brand" onClick={saveAccount}>
-              Profili saxla
+              {copy.save}
             </Button>
             {!account.email && (
               <Button
                 variant="outline"
                 onClick={async () => {
-                  const email = prompt("Email ünvanınızı daxil edin");
+                  const email = prompt(copy.emailPrompt);
                   if (!email) return;
                   try {
                     await api("/api/platform/auth/email/link/request", {
                       method: "POST",
                       body: JSON.stringify({ email }),
                     });
-                    setActionError("Email təsdiq keçidi göndərildi.");
+                    setActionError(copy.emailSent);
                   } catch (e) {
                     setActionError(e.message);
                   }
                 }}
               >
-                Email qoş
+              {copy.addEmail}
               </Button>
             )}
           </Flex>
@@ -2429,10 +2444,8 @@ function SettingsHub() {
       {(data.companies || []).length > 1 && (
         <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
           <Card.Header>
-            <Card.Title>Şirkət iş sahəsi</Card.Title>
-            <Card.Description>
-              Seçim yalnız sizin aktiv üzvlükləriniz arasından edilir
-            </Card.Description>
+            <Card.Title>{copy.workspace}</Card.Title>
+            <Card.Description>{copy.workspaceDescription}</Card.Description>
           </Card.Header>
           <Card.Body>
             <Flex gap="3" wrap="wrap">
@@ -2448,12 +2461,12 @@ function SettingsHub() {
               >
                 {data.companies.map((company) => (
                   <option key={company.id} value={company.id}>
-                    {company.name} · {roles[company.role] || company.role}
+                    {company.name} · {copy.roles[company.role] || company.role}
                   </option>
                 ))}
               </Box>
               <Button variant="outline" onClick={switchWorkspace}>
-                İş sahəsini dəyiş
+                {copy.switchWorkspace}
               </Button>
             </Flex>
           </Card.Body>
@@ -2461,10 +2474,8 @@ function SettingsHub() {
       )}
       <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
         <Card.Header>
-          <Card.Title>Aktiv sessiyalar</Card.Title>
-          <Card.Description>
-            İstifadə edilməyən girişləri bağlayın
-          </Card.Description>
+          <Card.Title>{copy.sessions}</Card.Title>
+          <Card.Description>{copy.sessionsDescription}</Card.Description>
         </Card.Header>
         <Card.Body>
           <Stack gap="2">
@@ -2476,7 +2487,7 @@ function SettingsHub() {
                 gap="3"
               >
                 <Text fontSize="sm">
-                  {session.current ? "Bu cihaz" : "Digər cihaz"} ·{" "}
+                  {session.current ? copy.thisDevice : copy.otherDevice} ·{" "}
                   {session.tenant_name} ·{" "}
                   {new Date(session.created_at).toLocaleString()}
                 </Text>
@@ -2486,14 +2497,14 @@ function SettingsHub() {
                     variant="outline"
                     onClick={() => revokeSession(session)}
                   >
-                    Bağla
+                    {copy.close}
                   </Button>
                 )}
               </Flex>
             ))}
             {!sessions.length && (
               <Text fontSize="sm" color="app.muted">
-                Saxlanmış sessiya tapılmadı.
+                {copy.noSessions}
               </Text>
             )}
           </Stack>
@@ -2668,12 +2679,12 @@ window.tenantChakraCRM = {
 };
 mount("aiDashboard", <AIDashboard />);
 for (const [view, host, component] of [
-  ["settings", "chakra-notification-settings-root", <NotificationPreferencesHub />],
-  ["settings", "chakra-settings-root", <SettingsHub />],
+  ["profile", "chakra-notification-settings-root", <NotificationPreferencesHub />],
+  ["profile", "chakra-settings-root", <SettingsHub />],
   ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
 ]) {
   window.tenantViewDemand.watch({
-    view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : host === "chakra-settings-root" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
     excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
     reset: () => { roots.get(host)?.unmount(); roots.delete(host); },

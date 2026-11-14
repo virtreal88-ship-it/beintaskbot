@@ -44,15 +44,12 @@ async function delayedBootstrap(){
 async function navigation(){
  for(const view of ['news','integrations','settings']){
   const b=fixture({view,core:true,workspace:true});try{
-   await tick();await tick();assert.ok(b.w.document.getElementById('view-'+view).classList.contains('active'),`direct ${view}`);
+   await tick();await tick();const resolvedView=view==='settings'?'profile':view;assert.ok(b.w.document.getElementById('view-'+resolvedView).classList.contains('active'),`direct ${view} resolves to ${resolvedView}`);
    if(view==='news')assert.match(b.w.document.getElementById('tnRows').textContent,/Synthetic tenant-a/);
    if(view==='integrations')assert.ok(b.requests.some(r=>r.url.endsWith('/integrations/connect')));
-   if(view==='settings'){
-    assert.ok(!b.requests.some(r=>r.url.endsWith('/sessions')),'hidden Diagnostics stays deferred even on Settings');
-    b.w.tenantOpenSettingsSection('advanced');await tick();assert.ok(b.requests.some(r=>r.url.endsWith('/sessions')));
-   }
-   const before=b.nonProfile().length;b.show('dialogs');b.w.history.back();await tick();assert.ok(b.w.document.getElementById('view-'+view).classList.contains('active'),'real back restores view');
-   if(view!=='settings')assert.equal(b.nonProfile().length,before,'warm back reuses rendered data');
+   if(view==='settings')assert.ok(!b.requests.some(r=>r.url.endsWith('/integrations/connect/diagnostics')),'legacy Settings URL resolves to Profile without eagerly loading Connect diagnostics');
+   const before=b.nonProfile().length;b.show('dialogs');b.w.history.back();await tick();assert.ok(b.w.document.getElementById('view-'+resolvedView).classList.contains('active'),'real back restores view');
+   assert.equal(b.nonProfile().length,before,'warm back reuses rendered data');
    b.w.history.forward();await tick();assert.ok(b.w.document.getElementById('view-dialogs').classList.contains('active'),'real forward');
   }finally{b.close();}
  }
@@ -157,7 +154,7 @@ async function isolation(){
   const worker={...owner,member:{...owner.member,role:'worker'},integrations:[{provider:'linear',status:'not_connected',metadata:{settings:{members:{11:{can_review_news:allowed}}}}}]};
   const b=fixture({profile:worker,core:true});try{await tick();assert.equal(b.w.document.getElementById('tnNav').hidden,false,'Published news is shared with active employees');assert.equal(b.nonProfile().length,0);b.show('news');await tick();assert.match(b.w.document.getElementById('tnRows').textContent,/Synthetic/);assert.equal(b.w.document.getElementById('tnCreate').hidden,!allowed);b.profile({...worker,integrations:[]});await tick();assert.equal(b.w.document.getElementById('tnNav').hidden,false);assert.equal(b.w.document.getElementById('tnCreate').hidden,true);assert.equal(b.w.document.getElementById('tnStatus').hidden,true);assert.equal(b.w.document.querySelector('[data-edit],[data-reject]'),null);assert.ok(b.requests.some(r=>r.url.includes('feed=published')));}finally{b.close();}
  }
- const focus=fixture({view:'integrations',core:true,reactDelay:150});try{await until(()=>focus.nonProfile().length>=5&&focus.w.document.querySelector('#chakra-integrations-root input'),'integration form after asynchronous React commit');const before=focus.nonProfile().length;assert.equal(before,5);const search=focus.w.document.querySelector('#chakra-integrations-root input');focus.resumeReact();search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await until(()=>focus.nonProfile().length>=before+5,'same-scope integration refresh');assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
+  const focus=fixture({view:'integrations',core:true,reactDelay:150});try{await until(()=>focus.nonProfile().length>=5&&focus.w.document.querySelector('#chakra-integrations-root input'),'integration form after asynchronous React commit');const before=focus.nonProfile().length;assert.ok(before>=5);for(const path of ['/api/platform/connect/access','/api/platform/integrations/connect','/api/platform/integrations/connect/diagnostics','/api/platform/linear/settings','/api/platform/chat/ai/settings'])assert.ok(focus.nonProfile().some(r=>r.url===path),'permitted Integrations view loads '+path);const search=focus.w.document.querySelector('#chakra-integrations-root input');focus.resumeReact();search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await until(()=>focus.nonProfile().length>=before+5,'same-scope integration refresh');assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, common news visibility with independent reviewer revocation, same-scope focus');
 }
 (async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
