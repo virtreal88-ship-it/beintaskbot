@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./app-shell.js";
+import {dealColumns} from "./deal-columns.js";
 import { AIDashboard } from "./ai-dashboard.jsx";
 import {
   Badge,
@@ -531,22 +532,14 @@ function DealTable({ rows = [], customer = false, onOpen }) {
   );
 }
 
-function DealKanban({ rows = [], onOpen }) {
-  const groups = useMemo(() => {
-    const result = new Map();
-    rows.forEach((row) => {
-      const key = row.stage_name || "Mərhələ";
-      if (!result.has(key)) result.set(key, []);
-      result.get(key).push(row);
-    });
-    return [...result.entries()];
-  }, [rows]);
+function DealKanban({ rows = [], catalog = [], hidden = [], onOpen }) {
+  const groups = useMemo(() => dealColumns(rows, catalog, hidden), [rows, catalog, hidden]);
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
   return (
     <Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
-      {groups.map(([stage, items]) => (
+      {groups.map(({key, pipeline, name: stage, rows: items}) => (
         <Box
-          key={stage}
+          key={key}
           minW="300px"
           w="300px"
           bg="app.raised"
@@ -554,7 +547,7 @@ function DealKanban({ rows = [], onOpen }) {
           p="3"
         >
           <Flex align="center" justify="space-between" mb="3">
-            <Heading size="sm">{stage}</Heading>
+            <Box><Text fontSize="xs" color="app.muted">{pipeline}</Text><Heading size="sm">{stage}</Heading></Box>
             <Badge borderRadius="full">{items.length}</Badge>
           </Flex>
           <Stack gap="3">
@@ -597,44 +590,63 @@ function DealKanban({ rows = [], onOpen }) {
   );
 }
 
+const dealColumnCopy = {
+  ru: {columns:"Столбцы", hint:"Выберите этапы. Настройка сохраняется только для вашего аккаунта.", all:"Показать все", save:"Сохранить", cancel:"Отмена", retry:"Повторить", error:"Не удалось загрузить настройки", table:"Таблица"},
+  az: {columns:"Sütunlar", hint:"Mərhələləri seçin. Ayarlar yalnız sizin hesabınız üçün saxlanılır.", all:"Hamısını göstər", save:"Saxla", cancel:"Ləğv et", retry:"Yenidən yoxla", error:"Ayarlar yüklənmədi", table:"Cədvəl"},
+  en: {columns:"Columns", hint:"Choose stages. Settings are saved only for your account.", all:"Show all", save:"Save", cancel:"Cancel", retry:"Retry", error:"Could not load settings", table:"Table"}
+};
 function DealsView({ rows = [], customer = false, onOpen }) {
-  const [mode, setMode] = useState(
-    customer ? "table" : localStorage.getItem("tenant-deal-view") || "kanban",
-  );
+  const [mode, setMode] = useState(() => {try {return localStorage.getItem("tenant-deal-view") === "table" ? "table" : "kanban";} catch {return "kanban";}});
+  const changeMode = value => {setMode(value); try {localStorage.setItem("tenant-deal-view", value);} catch {}};
+  const [data, setData] = useState(null), [error, setError] = useState("");
+  const [open, setOpen] = useState(false), [draft, setDraft] = useState([]), [saving, setSaving] = useState(false);
+  const [language, setLanguage] = useState(document.documentElement.lang || "az");
+  const generation = useRef(0), alive = useRef(false), columnTrigger = useRef(null);
+  const load = async () => {
+    const token = ++generation.current;
+    setData(null); setError(""); setOpen(false); setSaving(false);
+    try { const response = await api("/api/platform/crm/deal-board-preferences");
+      if (alive.current && token === generation.current) setData(response);
+    } catch (e) { if (alive.current && token === generation.current) setError(e.message); }
+  };
+  useEffect(() => {
+    if (customer) return;
+    alive.current = true;
+    const changed = () => load();
+    const relabel = () => setLanguage(document.documentElement.lang || "az");
+    load(); document.addEventListener("tenant-profile", changed); document.addEventListener("tenant-language", relabel);
+    return () => {alive.current = false; generation.current++; document.removeEventListener("tenant-profile", changed); document.removeEventListener("tenant-language", relabel);};
+  }, [customer]);
+  const copy = dealColumnCopy[language] || dealColumnCopy.az;
+  const save = async () => {
+    if (saving) return;
+    const token = generation.current; setSaving(true); setError("");
+    try { const response = await api("/api/platform/crm/deal-board-preferences", {method:"POST", body:JSON.stringify({hidden_stage_keys:draft})});
+      if (alive.current && token === generation.current) {setData(response); setOpen(false);}
+    } catch(e) {if (alive.current && token === generation.current) setError(e.message);}
+    finally {if (alive.current && token === generation.current) setSaving(false);}
+  };
   if (customer) return <DealTable rows={rows} customer onOpen={onOpen} />;
-  return (
-    <Stack gap="3">
-      <Flex justify="flex-end" gap="2">
-        <Button
-          size="sm"
-          variant={mode === "table" ? "solid" : "outline"}
-          colorPalette="brand"
-          onClick={() => {
-            setMode("table");
-            localStorage.setItem("tenant-deal-view", "table");
-          }}
-        >
-          Cədvəl
-        </Button>
-        <Button
-          size="sm"
-          variant={mode === "kanban" ? "solid" : "outline"}
-          colorPalette="brand"
-          onClick={() => {
-            setMode("kanban");
-            localStorage.setItem("tenant-deal-view", "kanban");
-          }}
-        >
-          Kanban
-        </Button>
-      </Flex>
-      {mode === "kanban" ? (
-        <DealKanban rows={rows} onOpen={onOpen} />
-      ) : (
-        <DealTable rows={rows} onOpen={onOpen} />
-      )}
-    </Stack>
-  );
+  const catalog = data?.catalog || [];
+  const hidden = data?.hidden_stage_keys || [];
+  return <Stack gap="3">
+    <Flex justify="flex-end" gap="2" wrap="wrap">
+      <Button ref={columnTrigger} size="sm" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
+      <Button size="sm" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
+      <Button size="sm" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
+    </Flex>
+    {error && <Box role="alert"><Text color="red.500">{error}</Text>{!open && <Button onClick={load}>{copy.retry}</Button>}</Box>}
+    {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen}/> : <DealTable rows={rows} onOpen={onOpen}/>}
+    <Dialog.Root finalFocusEl={() => columnTrigger.current} open={open} onOpenChange={e => {if (!saving) setOpen(e.open);}} placement="center" size="sm">
+      <Portal><Dialog.Backdrop/><Dialog.Positioner><Dialog.Content bg="app.surface" color="app.ink">
+        <Dialog.Header><Dialog.Title>{copy.columns}</Dialog.Title></Dialog.Header>
+        <Dialog.Body><Text fontSize="sm" mb="3">{copy.hint}</Text><Stack maxH="55vh" overflowY="auto">
+          {catalog.flatMap(p => (p.stages || []).map(stage => {const key = `${p.pipeline_id}:${stage.stage_id}`; return <PermissionCheckbox key={key} value={key} label={`${p.name} · ${stage.name}`} checked={!draft.includes(key)} disabled={saving} onChange={(key, checked) => setDraft(previous => checked ? previous.filter(x => x !== key) : [...previous, key])}/>;}))}
+        </Stack>{error && <Text role="alert" color="red.500">{error}</Text>}</Dialog.Body>
+        <Dialog.Footer flexWrap="wrap"><Button variant="outline" disabled={saving} onClick={() => setDraft([])}>{copy.all}</Button><Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>{copy.cancel}</Button><Button colorPalette="brand" loading={saving} onClick={save}>{copy.save}</Button></Dialog.Footer>
+      </Dialog.Content></Dialog.Positioner></Portal>
+    </Dialog.Root>
+  </Stack>;
 }
 
 function LegacyIntegrationMarketplace() {

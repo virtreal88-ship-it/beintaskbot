@@ -1,0 +1,24 @@
+const {JSDOM,VirtualConsole}=require('../.support-test-deps/node_modules/jsdom');
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const vc=new VirtualConsole(), errors=[];vc.on('jsdomError',e=>{if(!String(e.type).includes('css'))errors.push(e.message)});
+const dom=new JSDOM('<html lang="ru"><body><main><div id="deals"></div></main></body></html>',{url:'https://fixture.test/app',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:vc});
+const w=dom.window,d=w.document;
+w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}};w.tenantViewDemand={watch(){}};
+const catalog=[{pipeline_id:1,name:'Mine',stages:[{stage_id:10,name:'New'},{stage_id:20,name:'Empty'}]},{pipeline_id:2,name:'Second',stages:[{stage_id:10,name:'New'}]}];
+let stored=[],posts=0,fail=false,hold=null;
+w.fetch=async(url,opt={})=>{assert.equal(url,'/api/platform/crm/deal-board-preferences');if(opt.method==='POST'){posts++;if(hold)await hold;if(fail)return {ok:false,json:async()=>({success:false,error:'SAVE ERROR'})};stored=JSON.parse(opt.body).hidden_stage_keys;}return {ok:true,json:async()=>({success:true,catalog,hidden_stage_keys:stored})}};
+const tick=()=>new Promise(r=>setTimeout(r,30));
+async function until(f){for(let i=0;i<100;i++){if(f())return;await tick()}assert(f(),'UI did not settle')}
+const button=name=>[...d.querySelectorAll('button')].find(x=>x.textContent===name);
+(async()=>{w.eval(fs.readFileSync('docs/tenant-chakra-ui.js','utf8'));
+w.tenantChakraCRM.renderDeals('deals',[{kommo_lead_id:1,pipeline_id:1,status_id:10,stage_name:'New',name:'Deal'}],false);
+await until(()=>button('Столбцы')&&!button('Столбцы').disabled);
+assert(d.getElementById('deals').textContent.includes('Empty'));assert.equal(d.querySelectorAll('#deals h2').length,3);
+button('Столбцы').click();await until(()=>d.querySelectorAll('input[type=checkbox]').length===3);
+d.querySelectorAll('input[type=checkbox]')[1].click();button('Отмена').click();await tick();assert.equal(posts,0);assert(d.getElementById('deals').textContent.includes('Empty'));
+button('Столбцы').click();await until(()=>d.querySelectorAll('input[type=checkbox]').length===3);d.querySelectorAll('input[type=checkbox]')[1].click();fail=true;button('Сохранить').click();await until(()=>d.body.textContent.includes('SAVE ERROR'));assert(d.querySelector('[role=dialog]'));assert(d.getElementById('deals').textContent.includes('Empty'));
+fail=false;button('Сохранить').click();await until(()=>!d.querySelector('[role=dialog]'));assert.deepEqual(stored,['1:20']);assert(!d.getElementById('deals').textContent.includes('Empty'));
+w.document.dispatchEvent(new w.CustomEvent('tenant-profile'));await until(()=>button('Столбцы')&&!button('Столбцы').disabled);assert(!d.getElementById('deals').textContent.includes('Empty'));
+button('Столбцы').click();await until(()=>button('Показать все'));button('Показать все').click();await tick();button('Сохранить').click();await until(()=>!d.querySelector('[role=dialog]'));assert.deepEqual(stored,[]);assert(d.getElementById('deals').textContent.includes('Empty'));
+assert.equal(errors.length,0,errors.join('\n'));console.log('PASS: actual shipped UI empty stages, separate equal names, cancel, failed-save draft retention, server save/reload/reset');
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>w.close());

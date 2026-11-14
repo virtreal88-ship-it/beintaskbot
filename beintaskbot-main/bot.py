@@ -18618,6 +18618,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_notification_settings_handler(NotificationSettingsContext(
             member=_tenant_member_from_request,preferences=tenant_notification_preferences,
             origin=CANONICAL_WEB_ORIGIN,platform_error=TenantPlatformError)))
+    from tenant_deal_board_preferences import preferences as tenant_deal_board_preferences
+    from tenant_deal_board_api import DealBoardContext, handler as tenant_deal_board_handler
+    app_web.router.add_route('*', '/api/platform/crm/deal-board-preferences',
+        tenant_deal_board_handler(DealBoardContext(member=_tenant_member_from_request,
+            preferences=tenant_deal_board_preferences, origin=CANONICAL_WEB_ORIGIN,
+            platform_error=TenantPlatformError)))
     from tenant_telegram_binding import request_binding as tenant_request_telegram_binding, binding_status as tenant_telegram_binding_status
     from tenant_telegram_binding_api import TelegramBindingContext, handler as tenant_telegram_binding_handler
     app_web.router.add_route('*','/api/platform/telegram/binding', tenant_telegram_binding_handler(TelegramBindingContext(

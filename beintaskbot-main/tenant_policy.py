@@ -361,11 +361,11 @@ class TenantPolicy:
 
     def deal_board(self) -> list[dict]:
         """Display metadata only for pipelines/stages this membership may read."""
-        if not self.can_read_legacy_crm():
+        if not self.kommo_access():
             return []
         pipelines = {positive_id(p.get('pipeline_id')): p for p in self.config.get('pipelines', [])}
         result = []
-        for scope in self.pipeline_scope():
+        for scope in self.kommo_pipeline_scope():
             pid = scope['pipeline_id']
             stages = sorted((s for s in self.config.get('stages', [])
                              if positive_id(s.get('pipeline_id')) == pid
