@@ -455,6 +455,7 @@ function IntegrationLogo({ provider, size = "md" }) {
 }
 function TasksTable({ rows = [], settings = {} }) {
   const labels = settings.labels || {open:'Açıq',completed:'Tamamlandı',view:'Aç',complete:'Tamamla',deal:'Sövdələşmə',status:'Vəziyyət',due:'Son tarix',text:'Tapşırıq',none:'Göstərilməyib'};
+  const dragged = useRef(false);
   if (!rows.length) return <Empty>{settings.empty || 'Açıq tapşırıq yoxdur.'}</Empty>;
   return <Card.Root borderColor="app.line" borderRadius="xl" overflow="hidden" shadow="xs">
     <Flex direction="column" divideY="1px" borderColor="app.line">
@@ -463,13 +464,17 @@ function TasksTable({ rows = [], settings = {} }) {
         const native = settings.source === 'native';
         const clientName = task.deal_title || task.contact_name || '';
         const clientText = [clientName, task.phone && !clientName.includes(task.phone) ? task.phone : ''].filter(Boolean).join(' · ');
-        return <Flex key={id} p="4" gap="3" justify="space-between" wrap="wrap" align="start">
+        return <Flex key={id} data-task-open-surface={id} role={settings.onOpen ? "group" : undefined} tabIndex={settings.onOpen ? 0 : undefined} aria-label={String(task.display_title || task.text || labels.text)} cursor={settings.onOpen ? "pointer" : undefined}
+          onDragStartCapture={()=>{dragged.current=true;}} onDragEndCapture={()=>{setTimeout(()=>{dragged.current=false;},0);}}
+          onClick={event=>{if(!settings.onOpen || dragged.current || event.defaultPrevented || event.target.closest('button,a,input,select,textarea,label,[role="button"]'))return;settings.onOpen(id);}}
+          onKeyDown={event=>{if(event.target===event.currentTarget && settings.onOpen && ['Enter',' '].includes(event.key)){event.preventDefault();settings.onOpen(id);}}}
+          p="4" gap="3" justify="space-between" wrap="wrap" align="start">
           <Box flex="1" minW="180px" display="flex" flexDirection="column" alignItems="flex-start">
-            {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
+            {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={event => {event.stopPropagation();settings.onOpen(id);}}>
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.display_title || task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.display_title || task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
             {clientText && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
-              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" style={{color:"var(--app-accent, #0369a1)"}} textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
+              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" style={{color:"var(--app-accent, #0369a1)"}} textDecoration="none" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
                 <Text as="span" fontSize="sm" style={{color:"inherit"}} fontWeight="500" overflowWrap="anywhere">{clientText}</Text>
               </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{clientText}</Text>)}
             {task.responsible_name && <Text fontSize="sm" color="app.muted">{task.responsible_name}</Text>}
@@ -477,11 +482,11 @@ function TasksTable({ rows = [], settings = {} }) {
           </Box>
           <Flex gap="2" wrap="wrap" align="center">
             <StatusBadge tone={status === 'completed' ? 'gray' : 'green'}>{labels[status]}</StatusBadge>
-            {settings.moveNeedsSync?.(task) && <Text fontSize="sm" color="app.muted">{{ru:'Для переноса срока нужна свежая синхронизация Kommo.',az:'Tarixi dəyişmək üçün Kommo yenidən sinxronlaşdırılmalıdır.',en:'A fresh Kommo sync is required to move the deadline.'}[window.tenantI18n?.language] || 'A fresh Kommo sync is required.'}</Text>}
-            {settings.pendingMove?.(task) && <Button minH="44px" variant="outline" onClick={()=>settings.onCheckMove?.(id)}>{labels.check || 'Check original request'}</Button>}
+            {settings.pendingMove?.(task) && <Button minH="44px" variant="outline" onClick={event=>{event.stopPropagation();settings.onCheckMove?.(id);}}>{labels.check || 'Check original request'}</Button>}
             {!native && status === 'open' && settings.complete !== false && Number.isSafeInteger(Number(id)) && <Button minH="44px" colorPalette="brand" variant="outline" data-task-complete={id}>{labels.complete}</Button>}
             {!native && status === 'open' && !Number.isSafeInteger(Number(id)) && <Text fontSize="sm">{labels.unsafeComplete}</Text>}
           </Flex>
+          {!native && String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '').trim() && <Text data-task-description="" w="100%" fontSize="sm" color="app.muted" whiteSpace="pre-wrap" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
         </Flex>;
       })}
     </Flex>

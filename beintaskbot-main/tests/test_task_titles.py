@@ -9,9 +9,9 @@ def test_raw_text():
     assert row['text'] == '' and row['task_type_id'] == '4229224'
     assert row['display_title'] == 'Tapşırıq'
     row = task_title_fields({'raw': {'text': ' Call client ', 'task_type_id': 'bad'}})
-    assert row['text'] == ' Call client ' and row['display_title'] == 'Call client'
+    assert row['text'] == ' Call client ' and row['display_title'] == 'Tapşırıq'
     assert row['task_type_id'] is None
-    assert task_title_fields({'text': 'Legacy task'})['display_title'] == 'Legacy task'
+    assert task_title_fields({'text': 'Legacy task'})['display_title'] == 'Tapşırıq'
 
 
 def catalog(name):
@@ -79,13 +79,14 @@ async def test_bounded_cache_and_concurrent_single_fetch():
 
 
 @pytest.mark.asyncio
-async def test_unknown_id_does_not_use_first_type_and_real_text_wins():
+async def test_unknown_id_and_type_separate_from_description():
     request = AsyncMock(return_value=catalog('Named type'))
     service = TaskTypeTitles(request, identity=lambda _: 'a')
     rows = [{'task_type_id': '999', 'text': ''}, {'task_type_id': '4229224', 'text': 'Actual instruction'}]
     await service.enrich('t', {'source': 'kommo', 'tasks': rows})
     assert rows[0]['display_title'] == 'Tapşırıq'
-    assert rows[1]['display_title'] == 'Actual instruction'
+    assert rows[1]['display_title'] == 'Named type'
+    assert rows[1]['text'] == 'Actual instruction'
     assert rows[1]['task_type_name'] == 'Named type'
 
 
@@ -105,12 +106,13 @@ async def test_read_denial_precedes_catalog_request(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_nonempty_task_reads_never_fetch_catalog():
+async def test_command_reads_never_fetch_catalog():
     request = AsyncMock()
     service = TaskTypeTitles(request, identity=lambda _: 'a')
     row = {'text': 'Original task', 'task_type_id': '1'}
     await service.enrich('t', {'source': 'kommo', 'command': {'task': row}})
-    assert row['display_title'] == 'Original task'
+    assert row['display_title'] == 'Tapşırıq'
+    assert row['text'] == 'Original task'
     request.assert_not_awaited()
 
 
@@ -128,3 +130,15 @@ async def test_slow_tenant_does_not_block_other_tenants():
     assert (await asyncio.wait_for(service.names('fast'), 1))['4229224'] == 'fast'
     release.set()
     assert (await slow)['4229224'] == 'slow'
+
+
+@pytest.mark.asyncio
+async def test_list_and_detail_resolve_type_even_with_nonempty_description():
+    request = AsyncMock(return_value=catalog('Cavab gözlənilir'))
+    service = TaskTypeTitles(request, identity=lambda _: 'a')
+    row = {'text': 'Связаться', 'task_type_id': '4229224'}
+    await service.enrich('t', {'source': 'kommo', 'task': row})
+    assert row['display_title'] == 'Cavab gözlənilir'
+    assert row['text'] == 'Связаться'
+    await service.enrich('t', {'source': 'kommo', 'tasks': [row]})
+    assert request.await_count == 1
