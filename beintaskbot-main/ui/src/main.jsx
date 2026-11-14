@@ -2,6 +2,7 @@ import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
 import { NativeDealBoard } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import "./app-shell.js";
 import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
@@ -722,12 +723,14 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   if (customer) return <DealTable rows={rows} customer onOpen={onOpen} />;
   const catalog = data?.catalog || [];
   const hidden = data?.hidden_stage_keys || [];
+  const controls = <Flex data-deal-view-controls="" justify="flex-end" gap="2" wrap="nowrap">
+      <Button ref={columnTrigger} size="sm" h="44px" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
+      <Button size="sm" h="44px" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
+      <Button size="sm" h="44px" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
+    </Flex>;
+  const controlsTarget = document.getElementById("dealViewControls");
   return <Stack gap="3">
-    <Flex justify="flex-end" gap="2" wrap="wrap">
-      <Button ref={columnTrigger} size="sm" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
-      <Button size="sm" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
-      <Button size="sm" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
-    </Flex>
+    {controlsTarget ? createPortal(controls, controlsTarget) : controls}
     {error && <Box role="alert"><Text color="red.500">{error}</Text>{!open && <Button onClick={load}>{copy.retry}</Button>}</Box>}
     {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen} moveTargets={data?.move_stage_targets || []} moveSources={data?.move_stage_sources || []} completionApproval={data?.move_stage_completion_requires_approval===true} moveContext={data?.move_context}/> : <DealTable rows={rows} onOpen={onOpen}/>}
     <Dialog.Root finalFocusEl={() => columnTrigger.current} open={open} onOpenChange={e => {if (!saving) setOpen(e.open);}} placement="center" size="sm">
