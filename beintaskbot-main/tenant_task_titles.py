@@ -17,7 +17,7 @@ def task_title_fields(row):
     except (ValueError, TypeError):
         row['task_type_id'] = None
     row['task_type_name'] = ''
-    row['display_title'] = 'Tapşırıq'
+    row['display_title'] = ('Tapşırıq' if row['task_type_id'] else str(row.get('text') or '').strip() or 'Tapşırıq')
     return row
 
 
@@ -106,4 +106,4 @@ class TaskTypeTitles:
         names = await self.names(str(tenant)) if needs_catalog else {}
         for row in rows:
             row['task_type_name'] = names.get(str(row.get('task_type_id')), '')
-            row['display_title'] = row['task_type_name'] or 'Tapşırıq'
+            row['display_title'] = row['task_type_name'] or ('Tapşırıq' if row.get('task_type_id') else str(row.get('text') or '').strip() or 'Tapşırıq')

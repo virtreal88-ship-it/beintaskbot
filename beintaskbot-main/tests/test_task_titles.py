@@ -9,9 +9,9 @@ def test_raw_text():
     assert row['text'] == '' and row['task_type_id'] == '4229224'
     assert row['display_title'] == 'Tapşırıq'
     row = task_title_fields({'raw': {'text': ' Call client ', 'task_type_id': 'bad'}})
-    assert row['text'] == ' Call client ' and row['display_title'] == 'Tapşırıq'
+    assert row['text'] == ' Call client ' and row['display_title'] == 'Call client'
     assert row['task_type_id'] is None
-    assert task_title_fields({'text': 'Legacy task'})['display_title'] == 'Tapşırıq'
+    assert task_title_fields({'text': 'Legacy task'})['display_title'] == 'Legacy task'
 
 
 def catalog(name):
