@@ -1874,3 +1874,49 @@ def test_developer_free_create_retains_source_dialog_permission(db):
         store.create({'tenant_id':A,'telegram_id':33},{'request_id':str(uuid.uuid4()),'lead_id':41})
     assert denied.value.status==403
     assert not db.execute('SELECT id FROM saas_support_tickets')
+
+
+@pytest.mark.parametrize('missing',[
+    'table', 'risk_assessment', 'reply_draft', 'priority', 'priority_suggestion',
+    'priority_reason', 'response_due_at', 'response_due_manual', 'attention_index',
+    'priority_check', 'priority_suggestion_check',
+])
+def test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness(db, missing, monkeypatch):
+    ticket=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,description,assigned_to,created_by)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','Keep historical case',11,11)""",(A,ticket,CA))
+    db.commit()
+    before=db.execute('SELECT id,name FROM saas_tenants ORDER BY id')
+    historical=db.execute('SELECT id,tenant_id,description,assigned_to,created_by,status FROM saas_support_tickets')
+    if missing=='table':
+        db.execute('DROP TABLE saas_support_sla_policies')
+    elif missing=='attention_index':
+        db.execute('DROP INDEX saas_support_attention_idx')
+    elif missing.endswith('_check'):
+        db.execute('ALTER TABLE saas_support_tickets DROP CONSTRAINT saas_support_'+missing)
+    else:
+        db.execute('ALTER TABLE saas_support_tickets DROP COLUMN '+missing)
+    db.commit()
+    try:
+        assert not schema._schema_current(db), 'Incomplete support SLA upgrade was certified ready'
+        assert schema._schema_current(db, include_support_sla=False)
+        def unrelated_bootstrap(*args, **kwargs):
+            raise AssertionError('SLA-only upgrade invoked unrelated bootstrap')
+        monkeypatch.setattr(schema, '_ensure_platform_schema', unrelated_bootstrap)
+        monkeypatch.setattr('tenant_support_inbox_schema.create_schema', unrelated_bootstrap)
+        schema.ensure_schema(db)
+        assert schema._schema_current(db)
+        assert db.execute('SELECT id,name FROM saas_tenants ORDER BY id')==before
+        assert db.execute('SELECT count(*) AS n FROM saas_support_sla_policies')[0]['n']==0
+        assert db.execute('SELECT id,tenant_id,description,assigned_to,created_by,status FROM saas_support_tickets')==historical
+        result=store.listing(PROFILE)
+        assert [row['id'] for row in result['tickets']]==[ticket]
+        assert result['sla_policy']=={}
+        # A ready recheck must not rerun schema work or populate a default SLA.
+        schema.ensure_schema(db)
+        assert db.execute('SELECT count(*) AS n FROM saas_support_sla_policies')[0]['n']==0
+    finally:
+        db.rollback()
+        from tenant_support_inbox_schema import create_sla_schema
+        create_sla_schema(db)
+        db.commit()
