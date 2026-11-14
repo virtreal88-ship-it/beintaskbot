@@ -57,6 +57,8 @@ const server = http.createServer((req, res) => {
       }, { route, messages, profile });
       await page.addScriptTag({ path: path.join(docs, 'tenant-chat-send.js') });
       await page.addScriptTag({ path: path.join(docs, 'tenant-operator-dialogs.js') });
+      // Include the production consultation module: its menu entry must not change header layout.
+      await page.addScriptTag({ path: path.join(docs, 'tenant-dialog-consultations.js') });
       await page.evaluate(() => window.tenantOperator.refresh());
       await page.locator('.operator-row').waitFor();
       await page.evaluate(() => { const nav = document.querySelector('#nativeCrmNav'); if (nav) nav.open = false; });
@@ -111,11 +113,16 @@ const server = http.createServer((req, res) => {
         const title = await page.locator('#operatorDialogTitleSlot').boundingBox();
         const action = await page.locator('[data-operator-create-ticket]').boundingBox();
         assert.ok(action && action.height >= 44 && action.y < chatGeometry.header.height, 'create task keeps a 44px inline touch target');
+        const avatar = await page.locator('#operatorClientCardOpen').boundingBox();
+        assert.ok(avatar && avatar.height >= 44, 'avatar touch target is preserved');
+        assert.ok(Math.abs(action.y - avatar.y) <= 16, 'task stays beside avatar, not on a second row');
         const more = await page.locator('#operatorMoreActions summary').boundingBox();
+        assert.ok(Math.abs(more.y - avatar.y) <= 16, 'menu stays beside avatar, not on a second row');
         assert.ok(more.y < chatGeometry.header.height, 'more menu remains in the header row');
         assert.ok(title.width > 60, 'customer title retains useful space');
         await page.locator('#operatorMoreActions summary').click();
         assert.ok(await page.locator('.operator-action-menu').isVisible(), 'overflow actions still open');
+        assert.ok(await page.locator('#dialogDeveloperAsk').isVisible(), 'real consultation entry is present');
         await page.locator('#operatorMoreActions summary').click();
 
         if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'dialog-open-chat-' + width + '.png'), fullPage: false });
@@ -158,6 +165,8 @@ const server = http.createServer((req, res) => {
       await page.addScriptTag({ path: path.join(docs, 'tenant-operator-i18n.js') });
       await page.addScriptTag({ path: path.join(docs, 'tenant-chat-send.js') });
       await page.addScriptTag({ path: path.join(docs, 'tenant-operator-dialogs.js') });
+      // Include the production consultation module: its menu entry must not change header layout.
+      await page.addScriptTag({ path: path.join(docs, 'tenant-dialog-consultations.js') });
       await page.evaluate(() => window.tenantOperator.refresh());
       await page.locator('.operator-row').waitFor();
       await page.evaluate(() => { const nav = document.querySelector('#nativeCrmNav'); if (nav) nav.open = false; });
