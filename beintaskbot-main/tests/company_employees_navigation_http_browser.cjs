@@ -114,8 +114,12 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       if (actor !== 11) {
         assert.equal(await page.evaluate(() => tenantProfileSnapshot.capabilities.modules.settings), false);
         await page.locator('.app-avatar-button').click();
-        assert.equal(await page.locator('[data-app-open=settings]').isVisible(), false, 'Employee access grants no Settings access');
-        await page.keyboard.press('Escape');
+        const settingsItem = page.locator('#appUserMenu [data-app-open=settings]');
+        assert.equal(await settingsItem.isVisible(), true, 'Employee management permission grants its permitted Settings tab');
+        await settingsItem.click();
+        await page.locator('#view-employees.active').waitFor();
+        assert.equal(await page.locator('[data-settings-page=employees]').isVisible(), true);
+        assert.equal(await page.locator('[data-settings-page=integrations]').isVisible(), false, 'Employee access does not grant company Integrations');
       }
       if (mode === 'minute_resume') {
         // Use wall-clock time and the real built app, not synthetic profile
