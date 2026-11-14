@@ -741,8 +741,8 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   const hidden = data?.hidden_stage_keys || [];
   const controls = <Flex data-deal-view-controls="" justify="flex-end" gap="2" wrap="nowrap">
       <Button ref={columnTrigger} size="sm" h="44px" w="44px" minW="44px" p="0" aria-label={copy.columns} title={copy.columns} variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}><BoardControlIcon kind="settings"/></Button>
-      <Button size="sm" h="44px" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
-      <Button size="sm" h="44px" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
+      <Button size="sm" h="44px" w="44px" minW="44px" p="0" aria-label={copy.table} title={copy.table} aria-pressed={mode === "table"} variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}><BoardControlIcon kind="table"/></Button>
+      <Button size="sm" h="44px" w="44px" minW="44px" p="0" aria-label="Kanban" title="Kanban" aria-pressed={mode === "kanban"} variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}><BoardControlIcon kind="kanban"/></Button>
     </Flex>;
   const controlsTarget = document.getElementById("dealViewControls");
   return <Stack gap="3">
