@@ -724,7 +724,12 @@ def _assignment_display(cur, tenant, policy, dialogs):
     tenant before exposing the minimal display value. Group primary metadata
     belongs to its sending source, not every source present in that group.
     """
-    if str(policy.profile.get('tenant_id')) != str(tenant) or not policy.can_use_chat_ai():
+    # Display-only authorization follows the explicit dialog AI flag, not the
+    # legacy CRM gate used by AI operations. Never use this as an action grant.
+    if (str(policy.profile.get('tenant_id')) != str(tenant)
+            or policy.profile.get('active') is not True
+            or (policy.profile.get('role') != 'owner'
+                and policy.member_settings.get('ai_enabled') is not True)):
         return
     from tenant_dialog_access import allowed_channels
     from tenant_ai_group_coordination import group_jid
@@ -746,7 +751,8 @@ def _assignment_display(cur, tenant, policy, dialogs):
           JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id
             AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
           WHERE g.tenant_id=%s::uuid AND g.provider='connect' AND g.group_jid=ANY(%s::text[])
-            AND jsonb_array_length(g.assignments)=1
+            AND CASE WHEN jsonb_typeof(g.assignments)='array'
+                     THEN jsonb_array_length(g.assignments) ELSE 0 END=1
             AND (%s OR c.connect_channel_id::text=ANY(%s::text[]))
             AND NOT ai_legacy_blocked(g.tenant_id,c.connect_channel_id::text,g.group_jid,NULL)
             AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links l

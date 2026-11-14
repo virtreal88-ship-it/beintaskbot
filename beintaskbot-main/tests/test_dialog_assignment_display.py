@@ -69,3 +69,19 @@ def test_inactive_policy_never_gets_display(scoped):
         rows=[{'provider':'connect','channel_id':CA,'conversation_id':'client','agent_name':'other'}]
         dialogs._assignment_display(cur,A,policy,rows)
         assert 'assignment_display' not in rows[0]
+
+
+def test_display_does_not_require_unrelated_legacy_crm_grant(scoped, monkeypatch):
+    db, ids = scoped; enable(db)
+    monkeypatch.setattr(dialogs,'_connect',lambda:db)
+    db.execute("UPDATE saas_tenant_members SET permissions='[]'::jsonb WHERE tenant_id=%s AND telegram_id=31",(A,))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s,'connect',%s,'client',%s,'paused')",(A,CA,ids['other']));db.commit()
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    with db.cursor() as cur:
+        assert TenantPolicy(read_access_profile(cur,A,31)).can_use_chat_ai() is False
+    result=dialogs.history(ACTOR,'connect',41,CA,'client')['dialog']
+    assert result['assignment_display']=={'assigned':True,'name':'other'}
+    assert result['can_use_copilot'] is False
+    assert result['controls_allowed'] is False
+    assert 'agent_id' not in result
