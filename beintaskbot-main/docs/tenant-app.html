@@ -428,14 +428,15 @@
   document.addEventListener('tenant-auth-invalid',()=>{dealProfileKey='invalid:'+dealProfileKey;dealFeedEpoch++;dealsFlights.clear();dealPrefSerial++;dealFeeds={native:[],kommo:[]};dealLoaded={native:false,kommo:false};dealDenied={native:true,kommo:true};state.deals=[];$('dealModal').classList.remove('show');$('modalContent').replaceChildren();renderDealFeeds()});
   let dealsReadSerial=0,dealsBusy=false,dealOffset=0,dealQuery='',dealSearchTimer;const dealsFlights=new Map();
   function loadDeals(refresh=false,append=false){
-    const query=$('dealSearch').value.trim().slice(0,160),offset=append?dealOffset:0;
+    const query=$('dealSearch').value.trim().slice(0,160),offset=append?dealOffset:0,target=!append&&query===dealQuery?Math.max(100,dealOffset):100;
     if(!dealFeedAllowed('kommo')||append&&(dealsBusy||query!==dealQuery||offset>=dealTotal))return Promise.resolve();
     const key=dealFeedEpoch+':'+refresh+':'+query+':'+offset;if(dealsFlights.has(key))return dealsFlights.get(key);
     const b=$('dealsRefresh'),own=dealFeedScope(),serial=++dealsReadSerial,current=()=>dealFeedCurrent(own)&&serial===dealsReadSerial&&query===$('dealSearch').value.trim().slice(0,160);
     dealsBusy=true;renderDealFeeds();if(refresh)setLoading(b,true);
     const params=new URLSearchParams();if(refresh)params.set('refresh','1');if(query)params.set('search',query);if(offset)params.set('offset',String(offset));
-    const request=(async()=>{try{const d=await api('/api/platform/crm/deals'+(params.size?'?'+params:''));if(!current())return;
-      const rows=d.deals||[];const merged=append?[...state.deals,...rows]:rows;state.deals=[...new Map(merged.map(row=>[String(row.kommo_lead_id),row])).values()];dealFeeds.kommo=state.deals;dealQuery=query;dealOffset=offset+rows.length;dealTotal=Number.isFinite(d.total)?d.total:dealOffset;if(!rows.length)dealOffset=dealTotal;dealLoaded.kommo=true;renderDealFeeds();notice('dealsNotice',d.warning);if(refresh&&!d.warning)window.tenantCrmSyncWatch?.();
+    const request=(async()=>{try{let d=await api('/api/platform/crm/deals'+(params.size?'?'+params:''));if(!current())return;
+      const rows=[...(d.deals||[])];let pageSize=rows.length;while(!append&&pageSize===100&&rows.length<target&&rows.length<d.total){const next=new URLSearchParams(params);next.delete('refresh');next.set('offset',String(rows.length));const page=await api('/api/platform/crm/deals?'+next);if(!current())return;pageSize=(page.deals||[]).length;rows.push(...(page.deals||[]));d={...d,total:page.total};}
+      const merged=append?[...state.deals,...rows]:rows;state.deals=[...new Map(merged.map(row=>[String(row.kommo_lead_id),row])).values()];dealFeeds.kommo=state.deals;dealQuery=query;dealOffset=offset+rows.length;dealTotal=Number.isFinite(d.total)?d.total:dealOffset;if(!rows.length)dealOffset=dealTotal;dealLoaded.kommo=true;renderDealFeeds();notice('dealsNotice',d.warning);if(refresh&&!d.warning)window.tenantCrmSyncWatch?.();
     }catch(e){if(!current())return;notice('dealsNotice',e.message);if([401,403,409].includes(e.status)){state.deals=[];dealFeeds.kommo=[];dealLoaded.kommo=false;dealDenied.kommo=true;}renderDealFeeds();}finally{if(dealsFlights.get(key)===request)dealsFlights.delete(key);if(dealFeedCurrent(own)&&serial===dealsReadSerial){dealsBusy=false;renderDealFeeds();setLoading(b,false);}}})();dealsFlights.set(key,request);return request;
   }
   $('dealsMore').onclick=()=>void loadDeals(false,true);
