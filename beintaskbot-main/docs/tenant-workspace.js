@@ -68,6 +68,46 @@
       return null;
     }
   };
+  // Keep canonical routes and their existing access/demand guards.
+  const settingsPages = ['settings', 'integrations', 'employees'];
+  const mainTabs = document.createElement('div');
+  mainTabs.className = 'settings-sections settings-main-tabs'; mainTabs.setAttribute('role', 'tablist');
+  const settingsEntry = document.createElement('button');
+  settingsEntry.id='settingsFamilyNav'; settingsEntry.type='button'; settingsEntry.className='settings';
+  document.querySelector('.nav [data-view="settings"]')?.after(settingsEntry);
+  settingsEntry.onclick=()=>{const view=settingsPages.find(key=>{const node=document.querySelector('.nav [data-view="'+key+'"]');return node&&!node.hidden&&node.style.display!=='none';});if(view)window.tenantAppNavigate?.(view,true);};
+  const mainLabels = {ru:['Общие','Интеграции','Сотрудники'],az:['Ümumi','İnteqrasiyalar','Əməkdaşlar'],en:['General','Integrations','Employees']};
+  const settingsTitle = document.createElement('h1'); settingsTitle.className = 'settings-family-title';
+  const familyHost = document.createElement('section'); familyHost.className = 'settings-family'; familyHost.hidden = true;
+  familyHost.append(settingsTitle, mainTabs);
+  $('view-settings')?.parentElement?.insertBefore(familyHost, $('view-settings'));
+  settingsPages.forEach(view => {
+    const button = document.createElement('button'); button.type='button'; button.dataset.settingsPage=view; button.setAttribute('role','tab');
+    button.onclick=()=>window.tenantAppNavigate?.(view,true); mainTabs.append(button);
+  });
+  function showSettingsFamily() {
+    const language=window.tenantI18n?.language||document.documentElement.lang,labels=mainLabels[language]||mainLabels.az;
+    const active=document.querySelector('.view.active')?.id?.replace('view-','');
+    familyHost.hidden=!settingsPages.includes(active);
+    settingsTitle.textContent=({ru:'Настройки',az:'Tənzimləmələr',en:'Settings'})[language]||'Tənzimləmələr';
+    mainTabs.querySelectorAll('button').forEach((button,index)=>{
+      const original=document.querySelector('.nav [data-view="'+button.dataset.settingsPage+'"]');
+      button.textContent=labels[index]; button.hidden=!original||original.hidden||original.style.display==='none';
+      button.setAttribute('aria-selected',String(active===button.dataset.settingsPage));
+    });
+    settingsEntry.hidden=![...mainTabs.querySelectorAll('button')].some(button=>!button.hidden);
+    settingsEntry.title=settingsTitle.textContent;
+    settingsEntry.innerHTML='<span aria-hidden="true">⚙</span><span class="app-nav-label">'+settingsTitle.textContent+'</span>';
+    settingsEntry.classList.toggle('active',settingsPages.includes(active));
+  }
+  css.textContent += '.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"]{display:none!important}#settingsFamilyNav[hidden]{display:none!important}.settings-family[hidden]{display:none!important}.settings-family-title{margin:0 0 14px}.settings-main-tabs{margin-bottom:20px}.settings-main-tabs button[hidden]{display:none!important}.settings-main-tabs button[aria-selected="true"]{border-bottom:2px solid var(--brand);font-weight:700}';
+  document.addEventListener('tenant-view',showSettingsFamily);
+  document.addEventListener('tenant-profile',()=>queueMicrotask(showSettingsFamily));
+  document.addEventListener('tenant-language',showSettingsFamily);
+  document.addEventListener('tenant-language-change',showSettingsFamily);
+  const familyObserver=new MutationObserver(showSettingsFamily);
+  document.querySelectorAll('.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"]').forEach(node=>familyObserver.observe(node,{attributes:true,attributeFilter:['hidden','style']}));
+  showSettingsFamily();
   const settings = $('view-settings');
   const notificationSettingsRoot = $('chakra-notification-settings-root') || document.createElement('div');
   notificationSettingsRoot.id = 'chakra-notification-settings-root';

@@ -75,6 +75,7 @@ if (document.body.dataset.appUi === 'kwid') {
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       const page=button.dataset.view||button.dataset.reportLink
+      if(['employees','integrations'].includes(page)&&nav.querySelector('#settingsFamilyNav')){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1}
       if(page==='settings'||page==='profile'){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1;continue}
       let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')
       if(!label){label=document.createElement('span');label.textContent=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()||page}
@@ -90,9 +91,11 @@ if (document.body.dataset.appUi === 'kwid') {
       const group=groups.find(group=>group.pages.includes((button.dataset.view||button.dataset.reportLink)))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
       if(button.parentElement!==items)items.append(button)
     }
+    const settingsFamily=nav.querySelector('#settingsFamilyNav'),companyItems=containers.get('company')?.querySelector('.app-nav-group-items');
+    if(settingsFamily&&companyItems&&settingsFamily.parentElement!==companyItems)companyItems.append(settingsFamily);
     const legacyCrm=nav.querySelector('#nativeCrmNav')
     if(legacyCrm&&!legacyCrm.querySelector('[data-view]'))legacyCrm.remove()
-    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
+    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link],#settingsFamilyNav')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
     const settings=nav.querySelector('[data-view="settings"]')
     topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settings||settings.hidden||settings.style.display==='none')
   }
@@ -107,7 +110,7 @@ if (document.body.dataset.appUi === 'kwid') {
   const navObserver=new MutationObserver(organizeNav)
   navObserver.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','style']})
   organizeNav()
-  nav.addEventListener('click',event=>{if(event.target.closest('[data-view]')){mobileMenu(false);closeUserMenu();requestAnimationFrame(updateContext)}})
+  nav.addEventListener('click',event=>{if(event.target.closest('[data-view],#settingsFamilyNav')){mobileMenu(false);closeUserMenu();requestAnimationFrame(updateContext)}})
   function updateContext() {
     const page=document.querySelector('main>.view.active'),title=page?.querySelector('h1')?.textContent||''
     topbar.querySelector('.app-topbar-context').textContent=title

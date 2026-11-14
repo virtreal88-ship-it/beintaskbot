@@ -102,15 +102,17 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       assert.equal(response.status(), 403);
       assert.equal('members' in await response.json(), false);
     } else {
-      const nav = page.locator('#companyEmployeesNav');
       await openSidebar();
-      const group = page.locator('.app-nav-group[data-group=company] .app-nav-group-title');
-      if (await group.getAttribute('aria-expanded') === 'false') await group.click();
-      await group.click();
-      assert.equal(await group.getAttribute('aria-expanded'), 'false');
-      assert.equal(await nav.isVisible(), false);
-      await group.click();
-      await nav.click();
+      const entry = page.locator('#settingsFamilyNav');
+      const group = page.locator('[data-group=company]');
+      if (!(await entry.isVisible())) await group.locator('.app-nav-group-title').click();
+      await entry.click();
+      const staffTab = page.locator('[data-settings-page=employees]');
+      if (await staffTab.isVisible()) await staffTab.click();
+      else if (!(await page.locator('#view-employees').evaluate(node => node.classList.contains('active')))) {
+        await page.locator('.settings-family .app-tab-picker').selectOption({ label:await staffTab.textContent() });
+      }
+      assert.equal(await page.locator('#companyEmployeesNav').isVisible(),false);
       await visibleStaff(tenantA);
       if (actor !== 11) {
         assert.equal(await page.evaluate(() => tenantProfileSnapshot.capabilities.modules.settings), false);
