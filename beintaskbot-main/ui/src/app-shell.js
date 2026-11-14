@@ -95,7 +95,7 @@ if (document.body.dataset.appUi === 'kwid') {
     if(settingsFamily&&companyItems&&settingsFamily.parentElement!==companyItems)companyItems.append(settingsFamily);
     const legacyCrm=nav.querySelector('#nativeCrmNav')
     if(legacyCrm&&!legacyCrm.querySelector('[data-view]'))legacyCrm.remove()
-    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link],#settingsFamilyNav')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
+    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
     const settings=nav.querySelector('[data-view="settings"]')
     topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settings||settings.hidden||settings.style.display==='none')
   }

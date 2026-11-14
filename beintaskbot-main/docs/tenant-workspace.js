@@ -73,7 +73,7 @@
   const mainTabs = document.createElement('div');
   mainTabs.className = 'settings-sections settings-main-tabs'; mainTabs.setAttribute('role', 'tablist');
   const settingsEntry = document.createElement('button');
-  settingsEntry.id='settingsFamilyNav'; settingsEntry.type='button'; settingsEntry.className='settings';
+  settingsEntry.id='settingsFamilyNav'; settingsEntry.type='button'; settingsEntry.className='settings'; settingsEntry.setAttribute('aria-hidden','true'); settingsEntry.tabIndex=-1;
   settingsEntry.innerHTML='<span aria-hidden="true">⚙</span><span class="app-nav-label"></span>';
   document.querySelector('.nav [data-view="settings"]')?.after(settingsEntry);
   settingsEntry.onclick=()=>{const view=settingsPages.find(key=>{const node=document.querySelector('.nav [data-view="'+key+'"]');return node&&!node.hidden&&node.style.display!=='none';});if(view)window.tenantAppNavigate?.(view,true);};
@@ -102,7 +102,7 @@
     settingsEntry.querySelector('.app-nav-label').textContent=settingsTitle.textContent;
     settingsEntry.classList.toggle('active',settingsPages.includes(active));
   }
-  css.textContent += '.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"]{display:none!important}#settingsFamilyNav[hidden]{display:none!important}.settings-family[hidden]{display:none!important}.settings-family-title{margin:0 0 14px}.settings-main-tabs{margin-bottom:20px}.settings-main-tabs button[hidden]{display:none!important}.settings-main-tabs button[aria-selected="true"]{border-bottom:2px solid var(--brand);font-weight:700}';
+  css.textContent += '.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"],#settingsFamilyNav{display:none!important}.settings-family[hidden]{display:none!important}.settings-family-title{margin:0 0 14px}.settings-main-tabs{margin-bottom:20px}.settings-main-tabs button[hidden]{display:none!important}.settings-main-tabs button[aria-selected="true"]{border-bottom:2px solid var(--brand);font-weight:700}';
   document.addEventListener('tenant-view',showSettingsFamily);
   document.addEventListener('tenant-profile',()=>queueMicrotask(showSettingsFamily));
   document.addEventListener('tenant-language',showSettingsFamily);
