@@ -37,6 +37,7 @@ Playwright traces, refresh screenshots and raw metrics: `tests/artifacts/stable-
 - `test_contacts_directory_ui.cjs`, including new delayed/error/denial regression.
 - `test_dialog_audio_transcription_ui.cjs`, `test_tenant_operator_copilot_ui.cjs`, `test_tenant_operator_mobile_ui.cjs`, `test_tenant_operator_auto_refresh_ui.cjs`.
 - `test_operator_case_recovery_ui.cjs` checks incoming case-draft conflicts without replacing the existing employee draft.
+- `test_dialog_avatar_card_browser.cjs` verifies saved customer metadata still updates on mobile/desktop. The rendered route snapshot is independent of the mutable history model, preventing a stale header after a background read.
 - `test_deal_source_picker_ui.cjs` and `test_deal_source_picker_browser.cjs` preserve the parallel native/Kommo source selector, filtered counts and compact sync status on light/dark 390/1440 layouts.
 - `test_hidden_panel_loading.cjs` (including initial authorization with no hidden deal preference read), `test_tenant_crm_sync_ui.cjs`, `test_app_loading_performance.cjs`, `test_helper_request_identity_browser.cjs`, `test_kommo_board_ui.cjs`, `test_tenant_workspace.cjs`, `test_tenant_app_syntax.cjs`.
 - Added a built-browser CI job; source tests alone are not acceptance evidence.
