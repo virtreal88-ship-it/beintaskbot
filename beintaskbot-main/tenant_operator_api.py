@@ -11,6 +11,7 @@ from tenant_operator_continuation import options as continuation_options, grant 
 from tenant_operator_legacy import options as legacy_options, recover as recover_legacy
 from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
+from tenant_group_participants import get_participants
 from tenant_read_timing import ReadTiming
 from tenant_dialog_access import sources as dialog_sources
 
@@ -35,6 +36,8 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(preflight,profile,dict(query))
                 elif resource=='sources':
                     result=await asyncio.to_thread(dialog_sources,profile)
+                elif resource=='group_participants':
+                    result=await get_participants(profile,dict(query))
                 elif resource=='avatar':
                     content,mime=await get_avatar(profile,dict(query))
                     return web.Response(body=content,content_type=mime,headers={
@@ -82,3 +85,4 @@ def handler(member_from_request,origin,logger,resource):
         finally:
             if timing: timing.finish()
     return handle
+
