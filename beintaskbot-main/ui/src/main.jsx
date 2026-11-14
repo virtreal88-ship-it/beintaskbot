@@ -2416,6 +2416,10 @@ function SettingsHub() {
 }
 
 function NotificationPreferencesHub() {
+  const [language, setLanguage] = useState(window.tenantI18n?.language || "az");
+  useEffect(() => {const relabel=()=>setLanguage(window.tenantI18n?.language||"az");document.addEventListener("tenant-language",relabel);return()=>document.removeEventListener("tenant-language",relabel);},[]);
+  const copy = ({ru:{title:"Уведомления",description:"Выберите, где получать уведомления о событиях.",internal:"В кабинете",save:"Сохранить уведомления",retry:"Повторить",empty:"Для вашей роли нет доступных уведомлений.",loadError:"Не удалось загрузить настройки уведомлений.",saveError:"Не удалось сохранить настройки уведомлений."},en:{title:"Notifications",description:"Choose where to receive event notifications.",internal:"In app",save:"Save notifications",retry:"Retry",empty:"No notifications are available for your role.",loadError:"Could not load notification settings.",saveError:"Could not save notification settings."},az:{title:"Bildirişlər",description:"Hadisələr barədə bildirişləri harada alacağınızı seçin.",internal:"Tətbiq daxilində",save:"Bildirişləri saxla",retry:"Yenidən yoxla",empty:"Bu rola uyğun bildiriş yoxdur.",loadError:"Bildiriş ayarları yüklənmədi.",saveError:"Bildiriş ayarları saxlanmadı."}})[language] || {title:"Notifications",description:"",internal:"In app",save:"Save",retry:"Retry",empty:"No notifications",loadError:"Could not load",saveError:"Could not save"};
+  const eventNames = {ru:{deal_completion_requested:"Сделка ожидает подтверждения",new_lead:"Новая сделка",incoming_message:"Новое сообщение",task_assigned:"Новая задача",task_overdue:"Просроченная задача",task_approval_requested:"Задача ожидает подтверждения создания",task_completion_requested:"Задача ожидает подтверждения выполнения",task_approval_decided:"Результат подтверждения задачи",hot_order_available:"Новый заказ",hot_order_completion_requested:"Заказ ожидает подтверждения выполнения",hot_order_completion_decided:"Результат подтверждения заказа",linear_done:"Задача Linear завершена",linear_status_changed:"Статус задачи Linear изменён",proactive_risk:"Требуется проверка риска",ai_developer_consultation:"Ответ по консультации разработчика"},en:{deal_completion_requested:"Deal awaiting approval",new_lead:"New deal",incoming_message:"New message",task_assigned:"New task",task_overdue:"Overdue task",task_approval_requested:"Task creation awaiting approval",task_completion_requested:"Task completion awaiting approval",task_approval_decided:"Task approval result",hot_order_available:"New order",hot_order_completion_requested:"Order completion awaiting approval",hot_order_completion_decided:"Order approval result",linear_done:"Linear task completed",linear_status_changed:"Linear task status changed",proactive_risk:"Risk review required",ai_developer_consultation:"Developer consultation reply"}};
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2433,7 +2437,7 @@ function NotificationPreferencesHub() {
       window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
       if (!mounted.current || generation !== requestGeneration.current) return;
-      setError(e.message || "Bildiriş ayarları yüklənmədi.");
+      setError(e.message || copy.loadError);
     } finally {
       if (mounted.current && generation === requestGeneration.current) setLoading(false);
     }
@@ -2461,17 +2465,17 @@ function NotificationPreferencesHub() {
       window.tenantViewDemand?.clean("#chakra-notification-settings-root");
     } catch (e) {
       if (!mounted.current || generation !== requestGeneration.current) return;
-      setError(e.message || "Bildiriş ayarları saxlanmadı.");
+      setError(e.message || copy.saveError);
     } finally {
       if (mounted.current && generation === requestGeneration.current) setSaving(false);
     }
   };
   return (
-    <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
+    <Card.Root className="notification-preferences-card" minW="0" maxW="100%" borderRadius="xl" borderColor="app.line" shadow="xs">
       <Card.Header>
-        <Card.Title>Bildirişlər</Card.Title>
+        <Card.Title>{copy.title}</Card.Title>
         <Card.Description>
-          Yalnız hazırda dəstəklənən hadisələr göstərilir
+          {copy.description}
         </Card.Description>
       </Card.Header>
       <Card.Body>
@@ -2484,13 +2488,15 @@ function NotificationPreferencesHub() {
             {(data?.events || []).map((event) => (
               <Flex
                 key={event.key}
+                className="notification-preference-row"
+                minW="0"
                 justify="space-between"
                 align="center"
                 gap="3"
                 wrap="wrap"
               >
-                <Text fontSize="sm">{event.label}</Text>
-                <Flex gap="4">
+                <Text className="notification-event-label" fontSize="sm">{eventNames[language]?.[event.key] || event.label}</Text>
+                <Flex className="notification-channels" gap="4" wrap="wrap" minW="0" maxW="100%">
                   {(data?.channels_available || [])
                     .filter((channel) =>
                       (event.channels || data?.channels_available || []).includes(channel),
@@ -2503,7 +2509,7 @@ function NotificationPreferencesHub() {
                           channel === "push"
                             ? "Web Push"
                             : channel === "internal"
-                              ? "Tətbiq daxilində"
+                              ? copy.internal
                               : "Telegram"
                         }
                         checked={data?.preferences?.[event.key]?.[channel] === true}
@@ -2527,7 +2533,7 @@ function NotificationPreferencesHub() {
             ))}
             {!data?.events?.length && (
               <Text fontSize="sm" color="app.muted">
-                Bu rola uyğun bildiriş yoxdur.
+                {copy.empty}
               </Text>
             )}
             {error && (
@@ -2543,11 +2549,11 @@ function NotificationPreferencesHub() {
                 loading={saving}
                 disabled={!data || saving}
               >
-                Bildirişləri saxla
+                {copy.save}
               </Button>
               {error && (
                 <Button variant="outline" onClick={() => void load()} disabled={loading || saving}>
-                  Yenidən yoxla
+                  {copy.retry}
                 </Button>
               )}
             </Flex>

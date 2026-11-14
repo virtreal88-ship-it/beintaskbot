@@ -81,7 +81,8 @@
   const settingsTitle = document.createElement('h1'); settingsTitle.className = 'settings-family-title';
   const familyHost = document.createElement('section'); familyHost.className = 'settings-family'; familyHost.hidden = true;
   familyHost.append(settingsTitle, mainTabs);
-  $('view-settings')?.parentElement?.insertBefore(familyHost, $('view-settings'));
+  const firstView=document.querySelector('main > .view');
+  firstView?.parentElement?.insertBefore(familyHost, firstView);
   settingsPages.forEach(view => {
     const button = document.createElement('button'); button.type='button'; button.dataset.settingsPage=view; button.setAttribute('role','tab');
     button.onclick=()=>window.tenantAppNavigate?.(view,true); mainTabs.append(button);
