@@ -26,7 +26,7 @@
     const refresh=()=>{
       if(!active||active.actions!==actions||!actions.isConnected)return;
       const mic=actions.querySelector('.operator-voice-mic');if(mic&&mic.dataset.composerDelegate!=='true')mic.dataset.composerDelegate='true';
-      const media=window.tenantCustomerMedia?.action();
+      const media=!hasPending(send)&&window.tenantCustomerMedia?.action();
       if(media){primary.dataset.action='media';primary.textContent='↑';primary.title=media.label;primary.setAttribute('aria-label',media.label);primary.disabled=media.disabled;return;}
       const pending=hasPending(send);
       const useSend=!!input.value.trim()||pending;
