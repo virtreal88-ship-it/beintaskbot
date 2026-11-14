@@ -39,19 +39,19 @@ body[data-app-ui="kwid"] .app-nav-group-title span {font-size:11px}
 body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-title svg {transform:rotate(-90deg)}
 body[data-app-ui="kwid"] .app-nav-group-items {display:grid;grid-template-rows:1fr;gap:4px}
 body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-items {display:none}
-body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]) {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
-body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]):hover {background:var(--app-hover)}
-body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]).active {background:var(--app-hover);color:var(--app-accent)}
-body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link])>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav):hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav).active {background:var(--app-hover);color:var(--app-accent)}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav)>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
 body[data-app-ui="kwid"] .nav svg {width:22px;height:22px;stroke-width:1.5}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-sidebar-header {justify-content:center;padding:0 16px}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .brand,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-label,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-title {display:none}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .company {font-size:0;margin:24px 16px 20px;text-align:center}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .company::first-letter {font-size:14px}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav {min-width:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
-body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link]) {box-sizing:border-box;min-width:0;overflow:hidden;justify-content:center;padding:8px}
-body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link]):has(> #dialogsAttentionCount:not([hidden]),> #supportUnresolvedCount:not([hidden]),> #supportCasesPending:not([hidden])) {display:grid;grid-template-rows:22px 10px;align-content:center;justify-items:center;gap:0;padding:2px 4px}
-body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link]) :is(#dialogsAttentionCount,#supportUnresolvedCount,#supportCasesPending) {position:static;inset:auto;transform:none;display:block;box-sizing:border-box;width:max-content;max-width:30px;min-width:0;height:10px;margin:0;padding:0 3px;overflow:hidden;border-radius:5px;font-size:8px;line-height:10px;text-align:center;white-space:nowrap}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) {box-sizing:border-box;min-width:0;overflow:hidden;justify-content:center;padding:8px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link],#settingsFamilyNav):has(> #dialogsAttentionCount:not([hidden]),> #supportUnresolvedCount:not([hidden]),> #supportCasesPending:not([hidden])) {display:grid;grid-template-rows:22px 10px;align-content:center;justify-items:center;gap:0;padding:2px 4px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) :is(#dialogsAttentionCount,#supportUnresolvedCount,#supportCasesPending) {position:static;inset:auto;transform:none;display:block;box-sizing:border-box;width:max-content;max-width:30px;min-width:0;height:10px;margin:0;padding:0 3px;overflow:hidden;border-radius:5px;font-size:8px;line-height:10px;text-align:center;white-space:nowrap}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-items {display:grid!important}
 body[data-app-ui="kwid"] main {padding:96px 32px 32px!important;width:100%;max-width:1440px!important;margin:0 auto;min-width:0}
 body[data-app-ui="kwid"] .app-topbar {position:fixed;top:0;left:var(--app-sidebar);right:0;z-index:35;height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 32px;background:var(--app-surface);border-bottom:1px solid var(--app-line);transition:left var(--app-motion) ease}
@@ -175,7 +175,7 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
   body[data-app-ui="kwid"][data-mobile-menu="open"] .app-sidebar-backdrop {display:block;position:fixed;inset:0;background:#0009;z-index:90;border:0}
   body[data-app-ui="kwid"] main {padding:96px 24px 32px!important}
   body[data-app-ui="kwid"] .nav {flex-direction:column;margin:0}
-  body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]) {font-size:13px;justify-content:flex-start}
+  body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) {font-size:13px;justify-content:flex-start}
 }
 @media(max-width:639px) {
   body[data-app-ui="kwid"] main {padding:88px 16px 24px!important}
@@ -214,3 +214,22 @@ body[data-app-ui="kwid"] .nav [data-report-link]{box-sizing:border-box;text-deco
 /* Preserve the mounted Kommo controller and unsaved inputs across these tabs. */
 [data-kommo-pane="settings"] #tkCrmSyncHost,[data-kommo-pane="connection"] #tkCrmSyncHost{display:none!important}
 [data-kommo-pane="sync"] #tenantKommoPanel> :not(#tkBody),[data-kommo-pane="sync"] #tkBody> :not(#tkCrmSyncHost){display:none!important}
+
+/* Primary Settings destinations stay visible, including on phones. */
+body[data-app-ui="kwid"] .settings-family .app-tab-picker{display:none!important}
+body[data-app-ui="kwid"] .settings-family .settings-main-tabs{display:flex!important;width:100%;box-sizing:border-box}
+body[data-app-ui="kwid"] .settings-family .settings-main-tabs button{flex:1;min-width:max-content;font-size:13px;padding:8px}
+
+/* One Settings title; nested sections are content, not another page. */
+body[data-app-ui="kwid"] .settings-family-title{font-size:24px;font-weight:600;line-height:1.25;margin:0 0 16px}
+body[data-app-ui="kwid"] .settings-family~#view-settings>.top{display:none}
+body[data-app-ui="kwid"] #chakra-notification-settings-root{min-width:0;max-width:100%}
+body[data-app-ui="kwid"] .notification-event-label{min-width:0;overflow-wrap:anywhere}
+body[data-app-ui="kwid"] .notification-preference-row{padding:12px 0;border-bottom:1px solid var(--app-line)}
+body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:normal}
+@media(max-width:760px){
+ body[data-app-ui="kwid"] .notification-preference-row{flex-direction:column;align-items:stretch;gap:10px}
+ body[data-app-ui="kwid"] .notification-channels{width:100%;gap:10px 16px}
+ body[data-app-ui="kwid"] .notification-channels label{flex:0 1 auto;max-width:100%}
+ body[data-app-ui="kwid"] .notification-preferences-card>[data-part]{padding:16px}
+}
