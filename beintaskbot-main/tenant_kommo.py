@@ -116,10 +116,11 @@ class TenantKommo:
         and replay after a lost PATCH response could overwrite a newer edit.
         """
         if (binding.provider != 'kommo' or method not in ('GET','PATCH')
-                or not re.fullmatch(r'(contacts|leads)/[1-9][0-9]*', path)):
+                or not re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path)):
             raise self.context.platform_error('Scalar CRM request is invalid.')
+        allowed = {'complete_till'} if path.startswith('tasks/') else {'status_id'} if isinstance(json_body,dict) and set(json_body)=={'status_id'} and path.startswith('leads/') else {'name','custom_fields_values'}
         if method == 'PATCH' and (not isinstance(json_body,dict) or not json_body
-                or set(json_body)-{'name','custom_fields_values'}):
+                or set(json_body)-allowed or any(type(json_body[key]) is not int or json_body[key] <= 0 for key in set(json_body)&{'complete_till','status_id'})):
             raise self.context.platform_error('Scalar CRM fields are invalid.')
         def run():
             credentials=self.context.credentials(tenant_id=binding.tenant_id)
@@ -200,7 +201,7 @@ class TenantKommo:
             # Preserve the source of this existing read without adding requests,
             # changing payloads, or trusting provider-supplied metadata. Redirects
             # are compatible with legacy callers but never identity evidence.
-            if (method.upper() == 'GET' and path.lstrip('/') in ('contacts', 'leads')
+            if (method.upper() == 'GET' and path.lstrip('/') in ('contacts', 'leads', 'tasks')
                     and 200 <= response.status_code < 300
                     and getattr(response, 'history', None) == []):
                 from tenant_crm_import_provenance import observe_page

@@ -3,7 +3,7 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const root=path.resolve(__dirname,'..'),membersScript=fs.readFileSync(path.join(root,'docs/tenant-members-ui.js'),'utf8'),workspaceScript=fs.readFileSync(path.join(root,'docs/tenant-workspace.js'),'utf8');
 const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r))};
 function create(profile,allowed,pending=false){
- const dom=new JSDOM('<body><section id="view-deals"><div class="toolbar"></div></section><section id="view-employees" class="view active"><div class="top"><h1 id="companyEmployeesTitle" tabindex="-1">Employees</h1></div><div id="employeesManagementHost"></div></section><section id="view-settings"><div class="top"></div><div id="chakra-settings-root"></div><div class="grid"></div></section></body>',{url:'https://app.test/app?view=employees',runScripts:'outside-only',pretendToBeVisual:true});
+ const dom=new JSDOM('<body><section id="view-deals"><div class="toolbar"></div></section><section id="view-profile" class="view"><div class="grid"></div></section><section id="view-employees" class="view active"><div class="top"><h1 id="companyEmployeesTitle" tabindex="-1">Employees</h1></div><div id="employeesManagementHost"></div></section><section id="view-settings"><div class="top"></div><div id="chakra-settings-root"></div><div class="grid"></div></section></body>',{url:'https://app.test/app?view=employees',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;w.scrollTo=()=>{};w.tenantI18n={language:'ru'};w.confirm=()=>true;
  w.tenantProfileSnapshot={member:{active:true,...profile},capabilities:{can_manage_employees:allowed}};let release;
  w.fetch=async url=>({ok:true,json:async()=>url.endsWith('/me')?w.tenantProfileSnapshot:url.endsWith('/members')?(pending?new Promise(r=>release=r):{success:true,members:[{telegram_id:2,display_name:'Demo',role:'worker',active:true}]}):{success:true,requests:[]}});
@@ -14,7 +14,7 @@ function create(profile,allowed,pending=false){
  for(const [role,allowed] of [['owner',true],['admin',true],['admin',false],['manager',false],['operator',false]]){
   const {dom,w}=create({tenant_id:'a',telegram_id:1,role},allowed);await tick();const d=w.document;
   assert.equal(d.getElementById('staffManagement').hidden,!allowed,role);
-  assert.equal(d.querySelector('[data-settings-tab=employees]').hidden,true,'Settings cannot own the canonical employee editor');
+  assert.equal(d.querySelector('#chakra-settings-root #staffManagement'),null,'Settings cannot own the canonical employee editor');
   if(allowed){const staff=d.getElementById('staffManagement');assert.equal(staff.parentElement.id,'employeesManagementHost');d.getElementById('chakra-settings-root').innerHTML='<div>React rerender</div>';await tick();assert.equal(staff.isConnected,true);assert.equal(d.querySelectorAll('#staffManagement').length,1);assert.equal(d.querySelectorAll('#staffMemberModal').length,1)}
   dom.window.close();
  }
@@ -23,7 +23,7 @@ function create(profile,allowed,pending=false){
  f.release();await tick();
  assert.equal(f.w.document.getElementById('staffManagement').hidden,true);
  assert.ok(!f.w.document.getElementById('staffManagement').textContent.includes('Old tenant'));
- assert.equal(f.w.document.querySelector('[data-settings-tab=employees]').hidden,true);
+ assert.equal(f.w.document.querySelector('#chakra-settings-root #staffManagement'),null);
  assert.equal(f.w.document.body.classList.contains('staff-modal-open'),false);
  f.dom.window.close();console.log('PASS: owner/admin authority, denied roles, React rerender, tenant switch and stale requests.');
 })().catch(e=>{console.error(e);process.exitCode=1});

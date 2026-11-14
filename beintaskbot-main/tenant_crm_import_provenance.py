@@ -6,6 +6,8 @@ is not evidence for adopting an existing native row or a legacy identity link.
 """
 from dataclasses import dataclass
 import re
+import hashlib
+import json
 import uuid
 
 from tenant_crm_relation_contract import ProviderBinding, BoundIdentity, RecordRef
@@ -19,6 +21,7 @@ class ImportObservation:
     resource: str
     external_ids: frozenset[str]
     evidence_id: str
+    raw_digests: tuple[tuple[str, str], ...] = ()
 
 
 class ObservedKommoPage(dict):
@@ -28,9 +31,27 @@ class ObservedKommoPage(dict):
         self.observation = observation
 
 
+def board_observation_digest(resource, raw):
+    """Bind source-owned fields while allowing existing lead contact enrichment.
+
+    That enrichment adds contact names/phones from a separate GET, but cannot
+    change the lead, its stage, or its ordered linked-contact identities.
+    Relation imports intentionally keep their existing observation contract.
+    """
+    value = raw
+    if resource == 'leads' and isinstance(raw.get('_embedded'), dict):
+        embedded = raw['_embedded']
+        contacts = embedded.get('contacts')
+        if isinstance(contacts, list):
+            value = {**raw, '_embedded': {**embedded, 'contacts': [
+                {key: item[key] for key in ('id', 'is_main') if key in item}
+                if isinstance(item, dict) else item for item in contacts]}}
+    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+
+
 def observe_page(tenant, resource, credentials, payload):
     """Called only by transport after a direct successful GET with no redirect."""
-    if resource not in ('contacts', 'leads'):
+    if resource not in ('contacts', 'leads', 'tasks'):
         return payload
     binding = connection_binding(tenant, {
         'provider': credentials.get('provider'), 'status': 'connected',
@@ -52,7 +73,8 @@ def observe_page(tenant, resource, credentials, payload):
     if len(set(identities)) != len(identities):
         return payload
     return ObservedKommoPage(payload, ImportObservation(binding, resource,
-        frozenset(identities), 'kommo-read:' + str(uuid.uuid4())))
+        frozenset(identities), 'kommo-read:' + str(uuid.uuid4()),
+        tuple((str(row['id']), board_observation_digest(resource, row)) for row in rows)))
 
 
 def validate_observation(cur, tenant, resource, rows, observation):

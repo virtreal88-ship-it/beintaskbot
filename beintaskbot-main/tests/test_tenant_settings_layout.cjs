@@ -9,6 +9,8 @@ for(const id of ['view-ai_agents','view-ai_testing','view-integrations','view-se
   assert.ok(view,`${id} must exist`);
   assert.equal(view.closest('main'),main,`${id} must remain inside the application main container`);
 }
-assert.equal(doc.getElementById('view-settings').previousElementSibling?.id,'view-integrations','settings follows the preceding app view without an orphaned footer');
+assert.equal(doc.getElementById('view-employees').previousElementSibling?.id,'view-integrations','employee settings route remains adjacent to Integrations');
+assert.equal(doc.getElementById('view-settings').previousElementSibling?.id,'view-employees','the legacy Settings view remains routed after the permitted tabs');
+assert.equal(doc.getElementById('view-profile').previousElementSibling?.id,'view-settings','Profile remains the destination for the legacy General route');
 console.log('PASS: settings views stay inside main and cannot be pushed below the shell by malformed AI-agent markup.');
 dom.window.close();

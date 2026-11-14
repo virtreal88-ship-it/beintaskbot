@@ -57,7 +57,7 @@ if (document.body.dataset.appUi === 'kwid') {
   backdrop.addEventListener('click',()=>mobileMenu(false))
   mobile.addEventListener('change',syncSidebar);syncSidebar()
   avatar.addEventListener('click',()=>{userMenu.hidden=!userMenu.hidden;avatar.setAttribute('aria-expanded',String(!userMenu.hidden))})
-  topbar.querySelectorAll('[data-app-open]').forEach(button=>button.addEventListener('click',()=>{const target=nav.querySelector(`[data-view="${button.dataset.appOpen}"]`);if(target&&!target.hidden&&target.style.display!=='none')target.click();closeUserMenu()}))
+  topbar.querySelectorAll('[data-app-open]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.appOpen==='settings'){window.tenantOpenSettingsHub?.();closeUserMenu();return}const target=nav.querySelector(`[data-view="${button.dataset.appOpen}"]`);if(target&&!target.hidden&&target.style.display!=='none')target.click();closeUserMenu()}))
   topbar.querySelector('[data-app-logout]').addEventListener('click',()=>{closeUserMenu();document.getElementById('logout')?.click()})
   topbar.querySelectorAll('[data-app-theme-choice]').forEach(button=>button.addEventListener('click',()=>{theme=button.dataset.appThemeChoice;remember('tenant-app-theme',theme);applyTheme()}))
   document.addEventListener('click',event=>{if(!topbar.contains(event.target))closeUserMenu()})
@@ -95,9 +95,9 @@ if (document.body.dataset.appUi === 'kwid') {
     if(settingsFamily&&companyItems&&settingsFamily.parentElement!==companyItems)companyItems.append(settingsFamily);
     const legacyCrm=nav.querySelector('#nativeCrmNav')
     if(legacyCrm&&!legacyCrm.querySelector('[data-view]'))legacyCrm.remove()
-    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link],#settingsFamilyNav')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
-    const settings=nav.querySelector('[data-view="settings"]')
-    topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settings||settings.hidden||settings.style.display==='none')
+    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
+    const settingsAvailable=['integrations','employees'].some(page=>{const button=nav.querySelector(`[data-view="${page}"]`);return button&&!button.hidden&&button.style.display!=='none'})
+    topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settingsAvailable)
   }
   const languageSelect=topbar.querySelector('[data-app-language]')
   const instructionLink=topbar.querySelector('[data-app-instructions]')

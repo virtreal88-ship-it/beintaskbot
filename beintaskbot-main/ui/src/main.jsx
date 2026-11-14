@@ -1,5 +1,8 @@
+import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
+import { NativeDealBoard, dealProfileScope } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import "./app-shell.js";
 import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
@@ -462,11 +465,14 @@ function TasksTable({ rows = [], settings = {} }) {
             {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
+            <Text data-task-client="" fontSize="sm" color="app.ink">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>
             <Text fontSize="sm" color="app.muted">{task.deal_title || ''}{task.responsible_name ? ' · ' + task.responsible_name : ''}</Text>
             <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
           </Box>
           <Flex gap="2" wrap="wrap" align="center">
             <StatusBadge tone={status === 'completed' ? 'gray' : 'green'}>{labels[status]}</StatusBadge>
+            {settings.moveNeedsSync?.(task) && <Text fontSize="sm" color="app.muted">{{ru:'Для переноса срока нужна свежая синхронизация Kommo.',az:'Tarixi dəyişmək üçün Kommo yenidən sinxronlaşdırılmalıdır.',en:'A fresh Kommo sync is required to move the deadline.'}[window.tenantI18n?.language] || 'A fresh Kommo sync is required.'}</Text>}
+            {settings.pendingMove?.(task) && <Button minH="44px" variant="outline" onClick={()=>settings.onCheckMove?.(id)}>{labels.check || 'Check original request'}</Button>}
             {!native && status === 'open' && settings.complete !== false && Number.isSafeInteger(Number(id)) && <Button minH="44px" colorPalette="brand" variant="outline" data-task-complete={id}>{labels.complete}</Button>}
             {!native && status === 'open' && !Number.isSafeInteger(Number(id)) && <Text fontSize="sm">{labels.unsafeComplete}</Text>}
           </Flex>
@@ -479,6 +485,38 @@ function TasksTable({ rows = [], settings = {} }) {
 function TasksView({ rows = [], settings = {} }) {
   const [mode, setMode] = useState('kanban');
   const [now, setNow] = useState(() => new Date());
+  const drag = useRef(null), moveOpener = useRef(null);
+  const [moving, setMoving] = useState(null), [moveError, setMoveError] = useState('');
+  const [deadline, setDeadline] = useState('');
+  const [busy, setBusy] = useState(false);
+  const copy = {ru:{move:'Перенести срок',date:'Новый срок',save:'Сохранить',cancel:'Отмена',error:'Не удалось изменить срок. Обновите список перед повторной попыткой.'},az:{move:'Son tarixi dəyiş',date:'Yeni son tarix',save:'Saxla',cancel:'Ləğv et',error:'Tarix dəyişmədi. Yenidən cəhddən əvvəl siyahını yeniləyin.'},en:{move:'Move due date',date:'New due date',save:'Save',cancel:'Cancel',error:'Could not change the due date. Refresh before retrying.'}}[window.tenantI18n?.language] || {move:'Move due date',date:'New due date',save:'Save',cancel:'Cancel',error:'Could not change due date.'};
+  const editable = task => !busy && task.status !== 'completed' && typeof settings.onMove === 'function' && settings.canMove?.(task) === true;
+  const choose = (task, bucket) => {
+    if (!editable(task) || !['today','tomorrow','upcoming','later','undated'].includes(bucket) || settings.source === 'kommo' && bucket === 'undated') return;
+    const d = new Date(); d.setSeconds(0, 0);
+    if (bucket === 'today') {d.setHours(18, 0, 0, 0);if(d.getTime() <= Date.now())d.setTime(Date.now()+60000);}
+    if (bucket === 'tomorrow') {d.setDate(d.getDate()+1);d.setHours(10,0,0,0);}
+    // Range columns do not imply a unique deadline. Let the user choose it.
+    if (bucket === 'upcoming') {d.setDate(d.getDate()+2);d.setHours(10,0,0,0);}
+    if (bucket === 'later') {d.setDate(d.getDate()+14);d.setHours(10,0,0,0);}
+    moveOpener.current = document.activeElement;
+    setDeadline(bucket === 'undated' ? '' : new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16));
+    setMoving({id:String(task.id || task.kommo_task_id),bucket,source:settings.source});setMoveError('');
+  };
+  useEffect(() => {if (moving && (moving.source !== settings.source || !rows.some(row => String(row.id || row.kommo_task_id) === moving.id && settings.canMove?.(row) === true))) {setMoving(null);setBusy(false);} }, [rows, settings.source]);
+  const closeMove = () => {const id=moving?.id;setMoving(null);if(moveOpener.current?.isConnected)moveOpener.current.focus();else if(id)setTimeout(()=>document.querySelector(`[data-task-flow-open="${id}"]`)?.focus(),0);};
+  const submitMove = async () => {
+    if (busy || !moving) return;
+    const row = rows.find(row => String(row.id || row.kommo_task_id) === moving.id);
+    if (!row || !editable(row)) {setMoving(null);return;}
+    const due = moving.bucket === 'undated' ? null : new Date(deadline);
+    if (settings.source === 'kommo' && (!due || due.getTime() <= Date.now())) {setMoveError(copy.error);return;}
+    if (due && (Number.isNaN(due.getTime()) || taskColumns([{due_at:due.toISOString()}], new Date()).find(g => g.rows.length)?.key !== moving.bucket)) {setMoveError(copy.error);return;}
+    setBusy(true);setMoveError('');
+    try {await settings.onMove(moving.id,due?.toISOString() || null);closeMove();}
+    catch {setMoveError(copy.error);}
+    finally {setBusy(false);}
+  };
   useEffect(() => {
     let timer;
     const resume = () => {clearInterval(timer);const host=document.getElementById(settings.target || 'tasksList');if(!document.hidden&&host?.closest('.view')?.classList.contains('active'))timer=setInterval(()=>setNow(new Date()),60000);};
@@ -488,16 +526,27 @@ function TasksView({ rows = [], settings = {} }) {
   const c = taskBoardLabels[window.tenantI18n?.language] || taskBoardLabels.az;
   const groups = taskColumns(rows, now);
   return <Box data-task-view={mode} minW="0">
+    {moving && <Box role="region" aria-label={copy.move} borderWidth="1px" borderColor="app.line" p="3" mb="3">
+      <Text>{copy.move}: {c[moving.bucket]}</Text>
+      {moving.bucket !== 'undated' && <label>{copy.date}<Input autoFocus type="datetime-local" value={deadline} disabled={busy} onChange={e=>setDeadline(e.target.value)} /></label>}
+      <Flex gap="2" mt="2"><Button disabled={busy || moving.bucket !== 'undated' && !deadline} onClick={submitMove}>{copy.save}</Button><Button disabled={busy} variant="outline" onClick={closeMove}>{copy.cancel}</Button></Flex>
+      {moveError && <Text role="alert" color="red.600">{moveError}</Text>}
+    </Box>}
     <Flex role="group" aria-label={c.view} gap="2" mb="4" wrap="wrap">
       {['kanban', 'table'].map(value => <Button key={value} size="sm" minH="44px" aria-pressed={mode === value} variant={mode === value ? 'solid' : 'outline'} onClick={() => setMode(value)}>{c[value]}</Button>)}
     </Flex>
     {mode === 'table' ? <TasksTable rows={rows} settings={settings}/> : !rows.length ? <Empty>{settings.empty || c.empty}</Empty> :
       <Flex data-task-kanban="" data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3" scrollSnapType="x proximity">
-        {groups.map(group => <Box key={group.key} data-task-column={group.key} flex="1 0 280px" minW="min(280px, 82vw)" maxW="360px" scrollSnapAlign="start">
+        {groups.map(group => <Box key={group.key} data-task-column={group.key}
+          onDragOver={event=>{if(drag.current && ['today','tomorrow','upcoming','later','undated'].includes(group.key))event.preventDefault();}}
+          onDrop={event=>{event.preventDefault();const task=rows.find(row=>String(row.id || row.kommo_task_id)===drag.current);drag.current=null;if(task && !group.rows.includes(task))choose(task,group.key);}} flex="1 0 280px" minW="min(280px, 82vw)" maxW="360px" scrollSnapAlign="start">
           <Box textAlign="center" py="3" mb="3" borderBottomWidth="2px" borderColor={group.key === 'overdue' ? 'red.400' : group.key === 'today' ? 'green.400' : 'app.line'}>
             <Heading size="sm">{c[group.key]}</Heading><Text fontSize="sm" color="app.muted">{c.count}: {group.rows.length}</Text>
           </Box>
-          <Stack gap="2">{group.rows.length ? group.rows.map(task => <Box key={String(task.id || task.kommo_task_id)} data-task-card=""><TasksTable rows={[task]} settings={settings}/></Box>) : <Text textAlign="center" fontSize="sm" color="app.muted" py="4">{c.empty}</Text>}</Stack>
+          <Stack gap="2">{group.rows.length ? group.rows.map(task => <Box key={String(task.id || task.kommo_task_id)} data-task-card="" draggable={editable(task)} onDragStart={event=>{if(!editable(task)){event.preventDefault();return;}drag.current=String(task.id || task.kommo_task_id);event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',drag.current);}} onDragEnd={()=>{drag.current=null;}}><TasksTable rows={[task]} settings={settings}/>
+            {editable(task) && <Button variant="outline" size="sm" minH="44px" aria-label={copy.move} style={{touchAction:'none'}} onPointerDown={event=>{if(event.pointerType==='mouse')return;drag.current=String(task.id || task.kommo_task_id);event.currentTarget.setPointerCapture(event.pointerId);}} onPointerUp={event=>{const id=drag.current;drag.current=null;if(!id||event.pointerType==='mouse')return;const column=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-task-column]');if(column&&column.dataset.taskColumn!==group.key)choose(task,column.dataset.taskColumn);}} onPointerCancel={()=>{drag.current=null;}}>↔ {copy.move}</Button>}
+            {editable(task) && <label><Text fontSize="sm">{copy.move}</Text><select aria-label={copy.move} value="" style={{minHeight:44,maxWidth:'100%'}} onChange={event=>choose(task,event.target.value)}><option value="">{copy.move}</option>{['today','tomorrow','upcoming','later','undated'].filter(key=>key!==group.key && !(settings.source==='kommo' && key==='undated')).map(key=><option key={key} value={key}>{c[key]}</option>)}</select></label>}
+          </Box>) : <Text textAlign="center" fontSize="sm" color="app.muted" py="4">{c.empty}</Text>}</Stack>
         </Box>)}
       </Flex>}
   </Box>;
@@ -560,14 +609,31 @@ function DealTable({ rows = [], customer = false, onOpen }) {
   );
 }
 
-function DealKanban({ rows = [], catalog = [], hidden = [], onOpen }) {
-  const groups = useMemo(() => dealColumns(rows, catalog, hidden), [rows, catalog, hidden]);
+function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets = [], moveSources = [], completionApproval = false, moveContext }) {
+  const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
+  const drag=useRef(null),busy=useRef(false),revision=useRef(0),alive=useRef(true);
+  useEffect(()=>{setDisplayRows(rows);},[rows]);
+  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
+  const targets=row=>moveSources.some(s=>String(s.pipeline_id)===String(row.pipeline_id)&&String(s.stage_id)===String(row.status_id))?moveTargets.filter(t=>String(t.pipeline_id)===String(row.pipeline_id)):[];
+  const movable=row=>!!moveContext&&canIdentifyKommoDeal(row)&&!busy.current&&targets(row).length>0&&!!(row.raw?.updated_at||row.source_updated_at);
+  const move=async(row,stage)=>{
+    if(!movable(row)||String(row.status_id)===String(stage)||!targets(row).some(t=>String(t.stage_id)===String(stage)))return;
+    const serial=revision.current;busy.current=true;setPending(String(row.kommo_lead_id));setMoveError('');
+    setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?{...item,status_id:stage}:item));
+    try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current)setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?result:item));}
+    catch(e){if(alive.current&&serial===revision.current){setDisplayRows(values=>values.map(item=>item.kommo_lead_id===row.kommo_lead_id?row:item));setMoveError(e.message);}}
+    finally{if(alive.current&&serial===revision.current){busy.current=false;setPending('');}}
+  };
+  const groups = useMemo(() => dealColumns(displayRows, catalog, hidden), [displayRows, catalog, hidden]);
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
   return (
-    <Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
+    <Box>{completionApproval&&<Text fontSize="sm" color="app.muted">{document.documentElement.lang==='ru'?'Для успешного завершения используйте «Завершить сделку»: требуется подтверждение.':document.documentElement.lang==='en'?'Use Complete deal for successful completion: approval is required.':'Uğurlu tamamlamaq üçün «Sövdələşməni tamamla» istifadə edin: təsdiq tələb olunur.'}</Text>}{moveError&&<Text role="alert">{moveError}</Text>}<Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
       {groups.map(({key, pipeline, name: stage, rows: items}) => (
         <Box
           key={key}
+          data-kommo-stage-key={key}
+          onDragOver={event=>{const row=drag.current;if(row&&targets(row).some(t=>`${t.pipeline_id}:${t.stage_id}`===key)){event.preventDefault();event.dataTransfer.dropEffect='move';}}}
+          onDrop={event=>{event.preventDefault();const row=drag.current;drag.current=null;if(row&&key.startsWith(String(row.pipeline_id)+':'))move(row,key.slice(key.indexOf(':')+1));}}
           minW="300px"
           w="300px"
           bg="app.raised"
@@ -582,6 +648,10 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen }) {
             {items.map((deal) => (
               <Card.Root
                 key={deal.kommo_lead_id}
+                draggable={movable(deal)}
+                aria-busy={pending===String(deal.kommo_lead_id)}
+                onDragStart={event=>{if(!movable(deal)){event.preventDefault();return;}drag.current=deal;event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',String(deal.kommo_lead_id));}}
+                onDragEnd={()=>{drag.current=null;}}
                 borderWidth="1px"
                 borderColor="app.line"
                 shadow="xs"
@@ -591,6 +661,7 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen }) {
               >
                 <Card.Body p="4">
                   <Text fontWeight="600">{deal.contact_name || deal.name}</Text>
+                  {!!moveContext&&targets(deal).length>0&&<Box onClick={event=>event.stopPropagation()}><select aria-label={document.documentElement.lang==='ru'?'Изменить этап':document.documentElement.lang==='en'?'Change stage':'Mərhələni dəyiş'} disabled={!!pending||!canIdentifyKommoDeal(deal)} title={!canIdentifyKommoDeal(deal)?(document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'):undefined} value={deal.status_id} onChange={event=>move(deal,event.target.value)} style={{width:'100%',minHeight:44}}>{catalog.filter(p=>String(p.pipeline_id)===String(deal.pipeline_id)).flatMap(p=>(p.stages||[]).filter(t=>String(t.stage_id)===String(deal.status_id)||targets(deal).some(a=>String(a.stage_id)===String(t.stage_id))).map(t=><option key={t.stage_id} value={t.stage_id}>{t.name}</option>))}</select>{!canIdentifyKommoDeal(deal)&&<Text fontSize="xs" color="app.muted">{document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'}</Text>}<button type="button" disabled={!movable(deal)} aria-label={document.documentElement.lang==='ru'?'Перенести сделку':document.documentElement.lang==='en'?'Move deal':'Sövdələşməni daşı'} style={{touchAction:'none',minHeight:44}} onPointerDown={event=>{if(event.pointerType==='mouse'||!movable(deal))return;drag.current=deal;event.currentTarget.setPointerCapture(event.pointerId);}} onPointerCancel={()=>{drag.current=null;}} onPointerUp={event=>{const row=drag.current;drag.current=null;if(!row||event.pointerType==='mouse')return;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-kommo-stage-key]')?.dataset.kommoStageKey;if(target&&target.startsWith(String(row.pipeline_id)+':'))move(row,target.slice(target.indexOf(':')+1));}}>↔</button></Box>}
                   <Text fontSize="sm" color="app.muted">
                     {deal.phone || "Telefon yoxdur"}
                   </Text>
@@ -614,7 +685,7 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen }) {
           </Stack>
         </Box>
       ))}
-    </Flex>
+    </Flex></Box>
   );
 }
 
@@ -660,14 +731,16 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   if (customer) return <DealTable rows={rows} customer onOpen={onOpen} />;
   const catalog = data?.catalog || [];
   const hidden = data?.hidden_stage_keys || [];
+  const controls = <Flex data-deal-view-controls="" justify="flex-end" gap="2" wrap="nowrap">
+      <Button ref={columnTrigger} size="sm" h="44px" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
+      <Button size="sm" h="44px" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
+      <Button size="sm" h="44px" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
+    </Flex>;
+  const controlsTarget = document.getElementById("dealViewControls");
   return <Stack gap="3">
-    <Flex justify="flex-end" gap="2" wrap="wrap">
-      <Button ref={columnTrigger} size="sm" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
-      <Button size="sm" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
-      <Button size="sm" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
-    </Flex>
+    {controlsTarget ? createPortal(controls, controlsTarget) : controls}
     {error && <Box role="alert"><Text color="red.500">{error}</Text>{!open && <Button onClick={load}>{copy.retry}</Button>}</Box>}
-    {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen}/> : <DealTable rows={rows} onOpen={onOpen}/>}
+    {mode === "kanban" ? <DealKanban rows={rows} catalog={catalog} hidden={hidden} onOpen={onOpen} moveTargets={data?.move_stage_targets || []} moveSources={data?.move_stage_sources || []} completionApproval={data?.move_stage_completion_requires_approval===true} moveContext={data?.move_context}/> : <DealTable rows={rows} onOpen={onOpen}/>}
     <Dialog.Root finalFocusEl={() => columnTrigger.current} open={open} onOpenChange={e => {if (!saving) setOpen(e.open);}} placement="center" size="sm">
       <Portal><Dialog.Backdrop/><Dialog.Positioner><Dialog.Content bg="app.surface" color="app.ink">
         <Dialog.Header><Dialog.Title>{copy.columns}</Dialog.Title></Dialog.Header>
@@ -2205,6 +2278,7 @@ function SettingsHub() {
   const [data, setData] = useState(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
+  const [language, setLanguage] = useState(window.tenantI18n?.language || "az");
   const [account, setAccount] = useState({
       first_name: "",
       last_name: "",
@@ -2235,8 +2309,24 @@ function SettingsHub() {
     }
   };
   useEffect(() => {
+    const relabel = () => setLanguage(window.tenantI18n?.language || "az");
+    document.addEventListener("tenant-language", relabel);
+    return () => document.removeEventListener("tenant-language", relabel);
+  }, []);
+  useEffect(() => {
     load();
   }, []);
+  const copy = ({
+    ru: {
+      title: "Личный профиль", description: "Вход через Telegram и email в одной учётной записи.", first: "Имя", last: "Фамилия", phone: "Телефон", login: "Логин", avatar: "Ссылка на аватар HTTPS", emailMissing: "Email не подключён", verified: "подтверждён", save: "Сохранить профиль", addEmail: "Подключить email", emailPrompt: "Введите email", emailSent: "Ссылка для подтверждения email отправлена.", workspace: "Рабочее пространство компании", workspaceDescription: "Выбирайте только среди компаний, к которым у вас есть доступ.", switchWorkspace: "Сменить компанию", sessions: "Активные сеансы", sessionsDescription: "Завершайте сеансы, которыми больше не пользуетесь.", thisDevice: "Это устройство", otherDevice: "Другое устройство", close: "Завершить", noSessions: "Сохранённых сеансов нет.", roles: {owner:"Владелец",admin:"Администратор",manager:"Менеджер",worker:"Сотрудник"}
+    },
+    en: {
+      title: "Personal profile", description: "Telegram and email sign-in can use the same account.", first: "First name", last: "Last name", phone: "Phone", login: "Login", avatar: "Avatar HTTPS URL", emailMissing: "Email is not connected", verified: "verified", save: "Save profile", addEmail: "Connect email", emailPrompt: "Enter your email address", emailSent: "Email verification link sent.", workspace: "Company workspace", workspaceDescription: "Choose only from companies where you are a member.", switchWorkspace: "Switch company", sessions: "Active sessions", sessionsDescription: "End sign-ins you no longer use.", thisDevice: "This device", otherDevice: "Other device", close: "End session", noSessions: "No saved sessions.", roles: {owner:"Owner",admin:"Administrator",manager:"Manager",worker:"Employee"}
+    },
+    az: {
+      title: "Şəxsi hesab", description: "Telegram və email girişi eyni hesabda işləyə bilər.", first: "Ad", last: "Soyad", phone: "Telefon", login: "Login", avatar: "Avatar HTTPS URL", emailMissing: "Email qoşulmayıb", verified: "təsdiqlənib", save: "Profili saxla", addEmail: "Email qoş", emailPrompt: "Email ünvanınızı daxil edin", emailSent: "Email təsdiq keçidi göndərildi.", workspace: "Şirkət iş sahəsi", workspaceDescription: "Seçim yalnız sizin aktiv üzvlükləriniz arasından edilir.", switchWorkspace: "İş sahəsini dəyiş", sessions: "Aktiv sessiyalar", sessionsDescription: "İstifadə edilməyən girişləri bağlayın.", thisDevice: "Bu cihaz", otherDevice: "Digər cihaz", close: "Bağla", noSessions: "Saxlanmış sessiya tapılmadı.", roles: {owner:"Sahib",admin:"Administrator",manager:"Menecer",worker:"İcraçı"}
+    }
+  })[language] || {title:"Personal profile",description:"",first:"First name",last:"Last name",phone:"Phone",login:"Login",avatar:"Avatar HTTPS URL",emailMissing:"Email is not connected",verified:"verified",save:"Save profile",addEmail:"Connect email",emailPrompt:"Enter your email address",emailSent:"Verification link sent.",workspace:"Company workspace",workspaceDescription:"",switchWorkspace:"Switch company",sessions:"Active sessions",sessionsDescription:"",thisDevice:"This device",otherDevice:"Other device",close:"End session",noSessions:"No saved sessions.",roles:{}};
   if (loading)
     return (
       <Flex py="14" justify="center">
@@ -2289,43 +2379,41 @@ function SettingsHub() {
     <Stack gap="6" mt="5">
       <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
         <Card.Header>
-          <Card.Title>Şəxsi hesab</Card.Title>
-          <Card.Description>
-            Telegram və email girişləri eyni hesabda işləyə bilər
-          </Card.Description>
+          <Card.Title>{copy.title}</Card.Title>
+          <Card.Description>{copy.description}</Card.Description>
         </Card.Header>
         <Card.Body>
           <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap="3">
             <Input
-              placeholder="Ad"
+              placeholder={copy.first}
               value={account.first_name || ""}
               onChange={(e) =>
                 setAccount({ ...account, first_name: e.target.value })
               }
             />
             <Input
-              placeholder="Soyad"
+              placeholder={copy.last}
               value={account.last_name || ""}
               onChange={(e) =>
                 setAccount({ ...account, last_name: e.target.value })
               }
             />
             <Input
-              placeholder="Telefon"
+              placeholder={copy.phone}
               value={account.phone || ""}
               onChange={(e) =>
                 setAccount({ ...account, phone: e.target.value })
               }
             />
             <Input
-              placeholder="Login"
+              placeholder={copy.login}
               value={account.login || ""}
               onChange={(e) =>
                 setAccount({ ...account, login: e.target.value })
               }
             />
             <Input
-              placeholder="Avatar HTTPS URL"
+              placeholder={copy.avatar}
               value={account.avatar_url || ""}
               onChange={(e) =>
                 setAccount({ ...account, avatar_url: e.target.value })
@@ -2333,32 +2421,32 @@ function SettingsHub() {
             />
             <Text alignSelf="center" fontSize="sm" color="app.muted">
               {account.email
-                ? `${account.email}${account.verified ? " · təsdiqlənib" : ""}`
-                : "Email qoşulmayıb"}
+                ? `${account.email}${account.verified ? ` · ${copy.verified}` : ""}`
+                : copy.emailMissing}
             </Text>
           </Grid>
-          <Flex mt="3" gap="2">
+          <Flex mt="3" gap="2" wrap="wrap" minW="0">
             <Button colorPalette="brand" onClick={saveAccount}>
-              Profili saxla
+              {copy.save}
             </Button>
             {!account.email && (
               <Button
                 variant="outline"
                 onClick={async () => {
-                  const email = prompt("Email ünvanınızı daxil edin");
+                  const email = prompt(copy.emailPrompt);
                   if (!email) return;
                   try {
                     await api("/api/platform/auth/email/link/request", {
                       method: "POST",
                       body: JSON.stringify({ email }),
                     });
-                    setActionError("Email təsdiq keçidi göndərildi.");
+                    setActionError(copy.emailSent);
                   } catch (e) {
                     setActionError(e.message);
                   }
                 }}
               >
-                Email qoş
+              {copy.addEmail}
               </Button>
             )}
           </Flex>
@@ -2367,10 +2455,8 @@ function SettingsHub() {
       {(data.companies || []).length > 1 && (
         <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
           <Card.Header>
-            <Card.Title>Şirkət iş sahəsi</Card.Title>
-            <Card.Description>
-              Seçim yalnız sizin aktiv üzvlükləriniz arasından edilir
-            </Card.Description>
+            <Card.Title>{copy.workspace}</Card.Title>
+            <Card.Description>{copy.workspaceDescription}</Card.Description>
           </Card.Header>
           <Card.Body>
             <Flex gap="3" wrap="wrap">
@@ -2386,12 +2472,12 @@ function SettingsHub() {
               >
                 {data.companies.map((company) => (
                   <option key={company.id} value={company.id}>
-                    {company.name} · {roles[company.role] || company.role}
+                    {company.name} · {copy.roles[company.role] || company.role}
                   </option>
                 ))}
               </Box>
               <Button variant="outline" onClick={switchWorkspace}>
-                İş sahəsini dəyiş
+                {copy.switchWorkspace}
               </Button>
             </Flex>
           </Card.Body>
@@ -2399,10 +2485,8 @@ function SettingsHub() {
       )}
       <Card.Root borderRadius="xl" borderColor="app.line" shadow="xs">
         <Card.Header>
-          <Card.Title>Aktiv sessiyalar</Card.Title>
-          <Card.Description>
-            İstifadə edilməyən girişləri bağlayın
-          </Card.Description>
+          <Card.Title>{copy.sessions}</Card.Title>
+          <Card.Description>{copy.sessionsDescription}</Card.Description>
         </Card.Header>
         <Card.Body>
           <Stack gap="2">
@@ -2414,7 +2498,7 @@ function SettingsHub() {
                 gap="3"
               >
                 <Text fontSize="sm">
-                  {session.current ? "Bu cihaz" : "Digər cihaz"} ·{" "}
+                  {session.current ? copy.thisDevice : copy.otherDevice} ·{" "}
                   {session.tenant_name} ·{" "}
                   {new Date(session.created_at).toLocaleString()}
                 </Text>
@@ -2424,14 +2508,14 @@ function SettingsHub() {
                     variant="outline"
                     onClick={() => revokeSession(session)}
                   >
-                    Bağla
+                    {copy.close}
                   </Button>
                 )}
               </Flex>
             ))}
             {!sessions.length && (
               <Text fontSize="sm" color="app.muted">
-                Saxlanmış sessiya tapılmadı.
+                {copy.noSessions}
               </Text>
             )}
           </Stack>
@@ -2596,6 +2680,7 @@ function NotificationPreferencesHub() {
 }
 
 window.tenantChakraCRM = {
+  renderNativeDeals: (rows, settings = {}) => mount("nativeDealsList", <NativeDealBoard rows={rows} settings={settings} />),
   renderTasks: (rows, settings = {}) => mount(settings.target || "tasksList", <TasksView rows={rows} settings={settings} />),
   renderDeals: (target, rows, customer, onOpen) =>
     mount(
@@ -2605,12 +2690,12 @@ window.tenantChakraCRM = {
 };
 mount("aiDashboard", <AIDashboard />);
 for (const [view, host, component] of [
-  ["settings", "chakra-notification-settings-root", <NotificationPreferencesHub />],
-  ["settings", "chakra-settings-root", <SettingsHub />],
+  ["profile", "chakra-notification-settings-root", <NotificationPreferencesHub />],
+  ["profile", "chakra-settings-root", <SettingsHub />],
   ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
 ]) {
   window.tenantViewDemand.watch({
-    view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : host === "chakra-settings-root" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
     excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
     reset: () => { roots.get(host)?.unmount(); roots.delete(host); },

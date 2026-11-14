@@ -81,7 +81,7 @@ def test_store_fails_closed_without_access(monkeypatch):
 def test_jsonb_write_preserves_grants_users_and_tenants(monkeypatch):
     from test_tenant_account_notification_preferences import Database
     database = Database()
-    policy = SimpleNamespace(kommo_access=lambda: True, deal_board=lambda: CATALOG, member_settings={})
+    policy = SimpleNamespace(kommo_access=lambda: True, deal_board=lambda: CATALOG, member_settings={}, requires_deal_approval=lambda: False)
     monkeypatch.setattr(store, 'TenantPolicy', lambda _: policy)
     monkeypatch.setattr(store, '_connect', lambda: database)
     monkeypatch.setattr(store, 'member', lambda tenant, actor: {'tenant_id': tenant, 'telegram_id': actor})

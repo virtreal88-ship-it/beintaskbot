@@ -31,11 +31,11 @@
     main{padding:30px 28px 64px}.top{margin-bottom:22px}.top h1{font-size:27px;letter-spacing:-.7px;font-weight:650}.eyebrow{display:none}.top p{font-size:13px;margin-top:6px}.toolbar{margin:0 0 20px;gap:10px}.refresh,.primary{border-radius:8px;padding:10px 14px;font-size:14px}.table{border-radius:12px}.row{width:100%;background:white;text-align:left}.panel{border-radius:12px;padding:22px}.panel h2{font-weight:650}.panel p{font-size:13px;line-height:1.6}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #7bc7b5;outline-offset:2px}
     .workspace-controls{display:flex;gap:8px;align-items:center}.workspace-controls select{max-width:220px;border:1px solid var(--line);background:white;border-radius:8px;padding:10px;color:var(--ink)}.workspace-modes{display:flex;background:#e9eef0;padding:3px;border-radius:9px}.workspace-modes button{padding:7px 11px;border-radius:7px;background:transparent;color:var(--muted);font-size:13px}.workspace-modes button[aria-pressed=true]{background:white;color:var(--ink);box-shadow:0 1px 3px #20343a15}
     #dealsList.workspace-board{background:none;border:0;overflow:visible}.workspace-pipeline{margin:0 0 28px}.workspace-pipeline h2{font-size:15px;font-weight:650;margin:0 0 12px}.workspace-lanes{display:flex;gap:14px;overflow-x:auto;padding:0 0 12px;overscroll-behavior-x:contain}.workspace-lane{flex:0 0 276px;background:#edf1f3;border:1px solid #e4e9ec;border-radius:12px;padding:10px;min-height:170px}.workspace-lane-header{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 3px 13px;font-size:13px;font-weight:650}.workspace-lane-header span{background:#dce5e7;color:#61747a;border-radius:6px;padding:2px 7px;font-size:12px}.workspace-card{display:block;width:100%;background:white;text-align:left;border:1px solid #e1e7ea;border-radius:10px;padding:15px;margin-bottom:10px;box-shadow:0 2px 4px #20343a04;transition:border-color .15s}.workspace-card:hover{border-color:#8ebbb0}.workspace-card strong{display:block;font-size:14px;overflow-wrap:anywhere;line-height:1.5}.workspace-phone{display:block;font-size:13px;color:#2b7367;margin:4px 0 10px}.workspace-card .sub{white-space:normal;overflow-wrap:anywhere;font-size:12px}.workspace-card-footer{display:flex;justify-content:space-between;gap:8px;margin-top:13px;color:#88969b;font-size:11px}.workspace-empty{padding:28px 8px;text-align:center;color:#88969b;font-size:12px}
-    .settings-sections{display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:0 0 22px;padding-bottom:12px}.settings-sections button{padding:9px 14px;border-radius:8px;background:transparent;color:var(--muted);font-size:14px}.settings-sections button[aria-selected=true]{background:var(--brand-soft,var(--paper));color:var(--brand,var(--ink));font-weight:650}#view-settings [data-settings-section][hidden]{display:none!important}#view-settings>.panel{margin-bottom:16px}#view-settings>.grid{align-items:start}.settings-help{font-size:13px;color:var(--muted);margin:-7px 0 20px}
+    .settings-sections{display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:0 0 22px;padding-bottom:12px}.settings-sections button{padding:9px 14px;border-radius:8px;background:transparent;color:var(--muted);font-size:14px}.settings-sections button[aria-selected=true]{background:var(--brand-soft,var(--paper));color:var(--brand,var(--ink));font-weight:650}#profile-company-settings [data-settings-section][hidden]{display:none!important}#profile-company-settings>.panel{margin-bottom:16px}#profile-company-settings>.grid{align-items:start}.profile-account-settings,.profile-company-settings,.legacy-settings-panels{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0;max-width:100%}.profile-account-settings>*,.profile-company-settings>*,.legacy-settings-panels>*{min-width:0;max-width:100%}.legacy-settings-panels[hidden]{display:none!important}.settings-help{font-size:13px;color:var(--muted);margin:-7px 0 20px}
     @media(max-width:760px){aside{padding:10px 12px;gap:10px}.brand{font-size:14px}.nav{flex-direction:row;flex:0 1 auto}.nav button{font-size:0;padding:10px}.nav svg{width:20px;height:20px}.nav .settings{margin-top:0}main{padding:22px 16px 84px}.top h1{font-size:23px}.toolbar{gap:10px}.workspace-controls{width:100%;justify-content:space-between}.workspace-controls select{min-width:0;max-width:55%;flex:1}.workspace-lane{flex-basis:calc(100vw - 48px);max-width:340px}.settings-sections{flex-wrap:nowrap;overflow-x:auto}.settings-sections button{white-space:nowrap}.panel{padding:18px}.workspace-card{padding:16px}.top p{display:block}.top a{font-size:12px;padding:8px}.search{min-width:0;flex-basis:100%}}
   `;
   document.head.append(css);
-  css.textContent += `.top{justify-content:flex-start}.top>div:first-child{margin-right:auto}#view-settings>.grid>.panel[data-settings-section=integrations]{grid-column:1/-1}@media(max-width:760px){.top{flex-wrap:wrap}.top>div:first-child{flex-basis:100%}}`;
+  css.textContent += `.top{justify-content:flex-start}.top>div:first-child{margin-right:auto}#profile-company-settings>.grid>.panel[data-settings-section=integrations]{grid-column:1/-1}@media(max-width:760px){.top{flex-wrap:wrap}.top>div:first-child{flex-basis:100%}}`;
   const paths = {tasks:'M9 5h10v15H5V5h4m0-2h6v4H9zM8 11h8M8 15h5',customers:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m8-7a4 4 0 0 1 0 8m5 9v-2a4 4 0 0 0-3-4',deals:'M3 4h18v16H3zM9 4v16M15 4v16',settings:'M4 7h16M4 17h16M8 4v6M16 14v6',profile:'M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10',hot_orders:'M13 3c1 6-6 7-6 12a5 5 0 0 0 10 0c0-3-1-4-2-5 0 3-2 3-2 3',approvals:'M5 12l4 4L19 6',finance:'M12 3v18M17 7H9a3 3 0 0 0 0 6h6a3 3 0 0 1 0 6H6'};
   paths.linear='M4 4h16v16H4zM8 8h3v3H8zM14 8h2M8 15h8';
   paths.integrations='M8 3v4m8-4v4M6 7h12v3a6 6 0 0 1-12 0zM12 16v5';
@@ -69,15 +69,15 @@
     }
   };
   // Keep canonical routes and their existing access/demand guards.
-  const settingsPages = ['settings', 'integrations', 'employees'];
+  const settingsPages = ['integrations', 'employees'];
   const mainTabs = document.createElement('div');
   mainTabs.className = 'settings-sections settings-main-tabs'; mainTabs.setAttribute('role', 'tablist');
   const settingsEntry = document.createElement('button');
-  settingsEntry.id='settingsFamilyNav'; settingsEntry.type='button'; settingsEntry.className='settings';
+  settingsEntry.id='settingsFamilyNav'; settingsEntry.type='button'; settingsEntry.className='settings'; settingsEntry.setAttribute('aria-hidden','true'); settingsEntry.tabIndex=-1;
   settingsEntry.innerHTML='<span aria-hidden="true">⚙</span><span class="app-nav-label"></span>';
   document.querySelector('.nav [data-view="settings"]')?.after(settingsEntry);
-  settingsEntry.onclick=()=>{const view=settingsPages.find(key=>{const node=document.querySelector('.nav [data-view="'+key+'"]');return node&&!node.hidden&&node.style.display!=='none';});if(view)window.tenantAppNavigate?.(view,true);};
-  const mainLabels = {ru:['Общие','Интеграции','Сотрудники'],az:['Ümumi','İnteqrasiyalar','Əməkdaşlar'],en:['General','Integrations','Employees']};
+  settingsEntry.onclick=()=>window.tenantOpenSettingsHub?.();
+  const mainLabels = {ru:['Интеграции','Сотрудники'],az:['İnteqrasiyalar','Əməkdaşlar'],en:['Integrations','Employees']};
   const settingsTitle = document.createElement('h1'); settingsTitle.className = 'settings-family-title';
   const familyHost = document.createElement('section'); familyHost.className = 'settings-family'; familyHost.hidden = true;
   familyHost.append(settingsTitle, mainTabs);
@@ -102,7 +102,7 @@
     settingsEntry.querySelector('.app-nav-label').textContent=settingsTitle.textContent;
     settingsEntry.classList.toggle('active',settingsPages.includes(active));
   }
-  css.textContent += '.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"]{display:none!important}#settingsFamilyNav[hidden]{display:none!important}.settings-family[hidden]{display:none!important}.settings-family-title{margin:0 0 14px}.settings-main-tabs{margin-bottom:20px}.settings-main-tabs button[hidden]{display:none!important}.settings-main-tabs button[aria-selected="true"]{border-bottom:2px solid var(--brand);font-weight:700}';
+  css.textContent += '.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"],#settingsFamilyNav{display:none!important}.settings-family[hidden]{display:none!important}.settings-family-title{margin:0 0 14px}.settings-main-tabs{margin-bottom:20px}.settings-main-tabs button[hidden]{display:none!important}.settings-main-tabs button[aria-selected="true"]{border-bottom:2px solid var(--brand);font-weight:700}#profile-account-settings>#chakra-settings-root{width:100%;min-width:0;max-width:100%}#profile-account-settings>#chakra-settings-root>*{min-width:0;max-width:100%}';
   document.addEventListener('tenant-view',showSettingsFamily);
   document.addEventListener('tenant-profile',()=>queueMicrotask(showSettingsFamily));
   document.addEventListener('tenant-language',showSettingsFamily);
@@ -110,32 +110,65 @@
   const familyObserver=new MutationObserver(showSettingsFamily);
   document.querySelectorAll('.nav [data-view="employees"],.nav [data-view="integrations"],.nav [data-view="settings"]').forEach(node=>familyObserver.observe(node,{attributes:true,attributeFilter:['hidden','style']}));
   showSettingsFamily();
-  const settings = $('view-settings');
+  const legacySettings = $('view-settings');
+  const profileView = $('view-profile');
+  const integrationView = $('view-integrations');
+  const employeeView = $('view-employees');
+  const profileAccount = document.createElement('section');
+  profileAccount.id = 'profile-account-settings';
+  profileAccount.className = 'profile-account-settings';
+  const settings = document.createElement('section');
+  settings.id = 'profile-company-settings';
+  settings.className = 'profile-company-settings';
+  const integrationLegacy = document.createElement('div');
+  integrationLegacy.id = 'legacyIntegrationSettings';
+  integrationLegacy.className = 'legacy-settings-panels';
+  const employeeLegacy = document.createElement('div');
+  employeeLegacy.id = 'legacyEmployeeSettings';
+  employeeLegacy.className = 'legacy-settings-panels';
+  profileView?.querySelector(':scope > .grid')?.after(profileAccount, settings);
+  $('chakra-integrations-root')?.after(integrationLegacy);
+  $('employeesManagementHost')?.after(employeeLegacy);
+  const oldGrid = legacySettings?.querySelector(':scope > .grid');
+  for (const node of [...(legacySettings?.children || [])]) {
+    if (node.matches('.top')) continue;
+    if (node === oldGrid) {
+      for (const panel of [...oldGrid.children]) {
+        if (panel.querySelector('#integrationInfo,#connectEntitlement')) integrationLegacy.append(panel);
+        else if (panel.querySelector('#inviteName,#accessRequests,#members')) employeeLegacy.append(panel);
+        else settings.append(panel);
+      }
+      continue;
+    }
+    if (node.id === 'chakra-settings-root') profileAccount.append(node);
+    else settings.append(node);
+  }
+  integrationLegacy.hidden = !integrationLegacy.childElementCount;
+  employeeLegacy.hidden = !employeeLegacy.childElementCount;
   const notificationSettingsRoot = $('chakra-notification-settings-root') || document.createElement('div');
   notificationSettingsRoot.id = 'chakra-notification-settings-root';
-  if (!notificationSettingsRoot.parentElement) $('chakra-settings-root')?.before(notificationSettingsRoot);
+  if (!notificationSettingsRoot.parentElement) settings.prepend(notificationSettingsRoot);
+  else if (!settings.contains(notificationSettingsRoot)) settings.prepend(notificationSettingsRoot);
   const settingsCopy = {
     az:{notifications:['Bildirişlər','Hadisələr üçün kabinet və Web Push bildirişlərini seçin.'],employees:['Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],integrations:['İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],companies:['Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],workflow:['İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],advanced:['Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.'],title:'Geniş ayarlar',description:'Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.'},
     ru:{notifications:['Уведомления','Выберите уведомления в кабинете и Web Push для событий.'],employees:['Сотрудники','Приглашения, запросы доступа и команда.'],integrations:['Интеграции','Управляйте Connect WhatsApp и другими подключениями компании.'],companies:['Компании','Управляйте компаниями и доступом.'],workflow:['Правила работы','Воронки, этапы, права сотрудников и подтверждения.'],advanced:['Диагностика','Состояние системы и технические проверки.'],title:'Дополнительные настройки',description:'При необходимости настройте рабочие процессы и технические параметры компании.'},
     en:{notifications:['Notifications','Choose in-app and Web Push notifications for events.'],employees:['Employees','Invitations, access requests and your team.'],integrations:['Integrations','Manage Connect WhatsApp channels and other company connections.'],companies:['Companies','Manage company names and access.'],workflow:['Work rules','Pipelines, stages, employee permissions and approvals.'],advanced:['Diagnostics','System status and technical checks.'],title:'Advanced settings',description:'Adjust company workflows and technical settings when needed.'}
   };
-  const groups = ['notifications','employees','integrations','companies','workflow','advanced'];
-  const pageCopy={ru:['Настройки','Управляйте командой, правами и рабочими процессами компании.'],az:['Tənzimləmələr','Komandanı, hüquqları və şirkətin iş qaydalarını idarə edin.'],en:['Settings','Manage your team, access rights and company workflows.']};
+  const groups = ['notifications','companies','workflow','advanced'];
   const settingsLanguage=()=>settingsCopy[window.tenantI18n?.language||document.documentElement.lang]||settingsCopy.az;
-  let section = 'employees';
+  let section = 'notifications';
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
   sections.innerHTML = groups.map(key => `<button type="button" role="tab" data-settings-tab="${key}"></button>`).join('');
   const help = document.createElement('p'); help.className='settings-help';
   const advancedTitle = document.createElement('div'); advancedTitle.className = 'advanced-settings-title';
   advancedTitle.innerHTML = '<h2></h2><p></p>';
-  const settingsAnchor = settings.querySelector(':scope > .top');
-  settingsAnchor.after(advancedTitle,sections,help);
+  settings.prepend(advancedTitle,sections,help);
   function classify(panel) {
-    // The member manager is the only employee editor.  Chakra keeps personal
-    // account, notification and session preferences under Diagnostics.
+    // Personal account fields live directly in Profile; these tabs contain the
+    // remaining personal and company settings that used to sit under General.
     if (panel.id === 'staffManagement') return 'employees';
     if (panel.id === 'chakra-notification-settings-root') return 'notifications';
-    if (panel.id === 'chakra-settings-root') return 'advanced';
+    if (panel.id === 'chakra-settings-root') return 'profile';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
     if (['companyManagement','summaryLanguageSettings'].includes(panel.id)) return 'companies';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
@@ -145,37 +178,55 @@
   }
   function showSettings() {
     const languageCopy=settingsLanguage();
-    const page=pageCopy[window.tenantI18n?.language||document.documentElement.lang]||pageCopy.az;
-    const heading=settings.querySelector(':scope > .top');
-    if(heading?.querySelector('h1'))heading.querySelector('h1').textContent=page[0];
-    if(heading?.querySelector('p'))heading.querySelector('p').textContent=page[1];
     sections.querySelectorAll('[data-settings-tab]').forEach(button=>{button.textContent=languageCopy[button.dataset.settingsTab][0];});
     advancedTitle.querySelector('h2').textContent=languageCopy.title;advancedTitle.querySelector('p').textContent=languageCopy.description;
     const panels = [...settings.querySelectorAll(':scope > #chakra-notification-settings-root,:scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const staffDenied=panel=>panel.id==='staffManagement'&&panel.dataset.staffAllowed==='false';
-    const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration'&&!staffDenied(panel));
+    const canManageCompanySettings = window.tenantCanAccessCompanySettings?.() === true;
+    const settingsPanels = panels.filter(panel => {
+      const category = classify(panel);
+      const companyOnly = ['companies','workflow','advanced'].includes(category);
+      return category !== 'external-integration' && !staffDenied(panel) && (!companyOnly || canManageCompanySettings);
+    });
     const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
     if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available;
-    panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = staffDenied(panel) || panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
+    panels.forEach(panel => {
+      panel.dataset.settingsSection = classify(panel);
+      const companyOnly = ['companies','workflow','advanced'].includes(panel.dataset.settingsSection);
+      panel.hidden = staffDenied(panel) || panel.dataset.settingsSection === 'external-integration' ||
+        (companyOnly && !canManageCompanySettings) ||
+        (panel.dataset.settingsSection !== 'profile' && panel.dataset.settingsSection !== section);
+    });
     sections.querySelectorAll('button').forEach(button => {
       button.hidden = !settingsPanels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
       button.setAttribute('aria-selected',String(button.dataset.settingsTab === section));
     });
     help.textContent = languageCopy[section]?.[1] || '';
-    advancedTitle.hidden = !panels.length; sections.hidden = !panels.length; help.hidden = !panels.length;
+    advancedTitle.hidden = !settingsPanels.length; sections.hidden = !settingsPanels.length; help.hidden = !settingsPanels.length;
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
+  window.tenantOpenSettingsHub = () => {
+    const view = settingsPages.find(key => {
+      const node = document.querySelector('.nav [data-view="' + key + '"]');
+      return node && !node.hidden && node.style.display !== 'none';
+    });
+    return view ? window.tenantAppNavigate?.(view, true) === true : false;
+  };
   window.tenantOpenSettingsSection = target => {
-    if(target==='employees'&&document.getElementById('view-employees')){const entry=document.getElementById('companyEmployeesNav');if(entry)entry.click();return;}
-    if (['integrations','ai'].includes(target)) {
-      document.querySelector('.nav [data-view="integrations"]')?.click();
-      return;
+    if (target === 'settings' || target === 'integrations' || target === 'ai' || target === 'employees') {
+      if (target === 'settings') return window.tenantOpenSettingsHub?.();
+      const view = target === 'ai' ? 'integrations' : target;
+      return window.tenantAppNavigate?.(view, true) === true;
     }
-    const view = document.querySelector('.nav [data-view="settings"]');
-    if (view && !view.hidden) view.click();
-    if (groups.includes(target)) section = target;
-    showSettings();
-    requestAnimationFrame(() => sections.scrollIntoView({behavior:'smooth',block:'start'}));
+    if (groups.includes(target)) {
+      if (window.tenantCanAccessCompanySettings?.() !== true && ['companies','workflow','advanced'].includes(target)) return false;
+      section = target;
+      window.tenantAppNavigate?.('profile', true);
+      showSettings();
+      requestAnimationFrame(() => sections.scrollIntoView({behavior:'smooth',block:'start'}));
+      return true;
+    }
+    return false;
   };
   window.tenantOpenChatAISettings = () => {
     document.querySelector('.nav [data-view="integrations"]')?.click();
@@ -199,9 +250,11 @@
     setTimeout(open,0);
   };
   const observer = new MutationObserver(showSettings);
-  observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
+  observer.observe(settings,{childList:true});
+  const profileSettingsGrid=settings.querySelector('.grid');
+  if(profileSettingsGrid)observer.observe(profileSettingsGrid,{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
-  document.addEventListener('tenant-staff-management-ready', () => {if(document.getElementById('staffManagement')?.closest('#view-settings')){section='employees';showSettings();}});
+  document.addEventListener('tenant-staff-management-ready', showSettings);
   document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';

@@ -16,6 +16,8 @@ React roots in `ui/src/main.jsx` are already cached by host; root remounting was
 
 Main was reconciled with `c90c4aa0`, including PR #665 (deal source selection/compact sync status) and #656 (task visibility). The new source selection is preserved. Scoped deal clearing uses the existing renderer; the parallel branch referenced a nonexistent optional `clear()` method.
 
+Release reconciliation includes main `6e7f3e48` (PR #667/#668/#669): Profile settings, draggable task/deal boards and the common deal toolbar remain intact. Native and Kommo board authorization listeners now distinguish repeated same-profile checks from changed permissions/identity. New board cards remain mounted during same-profile checks and single-record refresh; invalid authorization still clears them. The built-browser suite exercises both boards and the relocated column editor.
+
 ## Browser evidence
 
 Synthetic HTTP boundaries use shipped application controllers and the **built** React bundle. No provider generation, client messages or production writes occurred. Owner and limited-role fixtures: 390px and 1440px. Before assets are read from `13b9a082`, not the working tree; after assets are the branch build.
@@ -28,6 +30,8 @@ Synthetic HTTP boundaries use shipped application controllers and the **built** 
 - 40 navigation cycles: DOM count remains 1220 on the baseline and 1228 after the parallel deal-source UI merge (constant within each run). GC heap before/20/40 cycles is about 9.37–9.44 / 9.86–9.90 / 9.99–10.03 MB on baseline and 9.60–9.67 / 9.96–10.00 / 10.05–10.10 MB after. The second 20 cycles add approximately 0.10 MB after; synthetic request recording and warm-up are included. This short run does **not** prove absence of a long-running memory leak.
 
 Playwright traces, refresh screenshots and raw metrics: `tests/artifacts/stable-refresh/{before,after}/`. CI uploads after traces as `stable-background-refresh-traces`. Artifacts contain synthetic data only and are not committed.
+
+After adding the parallel native React board, the release-integration run has 1241 DOM nodes initially and 1264 after the first board visit, staying at 1264 after 20 and 40 transitions. Heap is approximately 9.79–9.83 / 10.31–10.34 / 10.44–10.47 MB. This reflects lazy board mounting, with about 0.13 MB added during the second 20 cycles; the earlier measurements above belong to the pre-board build.
 
 ## Checks
 

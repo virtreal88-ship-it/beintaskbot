@@ -334,3 +334,57 @@ def set_deal_company_link(tenant_id, deal_id, company_id, *, unlink=False, actor
                 (None if unlink else company, tenant_id, deal))
         conn.commit()
     return {'id': deal, 'company_id': company, 'linked': not unlink}
+
+
+def move_deal_stage(tenant_id, deal_id, stage_id, *, expected_updated_at, actor_id):
+    """Narrow user stage edit, with row-level update authority and CAS.
+
+    Never accepts a pipeline/relationship or replays a stale full-record form.
+    Existing stage-entry automation and scoped scalar export remain authoritative.
+    """
+    from datetime import datetime, timezone
+    from tenant_crm_writer_fence import lock_card
+    from tenant_scoped_access import scoped_access_enabled
+    ident = _uuid(deal_id, 'deal id')
+    stage = str(stage_id or '').strip()
+    if not stage or len(stage) > 120 or not actor_id:
+        raise ValueError('invalid stage move')
+    try:
+        expected = datetime.fromisoformat(str(expected_updated_at).replace('Z', '+00:00'))
+        if expected.tzinfo is None:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ValueError('invalid deal revision') from None
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            if scoped_access_enabled():
+                lock_card(cur, tenant_id, 'deal', ident)
+            lock_admission(cur, tenant_id, actor_id)
+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'update')
+            previous = locked_resource(cur, profile, 'deals', 'update',
+                'saas_crm_native_deals', tenant_id, ident)
+            if not previous:
+                return None
+            if previous['updated_at'].astimezone(timezone.utc) != expected.astimezone(timezone.utc):
+                raise CRMAccessError('deal_changed', 409)
+            cur.execute('''SELECT 1 FROM saas_tenant_pipeline_stages s JOIN saas_tenant_pipelines p
+                USING(tenant_id,pipeline_id) WHERE s.tenant_id=%s::uuid AND s.pipeline_id=%s
+                AND s.stage_id=%s AND p.active=TRUE''', (tenant_id, previous['pipeline_id'], stage))
+            if not cur.fetchone():
+                raise ValueError('stage outside deal pipeline')
+            if str(previous['stage_id']) == stage:
+                return {key: previous[key] for key in ('id', 'title', 'pipeline_id', 'stage_id', 'updated_at')}
+            cur.execute('''UPDATE saas_crm_native_deals SET stage_id=%s,updated_at=clock_timestamp()
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
+                RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,
+                conversation_id,description,created_at,updated_at''', (stage, tenant_id, ident))
+            row = cur.fetchone()
+            from tenant_crm_native_tasks import maybe_create_stage_task
+            maybe_create_stage_task(cur, tenant_id, row,
+                event_key=f"stage-entered:{ident}:{previous['stage_id']}:{stage}:{row['updated_at'].isoformat()}")
+            sync = queue_edit(cur, tenant_id, actor_id, profile, 'deal', row, previous)
+            if sync is not None:
+                row = {**row, 'sync': sync}
+        conn.commit()
+    return row

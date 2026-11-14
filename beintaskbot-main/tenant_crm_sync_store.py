@@ -243,6 +243,9 @@ class SyncPageStore:
                         THEN (EXCLUDED.raw->>'updated_at')::numeric END,0) >=
                         COALESCE(CASE WHEN saas_crm_tasks.raw->>'updated_at' ~ '^[0-9]+$'
                         THEN (saas_crm_tasks.raw->>'updated_at')::numeric END,0)''', rows)
+            if not deleted:
+                from tenant_kommo_board_provenance import record as record_board_provenance
+                record_board_provenance(cur,tenant,resource,snapshots,observation)
             cur.execute('''UPDATE saas_crm_sync_jobs SET status=%s,next_page=next_page+1,pages_done=pages_done+1,last_record_id=%s,
                 records_saved=records_saved+%s,attempts=0,next_attempt_at=now(),updated_at=now(),
                 finished_at=CASE WHEN %s THEN now() ELSE NULL END

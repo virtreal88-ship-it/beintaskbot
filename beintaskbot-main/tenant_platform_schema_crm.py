@@ -9,6 +9,8 @@ from tenant_crm_sync_history_schema import migrate_history_indexes
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
 
 def migrate_crm_schema(cur) -> None:
+    from tenant_kommo_board_provenance import migrate as migrate_board_provenance
+    migrate_board_provenance(cur)
     migrate_crm_identity_schema(cur)
     migrate_native_contacts(cur)
     migrate_relation_schema(cur)

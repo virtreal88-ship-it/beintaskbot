@@ -23,7 +23,8 @@ class TenantChakraUiTests(unittest.TestCase):
         self.assertIn('function NotificationPreferencesHub()', source)
         self.assertIn('api("/api/platform/notification-preferences")', source)
         self.assertIn('clean("#chakra-notification-settings-root")', source)
-        self.assertIn('["settings", "chakra-notification-settings-root"', source)
+        self.assertIn('["profile", "chakra-notification-settings-root"', source)
+        self.assertIn('["profile", "chakra-settings-root"', source)
         self.assertIn('host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root"', source)
 
     def test_market_is_separate_navigation_surface_with_expected_catalog(self):

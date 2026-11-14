@@ -80,6 +80,10 @@ class CRMRepository:
                             'ORDER BY last_message_at DESC NULLS LAST, source_updated_at DESC NULLS LAST, synced_at DESC '
                             'LIMIT %s OFFSET %s', [*values, safe_limit, safe_offset])
                 rows = cur.fetchall()
+                from tenant_kommo_board_provenance import revisions
+                proof = revisions(cur,tenant_id,'leads',[row['kommo_lead_id'] for row in rows],
+                    expected_raw={str(row['kommo_lead_id']):row.get('raw') or {} for row in rows})
+                rows = [{**row,'source_revision':proof.get(str(row['kommo_lead_id']))} for row in rows]
         return [self.payload(row) for row in rows], total
 
     def _one(self, sql: str, parameters: tuple) -> dict | None:
