@@ -210,3 +210,7 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
 body[data-app-ui="kwid"] .nav [data-report-link]{box-sizing:border-box;text-decoration:none}
 #aiReliability{overflow-wrap:anywhere;margin:16px 0}
 #aiAgentsOverview .ai-overview-actions{flex-wrap:wrap}
+
+/* Preserve the mounted Kommo controller and unsaved inputs across these tabs. */
+[data-kommo-pane="settings"] #tkCrmSyncHost,[data-kommo-pane="connection"] #tkCrmSyncHost{display:none!important}
+[data-kommo-pane="sync"] #tenantKommoPanel> :not(#tkBody),[data-kommo-pane="sync"] #tkBody> :not(#tkCrmSyncHost){display:none!important}

@@ -1300,10 +1300,11 @@ function IntegrationMarketplace() {
   useEffect(() => {
     load();
   }, []);
+  const managementTab = tab === "sync" ? "settings" : tab;
   useEffect(() => {
     if (
       !selected ||
-      (tab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
+      (managementTab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
       (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
     )
       return;
@@ -1325,7 +1326,7 @@ function IntegrationMarketplace() {
         }),
       );
     };
-  }, [selected?.id, tab, owner]);
+  }, [selected?.id, managementTab, owner]);
 
   const localeCopy = {
     ru: {
@@ -1676,10 +1677,13 @@ function IntegrationMarketplace() {
                         >
                           {tx("settings")}
                         </Button>
+                        {selected.id === "kommo" && <Button role="tab" aria-selected={tab === "sync"} variant="ghost" onClick={() => setTab("sync")}>
+                          {({ru:"Синхронизация",az:"Sinxronizasiya",en:"Synchronization"})[window.tenantI18n?.language] || "Sinxronizasiya"}
+                        </Button>}
                       </Flex>
                     </Box>
                   )}
-                  <Dialog.Body p={{ base: "5", md: "6" }} overflowY="auto">
+                  <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
                     {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box><Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
@@ -1870,7 +1874,7 @@ function IntegrationMarketplace() {
                         )}
                       </Stack>
                     )}
-                    {tab === "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id) && (
+                    {managementTab === "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id) && (
                       <>
                         {selected.id === "connect" ? (
                           owner ? (
@@ -1924,6 +1928,7 @@ function IntegrationMarketplace() {
                           </Stack>
                         ) : selected.id === "kommo" ? (
                           <Stack gap="3">
+                            <Box hidden={tab === "sync"}>
                             {selected.features.map((feature) => (
                               <Flex
                                 key={feature}
@@ -1951,6 +1956,7 @@ function IntegrationMarketplace() {
                                 Vərəq və mərhələləri seç
                               </Button>
                             )}
+                            </Box>
                             {profile?.member?.role === "owner" ? (
                               <Box
                                 id="integrationSettingsHost"

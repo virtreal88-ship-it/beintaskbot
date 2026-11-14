@@ -17,6 +17,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_members*'
       - 'beintaskbot-main/tests/test_staff_profile_lifecycle.cjs'
       - 'beintaskbot-main/tests/test_tenant_workspace.cjs'
+      - 'beintaskbot-main/tests/test_settings_family*.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
   workflow_dispatch:
 permissions:
@@ -80,6 +81,8 @@ jobs:
           node tests/test_tenant_members_invite_ui.cjs
           node tests/test_staff_profile_lifecycle.cjs
           node tests/test_tenant_workspace.cjs
+          node tests/test_settings_family_ui.cjs
+          node tests/test_settings_family_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_tenant_crm_native_workflow_ui.cjs
           node tests/test_app_loading_performance.cjs
