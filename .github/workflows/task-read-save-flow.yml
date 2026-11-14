@@ -100,6 +100,8 @@ jobs:
           node tests/test_kommo_task_move_flow.cjs
           node tests/test_task_move_ui.cjs
           node tests/test_native_deal_board_ui.cjs
+          node tests/test_kommo_board_columns.mjs
+          node tests/test_deal_stage_style_browser.cjs
           node tests/test_task_source_picker_ui.cjs
           node tests/test_task_source_picker_browser.cjs
           node tests/test_deal_source_picker_ui.cjs
