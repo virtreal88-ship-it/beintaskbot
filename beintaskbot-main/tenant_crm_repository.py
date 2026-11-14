@@ -77,7 +77,7 @@ class CRMRepository:
                 cur.execute(f'SELECT count(*) AS total FROM saas_crm_deals WHERE {where}', values)
                 total = int((cur.fetchone() or {}).get('total') or 0)
                 cur.execute(f'SELECT * FROM saas_crm_deals WHERE {where} '
-                            'ORDER BY last_message_at DESC NULLS LAST, source_updated_at DESC NULLS LAST, synced_at DESC '
+                            'ORDER BY last_message_at DESC NULLS LAST, source_updated_at DESC NULLS LAST, synced_at DESC, kommo_lead_id DESC '
                             'LIMIT %s OFFSET %s', [*values, safe_limit, safe_offset])
                 rows = cur.fetchall()
                 from tenant_kommo_board_provenance import revisions

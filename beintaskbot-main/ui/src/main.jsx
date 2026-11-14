@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import "./app-shell.js";
 import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
-import {DealStageBadge} from "./deal-stage-badge.jsx";
+import {DealStageBadge, DealStageSelect} from "./deal-stage-badge.jsx";
 import { AIDashboard } from "./ai-dashboard.jsx";
 import {
   Badge,
@@ -461,16 +461,18 @@ function TasksTable({ rows = [], settings = {} }) {
       {rows.map(task => {
         const id = String(task.id || task.kommo_task_id), status = task.status || (task.completed ? 'completed' : 'open');
         const native = settings.source === 'native';
+        const clientName = task.deal_title || task.contact_name || '';
+        const clientText = [clientName, task.phone && !clientName.includes(task.phone) ? task.phone : ''].filter(Boolean).join(' · ');
         return <Flex key={id} p="4" gap="3" justify="space-between" wrap="wrap" align="start">
           <Box flex="1" minW="180px">
             {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
-            {[task.contact_name, task.phone].some(Boolean) && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
+            {clientText && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
               <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" color="brand.600" textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
-                <Text fontSize="sm" overflowWrap="anywhere">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>
-              </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>)}
-            <Text fontSize="sm" color="app.muted">{task.deal_title || ''}{task.responsible_name ? ' · ' + task.responsible_name : ''}</Text>
+                <Text fontSize="sm" overflowWrap="anywhere">{clientText}</Text>
+              </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{clientText}</Text>)}
+            {task.responsible_name && <Text fontSize="sm" color="app.muted">{task.responsible_name}</Text>}
             <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
           </Box>
           <Flex gap="2" wrap="wrap" align="center">
@@ -673,9 +675,9 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
                 onClick={() => onOpen?.(deal.kommo_lead_id)}
               >
                 <Card.Body p="4">
-                  <DealStageBadge name={stage} appearance={appearance}/>
-                  <Text fontWeight="600" mt="2">{deal.contact_name || deal.name}</Text>
-                  {!!moveContext&&targets(deal).length>0&&<Box onClick={event=>event.stopPropagation()}><select aria-label={document.documentElement.lang==='ru'?'Изменить этап':document.documentElement.lang==='en'?'Change stage':'Mərhələni dəyiş'} disabled={!!pending||!canIdentifyKommoDeal(deal)} title={!canIdentifyKommoDeal(deal)?(document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'):undefined} value={deal.status_id} onChange={event=>move(deal,event.target.value)} style={{width:'100%',minHeight:44}}>{catalog.filter(p=>String(p.pipeline_id)===String(deal.pipeline_id)).flatMap(p=>(p.stages||[]).filter(t=>String(t.stage_id)===String(deal.status_id)||targets(deal).some(a=>String(a.stage_id)===String(t.stage_id))).map(t=><option key={t.stage_id} value={t.stage_id}>{t.name}</option>))}</select>{!canIdentifyKommoDeal(deal)&&<Text fontSize="xs" color="app.muted">{document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'}</Text>}<button type="button" disabled={!movable(deal)} aria-label={document.documentElement.lang==='ru'?'Перенести сделку':document.documentElement.lang==='en'?'Move deal':'Sövdələşməni daşı'} style={{touchAction:'none',minHeight:44}} onPointerDown={event=>{if(event.pointerType==='mouse'||!movable(deal))return;drag.current=deal;event.currentTarget.setPointerCapture(event.pointerId);}} onPointerCancel={()=>{drag.current=null;}} onPointerUp={event=>{const row=drag.current;drag.current=null;if(!row||event.pointerType==='mouse')return;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-kommo-stage-key]')?.dataset.kommoStageKey;if(target&&target.startsWith(String(row.pipeline_id)+':'))move(row,target.slice(target.indexOf(':')+1));}}>↔</button></Box>}
+                  <Text fontWeight="600">{deal.contact_name || deal.name}</Text>
+                  {!(moveContext&&targets(deal).length>0)&&<DealStageBadge name={stage} appearance={appearance}/>}
+                  {!!moveContext&&targets(deal).length>0&&<Box onClick={event=>event.stopPropagation()}><DealStageSelect appearance={appearance} aria-label={document.documentElement.lang==='ru'?'Изменить этап':document.documentElement.lang==='en'?'Change stage':'Mərhələni dəyiş'} disabled={!!pending||!canIdentifyKommoDeal(deal)} title={!canIdentifyKommoDeal(deal)?(document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'):undefined} value={deal.status_id} onChange={event=>move(deal,event.target.value)} >{catalog.filter(p=>String(p.pipeline_id)===String(deal.pipeline_id)).flatMap(p=>(p.stages||[]).filter(t=>String(t.stage_id)===String(deal.status_id)||targets(deal).some(a=>String(a.stage_id)===String(t.stage_id))).map(t=><option key={t.stage_id} value={t.stage_id}>{t.name}</option>))}</DealStageSelect>{!canIdentifyKommoDeal(deal)&&<Text fontSize="xs" color="app.muted">{document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'}</Text>}<button type="button" disabled={!movable(deal)} aria-label={document.documentElement.lang==='ru'?'Перенести сделку':document.documentElement.lang==='en'?'Move deal':'Sövdələşməni daşı'} style={{touchAction:'none',minHeight:44}} onPointerDown={event=>{if(event.pointerType==='mouse'||!movable(deal))return;drag.current=deal;event.currentTarget.setPointerCapture(event.pointerId);}} onPointerCancel={()=>{drag.current=null;}} onPointerUp={event=>{const row=drag.current;drag.current=null;if(!row||event.pointerType==='mouse')return;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-kommo-stage-key]')?.dataset.kommoStageKey;if(target&&target.startsWith(String(row.pipeline_id)+':'))move(row,target.slice(target.indexOf(':')+1));}}>↔</button></Box>}
                   <Text fontSize="sm" color="app.muted">
                     {deal.phone || "Telefon yoxdur"}
                   </Text>

@@ -46,11 +46,13 @@ jobs:
           node tests/test_kommo_board_columns.mjs
           node tests/test_kommo_board_ui.cjs
           node tests/test_tenant_app_syntax.cjs
+          node tests/test_deal_pagination_ui.cjs
           node tests/test_tenant_dialog_avatar_queue.cjs
           node tests/test_tenant_operator_auto_refresh_ui.cjs
           node tests/test_case_attachment_download_ui.cjs
           node tests/test_support_cases_modal_ui.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
+          node tests/test_analytics_nav_label.cjs
       - name: Check dialog SQL and authorization regressions
         run: >-
           python -m pytest -q --tb=short

@@ -106,6 +106,7 @@ jobs:
           node tests/test_task_source_picker_browser.cjs
           node tests/test_deal_source_picker_ui.cjs
           node tests/test_deal_source_picker_browser.cjs
+          node tests/test_deal_pagination_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_native_task_assignee_browser.cjs
           node tests/test_tenant_tasks_ui.cjs
