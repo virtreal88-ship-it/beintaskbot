@@ -179,7 +179,7 @@
       const id=key(message),old=id&&known.get(id);if(!old)continue;
       if(old.provider_message_id&&message.provider_message_id&&old.provider_message_id!==message.provider_message_id)continue;
       const before=old.delivery_state,after=message.delivery_state;
-      if((['delivered','read'].includes(before)&&(rank[after]||0)<rank[before])||(before==='sent'&&['pending','retrying','unknown'].includes(after))||(before==='failed'&&['pending','retrying','sent'].includes(after)))message.delivery_state=before;
+      if((['delivered','read'].includes(before)&&(rank[after]||0)<rank[before])||(before==='sent'&&['pending','retrying','unknown',undefined].includes(after))||(before==='failed'&&['pending','retrying','sent',undefined].includes(after)))message.delivery_state=before;
     }
   }
   function deliveryMarkup(message){
@@ -445,6 +445,7 @@
   }
   function updateDeliveryEvidence(latest,route){
     const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route))return;
+    retainDeliveryEvidence(currentPage,latest);
     const top=chat.scrollTop;
     for(const fresh of latest.messages||[]){
       if(fresh.source!=='connect'||fresh.direction!=='outgoing')continue;
