@@ -78,13 +78,17 @@ def test_explicit_all_keeps_legacy_pipeline_and_tenant_boundary(monkeypatch):
     assert not policy.can_access_deal({**c.get_deal.return_value,'pipeline_id':99})
 
 
-def test_sparse_read_restriction_closes_board_and_ai_legacy_projection(monkeypatch):
+@pytest.mark.parametrize('scope',['none','self','department'])
+def test_sparse_native_read_keeps_assigned_kommo_board_but_closes_ai_legacy_projection(monkeypatch,scope):
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
-    p=profile();p['workflow']['policies']['members']['20']['ai_enabled']=True
+    p=profile(scope=scope);p['workflow']['policies']['members']['20']['ai_enabled']=True
     policy=TenantPolicy(p)
-    assert policy.deal_board()==[]
+    assert policy.deal_board()==[{'pipeline_id':10,'name':'','stages':[{'stage_id':100,'name':''}]}]
+    assert not policy.can_read_legacy_crm()
     assert not policy.can_use_chat_ai()
     assert policy.can_access_kommo_deal({'tenant_id':'company-a','pipeline_id':10,'status_id':100})
+    p['workflow']['policies']['members']['20']['pipeline_ids']=[]
+    assert TenantPolicy(p).deal_board()==[]
 
 
 def test_legacy_chat_fallback_cannot_use_customers_grant(monkeypatch):
