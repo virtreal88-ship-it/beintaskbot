@@ -37,12 +37,15 @@
       ai.disabled=!Array.from(menu.querySelectorAll('button')).some(button=>!button.disabled);
       if(ai.disabled)close(false);
     };
+    const panel=document.getElementById('operatorCopilot');let panelWasOpen=panel&&!panel.hidden;
     const observer=new MutationObserver(records=>{
+      if(panel){const open=!panel.hidden;if(panelWasOpen&&!open)ai.focus({preventScroll:true});panelWasOpen=open;}
       if(records.some(r=>r.target===send||r.target===input||menu.contains(r.target)&&r.attributeName==='disabled'||r.target.classList?.contains('operator-voice-mic')||r.type==='childList'&&r.target===actions))refresh();
     });
     active={actions,input,send,primary,menu,ai,observer,refresh};
     observer.observe(actions,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','hidden','class']});
     observer.observe(input,{attributes:true,attributeFilter:['disabled']});
+    if(panel)observer.observe(panel,{attributes:true,attributeFilter:['hidden']});
     input.addEventListener('input',refresh);
     primary.onclick=()=>{refresh();if(primary.disabled)return;const target=primary.dataset.action==='send'?send:actions.querySelector('.operator-voice-mic');target?.click();refresh();};
     ai.onclick=()=>{if(ai.disabled)return;const opening=menu.hidden;menu.hidden=!opening;ai.setAttribute('aria-expanded',String(opening));if(opening)menu.querySelector('button:not(:disabled)')?.focus();};
@@ -53,6 +56,6 @@
   document.addEventListener('tenant-chat-close',clear);
   document.addEventListener('tenant-auth-invalid',clear);
   document.addEventListener('pointerdown',event=>{if(active&&!active.menu.contains(event.target)&&!active.ai.contains(event.target))close(false);});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active&&!active.menu.hidden){event.preventDefault();close(true);}});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active&&!active.menu.hidden){event.preventDefault();event.stopImmediatePropagation();close(true);}},true);
   attach();
 })();

@@ -37,7 +37,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     const rect=await primary.boundingBox();assert(rect.width>=44&&rect.height>=44);
     await ai.click();const menu=page.locator('#operatorAIActionChoices');assert.equal(await menu.isVisible(),true);assert.equal(await menu.locator('button').count(),3);
     const box=await menu.boundingBox();assert(box.x>=0&&box.x+box.width<=width+1);await page.keyboard.press('Escape');assert.equal(await menu.isVisible(),false);
-    await ai.click();await menu.locator('#operatorCopilotToggle').click();assert.equal(await menu.isVisible(),false);assert.equal(await page.locator('#operatorCopilot').isVisible(),true);await page.locator('#operatorCopilotClose').click();
+    await ai.click();await menu.locator('#operatorCopilotToggle').click();assert.equal(await menu.isVisible(),false);assert.equal(await page.locator('#operatorCopilot').isVisible(),true);await page.locator('#operatorCopilotClose').click();await page.waitForFunction(()=>document.activeElement?.id==='operatorAIActionMenu');
     assert.equal(await input.inputValue(),'Draft');await input.fill('');assert.equal(await primary.getAttribute('data-action'),'voice');
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.deepEqual(errors,[]);assert.equal(calls.some(call=>/chat\/send/.test(call.path)&&call.method==='POST'),false);
