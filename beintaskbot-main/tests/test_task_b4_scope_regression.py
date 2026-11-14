@@ -21,24 +21,25 @@ def test_search_keeps_tenant_marker_pipeline_and_deleted_boundaries(task_flow,ne
             (A,81005,104,needle+'\n'+marker)):
             conn.execute('''INSERT INTO saas_crm_tasks(tenant_id,kommo_task_id,kommo_lead_id,text,responsible_id)
                 VALUES(%s::uuid,%s,%s,%s,999)''',(tenant,ident,lead,text))
-    for tenant,actor,expected in ((A,11,{'81001','81002','81003'}),(A,82,{'81001'}),(A,83,{'81001'}),(B,22,{'81004'})):
+    for tenant,actor,expected in ((A,11,{'81001','81002','81003'}),(A,86,{'81001','81002','81003'}),(A,82,{'81001'}),(A,83,{'81001'}),(B,22,{'81004'})):
         result=read({'tenant_id':tenant,'telegram_id':actor},source='kommo',search=needle)
         assert {row['id'] for row in result['tasks']}==expected
         assert result['shown']==len(expected) and result['has_more'] is False
-    for actor in (85,86):
+    for actor in (85,):
         with pytest.raises(TaskFlowError) as error:read({'tenant_id':A,'telegram_id':actor},source='kommo',search=needle)
         assert error.value.status==403
     assert f['provider'].calls==[]
 
 
-def test_native_scopes_do_not_open_external_search(task_flow,monkeypatch):
+def test_native_scopes_do_not_widen_external_search(task_flow,monkeypatch):
     f=task_flow;monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
-    scopes={'81':{'access_scopes':{'tasks':{'create':'all','view':'all','update':'all','delete':'all'}}}}
+    scopes={'83':{'access_scopes':{'tasks':{'create':'all','view':'all','update':'all','delete':'all'}}}}
     with f['factory']() as conn:
         conn.execute("UPDATE saas_tenant_workflow_policies SET value=value||%s::jsonb WHERE tenant_id=%s::uuid AND policy_key='members'",(json.dumps(scopes),A))
-    with pytest.raises(TaskFlowError) as error:read({'tenant_id':A,'telegram_id':81},source='kommo',search='%')
-    assert error.value.status==403
-    native=read({'tenant_id':A,'telegram_id':81},source='native',search='A native task')
+    external=read({'tenant_id':A,'telegram_id':83},source='kommo',search='cached task')
+    assert {row['id'] for row in external['tasks']}=={'502'}
+    assert all(external['sources'][1][key] is False for key in ('create','complete','sync'))
+    native=read({'tenant_id':A,'telegram_id':83},source='native',search='A native task')
     assert native['tasks']
     for row in native['tasks']:
         assert 'access_responsible_id' not in row and 'access_responsible_department_id' not in row
