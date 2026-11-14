@@ -178,7 +178,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       assert.equal((await control('state')).posts,beforeOpenNoop,'Reopened permissions remain a no-op');
       for(const viewportWidth of [...new Set([width,360])]){
         await page.setViewportSize({width:viewportWidth,height:900});
-        for(const tab of ['details','rights']){
+        for(const tab of ['details','rights','notifications']){
           await form.locator('[data-staff-pane-tab='+tab+']').click();
           const layout=await form.evaluate((node,tab)=>{
             const footer=node.querySelector('.staff-modal-actions').getBoundingClientRect();
@@ -208,6 +208,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       await form.locator('[data-permission][value=finance]').check();
       await form.locator('[data-staff-pane-tab=rights]').click();
       await form.locator('[data-work-setting=completion_requires_admin]').selectOption('true');
+      await form.locator('[data-staff-pane-tab=notifications]').click();
       await form.locator('[data-work-event=task_assigned][data-work-channel=push]').check();
       assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Expanded settings fit viewport');
       if (process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR) await page.screenshot({path:process.env.EMPLOYEE_SETTINGS_SCREENSHOT_DIR+'/employee-settings-'+width+'.png'});
@@ -228,6 +229,7 @@ assert(origin && mode && width && login && tenantA && tenantB);
       assert.equal(await form.locator('[data-permission][value=finance]').isChecked(), true);
       await form.locator('[data-staff-pane-tab=rights]').click();
       assert.equal(await form.locator('[data-work-setting=completion_requires_admin]').inputValue(), 'true');
+      await form.locator('[data-staff-pane-tab=notifications]').click();
       assert.equal(await form.locator('[data-work-event=task_assigned][data-work-channel=push]').isChecked(), true);
       await form.locator('[data-staff-pane-tab=details]').click();
       assert((await form.innerText()).includes('+994501231234'), 'Explicit WA binding is separate from contact phone');
