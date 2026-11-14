@@ -39,27 +39,7 @@ def create_schema(conn):
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_scope TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_agent_binding TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_scope_hash TEXT NOT NULL DEFAULT ''")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS risk_assessment TEXT NOT NULL DEFAULT ''")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS reply_draft TEXT NOT NULL DEFAULT ''")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority_suggestion TEXT NOT NULL DEFAULT ''")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority_reason TEXT NOT NULL DEFAULT ''")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS response_due_at TIMESTAMPTZ NULL")
-        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS response_due_manual BOOLEAN NOT NULL DEFAULT FALSE")
-        cur.execute('''DO $$ BEGIN
-          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_priority_check') THEN
-            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_priority_check CHECK(priority IN ('low','normal','high','urgent'));
-          END IF;
-          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_priority_suggestion_check') THEN
-            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_priority_suggestion_check CHECK(priority_suggestion IN ('','low','normal','high','urgent'));
-          END IF;
-        END $$''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_sla_policies(
-          tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
-          response_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
-          updated_by BIGINT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
-        cur.execute('CREATE INDEX IF NOT EXISTS saas_support_attention_idx ON saas_support_tickets(tenant_id,status,priority,response_due_at)')
+        create_sla_schema(conn)
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_channel_id UUID NULL')
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_conversation_id TEXT NULL')
         cur.execute('''DO $$ BEGIN
@@ -108,3 +88,29 @@ def create_schema(conn):
         cur.execute('ALTER TABLE saas_ai_case_developer_dispatches ADD COLUMN IF NOT EXISTS source_assignment_id UUID NULL')
         cur.execute('''CREATE INDEX IF NOT EXISTS saas_support_ticket_messages_order_idx
           ON saas_support_ticket_messages(tenant_id,ticket_id,created_at,message_id)''')
+
+
+def create_sla_schema(conn):
+    """Only the additive support SLA shape; no compatibility or business DML."""
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS risk_assessment TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS reply_draft TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority_suggestion TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS priority_reason TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS response_due_at TIMESTAMPTZ NULL")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS response_due_manual BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute('''DO $$ BEGIN
+          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_priority_check') THEN
+            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_priority_check CHECK(priority IN ('low','normal','high','urgent'));
+          END IF;
+          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_priority_suggestion_check') THEN
+            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_priority_suggestion_check CHECK(priority_suggestion IN ('','low','normal','high','urgent'));
+          END IF;
+        END $$''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_sla_policies(
+          tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          response_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
+          updated_by BIGINT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+        cur.execute('CREATE INDEX IF NOT EXISTS saas_support_attention_idx ON saas_support_tickets(tenant_id,status,priority,response_due_at)')

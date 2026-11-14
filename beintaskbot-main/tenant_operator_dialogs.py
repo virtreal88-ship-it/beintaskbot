@@ -717,6 +717,64 @@ def _scoped_ai_documents(policy):
     return policy.profile.get('role') != 'owner' and policy.has_scoped_access('ai_agents')
 
 
+def _assignment_display(cur, tenant, policy, dialogs):
+    """Read-only name/fact, not an AI document or an operation grant.
+
+    The caller already selected visible routes. Recheck source membership and
+    tenant before exposing the minimal display value. Group primary metadata
+    belongs to its sending source, not every source present in that group.
+    """
+    # Display-only authorization follows the explicit dialog AI flag, not the
+    # legacy CRM gate used by AI operations. Never use this as an action grant.
+    if (str(policy.profile.get('tenant_id')) != str(tenant)
+            or policy.profile.get('active') is not True
+            or (policy.profile.get('role') != 'owner'
+                and policy.member_settings.get('ai_enabled') is not True)):
+        return
+    from tenant_dialog_access import allowed_channels
+    from tenant_ai_group_coordination import group_jid
+    allowed = allowed_channels(cur, tenant, policy)
+    permitted = None if allowed is None else set(allowed)
+    visible = [d for d in dialogs if d.get('provider') == 'connect'
+               and (permitted is None or str(d.get('channel_id')) in permitted)]
+    groups = [d['conversation_id'] for d in visible if group_jid(d['conversation_id'])]
+    group_names = {}
+    if groups:
+        cur.execute("""SELECT g.group_jid,a.name,a.enabled,a.role,a.scopes,
+                    g.assignments->0->>'channel_id' AS sending_channel_id
+          FROM saas_ai_group_coordination g
+          JOIN saas_ai_agents a ON a.tenant_id=g.tenant_id
+            AND a.id::text=g.assignments->0->>'agent_id'
+          JOIN saas_connect_conversations c ON c.tenant_id=g.tenant_id
+            AND c.conversation_id=g.group_jid
+            AND c.connect_channel_id::text=g.assignments->0->>'channel_id'
+          JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id
+            AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+          WHERE g.tenant_id=%s::uuid AND g.provider='connect' AND g.group_jid=ANY(%s::text[])
+            AND CASE WHEN jsonb_typeof(g.assignments)='array'
+                     THEN jsonb_array_length(g.assignments) ELSE 0 END=1
+            AND (%s OR c.connect_channel_id::text=ANY(%s::text[]))
+            AND NOT ai_legacy_blocked(g.tenant_id,c.connect_channel_id::text,g.group_jid,NULL)
+            AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links l
+              WHERE l.tenant_id=g.tenant_id AND l.channel_id=c.connect_channel_id
+                AND l.source_id=g.group_jid AND l.active)""",
+                    (tenant, groups, permitted is None, sorted(permitted or [])))
+        from tenant_ai_agent_connect import scope_matches
+        group_names = {r['group_jid']: r.get('name') for r in cur.fetchall()
+                       if r.get('enabled') and r.get('role') == 'primary'
+                       and scope_matches(r.get('scopes'), r['sending_channel_id'], is_group=True)}
+    for dialog in visible:
+        if group_jid(dialog['conversation_id']):
+            # Absence may mean an inaccessible sending source. Do not label it
+            # unassigned or disclose the hidden source's existence/name.
+            if dialog['conversation_id'] not in group_names:
+                continue
+            name = group_names[dialog['conversation_id']]
+        else:
+            name = dialog.get('agent_name')
+        dialog['assignment_display'] = {'assigned': bool(name), 'name': name or ''}
+
+
 def _hide_shared_ai(dialog):
     for key in list(dialog):
         if key.startswith(('agent_', 'company_', 'latest_job_', 'group_')) or key in {
@@ -784,6 +842,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             from tenant_dialog_access import apply_capabilities
             for r in rows:apply_capabilities(cur,tenant,policy,r)
             if restricted_ai:
+                _assignment_display(cur,tenant,policy,rows)
                 rows=[_hide_shared_ai(r) for r in rows]
                 agents=[]
                 count=None
@@ -1025,7 +1084,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
             from tenant_dialog_access import apply_capabilities
             apply_capabilities(cur,tenant,policy,dialog)
-            if restricted_ai:_hide_shared_ai(dialog)
+            if restricted_ai:
+                _assignment_display(cur,tenant,policy,[dialog])
+                _hide_shared_ai(dialog)
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.

@@ -96,7 +96,11 @@ def _episode_evidence_error(command,row,agent_context,*,context_limit=False):
     if str(row.get('message_type') or '').lower() in {'video','document'}:
         message={'az':'Cari əlavələr tam təhlil edilməyib və ya AI kontekstinə tam sığmır. Cavab yaradılmadı.','en':'Current attachments are incomplete or do not fit fully in the AI context. No reply was created.'}.get(language,'Текущие вложения не проанализированы полностью или не помещаются целиком в контекст AI. Ответ не создан.')
         if str(row.get('message_type')).lower()=='document' and code in {'audio_evidence_incomplete','audio_context_incomplete'}:code='document_context_incomplete' if context_limit else 'document_evidence_incomplete'
-        if str(row.get('message_type')).lower()=='video':code='video_full_coverage_unavailable';stage='context_preparation'
+        if str(row.get('message_type')).lower()=='video':
+            code='video_full_coverage_unavailable';stage='context_preparation'
+            message={'az':'Cari mesajlar arasında video var. AI videonu tam təhlil edə bilmir, buna görə cavab yaradılmadı. Videonu əməkdaş yoxlamalıdır.',
+                'en':'The current messages include a video. AI cannot analyze the entire video, so no reply was created. An employee needs to review the video.'}.get(language,
+                'В текущих сообщениях есть видео. AI не может проанализировать его целиком, поэтому ответ не создан. Сотруднику нужно просмотреть видео.')
         command['_media_failure'].update(code=code,failure_stage=stage)
     reason=explanation(code,language)
     status=receipt.get('admission_status') if code in REASONS else 409

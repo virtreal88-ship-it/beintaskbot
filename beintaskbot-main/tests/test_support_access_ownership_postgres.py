@@ -100,3 +100,30 @@ def test_support_responsibility_is_not_a_report_field_and_catalog_has_no_delete(
     assert store.public(raw) == expected
     assert public(raw) == expected
     assert raw['access_responsible_id'] == 11
+
+# Run the same missing-object/field upgrade matrix against native PostgreSQL,
+# not just PGlite. This module's database fixture supplies disposable localhost DBs.
+from test_tenant_support_inbox import test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness
+
+
+def test_sla_only_upgrade_busy_table_fails_bounded_without_partial_commit(database):
+    from psycopg.rows import dict_row
+    with psycopg.connect(database.dsn) as conn:
+        conn.execute('ALTER TABLE saas_support_tickets DROP COLUMN risk_assessment')
+    try:
+        with psycopg.connect(database.dsn) as holder:
+            holder.execute('LOCK TABLE saas_support_tickets IN ACCESS SHARE MODE')
+            with psycopg.connect(database.dsn, row_factory=dict_row) as repair:
+                repair.execute("SET lock_timeout='100ms'")
+                assert schema._schema_current(repair, include_support_sla=False)
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    schema.ensure_schema(repair)
+                repair.rollback()
+                assert not schema._schema_current(repair)
+            holder.rollback()
+        with psycopg.connect(database.dsn, row_factory=dict_row) as conn:
+            schema.ensure_schema(conn)
+            assert schema._schema_current(conn)
+    finally:
+        with psycopg.connect(database.dsn, row_factory=dict_row) as conn:
+            schema.ensure_schema(conn)
