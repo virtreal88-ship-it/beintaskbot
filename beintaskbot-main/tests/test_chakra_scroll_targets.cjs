@@ -9,7 +9,7 @@ const w=dom.window,d=w.document;
 w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});
 w.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}};
 w.tenantViewDemand={watch(){}};
-w.fetch=()=>{throw new Error('No external requests allowed in scroll target test');};
+w.fetch=async url=>{assert.equal(url,'/api/platform/crm/deal-board-preferences');return {ok:true,json:async()=>({success:true,catalog:[],hidden_stage_keys:[]})};};
 const observers=[],NativeMutationObserver=w.MutationObserver;
 w.MutationObserver=class extends NativeMutationObserver{constructor(callback){super(callback);observers.push(this);}};
 Object.defineProperty(w.HTMLElement.prototype,'clientWidth',{get(){return this.matches('[data-horizontal-scroll]')?500:0;}});
@@ -18,7 +18,7 @@ w.HTMLElement.prototype.getBoundingClientRect=function(){return {top:100,bottom:
 const tick=()=>new Promise(r=>w.requestAnimationFrame(()=>w.requestAnimationFrame(r)));
 (async()=>{
  w.eval(read('tenant-chakra-ui.js'));
- const rows=Array.from({length:5},(_,i)=>({kommo_lead_id:i+1,name:'Synthetic deal '+i,stage_name:'Stage '+i}));
+ const rows=Array.from({length:5},(_,i)=>({kommo_lead_id:i+1,pipeline_id:1,status_id:i+1,name:'Synthetic deal '+i,stage_name:'Stage '+i}));
  w.tenantChakraCRM.renderDeals('tableHost',rows,true);
  w.tenantChakraCRM.renderDeals('kanbanHost',rows,false);
  for(let n=0;n<20&&d.querySelectorAll('[data-horizontal-scroll]').length<2;n++)await tick();
