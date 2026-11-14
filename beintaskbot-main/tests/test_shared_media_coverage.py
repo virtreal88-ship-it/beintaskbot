@@ -377,3 +377,27 @@ def test_approved_physical_voice_load_and_cached_proof_keep_alias_fence(flow,mon
     with db.cursor() as cur:
         with pytest.raises(CoverageError,match='incomplete'):MediaCoverage.validate_proof(cur,A,CA,41,proofs[0])
     f['generate'].assert_called_once();f['send'].assert_called_once()
+
+
+@pytest.mark.parametrize('language,expected,misleading',[
+    ('az','AI videonu tam təhlil edə bilmir','kontekstinə tam sığmır'),
+    ('en','AI cannot analyze the entire video','fit fully in the AI context'),
+    ('ru','AI не может проанализировать его целиком','не помещаются целиком'),
+    ('auto','AI не может проанализировать его целиком','не помещаются целиком'),
+])
+@pytest.mark.parametrize('context_limit',[False,True])
+def test_video_failure_copy_names_unsupported_full_analysis(language,expected,misleading,context_limit):
+    row=prepared('video')
+    command={'channel_id':CA,'lead_id':41}
+    error=copilot._episode_evidence_error(command,row,{'language':language},context_limit=context_limit)
+    assert expected in str(error)
+    assert misleading not in str(error)
+    assert '[context_preparation: video_full_coverage_unavailable]' in str(error)
+    assert error.keep_request is True
+    assert command['_media_failure']['code']=='video_full_coverage_unavailable'
+    assert command['_media_failure']['failure_stage']=='context_preparation'
+    for manual in (False,True):
+        with pytest.raises(CoverageError,match='Required current-episode media') as caught:
+            manifest_for([row],manual).supported()
+        assert caught.value.code=='video_full_coverage_unavailable'
+    assert not evidence_ready(row)
