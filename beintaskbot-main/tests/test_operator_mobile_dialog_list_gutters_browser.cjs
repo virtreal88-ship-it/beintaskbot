@@ -10,7 +10,7 @@ const docs = path.join(repo, 'docs');
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 const route = {
   provider: 'connect', lead_id: 41, channel_id: 'channel-mobile', conversation_id: 'mobile-contact',
-  customer_kind: 'contact', customer_name: 'Mobile customer', agent_id: 'agent-a', agent_name: 'Agent',
+  customer_kind: 'contact', customer_name: 'Caspian Oil with a deliberately long customer name', channel_name: 'Texniki Dəstək', customer_phone: '994993180666', agent_id: 'agent-a', agent_name: 'Agent',
   agent_status: 'manual', can_send: true, controls_allowed: true, available_actions: []
 };
 const messages = [{
@@ -95,7 +95,7 @@ const server = http.createServer((req, res) => {
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'keyboard open/back keeps the mobile list within the viewport');
       }
 
-      if (width === 390) {
+      if (width <= 430) {
         await page.locator('.operator-row').click();
         await page.locator('#operatorConversationPane').waitFor();
         await page.waitForTimeout(200);
@@ -103,11 +103,21 @@ const server = http.createServer((req, res) => {
           const pane = document.querySelector('#operatorConversationPane').getBoundingClientRect();
           const header = document.querySelector('#operatorConversationHeader').getBoundingClientRect();
           const composer = document.querySelector('.operator-composer').getBoundingClientRect();
-          return { viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, pane: { left: pane.left, right: pane.right, width: pane.width }, header: { left: header.left, right: header.right }, composer: { left: composer.left, right: composer.right } };
+          return { viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, pane: { left: pane.left, right: pane.right, width: pane.width }, header: { left: header.left, right: header.right, height: header.height }, composer: { left: composer.left, right: composer.right } };
         });
         assert.ok(Math.abs(chatGeometry.pane.left) <= 1 && chatGeometry.pane.width >= width - 1, `opened chat remains full-width at ${width}px: ${JSON.stringify(chatGeometry)}`);
         assert.ok(chatGeometry.documentWidth <= width + 1, 'opening chat does not introduce horizontal overflow');
-        if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'dialog-open-chat-390.png'), fullPage: false });
+        assert.ok(chatGeometry.header.height <= 66, 'mobile header stays one compact toolbar: ' + JSON.stringify(chatGeometry));
+        const title = await page.locator('#operatorDialogTitleSlot').boundingBox();
+        const action = await page.locator('[data-operator-create-ticket]').boundingBox().catch(() => null);
+        const more = await page.locator('#operatorMoreActions summary').boundingBox();
+        assert.ok(more.y < chatGeometry.header.height, 'more menu remains in the header row');
+        assert.ok(title.width > 60, 'customer title retains useful space');
+        await page.locator('#operatorMoreActions summary').click();
+        assert.ok(await page.locator('.operator-action-menu').isVisible(), 'overflow actions still open');
+        await page.locator('#operatorMoreActions summary').click();
+
+        if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'dialog-open-chat-' + width + '.png'), fullPage: false });
         await page.goBack();
         await page.waitForFunction(() => document.querySelector('#operatorWorkspace')?.dataset.selected === 'false');
         await page.locator('.operator-row').click();
