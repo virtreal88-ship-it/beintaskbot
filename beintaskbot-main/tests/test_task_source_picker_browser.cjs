@@ -1,12 +1,18 @@
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
-(async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{for(const width of [390,1440]){
+(async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{for(const width of [320,390,1080,1440]){
  let saved='kommo',writes=0;const context=await browser.newContext({viewport:{width,height:900},timezoneId:'Asia/Baku'}),page=await context.newPage();
  await page.addInitScript(()=>{window.realFetch=window.fetch});await page.addInitScript(installFixture,{});await page.addInitScript(()=>{const original=window.fetch;window.fetch=(url,opt)=>String(url).includes('/task-view-preferences')?window.realFetch(url,opt):original(url,opt)});
  const html=appHtml().replace('</body>',()=>'<script>'+fs.readFileSync('docs/tenant-chakra-ui.js','utf8').replace(/<\/script/gi,'<\\/script')+'</script></body>');
  await page.route('**/*',async route=>{const req=route.request();if(req.url().includes('/task-view-preferences')){if(req.method()==='POST'){saved=req.postDataJSON().source;writes++}return route.fulfill({json:{success:true,source:saved}})}return req.isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort()});
  await page.goto('https://fixture.test/app?view=tasks&lang=ru');await page.waitForFunction(()=>taskFeedSource.value==='kommo'&&!taskFeedSource.disabled);assert.equal(await page.locator('.task-source-panel:visible').count(),1);assert.equal(await page.locator('#tasksList').isVisible(),true);
+ await page.locator('#kommoTaskViewControls button').first().waitFor();
+ assert.equal(await page.locator('.task-view-controls:visible').count(),1);
+ const controls=page.locator('#kommoTaskViewControls button');assert.equal(await controls.count(),2);
+ for(const button of await controls.all()){assert.equal((await button.innerText()).trim(),'');assert(await button.getAttribute('aria-label'));assert(await button.getAttribute('title'));const box=await button.boundingBox();assert(box.width>=44&&box.height>=44);}
+ if(width>=1080){const boxes=await Promise.all(['#taskSearch','#taskStatus','#kommoTaskViewControls'].map(s=>page.locator(s).boundingBox()));assert(Math.abs(boxes[0].y-boxes[1].y)<1);assert(Math.abs(boxes[0].y-boxes[2].y)<1);}
+ assert.equal(await page.locator('#tasksList [data-task-view-controls]').count(),0);
  await page.selectOption('#taskFeedSource','native');await page.waitForFunction(()=>!taskFeedSource.disabled);assert.equal(saved,'native');assert.equal(writes,1);assert.equal(await page.locator('#nativeTasksList').isVisible(),true);await page.getByRole('button',{name:'Таблица',exact:true}).click();assert.equal(await page.locator('#nativeTasksList [data-task-view]').getAttribute('data-task-view'),'table');
  await page.selectOption('#taskFeedSource','kommo');await page.waitForFunction(()=>!taskFeedSource.disabled);await page.selectOption('#taskFeedSource','native');await page.waitForFunction(()=>!taskFeedSource.disabled);assert.equal(await page.locator('#nativeTasksList [data-task-view]').getAttribute('data-task-view'),'table');
  await page.reload();await page.waitForFunction(()=>taskFeedSource.value==='native'&&!taskFeedSource.disabled);assert.equal(await page.locator('.task-source-panel:visible').count(),1);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));fs.mkdirSync('tests/artifacts/task-source',{recursive:true});await page.screenshot({path:'tests/artifacts/task-source/'+width+'.png',fullPage:true});await context.close();

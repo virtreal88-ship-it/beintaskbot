@@ -482,6 +482,12 @@ function TasksTable({ rows = [], settings = {} }) {
   </Card.Root>;
 }
 
+function BoardControlIcon({ kind }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {kind === 'settings' ? <><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--chakra-colors-app-surface)"/><circle cx="15" cy="17" r="3" fill="var(--chakra-colors-app-surface)"/></> : kind === 'table' ? <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/></> : <><rect x="3" y="4" width="5" height="13" rx="1"/><rect x="10" y="4" width="5" height="9" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/></>}
+  </svg>;
+}
+
 function TasksView({ rows = [], settings = {} }) {
   const [mode, setMode] = useState('kanban');
   const [now, setNow] = useState(() => new Date());
@@ -525,6 +531,10 @@ function TasksView({ rows = [], settings = {} }) {
   }, [settings.target]);
   const c = taskBoardLabels[window.tenantI18n?.language] || taskBoardLabels.az;
   const groups = taskColumns(rows, now);
+  const controls = <Flex role="group" aria-label={c.view} data-task-view-controls="" gap="2" wrap="nowrap">
+    {['kanban', 'table'].map(value => <Button key={value} size="sm" h="44px" w="44px" minW="44px" p="0" aria-label={c[value]} title={c[value]} aria-pressed={mode === value} variant={mode === value ? 'solid' : 'outline'} onClick={() => setMode(value)}><BoardControlIcon kind={value}/></Button>)}
+  </Flex>;
+  const controlsTarget = document.getElementById(settings.source === 'native' ? 'nativeTaskViewControls' : 'kommoTaskViewControls');
   return <Box data-task-view={mode} minW="0">
     {moving && <Box role="region" aria-label={copy.move} borderWidth="1px" borderColor="app.line" p="3" mb="3">
       <Text>{copy.move}: {c[moving.bucket]}</Text>
@@ -532,9 +542,7 @@ function TasksView({ rows = [], settings = {} }) {
       <Flex gap="2" mt="2"><Button disabled={busy || moving.bucket !== 'undated' && !deadline} onClick={submitMove}>{copy.save}</Button><Button disabled={busy} variant="outline" onClick={closeMove}>{copy.cancel}</Button></Flex>
       {moveError && <Text role="alert" color="red.600">{moveError}</Text>}
     </Box>}
-    <Flex role="group" aria-label={c.view} gap="2" mb="4" wrap="wrap">
-      {['kanban', 'table'].map(value => <Button key={value} size="sm" minH="44px" aria-pressed={mode === value} variant={mode === value ? 'solid' : 'outline'} onClick={() => setMode(value)}>{c[value]}</Button>)}
-    </Flex>
+    {controlsTarget ? createPortal(controls, controlsTarget) : <Box mb="4">{controls}</Box>}
     {mode === 'table' ? <TasksTable rows={rows} settings={settings}/> : !rows.length ? <Empty>{settings.empty || c.empty}</Empty> :
       <Flex data-task-kanban="" data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3" scrollSnapType="x proximity">
         {groups.map(group => <Box key={group.key} data-task-column={group.key}
@@ -612,15 +620,15 @@ function DealTable({ rows = [], customer = false, onOpen }) {
 function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets = [], moveSources = [], completionApproval = false, moveContext }) {
   const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
   const drag=useRef(null),busy=useRef(false),moveSnapshots=useRef(new Map()),revision=useRef(0),alive=useRef(true);
-  useEffect(()=>{setDisplayRows(previous=>rows.map(row=>{const key=String(row.kommo_lead_id),snapshot=moveSnapshots.current.get(key);if(!snapshot)return row;if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision===snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision&&row.source_revision!==snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}return snapshot.row||previous.find(item=>String(item.kommo_lead_id)===key)||row;}));},[rows]);
-  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;moveSnapshots.current.clear();busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[moveContext?.tenant_id,moveContext?.user_id]);
+  useEffect(()=>{setDisplayRows(previous=>rows.map(row=>{const key=String(row.kommo_lead_id),snapshot=moveSnapshots.current.get(key);if(!snapshot)return row;if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision===snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}if(snapshot.confirmed&&snapshot.baseRevision&&row.source_revision&&row.source_revision!==snapshot.baseRevision&&row.source_revision!==snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}return snapshot.row||previous.find(item=>String(item.kommo_lead_id)===key)||row;}));},[rows]);
+  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;moveSnapshots.current.clear();busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};const invalid=()=>clear();document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',invalid);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',invalid);};},[]);
   const targets=row=>moveSources.some(s=>String(s.pipeline_id)===String(row.pipeline_id)&&String(s.stage_id)===String(row.status_id))?moveTargets.filter(t=>String(t.pipeline_id)===String(row.pipeline_id)):[];
   const movable=row=>!!moveContext&&canIdentifyKommoDeal(row)&&!busy.current&&targets(row).length>0&&!!(row.raw?.updated_at||row.source_updated_at);
   const move=async(row,stage)=>{
     if(!movable(row)||String(row.status_id)===String(stage)||!targets(row).some(t=>String(t.stage_id)===String(stage)))return;
     const serial=revision.current,key=String(row.kommo_lead_id),optimistic={...row,status_id:stage};busy.current=true;moveSnapshots.current.set(key,{row:optimistic,confirmed:false,sourceRevision:''});setPending(key);setMoveError('');
     setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?optimistic:item));
-    try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current){moveSnapshots.current.set(key,{row:result,confirmed:true,sourceRevision:result.source_revision});setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?result:item));}}
+    try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current){moveSnapshots.current.set(key,{row:result,confirmed:true,baseRevision:row.source_revision,sourceRevision:result.source_revision});setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?result:item));}}
     catch(e){if(alive.current&&serial===revision.current){moveSnapshots.current.delete(key);setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?row:item));setMoveError(e.message);}}
     finally{if(alive.current&&serial===revision.current){busy.current=false;setPending('');}}
   };
@@ -732,7 +740,7 @@ function DealsView({ rows = [], customer = false, onOpen }) {
   const catalog = data?.catalog || [];
   const hidden = data?.hidden_stage_keys || [];
   const controls = <Flex data-deal-view-controls="" justify="flex-end" gap="2" wrap="nowrap">
-      <Button ref={columnTrigger} size="sm" h="44px" variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}>{copy.columns}</Button>
+      <Button ref={columnTrigger} size="sm" h="44px" w="44px" minW="44px" p="0" aria-label={copy.columns} title={copy.columns} variant="outline" disabled={!data || saving} onClick={() => {setDraft([...hidden]); setOpen(true);}}><BoardControlIcon kind="settings"/></Button>
       <Button size="sm" h="44px" variant={mode === "table" ? "solid" : "outline"} onClick={() => changeMode("table")}>{copy.table}</Button>
       <Button size="sm" h="44px" variant={mode === "kanban" ? "solid" : "outline"} onClick={() => changeMode("kanban")}>Kanban</Button>
     </Flex>;
