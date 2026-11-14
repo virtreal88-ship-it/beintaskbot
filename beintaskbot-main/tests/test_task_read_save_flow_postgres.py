@@ -57,7 +57,7 @@ class ExternalTransport:
 
     async def __call__(self, tenant, method, path, **kwargs):
         self.calls.append((str(tenant), method, path, copy.deepcopy(kwargs)))
-        if method == 'GET' and path == 'account': return {'current_user_id': 999}
+        if method == 'GET' and path == 'account': return {'current_user_id': 999, '_embedded': {'task_types': [{'id': 1, 'name': 'Contact client'}]}}
         if method == 'GET' and path == 'leads/pipelines':
             return {'_embedded': {'pipelines': [
                 {'id': 10, '_embedded': {'statuses': [{'id': 101, 'name': 'Open', 'type': 0}]}},
@@ -882,6 +882,9 @@ def test_employee_created_external_task_remains_visible_after_pipeline_scope_rev
             assert checked['command']['cache_state'] == 'available'
             status, visible_task = await _get(http, cookie, 'kommo', actor=82, extra={'task_id': task_id})
             assert status == 200 and visible_task['task']['id'] == task_id, visible_task
+            assert visible_task['task']['task_type_name'] == 'Contact client'
+            assert f['provider'].calls == calls + [(A, 'GET', 'account', {'params': {'with': 'task_types'}})]
+            calls = copy.deepcopy(f['provider'].calls)
             with f['factory']() as conn:
                 conn.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
             status, denied = await _get(http, cookie, 'kommo', actor=82, extra={'request_id': command['request_id']})
