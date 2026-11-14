@@ -206,6 +206,7 @@ jobs:
         run: |
           status=0
           node tests/employee_scope_matrix_browser.cjs || status=1
+          node tests/test_ai_scoped_layout_browser.cjs || status=1
           python -m pytest -q -rs tests/test_ai_scoped_documents_browser.py || status=1
           node tests/test_native_company_deal_source_browser.cjs || status=1
           node tests/test_crm_sync_history_browser.cjs || status=1
@@ -217,5 +218,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: employee-scope-synthetic-screenshots
-          path: beintaskbot-main/employee-scope-screenshots/
+          path: |
+            beintaskbot-main/employee-scope-screenshots/
+            beintaskbot-main/tests/artifacts/scoped-agents-layout/
           if-no-files-found: warn
