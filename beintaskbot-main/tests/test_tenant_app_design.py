@@ -61,7 +61,7 @@ class AppDesignTests(unittest.TestCase):
         i18n = (ROOT / 'docs/tenant-operator-i18n.js').read_text(encoding='utf-8')
         self.assertIn('data-app-instructions', shell)
         self.assertIn("pages:['tasks','customers','companies','deals','hot_orders']", shell)
-        self.assertIn("button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')", shell)
+        self.assertIn("button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label]')", shell)
         self.assertIn('extra!==label)extra.remove()', shell)
         self.assertIn("customers:'Контакты'", shell)
         self.assertIn("companies:'Şirkətlər'", shell)
