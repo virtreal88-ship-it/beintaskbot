@@ -25,6 +25,15 @@ test('contact opens only its exact authorized linked deal without opening task',
  assert.match(el(b,'nativeTasksList').textContent,/Client/);assert.equal(posts(b).length,0);
  }finally{b.w.close();}
 });
+test('Kommo display title is readable and searchable without rewriting task text',async()=>{
+ const b=await mount();try{
+ b.f.kommo[0]={...b.f.kommo[0],text:'',display_title:'Cavab gözlənilir',task_type_name:'Cavab gözlənilir'};
+ await b.w.tenantTaskFlow.refreshSource('kommo');
+ const button=b.d.querySelector('#tasksList [data-task-flow-open]');assert.equal(button.textContent,'Cavab gözlənilir');button.click();await settle();
+ assert.equal(el(b,'taskFlowCardTitle').textContent,'Cavab gözlənilir');assert.equal(b.f.kommo[0].text,'');
+ el(b,'taskSearch').value='Cavab';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));assert.match(el(b,'tasksList').textContent,/Cavab gözlənilir/);assert.equal(posts(b).length,0);
+ }finally{b.w.close();}
+});
 test('loaded-window filtering, true empty, no matches and stale failure are different',async()=>{
  const b=await mount();try{el(b,'taskSearch').value='missing';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));assert.match(el(b,'nativeTasksList').textContent,/совпадений нет/);assert.match(el(b,'nativeTaskCount').textContent,/0.*1/);el(b,'taskSearch').value='';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));b.f.readErrors.native=true;await b.w.tenantTaskFlow.refreshSource('native');assert.match(el(b,'nativeTasksNotice').textContent,/ранее загруженный/);assert.match(el(b,'nativeTasksList').textContent,/PRIVATE task A/);b.f.readErrors.native=false;b.f.native=[];await b.w.tenantTaskFlow.refreshSource('native');assert.match(el(b,'nativeTasksList').textContent,/задач нет/);assert.equal(posts(b).length,0);}finally{b.w.close();}
 });

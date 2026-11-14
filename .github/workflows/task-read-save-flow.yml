@@ -85,6 +85,7 @@ jobs:
           tests/test_crm_native_tasks.py
           tests/test_crm_native_task_api.py
           tests/test_tenant_task_api.py
+          tests/test_task_titles.py
           tests/test_tenant_tasks.py
           tests/test_task_assignment_no_move.py
           tests/test_tenant_task_completion.py
