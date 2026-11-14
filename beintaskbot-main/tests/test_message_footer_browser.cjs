@@ -19,7 +19,7 @@ const {fixture,server,message,launch,deferred}=require('./visible_media_fixture.
     assert.equal(await article.locator('footer time').count(),1);
     const indicator=article.locator('[data-delivery-state]');assert.equal(await indicator.getAttribute('data-delivery-state'),state);
     if(['sent','delivered','read'].includes(state)){
-     assert.equal(await indicator.locator('svg path').count(),state==='sent'?1:2);assert.equal((await indicator.innerText()).trim(),'');assert.ok(await indicator.getAttribute('aria-label'));assert.equal(await indicator.getAttribute('title'),await indicator.getAttribute('aria-label'));colors[state]=await indicator.evaluate(n=>getComputedStyle(n).color);
+     assert.equal(await indicator.locator('svg path').count(),{sent:1,delivered:2,read:3}[state]);assert.equal(await indicator.locator('svg').getAttribute('height'),'14');assert.equal(await indicator.locator('svg').getAttribute('width'),String({sent:14,delivered:19,read:24}[state]));assert.equal((await indicator.innerText()).trim(),'');assert.ok(await indicator.getAttribute('aria-label'));assert.equal(await indicator.getAttribute('title'),await indicator.getAttribute('aria-label'));colors[state]=await indicator.evaluate(n=>getComputedStyle(n).color);
     }else{assert.equal(await indicator.locator('svg').count(),0);assert.ok((await indicator.innerText()).trim());}
    }
    assert.equal(colors.sent,colors.delivered);assert.notEqual(colors.read,colors.delivered,'only explicit read is blue');
