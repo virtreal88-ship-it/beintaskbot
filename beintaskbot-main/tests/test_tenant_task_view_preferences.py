@@ -94,8 +94,17 @@ def test_sources_use_existing_policy_without_granting_access(monkeypatch):
     current['permissions'] = []
     monkeypatch.setattr(store, 'member', lambda *_: current)
     monkeypatch.setattr('tenant_task_flow.scoped_access_enabled', lambda: False)
-    with pytest.raises(TenantPlatformError):
-        store.preferences(tenant_id=TENANT, actor_id=17)
+    # Native denial does not revoke the independently row-filtered Kommo feed.
+    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native'}
+    from tenant_policy import TenantPolicy
+    from tenant_task_flow import _sources
+    policy = TenantPolicy(current)
+    assert _sources(policy)[0]['view'] is False
+    external = _sources(policy)[1]
+    assert external['view'] is True
+    assert all(external[key] is False for key in ('create', 'complete', 'sync'))
+    assert policy.kommo_task_scope()['pipelines'] == []
+    assert policy.kommo_task_scope()['kommo_user_id'] == 0
     current['permissions'] = ['tasks']
     assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native'}
 

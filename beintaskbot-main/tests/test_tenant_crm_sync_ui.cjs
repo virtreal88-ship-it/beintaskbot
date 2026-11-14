@@ -21,7 +21,8 @@ function setup() {
   const document = {
     hidden: false,
     getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {after(box) { boxes.push(box); anchors.push({id,box}); }}; },
-    createElement() { return {textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
+    querySelector(selector) { return {append(box){boxes.push(box);anchors.push({id:selector,box})}}; },
+    createElement() { return {dataset:{},textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
     addEventListener(name, handler) { listeners[name] = handler; },
     dispatchEvent(event) { events.push(event); }
   };
@@ -44,7 +45,7 @@ const flush = () => new Promise(resolve=>setImmediate(resolve));
   assert.equal(s.timers.size,1);
   const fn = [...s.timers.values()][0];s.timers.clear();
   s.push(s.reply([{resource:'tasks',status:'done',pages_done:3}]));await fn();await flush();
-  assert.equal(s.timers.size,0);assert.equal(s.events.length,1);
+  assert.equal(s.timers.size,0);assert.equal(s.events.length,1);assert(s.boxes.filter(box=>box.dataset?.crmSyncStatus).every(box=>box.hidden),'completed sync leaves no warning banner');
   assert.equal(s.events[0].detail.tenant_id,'company-a');
   assert.equal(s.events[0].detail.resources[0],'tasks');
   assert(s.requests.every(r=>r.url==='/api/platform/crm/sync' && !r.options.method));

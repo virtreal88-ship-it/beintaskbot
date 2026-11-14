@@ -17,6 +17,7 @@ function installNativeCompanyDealFixture(config={}){
  const base=window.fetch,clone=value=>JSON.parse(JSON.stringify(value)),response=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
  window.fetch=async(input,options={})=>{
   const u=new URL(String(input),location.href),method=options.method||'GET',body=options.body?JSON.parse(options.body):null;
+  if(u.pathname==='/api/platform/crm/deal-view-preferences'&&method==='GET')return response({source:'native'});
   if(!/^\/api\/platform\/crm\/native\/(companies|deals|contacts)(\/|$)/.test(u.pathname))return base(input,options);
   f.calls.push({url:u.pathname+u.search,path:u.pathname,method,body});
   const kind=u.pathname.split('/')[5],id=u.pathname.split('/')[6];

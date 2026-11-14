@@ -14,6 +14,8 @@
 
 React roots in `ui/src/main.jsx` are already cached by host; root remounting was not the task-list cause. Existing workspace integration placement moves existing nodes. No wholesale workspace rewrite. Task minute timers now stop while hidden/off-page and unsubscribe on unmount. CRM polling is stopped on pagehide and resumes on BFCache restore.
 
+Main was reconciled with `c90c4aa0`, including PR #665 (deal source selection/compact sync status) and #656 (task visibility). The new source selection is preserved. Scoped deal clearing uses the existing renderer; the parallel branch referenced a nonexistent optional `clear()` method.
+
 ## Browser evidence
 
 Synthetic HTTP boundaries use shipped application controllers and the **built** React bundle. No provider generation, client messages or production writes occurred. Owner and limited-role fixtures: 390px and 1440px. Before assets are read from `13b9a082`, not the working tree; after assets are the branch build.
@@ -23,7 +25,7 @@ Synthetic HTTP boundaries use shipped application controllers and the **built** 
 - AI: before, pending busy state remained stuck in the refresh race. After, one explicit click produces one generation, editor and audio element survive, and voice disposal is not invoked. Error and late completion after switching dialogs are covered.
 - Deals: five concurrent completion notifications produce one GET; search and column editor survive unchanged authorization; a changed native record preserves its row; network failure retains data; company switch rejects delayed old data.
 - Task error, denied source, logout and out-of-order reads are covered. Existing task suite also covers workflow-only revocation and company collision. Contact suite covers query/body races, scope changes, and retained snapshots vs denial.
-- 40 navigation cycles: DOM count remains 1220 before and after (constant within each run). GC heap before/20/40 cycles is about 9.37–9.44 / 9.86–9.90 / 9.99–10.03 MB on baseline and 9.60–9.64 / 9.96–9.97 / 10.06–10.08 MB after. The second 20 cycles add approximately 0.10 MB after; synthetic request recording and warm-up are included. This short run does **not** prove absence of a long-running memory leak.
+- 40 navigation cycles: DOM count remains 1220 on the baseline and 1228 after the parallel deal-source UI merge (constant within each run). GC heap before/20/40 cycles is about 9.37–9.44 / 9.86–9.90 / 9.99–10.03 MB on baseline and 9.60–9.67 / 9.96–10.00 / 10.05–10.10 MB after. The second 20 cycles add approximately 0.10 MB after; synthetic request recording and warm-up are included. This short run does **not** prove absence of a long-running memory leak.
 
 Playwright traces, refresh screenshots and raw metrics: `tests/artifacts/stable-refresh/{before,after}/`. CI uploads after traces as `stable-background-refresh-traces`. Artifacts contain synthetic data only and are not committed.
 
@@ -34,6 +36,8 @@ Playwright traces, refresh screenshots and raw metrics: `tests/artifacts/stable-
 - `test_task_read_save_flow_ui.cjs`: 25 groups.
 - `test_contacts_directory_ui.cjs`, including new delayed/error/denial regression.
 - `test_dialog_audio_transcription_ui.cjs`, `test_tenant_operator_copilot_ui.cjs`, `test_tenant_operator_mobile_ui.cjs`, `test_tenant_operator_auto_refresh_ui.cjs`.
+- `test_operator_case_recovery_ui.cjs` checks incoming case-draft conflicts without replacing the existing employee draft.
+- `test_deal_source_picker_ui.cjs` and `test_deal_source_picker_browser.cjs` preserve the parallel native/Kommo source selector, filtered counts and compact sync status on light/dark 390/1440 layouts.
 - `test_hidden_panel_loading.cjs` (including initial authorization with no hidden deal preference read), `test_tenant_crm_sync_ui.cjs`, `test_app_loading_performance.cjs`, `test_helper_request_identity_browser.cjs`, `test_kommo_board_ui.cjs`, `test_tenant_workspace.cjs`, `test_tenant_app_syntax.cjs`.
 - Added a built-browser CI job; source tests alone are not acceptance evidence.
 

@@ -207,7 +207,7 @@ class TenantPolicy:
 
     def kommo_task_access(self) -> bool:
         """Task markers can authorize a member's own Kommo tasks without a deal pipeline."""
-        return self.profile.get('active') is True and self.allows('tasks')
+        return self.profile.get('active') is True
 
     def can_access_kommo_deal(self, deal: dict | None) -> bool:
         if not deal or str(deal.get('tenant_id')) != str(self.profile.get('tenant_id')): return False

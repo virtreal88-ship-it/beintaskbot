@@ -47,7 +47,7 @@ def page_capabilities(profile):
     pages['customers'] = bool(policy.allows_action('customers', 'view')
                               or (external_crm and policy.pipeline_scope()))
     pages['deals'] = bool(policy.allows_action('deals', 'view') or policy.kommo_access())
-    pages['tasks'] = bool(policy.allows_action('tasks', 'view') or policy.kommo_task_access())
+    pages['tasks'] = bool(policy.allows_action('tasks', 'view') or policy.allows('tasks') or policy.kommo_access())
     pages['companies'] = policy.allows_action('customers', 'view')
     from tenant_employee_policy import employee_action_allowed
     pages['employees'] = employee_action_allowed(profile, 'view') or employee_action_allowed(profile, 'create')
