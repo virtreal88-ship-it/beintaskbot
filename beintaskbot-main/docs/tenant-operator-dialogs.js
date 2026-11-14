@@ -170,6 +170,18 @@
   const messageCopyText=message=>String(message?.has_transcription?(message.audio_transcript||message.body||''):(message?.body||'')).replace(/\[Attachment pending_processing: contents not read\]/gi,'').replace(/\[CRM:[^\]]*\]/gi,'').trim();
   const copyControlMarkup=message=>messageCopyText(message)?`<span class="operator-copy-control"><span data-copy-status role="status" aria-live="polite"></span><button type="button" class="operator-copy-message" data-copy-message="${esc(message.id||message.external_id||'')}" aria-label="${esc(replyText('copy'))}" title="${esc(replyText('copy'))}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button></span>`:'';
   const deliveryCopy=state=>({ru:{sent:'Отправлено',delivered:'Доставлено',read:'Прочитано',pending:'Ожидает отправки',retrying:'Отправка готовится',failed:'Ошибка отправки',unknown:'Статус неизвестен'},az:{sent:'Göndərilib',delivered:'Çatdırılıb',read:'Oxunub',pending:'Göndərilmə gözlənilir',retrying:'Göndərmə hazırlanır',failed:'Göndərmə xətası',unknown:'Status məlum deyil'},en:{sent:'Sent',delivered:'Delivered',read:'Read',pending:'Waiting to send',retrying:'Preparing send',failed:'Send failed',unknown:'Status unknown'}}[i18n.language]||{})[state]||state;
+  function retainDeliveryEvidence(previous,page){
+    if(!previous||!sameDialog(previous.dialog,page.dialog))return;
+    const key=m=>m.direction==='outgoing'&&m.source==='connect'&&m.external_id&&m.source_channel_id&&m.source_conversation_id?JSON.stringify([m.id,m.external_id,m.source_channel_id,m.source_conversation_id,m.source_lead_id]):null;
+    const known=new Map((previous.messages||[]).map(m=>[key(m),m]));
+    const rank={sent:1,delivered:2,read:3};
+    for(const message of page.messages||[]){
+      const id=key(message),old=id&&known.get(id);if(!old)continue;
+      if(old.provider_message_id&&message.provider_message_id&&old.provider_message_id!==message.provider_message_id)continue;
+      const before=old.delivery_state,after=message.delivery_state;
+      if((['delivered','read'].includes(before)&&(rank[after]||0)<rank[before])||(before==='sent'&&['pending','retrying','unknown',undefined].includes(after))||(before==='failed'&&['pending','retrying','sent',undefined].includes(after)))message.delivery_state=before;
+    }
+  }
   function deliveryMarkup(message){
     if(message.direction!=='outgoing')return '';
     const state=message.delivery_state;if(!['sent','delivered','read','pending','retrying','failed','unknown'].includes(state))return '';
@@ -433,6 +445,7 @@
   }
   function updateDeliveryEvidence(latest,route){
     const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route))return;
+    retainDeliveryEvidence(currentPage,latest);
     const top=chat.scrollTop;
     for(const fresh of latest.messages||[]){
       if(fresh.source!=='connect'||fresh.direction!=='outgoing')continue;
@@ -595,7 +608,7 @@
     if(cached){cached.dialog={...cached.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
+    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
     catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
     finally{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }

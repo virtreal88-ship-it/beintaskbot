@@ -47,6 +47,8 @@ def handler(member_from_request,origin,logger,resource):
                     result=await timing.run(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     result=await timing.run(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
+                    from tenant_message_delivery import enrich_history
+                    result=await enrich_history(profile,result)
                 elif resource=='agent_assignment':
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
                 elif resource=='agent_assignment_bulk':
