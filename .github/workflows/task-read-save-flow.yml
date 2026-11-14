@@ -73,6 +73,7 @@ jobs:
       - name: PostgreSQL, current cookie HTTP and actual app task journeys
         run: >-
           python -m pytest -q -rs
+          tests/test_tenant_task_view_preferences.py
           tests/test_task_read_save_flow_postgres.py
           tests/test_task_read_save_flow_bounds.py
           tests/test_native_task_assignee_access.py
@@ -90,6 +91,8 @@ jobs:
       - name: Task states, interrupted saves and retained native task form
         run: |
           node tests/test_task_read_save_flow_ui.cjs
+          node tests/test_task_source_picker_ui.cjs
+          node tests/test_task_source_picker_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_native_task_assignee_browser.cjs
           node tests/test_tenant_tasks_ui.cjs
@@ -110,3 +113,11 @@ jobs:
           node tests/test_tenant_app_syntax.cjs
           node tests/test_operator_case_recovery_ui.cjs
           node tests/case-deeplink-smoke.cjs
+
+      - name: Task source desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-source-screenshots
+          path: beintaskbot-main/tests/artifacts/task-source/
+          if-no-files-found: ignore
