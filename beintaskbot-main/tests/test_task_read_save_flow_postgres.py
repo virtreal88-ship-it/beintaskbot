@@ -29,6 +29,8 @@ import tenant_task_api as legacy_api
 import tenant_tasks as external_tasks
 import tenant_task_commands as commands
 import tenant_task_completion as completion
+import tenant_task_view_preferences as task_view_preferences
+from tenant_task_view_api import TaskViewContext, handler as task_view_handler
 import tenant_task_approvals as approvals
 import tenant_crm_sync_store as sync_store
 from tenant_platform_core import TenantPlatformError
@@ -98,7 +100,8 @@ def task_flow(staff, monkeypatch):
     f = staff
     modules = ('tenant_crm_native_tasks', 'tenant_crm_native_deals', 'tenant_crm_native_contacts',
                'tenant_crm_store', 'tenant_task_commands', 'tenant_tasks', 'tenant_task_completion',
-               'tenant_task_approvals', 'tenant_crm_sync_store', 'tenant_task_flow')
+               'tenant_task_approvals', 'tenant_crm_sync_store', 'tenant_task_flow',
+               'tenant_task_view_preferences')
     for name in modules:
         module = importlib.import_module(name)
         if hasattr(module, '_connect'): monkeypatch.setattr(module, '_connect', f['factory'])
@@ -139,6 +142,7 @@ def task_flow(staff, monkeypatch):
         'complete_till': int(datetime.fromisoformat(DUE).timestamp())}
     f['sync'] = _production_sync()
     f['posts'] = []
+    f['preference_posts'] = []
     f['native'] = {}
     for name, tenant, deal, creator, target in (
         ('a', A, DEALS[0], 11, 41), ('manager', A, DEALS[0], 82, 82),
@@ -188,15 +192,25 @@ def _app(f, origin=ORIGIN):
     @web.middleware
     async def mutation_allowlist(request, handler):
         if request.method not in {'GET', 'HEAD'}:
-            allowed = request.method == 'POST' and (request.path.startswith('/api/platform/crm/native/tasks') or request.path in {'/api/platform/crm/tasks', '/api/platform/crm/tasks/complete'})
+            allowed = request.method == 'POST' and (request.path.startswith('/api/platform/crm/native/tasks') or request.path in {'/api/platform/crm/tasks', '/api/platform/crm/tasks/complete', '/api/platform/crm/task-view-preferences'})
             if not allowed:
                 f['blocked'].append((request.method, request.path))
                 return web.json_response({'success': False, 'error': 'Unexpected test mutation'}, status=405)
-            f['posts'].append({'path': request.path, 'query': dict(request.query), 'body': await request.json()})
+            post = {'path': request.path, 'query': dict(request.query), 'body': await request.json()}
+            if request.path == '/api/platform/crm/task-view-preferences':
+                response = await handler(request)
+                if response.status == 200:
+                    f['preference_posts'].append(post)
+                return response
+            f['posts'].append(post)
         return await handler(request)
     app = web.Application(middlewares=[mutation_allowlist])
     auth, _ = _apis(f, origin)
     external, native = _task_apis(f, origin)
+    app.router.add_route('*', '/api/platform/crm/task-view-preferences',
+        task_view_handler(TaskViewContext(member=f['session'].profile,
+            preferences=task_view_preferences.preferences, origin=origin,
+            platform_error=TenantPlatformError)))
     app.router.add_get('/api/platform/me', auth['me'])
     app.router.add_get('/api/platform/crm/tasks', external['tasks'])
     app.router.add_post('/api/platform/crm/tasks', external['create'])
@@ -216,6 +230,33 @@ def _state(f):
             values = conn.execute(psycopg.sql.SQL('SELECT to_jsonb(t) AS value FROM {} t').format(psycopg.sql.Identifier(row['tablename']))).fetchall()
             state[row['tablename']] = sorted(json.dumps(item['value'], sort_keys=True) for item in values)
     return state
+
+
+def _assert_preference_delta(before, after, posts):
+    """Remove only proven personal-source writes from the business-state diff."""
+    table = 'saas_tenant_workflow_policies'
+    old = {(row['tenant_id'], row['policy_key']): row
+           for row in map(json.loads, before[table])}
+    actual = {(row['tenant_id'], row['policy_key']): row
+              for row in map(json.loads, after[table])}
+    expected = copy.deepcopy(old)
+    touched = set()
+    for post in posts:
+        tenant = post['query']['expected_tenant_id']
+        actor = post['query']['expected_user_id']
+        source = post['body']['source']
+        assert source in ('native', 'kommo')
+        key = (tenant, 'members')
+        touched.add(key)
+        if key not in expected:
+            expected[key] = {**actual[key], 'value': {}}
+        expected[key]['value'].setdefault(actor, {})['task_view'] = {'source': source}
+        expected[key]['updated_by'] = int(actor)
+    for key in touched:
+        expected[key]['updated_at'] = actual[key]['updated_at']
+    assert actual == expected, 'Source selection changed more than its personal presentation subkey'
+    # All other business-state assertions below remain strict.
+    after[table] = before[table]
 
 
 def _identity(tenant=A, actor=11):
@@ -670,6 +711,7 @@ def test_actual_tasks_app_reads_and_saves_through_cookie_postgres(task_flow, mod
         assert not f['blocked']
         # Ordinary task/app reads cannot enqueue sync or mutate business rows.
         after = _state(f)
+        _assert_preference_delta(before, after, f['preference_posts'])
         changed = {key for key in after if before[key] != after[key]}
         if mode == 'tenant_late':
             assert changed == set() and f['posts'] == [], changed
@@ -907,3 +949,40 @@ def test_native_same_request_uuid_across_tenants_has_independent_actor_bound_rec
             assert status == 200 and other_actor['command']['state'] == 'not_confirmed' and other_actor['command']['task_id'] is None
     asyncio.run(scenario())
     assert f['provider'].calls == []
+
+
+def test_task_source_preferences_use_current_cookie_and_isolated_storage(task_flow):
+    f = task_flow
+    path = '/api/platform/crm/task-view-preferences'
+    cookie = f['session'].issue(A, 88)
+    other_cookie = f['session'].issue(B, 88)
+    before = _state(f)
+
+    async def scenario():
+        async with TestClient(TestServer(_app(f))) as http:
+            status, result = await _get(http, cookie, actor=88, path=path)
+            assert status == 200 and result['source'] == 'native'
+            status, result = await _post(http, cookie, {'source': 'kommo'}, path=path, query=_identity(A, 88))
+            assert status == 200 and result['source'] == 'kommo'
+            status, result = await _get(http, cookie, actor=88, path=path)
+            assert status == 200 and result['source'] == 'kommo'
+            status, result = await _get(http, other_cookie, tenant=B, actor=88, path=path)
+            assert status == 200 and result['source'] == 'native'
+            status, _ = await _post(http, other_cookie, {'source': 'native'}, path=path, query=_identity(A, 88))
+            assert status == 409
+            status, _ = await _post(http, cookie, {'source': 'native', 'actor_id': 11}, path=path, query=_identity(A, 88))
+            assert status == 400
+            response = await http.post(path, params=_identity(A, 88),
+                headers={'Cookie': COOKIE_NAME + '=' + cookie, 'Origin': 'https://foreign.invalid'}, json={'source': 'native'})
+            assert response.status == 403
+            with f['factory']() as conn:
+                conn.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=88', (A,))
+            status, _ = await _post(http, cookie, {'source': 'native'}, path=path, query=_identity(A, 88))
+            assert status == 401
+            with f['factory']() as conn:
+                conn.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=88', (A,))
+    asyncio.run(scenario())
+    assert len(f['preference_posts']) == 1 and not f['posts'] and not f['provider'].calls
+    after = _state(f)
+    _assert_preference_delta(before, after, f['preference_posts'])
+    assert before == after
