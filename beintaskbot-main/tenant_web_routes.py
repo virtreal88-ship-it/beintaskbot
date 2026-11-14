@@ -148,6 +148,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
         ('dialogs/sources', operator_handler(member, origin, logger, 'sources'), ('GET','POST')),
+        ('dialogs/group-participants', operator_handler(member, origin, logger, 'group_participants'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
@@ -262,3 +263,4 @@ def register_feature_routes(app: web.Application, context: TenantWebContext) -> 
             app.router.add_get(path, handle)
         else:
             app.router.add_route(method, path, handle)
+
