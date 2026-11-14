@@ -61,6 +61,7 @@
     for(const source of ['native','kommo']){
       const panel=$(source==='native'?'nativeTasksList':'tasksList')?.closest('.task-source-panel');
       if(panel)panel.hidden=source!==activeSource;
+      const controls=$(source==='native'?'nativeTaskViewControls':'kommoTaskViewControls');if(controls)controls.hidden=source!==activeSource;
     }
   }
   async function loadSourcePreference(){

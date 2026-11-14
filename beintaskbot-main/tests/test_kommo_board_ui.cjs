@@ -9,7 +9,7 @@ let stored=[],posts=0,fail=false,hold=null;
 w.fetch=async(url,opt={})=>{assert.equal(url,'/api/platform/crm/deal-board-preferences');if(opt.method==='POST'){posts++;if(hold)await hold;if(fail)return {ok:false,json:async()=>({success:false,error:'SAVE ERROR'})};stored=JSON.parse(opt.body).hidden_stage_keys;}return {ok:true,json:async()=>({success:true,catalog,hidden_stage_keys:stored})}};
 const tick=()=>new Promise(r=>setTimeout(r,30));
 async function until(f){for(let i=0;i<100;i++){if(f())return;await tick()}assert(f(),'UI did not settle')}
-const button=name=>[...d.querySelectorAll('button')].find(x=>x.textContent===name);
+const button=name=>[...d.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||x.textContent)===name);
 (async()=>{w.eval(fs.readFileSync('docs/tenant-chakra-ui.js','utf8'));
 w.tenantChakraCRM.renderDeals('deals',[{kommo_lead_id:1,pipeline_id:1,status_id:10,stage_name:'New',name:'Deal'}],false);
 await until(()=>button('Столбцы')&&!button('Столбцы').disabled);
