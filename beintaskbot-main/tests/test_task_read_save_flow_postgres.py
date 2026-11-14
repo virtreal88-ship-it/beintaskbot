@@ -910,12 +910,17 @@ def test_native_same_request_uuid_across_tenants_has_independent_actor_bound_rec
     assert f['provider'].calls == []
 
 
-def test_kommo_pipeline_read_survives_native_permission_denial_without_write_grants(task_flow):
+@pytest.mark.parametrize("native_scope", ["none", "self"])
+def test_kommo_pipeline_read_survives_native_permission_denial_without_write_grants(task_flow, monkeypatch, native_scope):
     f = task_flow
     with f['factory']() as conn:
         conn.execute("UPDATE saas_tenant_members SET permissions='[]' WHERE tenant_id=%s::uuid AND telegram_id=82", (A,))
         conn.execute("INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,pipeline_id,status_id,name) VALUES(%s::uuid,202,20,201,'Other funnel')", (A,))
         conn.execute("INSERT INTO saas_crm_tasks(tenant_id,kommo_task_id,kommo_lead_id,text) VALUES(%s::uuid,503,202,'Other funnel task')", (A,))
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    with f['factory']() as conn:
+        conn.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value, '{82,access_scopes}', %s::jsonb) WHERE tenant_id=%s::uuid AND policy_key='members'",
+            (json.dumps({'tasks': {action: native_scope for action in ('view', 'create', 'update', 'delete')}}), A))
     cookie = f['session'].issue(A, 82)
     before = _state(f)
     async def scenario():
