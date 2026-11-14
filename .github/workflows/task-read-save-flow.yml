@@ -74,6 +74,7 @@ jobs:
         run: >-
           python -m pytest -q -rs
           tests/test_tenant_task_view_preferences.py
+          tests/test_tenant_deal_view_preferences.py
           tests/test_task_read_save_flow_postgres.py
           tests/test_task_read_save_flow_bounds.py
           tests/test_native_task_assignee_access.py
@@ -93,6 +94,8 @@ jobs:
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_task_source_picker_ui.cjs
           node tests/test_task_source_picker_browser.cjs
+          node tests/test_deal_source_picker_ui.cjs
+          node tests/test_deal_source_picker_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_native_task_assignee_browser.cjs
           node tests/test_tenant_tasks_ui.cjs
@@ -120,4 +123,12 @@ jobs:
         with:
           name: task-source-screenshots
           path: beintaskbot-main/tests/artifacts/task-source/
+          if-no-files-found: ignore
+
+      - name: Deal source desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deal-source-screenshots
+          path: beintaskbot-main/tests/artifacts/deal-source/
           if-no-files-found: ignore

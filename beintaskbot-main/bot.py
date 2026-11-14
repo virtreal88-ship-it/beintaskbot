@@ -18624,6 +18624,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_deal_board_handler(DealBoardContext(member=_tenant_member_from_request,
             preferences=tenant_deal_board_preferences, origin=CANONICAL_WEB_ORIGIN,
             platform_error=TenantPlatformError)))
+    from tenant_deal_view_preferences import preferences as tenant_deal_view_preferences
+    from tenant_deal_view_api import DealViewContext, handler as tenant_deal_view_handler
+    app_web.router.add_route('*', '/api/platform/crm/deal-view-preferences',
+        tenant_deal_view_handler(DealViewContext(member=_tenant_member_from_request,
+            preferences=tenant_deal_view_preferences, origin=CANONICAL_WEB_ORIGIN,
+            platform_error=TenantPlatformError)))
     from tenant_task_view_preferences import preferences as tenant_task_view_preferences
     from tenant_task_view_api import TaskViewContext, handler as tenant_task_view_handler
     app_web.router.add_route('*', '/api/platform/crm/task-view-preferences',

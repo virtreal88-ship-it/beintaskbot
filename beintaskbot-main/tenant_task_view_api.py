@@ -12,6 +12,8 @@ class TaskViewContext:
     preferences: Callable
     origin: str
     platform_error: type[Exception]
+    invalid_message: str = 'Tapşırıq mənbəyi düzgün deyil.'
+    failure_message: str = 'Tapşırıq görünüşü yüklənmədi və ya saxlanmadı.'
 
 
 def handler(context: TaskViewContext):
@@ -39,7 +41,7 @@ def handler(context: TaskViewContext):
                     raise ValueError()
                 source = data['source']
             except Exception:
-                return response({'success': False, 'error': 'Tapşırıq mənbəyi düzgün deyil.'}, 400)
+                return response({'success': False, 'error': context.invalid_message}, 400)
         try:
             result = await asyncio.to_thread(context.preferences, tenant_id=str(profile['tenant_id']),
                                             actor_id=int(profile['telegram_id']), source=source)
@@ -47,5 +49,5 @@ def handler(context: TaskViewContext):
         except context.platform_error as exc:
             return response({'success': False, 'error': str(exc)}, 400)
         except Exception:
-            return response({'success': False, 'error': 'Tapşırıq görünüşü yüklənmədi və ya saxlanmadı.'}, 503)
+            return response({'success': False, 'error': context.failure_message}, 503)
     return handle
