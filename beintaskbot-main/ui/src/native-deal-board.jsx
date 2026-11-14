@@ -1,5 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 
+export const dealProfileScope = (data=window.tenantProfileSnapshot||{}) => JSON.stringify([data.member,data.capabilities,data.role_permissions,data.integrations]);
+
 const copy = {
   az:{board:'Kanban',table:'Cədvəl',move:'Mərhələni dəyiş',open:'Aç',edit:'Redaktə et',empty:'Sövdələşmə yoxdur',saving:'Saxlanılır…',error:'Dəyişiklik saxlanmadı. Siyahını yeniləyin.',drag:'Daşımaq üçün tutun'},
   ru:{board:'Канбан',table:'Таблица',move:'Изменить этап',open:'Открыть',edit:'Редактировать',empty:'Нет сделок',saving:'Сохраняем…',error:'Изменение не сохранено. Обновите список.',drag:'Удерживайте для переноса'},
@@ -12,7 +14,7 @@ export function NativeDealBoard({rows=[], settings={}}) {
   const alive=useRef(true), generation=useRef(0), busy=useRef(false), drag=useRef(null);
   const identity=`${settings.tenantId}:${settings.userId}`;
   useEffect(()=>{setItems(old=>rows.map(row=>pending===String(row.id)?(old.find(item=>item.id===row.id)||row):row));},[rows]);
-  useEffect(()=>{alive.current=true;const clear=()=>{generation.current++;busy.current=false;drag.current=null;setPending('');setItems([]);};document.addEventListener('tenant-profile',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',clear);};},[identity]);
+  useEffect(()=>{alive.current=true;const clear=()=>{generation.current++;busy.current=false;drag.current=null;setPending('');setItems([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',clear);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',clear);};},[identity]);
   const workflows=settings.workflows||[];
   const canMove=row=>settings.canUpdate===true && row.actions?.update===true && !!row.updated_at && targets(row).length>0 && !pending;
   const targets=row=>workflows.filter(w=>String(w.pipeline_id)===String(row.pipeline_id));

@@ -142,9 +142,9 @@
   }
   async function refreshSource(source,{force=false}={}){
     const state=rows[source];if(!allowed()||!visible()||routeTarget()?.error)return;if(state.promise&&!force)return state.promise;
-    const serial=++state.serial,scope=capture();state.phase='loading';renderSource(source);
+    const serial=++state.serial,scope=capture();if(!state.page)state.phase='loading';renderSource(source);
     const promise=(async()=>{try{const data=await read(source,{},scope);if(!current(scope)||serial!==state.serial)return;if(data.source!==source||!Array.isArray(data.tasks)||!data.tasks.every(row=>rowValid(source,row))||!Array.isArray(data.sources))throw new Error('invalid_task_list');state.rows=data.tasks;state.page=data;state.phase='ready';}
-      catch(error){if(!current(scope)||serial!==state.serial||error.stale)return;state.phase=error.status===403?'forbidden':state.rows.length?'stale':'error';if(error.status===403){state.rows=[];state.page=null;}if(error.status===409)void proveAccess();}
+      catch(error){if(!current(scope)||serial!==state.serial||error.stale)return;state.phase=error.status===403?'forbidden':state.page?'stale':'error';if(error.status===403){state.rows=[];state.page=null;}if(error.status===409)void proveAccess();}
       finally{if(current(scope)&&serial===state.serial){state.promise=null;enforcePrivateAccess();render();window.tenantTaskBridge?.render();window.tenantExternalTasks?.render();window.tenantTaskCompletion?.render();}}})();state.promise=promise;return promise;
   }
   const refresh=()=>Promise.allSettled(['native','kommo'].map(source=>refreshSource(source)));

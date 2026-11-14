@@ -49,7 +49,7 @@
     const headers=new Headers(options.headers||input?.headers||{});
     if(headers.get('content-type')==='application/json')headers.delete('content-type');
     const share=typeof input==='string'&&!options.signal&&!headers.has('authorization')&&options.credentials!=='omit'&&(
-      url.pathname==='/api/platform/me'||/^\/api\/platform\/ai\/(dialogs|agents)(\/|$)/.test(url.pathname)||/^\/api\/platform\/crm\/native\/(tasks|deals|contacts|companies)$/.test(url.pathname));
+      url.pathname==='/api/platform/me'||(/^\/api\/platform\/crm\/(deals|sync)$/.test(url.pathname)&&!url.searchParams.has('refresh')&&!url.searchParams.has('full'))||/^\/api\/platform\/ai\/(dialogs|agents)(\/|$)/.test(url.pathname)||/^\/api\/platform\/crm\/native\/(tasks|deals|contacts|companies)$/.test(url.pathname));
     if(!share)return nativeFetch(input,options).then(response=>{if(isTenantAuthFailure(response,url))invalidateAuth();return response;});
     const isProfile=url.pathname==='/api/platform/me',key=JSON.stringify([url.href,options.credentials||'same-origin',[...headers.entries()].sort(),options.mode||'cors',options.redirect||'follow',options.integrity||'',options.referrer||'',options.referrerPolicy||'']);
     if(isProfile&&profileResponse&&profileKey===key&&Date.now()<profileUntil)return Promise.resolve(scopedResponse(profileResponse.clone(),generation));

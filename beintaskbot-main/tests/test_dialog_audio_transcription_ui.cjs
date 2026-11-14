@@ -32,7 +32,7 @@ async function setup(browser,options={}){
  await page.goto('https://test.local/app?view=dialogs'+(options.siteLanguage?'&site_lang='+encodeURIComponent(options.siteLanguage):''));
  await installApp(page,options);return page;
 }
-async function openMenu(page){await page.locator('article[data-message-id="row-voice-1"]').click({button:'right',position:{x:8,y:8}});}
+async function openMenu(page){if(await page.locator('.operator-reply-context-menu').count())await page.keyboard.press('Escape');await page.locator('article[data-message-id="row-voice-1"]').click({button:'right',position:{x:8,y:8}});}
 async function waitForGet(page){await page.waitForFunction(()=>window.requests.some(r=>r.url.includes('/audio-transcription')&&r.method==='GET'));}
 
 (async()=>{

@@ -3,7 +3,7 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));};
 // Check every locale, including the label shared by persisted cards and dispatch results.
 const consultationSource=fs.readFileSync('docs/tenant-dialog-consultations.js','utf8');
-const receiptCopy=require('node:vm').runInNewContext('('+consultationSource.match(/const copy=(.*?);\n/s)[1]+')');
+const receiptCopy=require('node:vm').runInNewContext('('+consultationSource.match(/const copy=(.*?);\r?\n/s)[1]+')');
 for(const [language,label] of Object.entries({ru:'Передано провайдеру; доставка не подтверждена.',az:'Provayderə ötürülüb; çatdırılma təsdiqlənməyib.',en:'Submitted to provider; delivery unconfirmed.'})){
  assert.equal(receiptCopy[language].sent,label);
  assert.notEqual(receiptCopy[language].pendingSend,label);

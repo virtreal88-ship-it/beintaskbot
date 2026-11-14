@@ -43,7 +43,8 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.match(await menu.locator('[data-context-file="doc-1"] [data-context-file-action=load]').innerText(),/Повтор|Retry|təkrar/);
     // A stale host/source cannot run an action from an already-open portal.
     await page.evaluate(()=>{document.querySelector('[data-chat-attachment="doc-1"]').dataset.mediaVersion='b'.repeat(64);});await page.waitForFunction(()=>!document.querySelector('.operator-reply-context-menu'));assert.equal(mediaRequests,1);
-    await open();await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));assert.equal(await menu.count(),0,'same-dialog render retires the portal');
+    // An actual locale change remounts translated controls; an unchanged locale now preserves DOM.
+    await open();await page.locator('[data-app-language]').selectOption('en',{force:true});assert.equal(await menu.count(),0,'language change retires the portal');await page.locator('[data-app-language]').selectOption(language,{force:true});
     await article.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();assert.equal(await menu.locator('[data-context-file]').count(),1,'fresh rendering restores the real per-row files');await page.keyboard.press('Escape');
     // Actual desktop right-click and touch hold share one entry point.
     await card.locator('.operator-audio-heading').click({button:'right'});await menu.waitFor();assert.equal(await menu.count(),1);await page.keyboard.press('Escape');

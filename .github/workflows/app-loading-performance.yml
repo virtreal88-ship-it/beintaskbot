@@ -75,3 +75,35 @@ jobs:
           tests/test_tenant_app_pwa_assets.py
           tests/test_tenant_web_routes.py
           tests/test_tenant_ai_agents_api_diagnostics.py
+
+  stable-background-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build shipped UI and install browser
+        run: |
+          npm ci --prefix ui --no-audit --no-fund
+          npm run build --prefix ui
+          npm install --prefix .support-test-deps --no-save playwright@1.62.1 jsdom@26.1.0
+          node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Background refresh, AI reply, tenant isolation and retained editor
+        env:
+          PLAYWRIGHT_MODULE: ../.support-test-deps/node_modules/playwright
+        run: |
+          node tests/test_stable_background_refresh_browser.cjs
+          node tests/test_stable_deals_refresh_browser.cjs
+          node tests/test_contacts_directory_ui.cjs
+          node tests/test_tenant_crm_sync_ui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stable-background-refresh-traces
+          path: beintaskbot-main/tests/artifacts/stable-refresh/
+          if-no-files-found: warn
