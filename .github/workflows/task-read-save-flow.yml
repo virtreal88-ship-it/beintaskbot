@@ -76,6 +76,10 @@ jobs:
           tests/test_tenant_task_view_preferences.py
           tests/test_tenant_deal_view_preferences.py
           tests/test_task_read_save_flow_postgres.py
+          tests/test_kommo_task_reschedule.py
+          tests/test_kommo_board_preflight.py
+          tests/test_task_customer_context.py
+          tests/test_task_customer_context_postgres.py
           tests/test_task_read_save_flow_bounds.py
           tests/test_native_task_assignee_access.py
           tests/test_crm_native_tasks.py
@@ -92,6 +96,10 @@ jobs:
       - name: Task states, interrupted saves and retained native task form
         run: |
           node tests/test_task_read_save_flow_ui.cjs
+          node tests/test_task_move_flow.cjs
+          node tests/test_kommo_task_move_flow.cjs
+          node tests/test_task_move_ui.cjs
+          node tests/test_native_deal_board_ui.cjs
           node tests/test_task_source_picker_ui.cjs
           node tests/test_task_source_picker_browser.cjs
           node tests/test_deal_source_picker_ui.cjs

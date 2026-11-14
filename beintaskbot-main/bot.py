@@ -18618,6 +18618,9 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_notification_settings_handler(NotificationSettingsContext(
             member=_tenant_member_from_request,preferences=tenant_notification_preferences,
             origin=CANONICAL_WEB_ORIGIN,platform_error=TenantPlatformError)))
+    from tenant_kommo_deal_move_api import handler as kommo_deal_move_handler
+    app_web.router.add_route('*','/api/platform/crm/deals/move-stage',
+        kommo_deal_move_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,_tenant_kommo_service.request_bound,logger))
     from tenant_deal_board_preferences import preferences as tenant_deal_board_preferences
     from tenant_deal_board_api import DealBoardContext, handler as tenant_deal_board_handler
     app_web.router.add_route('*', '/api/platform/crm/deal-board-preferences',
@@ -18809,6 +18812,11 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/tasks/complete', task_api["complete"])
+    from tenant_kommo_task_reschedule import handlers as kommo_reschedule_handlers
+    kommo_reschedule = kommo_reschedule_handlers(member=_tenant_member_from_request,
+        bound_request=_tenant_kommo_service.request_bound, origin=CANONICAL_WEB_ORIGIN, logger=logger)
+    app_web.router.add_post('/api/platform/crm/tasks/reschedule', kommo_reschedule)
+    app_web.router.add_get('/api/platform/crm/tasks/reschedule', kommo_reschedule)
     app_web.router.add_get("/api/platform/workflow", workflow_api["config"])
     app_web.router.add_post("/api/platform/workflow", workflow_api["config"])
     app_web.router.add_get("/api/platform/workflow/catalog", workflow_api["catalog"])

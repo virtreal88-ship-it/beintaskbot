@@ -96,27 +96,59 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
         # PR630 passed creator_id through the handler but omitted this adapter.
         from dataclasses import replace
         from tenant_crm_store import list_crm_deals
+        tenant = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        self.profile['tenant_id'] = tenant
+        from datetime import datetime, timezone
+        from tenant_kommo_board_provenance import digest
         for role, creator in [('owner', 0), ('worker', 77)]:
-            with self.subTest(role=role):
-                self.profile['role'] = role
-                self.profile['workflow']['policies'][0]['value']['20']['kommo_user_id'] = creator
-                connection = MagicMock()
-                cur = connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
-                cur.fetchone.return_value = {'total': 1}
-                cur.fetchall.return_value = [{'tenant_id': 'company-a', 'kommo_lead_id': 7}]
-                with patch('tenant_crm_store._connect', connection), patch('tenant_crm_store._ensure_schema'):
-                    api = handlers(replace(self.context, list_deals=list_crm_deals))
-                    response = await api['deals'](Request())
-                self.assertEqual(response.status, 200)
-                self.assertEqual(response_body(response)['total'], 1)
-                for call in cur.execute.call_args_list:
-                    sql, values = call.args
-                    self.assertIn('tenant_id = %s::uuid', sql)
-                    self.assertEqual(values[0], 'company-a')
-                    self.assertIn('pipeline_id = %s', sql)
-                    if creator:
-                        self.assertIn("raw->>'created_by_id'=%s", sql)
-                        self.assertIn('77', values)
+            for proof_ready in (False, True):
+                with self.subTest(role=role, proof_ready=proof_ready):
+                    self.profile['role'] = role
+                    self.profile['workflow']['policies'][0]['value']['20']['kommo_user_id'] = creator
+                    connection = MagicMock()
+                    cur = connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                    raw = {'id': 7, 'pipeline_id': 10, 'status_id': 100, 'updated_at': 1000}
+                    stamp = datetime(2026, 11, 14, tzinfo=timezone.utc)
+                    cur.fetchone.side_effect = [{'total': 1}, {'ready': proof_ready}]
+                    batches = [[{'tenant_id': tenant, 'kommo_lead_id': 7, 'raw': raw}]]
+                    if proof_ready:
+                        batches.extend([
+                            [{'provider': 'kommo', 'status': 'connected', 'account_domain': 'company-a.kommo.com',
+                              'connected_at': stamp}],
+                            [{'external_id': 7, 'raw_digest': digest(raw), 'source_revision': 'a' * 64, 'raw': raw}],
+                        ])
+                    cur.fetchall.side_effect = batches
+                    with patch('tenant_crm_store._connect', connection), patch('tenant_crm_store._ensure_schema'):
+                        api = handlers(replace(self.context, list_deals=list_crm_deals))
+                        response = await api['deals'](Request())
+                    self.assertEqual(response.status, 200)
+                    payload = response_body(response)
+                    self.assertEqual(payload['total'], 1)
+                    self.assertEqual(payload['deals'][0]['source_revision'], 'a' * 64 if proof_ready else None)
+                    calls = cur.execute.call_args_list
+                    self.assertEqual(len(calls), 5 if proof_ready else 3)
+                    # Count and page still use the identical tenant/funnel/creator
+                    # predicate. Read-only schema metadata is not a deal query.
+                    for call in calls[:2]:
+                        sql, values = call.args
+                        self.assertIn('tenant_id = %s::uuid', sql)
+                        self.assertEqual(values[0], tenant)
+                        self.assertIn('pipeline_id = %s', sql)
+                        if creator:
+                            self.assertIn("raw->>'created_by_id'=%s", sql)
+                            self.assertIn('77', values)
+                    self.assertEqual(calls[2].args, (
+                        "SELECT to_regclass('saas_crm_board_provenance') IS NOT NULL AS ready",))
+                    if proof_ready:
+                        integration_sql, integration_values = calls[3].args
+                        self.assertIn('tenant_id=%s::uuid', integration_sql)
+                        self.assertEqual(integration_values, (tenant,))
+                        proof_sql, proof_values = calls[4].args
+                        self.assertIn('p.tenant_id=%s::uuid', proof_sql)
+                        self.assertIn('p.external_id=ANY(%s::bigint[])', proof_sql)
+                        self.assertIn('p.account_id=%s AND p.connection_generation=%s', proof_sql)
+                        self.assertEqual(proof_values, (tenant, 'leads', [7],
+                            'company-a.kommo.com', 'kommo:' + stamp.isoformat()))
 
     async def test_invalid_filter_is_rejected_before_storage(self):
         response = await self.api["deals"](Request({"pipeline_id": ["invalid"]}))
