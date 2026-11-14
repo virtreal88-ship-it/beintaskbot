@@ -2414,7 +2414,7 @@ function SettingsHub() {
                 : copy.emailMissing}
             </Text>
           </Grid>
-          <Flex mt="3" gap="2">
+          <Flex mt="3" gap="2" wrap="wrap" minW="0">
             <Button colorPalette="brand" onClick={saveAccount}>
               {copy.save}
             </Button>
