@@ -277,12 +277,15 @@ def _arm_synthetic_initial_pilot(db,monkeypatch):
     with db.cursor() as cur:
         pilot.schema(cur)
         _row,fingerprint=pilot._snapshot(cur,A,scope)
-        cur.execute('''INSERT INTO saas_ai_pilot_confirmations
+        cur.execute('''WITH attestation AS (
+          SELECT clock_timestamp()-interval '1 minute' AS approved_at,
+                 clock_timestamp()+interval '14 minutes' AS expires_at
+        )
+        INSERT INTO saas_ai_pilot_confirmations
           (tenant_id,channel_id,conversation_id,scope_fingerprint,kwid_confirmed_by,
            kwid_confirmed_at,kwid_expires_at,owner_approved_by,owner_approved_at,owner_expires_at)
-          VALUES(%s::uuid,%s::uuid,%s,%s,11,clock_timestamp()-interval '1 minute',
-           clock_timestamp()+interval '14 minutes',11,clock_timestamp()-interval '1 minute',
-           clock_timestamp()+interval '14 minutes')
+          SELECT %s::uuid,%s::uuid,%s,%s,11,approved_at,expires_at,11,approved_at,expires_at
+          FROM attestation
           ON CONFLICT(tenant_id) DO UPDATE SET channel_id=EXCLUDED.channel_id,
            conversation_id=EXCLUDED.conversation_id,scope_fingerprint=EXCLUDED.scope_fingerprint,
            kwid_confirmed_by=EXCLUDED.kwid_confirmed_by,kwid_confirmed_at=EXCLUDED.kwid_confirmed_at,
