@@ -19,7 +19,7 @@ assert.equal(columns([],[]).length,0);
 assert.equal(date('not-a-date'),'—');
 assert.match(date('2026-10-10T12:00:00Z'),/^10\/10\/2026 \d\d:\d\d$/);
 assert.equal(escape('<img onerror="x">'),'&lt;img onerror=&quot;x&quot;&gt;');
-assert.match(settingsSource,/settings\.querySelector\(':scope > \.top'\)/,'settings tabs attach to the visible settings header, not a nested hidden modal');
+assert.match(settingsSource,/settings\.prepend\(advancedTitle,sections,help\)/,'Profile settings subsections stay attached to their visible section heading');
 assert.match(settingsSource,/document\.addEventListener\('tenant-language',showSettings\)/,'settings tabs relocalize immediately when the language changes');
 for(const key of ['employees','integrations','companies','workflow','advanced'])assert.match(settingsSource,new RegExp(key+':\\['),'settings groups have localized labels and descriptions');
 console.log('PASS: board grouping, ordering, empty stages, isolation and escaping');
