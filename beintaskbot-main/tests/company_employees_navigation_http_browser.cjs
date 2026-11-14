@@ -102,11 +102,8 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
       assert.equal(response.status(), 403);
       assert.equal('members' in await response.json(), false);
     } else {
-      await openSidebar();
-      const entry = page.locator('#settingsFamilyNav');
-      const group = page.locator('[data-group=company]');
-      if (!(await entry.isVisible())) await group.locator('.app-nav-group-title').click();
-      await entry.click();
+      await page.locator('.app-avatar-button').click();
+      await page.locator('#appUserMenu [data-app-open=settings]').click();
       const staffTab = page.locator('[data-settings-page=employees]');
       if (await staffTab.isVisible()) await staffTab.click();
       else if (!(await page.locator('#view-employees').evaluate(node => node.classList.contains('active')))) {
