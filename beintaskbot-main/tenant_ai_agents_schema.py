@@ -261,7 +261,7 @@ _SCHEMA_INDEXES = [
 ]
 
 
-def _schema_current(conn):
+def _schema_current(conn, *, include_support_sla=True):
     """Certify the selected schema without DDL, locks on business rows or commits."""
     from tenant_schema_preflight import ready
     from tenant_ai_spend_budget import _SCHEMA_COLUMNS as spend_columns, _SCHEMA_INDEXES as spend_indexes
@@ -270,6 +270,12 @@ def _schema_current(conn):
     import json
     columns = {**_SCHEMA_COLUMNS, **spend_columns, **connect_columns}
     indexes = [*_SCHEMA_INDEXES, *spend_indexes, *connect_indexes]
+    if not include_support_sla:
+        columns.pop('saas_support_sla_policies', None)
+        sla_columns={'risk_assessment','reply_draft','priority','priority_suggestion',
+                     'priority_reason','response_due_at','response_due_manual'}
+        columns['saas_support_tickets']=[name for name in columns['saas_support_tickets'] if name not in sla_columns]
+        indexes=[name for name in indexes if name!='saas_support_attention_idx']
     with conn.cursor() as cur:
         if not ready(cur, columns, indexes):
             return False
@@ -326,14 +332,17 @@ def _schema_current(conn):
               ('saas_ai_agent_drafts','saas_ai_agent_drafts_state_check','sending'),
               ('saas_ai_agent_settings','saas_ai_agent_settings_operating_mode_check','simulation'),
               ('saas_ai_agent_settings','saas_ai_agent_settings_support_case_extraction_mode_check','automatic'),
-              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived'),
-              ('saas_support_tickets','saas_support_priority_check','urgent'),
-              ('saas_support_tickets','saas_support_priority_suggestion_check','urgent')
+              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived')
             ) AS expected(relation, name, value)
             WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
               WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name
-                AND c.convalidated AND position(expected.value in pg_get_constraintdef(c.oid))>0)) AS ready""",
-            (json.dumps(history_fks),))
+                AND c.convalidated AND position(expected.value in pg_get_constraintdef(c.oid))>0))
+          AND (NOT %s OR NOT EXISTS (
+            SELECT 1 FROM (VALUES ('saas_support_priority_check'),('saas_support_priority_suggestion_check')) AS expected(name)
+            WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
+              WHERE c.conrelid='saas_support_tickets'::regclass AND c.conname=expected.name
+                AND c.contype='c' AND c.convalidated AND position('urgent' in pg_get_constraintdef(c.oid))>0))) AS ready""",
+            (json.dumps(history_fks),include_support_sla))
         base_ready = (cur.fetchone() or {}).get('ready') is True
         from tenant_ai_unused_archive import fences_ready
         return base_ready and fences_ready(cur)
@@ -365,6 +374,23 @@ def _ensure_platform_schema(conn):
 def ensure_schema(conn):
     global _ready
     if _schema_current(conn):
+        return
+    # An existing ready baseline missing only SLA additions must not replay
+    # unrelated compatibility migrations or mutate business rows.
+    if _schema_current(conn, include_support_sla=False):
+        with _lock:
+            from tenant_schema_preflight import lock_schema
+            with conn.cursor() as cur:
+                lock_schema(cur)
+            if _schema_current(conn):
+                return
+            if not _schema_current(conn, include_support_sla=False):
+                raise RuntimeError('Support SLA upgrade baseline changed; stop for schema review.')
+            from tenant_support_inbox_schema import create_sla_schema
+            create_sla_schema(conn)
+            if not _schema_current(conn):
+                raise RuntimeError('Support SLA upgrade did not certify the expected schema.')
+            conn.commit()
         return
     with _lock:
         # Missing-schema bootstrap shares Connect/Spend's transaction lock and

@@ -1881,7 +1881,7 @@ def test_developer_free_create_retains_source_dialog_permission(db):
     'priority_reason', 'response_due_at', 'response_due_manual', 'attention_index',
     'priority_check', 'priority_suggestion_check',
 ])
-def test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness(db, missing):
+def test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness(db, missing, monkeypatch):
     ticket=str(uuid.uuid4())
     db.execute("""INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,description,assigned_to,created_by)
         VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','Keep historical case',11,11)""",(A,ticket,CA))
@@ -1899,6 +1899,11 @@ def test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness(db, missing):
     db.commit()
     try:
         assert not schema._schema_current(db), 'Incomplete support SLA upgrade was certified ready'
+        assert schema._schema_current(db, include_support_sla=False)
+        def unrelated_bootstrap(*args, **kwargs):
+            raise AssertionError('SLA-only upgrade invoked unrelated bootstrap')
+        monkeypatch.setattr(schema, '_ensure_platform_schema', unrelated_bootstrap)
+        monkeypatch.setattr('tenant_support_inbox_schema.create_schema', unrelated_bootstrap)
         schema.ensure_schema(db)
         assert schema._schema_current(db)
         assert db.execute('SELECT id,name FROM saas_tenants ORDER BY id')==before
@@ -1912,6 +1917,6 @@ def test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness(db, missing):
         assert db.execute('SELECT count(*) AS n FROM saas_support_sla_policies')[0]['n']==0
     finally:
         db.rollback()
-        from tenant_support_inbox_schema import create_schema
-        create_schema(db)
+        from tenant_support_inbox_schema import create_sla_schema
+        create_sla_schema(db)
         db.commit()
