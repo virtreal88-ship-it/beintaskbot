@@ -215,6 +215,8 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             row.update(id=str(row['kommo_task_id']), status='completed' if row['completed'] else 'open')
             row['kommo_task_id'] = str(row['kommo_task_id'])
             row['source_revision'] = proof.get(row['kommo_task_id'])
+            from tenant_task_titles import task_title_fields
+            task_title_fields(row)
             row.pop('raw',None)
             row['kommo_lead_id'] = str(row['kommo_lead_id']) if row.get('kommo_lead_id') else None
         if source == 'native':
