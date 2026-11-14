@@ -227,7 +227,7 @@ assert(origin && actor && tenantA && tenantB, 'The real HTTP fixture must supply
           await openProfile();
           await page.locator('.app-sidebar-header .app-icon-button').click();
           assert.equal(await page.locator('body').getAttribute('data-sidebar'), 'collapsed');
-          await nav.click();
+          await entry.click();
           await visibleStaff(tenantA);
         }
         await page.reload();

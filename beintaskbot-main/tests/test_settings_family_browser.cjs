@@ -10,6 +10,7 @@ const {nodeHtml,installCompanyEmployeesFixture}=require('./company_employees_ent
  await page.goto('https://fixture.local/app?view=employees');
  await page.locator('#staffContent .staff-row:not(.head)').first().waitFor();
  assert.equal(await page.locator('#companyEmployeesNav').isVisible(),false);
+ if(width===390){await page.locator('.app-mobile-menu').click();await page.locator('#settingsFamilyNav .app-nav-label').click();assert.notEqual(await page.locator('body').getAttribute('data-mobile-menu'),'open');}
  assert.equal(await page.locator('[data-staff-tab=invites],[data-staff-tab=requests]').count(),0);
  const select=page.locator('.settings-family .app-tab-picker');
  for(const view of ['integrations','settings','employees']){
