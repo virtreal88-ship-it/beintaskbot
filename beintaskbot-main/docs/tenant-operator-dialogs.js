@@ -862,11 +862,13 @@
   }
   function restoreCaseDraft(route,composer){
     const key=contextKey('incoming-case-draft',route),draft=sessionStorage.getItem(key);if(!draft)return;
-    const use=()=>{composer.value=draft;composer.dispatchEvent(new Event('input',{bubbles:true}));sessionStorage.removeItem(key);$('operatorCaseDraftReview')?.remove();const status=$('operatorAIReplyStatus');if(status)status.textContent=copilotText('aiReplyReady');};
+    const clearReview=()=>{const prior=$('operatorCaseDraftReview');if(prior){composer.removeEventListener('input',prior._draftInput);prior.remove();}};
+    const use=()=>{composer.value=draft;composer.dispatchEvent(new Event('input',{bubbles:true}));sessionStorage.removeItem(key);clearReview();const status=$('operatorAIReplyStatus');if(status)status.textContent=copilotText('aiReplyReady');};
     if(!composer.value.trim()){use();return;}
-    if(composer.value===draft){sessionStorage.removeItem(key);return;}
+    if(composer.value===draft){sessionStorage.removeItem(key);clearReview();return;}
+    if($('operatorCaseDraftReview')?.dataset.caseDraft===draft)return;clearReview();
     const words=({ru:{title:'Черновик по ответу разработчика — клиенту не отправлен',kept:'Ваш текущий черновик сохранён. Освободите поле сообщения, чтобы использовать этот ответ.',use:'Вставить проверенный черновик'},az:{title:'Tərtibatçı cavabına əsaslanan qaralama — müştəriyə göndərilməyib',kept:'Cari qaralamanız saxlanılıb. Bu cavabı istifadə etmək üçün mesaj sahəsini boşaldın.',use:'Yoxlanmış qaralamanı əlavə et'},en:{title:'Developer reply draft — not sent to the customer',kept:'Your current draft is preserved. Clear the message field to use this reply.',use:'Use reviewed draft'}}[i18n.language]||{});
-    const panel=document.createElement('section');panel.id='operatorCaseDraftReview';panel.className='operator-case-draft-review';const title=document.createElement('strong'),body=document.createElement('p'),hint=document.createElement('p'),insert=document.createElement('button');title.textContent=words.title;body.textContent=draft;hint.textContent=words.kept;insert.type='button';insert.className='outline';insert.textContent=words.use;insert.disabled=true;insert.onclick=()=>{if(!composer.value.trim())use();};composer.addEventListener('input',()=>{insert.disabled=!!composer.value.trim();});panel.append(title,body,hint,insert);composer.closest('.operator-composer').before(panel);
+    const panel=document.createElement('section');panel.id='operatorCaseDraftReview';panel.dataset.caseDraft=draft;panel.className='operator-case-draft-review';const title=document.createElement('strong'),body=document.createElement('p'),hint=document.createElement('p'),insert=document.createElement('button');title.textContent=words.title;body.textContent=draft;hint.textContent=words.kept;insert.type='button';insert.className='outline';insert.textContent=words.use;insert.disabled=true;insert.onclick=()=>{if(!composer.value.trim())use();};panel._draftInput=()=>{insert.disabled=!!composer.value.trim();};composer.addEventListener('input',panel._draftInput);panel.append(title,body,hint,insert);composer.closest('.operator-composer').before(panel);
   }
   // Keep the mounted editor/media subtree for a refreshed snapshot of the
   // same route and permissions. Mutate the page object captured by handlers.
@@ -883,7 +885,7 @@
       else {if(prior.body!==message.body&&(!message.message_type||message.message_type==='text')){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
     }
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id'].includes(key))old[key]=value;
-    currentDialog=old.dialog;displayedPage=old;rememberDialogPage(old.dialog,old);
+    currentDialog=old.dialog;displayedPage=old;rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
     chat.scrollTop=follow?chat.scrollHeight:top;
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
