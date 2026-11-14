@@ -81,6 +81,31 @@ class Lifecycle(unittest.TestCase):
         request=Mock()
         with self.assertRaises(TaskFlowError):commands.execute_sync(PROFILE,self.payload,request,**self.options)
         request.assert_not_called()
+    def test_first_get_failure_is_definitively_rejected(self):
+        for failure in (TimeoutError('GET failed'),RuntimeError('Scalar CRM token requires refresh before delivery.')):
+            Store.state={}
+            request=Mock(side_effect=failure)
+            with self.assertRaises(TaskFlowError) as caught:commands.execute_sync(PROFILE,self.payload,request,**self.options)
+            self.assertEqual(caught.exception.code,'board_preflight_unavailable')
+            self.assertFalse(caught.exception.keep_request)
+            self.assertEqual(Store.state['step'],'rejected')
+            self.assertEqual([x.args[1] for x in request.call_args_list],['GET'])
+            # A new request gets a new row; the retired row is not selected by
+            # the unresolved-command query (which requires board_sending).
+            prior=dict(Store.state); Store.state={}
+            new_payload={**self.payload,'request_id':'33333333-3333-4333-8333-333333333333'}
+            request=Mock(return_value={'id':12})
+            result=commands.execute_sync(PROFILE,new_payload,request,**self.options)
+            self.assertEqual(result['state'],'confirmed')
+            self.assertEqual(prior['step'],'rejected')
+    def test_prior_unknown_get_failure_remains_unknown(self):
+        from dataclasses import asdict
+        Store.state={'step':'board_sending','board_binding':asdict(BINDING)}
+        request=Mock(side_effect=TimeoutError('GET failed'))
+        with self.assertRaises(TaskFlowError) as caught:commands.execute_sync(PROFILE,self.payload,request,**self.options,verify_only=True)
+        self.assertTrue(caught.exception.keep_request)
+        self.assertEqual(Store.state['step'],'board_sending')
+        self.assertEqual([x.args[1] for x in request.call_args_list],['GET'])
     def test_cache_failure_after_patch_stays_unknown(self):
         self.options['cache_confirmed']=Mock(side_effect=RuntimeError('cache down'))
         request=Mock(return_value={'id':12})

@@ -85,6 +85,13 @@ def execute_sync(profile, payload, request, *, operation, path, prepare, verifie
             raise error from exc
         except Exception as exc:
             store.conn.rollback()
+            if not patched and not unknown:
+                # First-read/credentials/preflight failures cannot have sent a
+                # write. Retire this command only after its rejection is durable;
+                # if saving fails, the caller conservatively retains uncertainty.
+                store.save({**store.state,'step':'rejected','code':'board_preflight_unavailable'})
+                error=TaskFlowError('board_preflight_unavailable',503); error.keep_request=False
+                raise error from exc
             error=TaskFlowError('board_outcome_unknown',409); error.keep_request=True
             raise error from exc
     finally:
