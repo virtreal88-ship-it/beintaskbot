@@ -31,5 +31,6 @@ for(const width of [320,360,390,430,1280])for(const theme of ['light','dark']){
  for(const b of geometry.buttons){assert(Math.abs(b.y-geometry.buttons[0].y)<1,`${v} all buttons in first row`);assert(b.w>=36&&b.h>=44,'usable tap target');if(b.svg){assert(Math.abs(b.svg.x+b.svg.w/2-b.x-b.w/2)<1,'icon horizontally centered');assert(Math.abs(b.svg.y+b.svg.h/2-b.y-b.h/2)<1,'icon vertically centered');}}
  for(const s of geometry.selects)assert(s.y>=geometry.buttons[0].y+44,`${v} dropdowns below actions`);
  }}
+ if(mobile){await page.evaluate(()=>document.getElementById('kommoDealSourcePanel').hidden=true);assert.equal(await page.locator('[data-deal-view-controls] button').first().isVisible(),false,'native source does not expose Kommo controls');await page.evaluate(()=>document.getElementById('kommoDealSourcePanel').hidden=false);}
  fs.mkdirSync('tests/artifacts/mobile-crm-toolbar',{recursive:true});await page.screenshot({path:`tests/artifacts/mobile-crm-toolbar/${width}-${theme}.png`});await page.close();
 }console.log('PASS compact CRM toolbars, real page styles, React controls, breakpoint/state/keyboard/callback preservation');}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1});
