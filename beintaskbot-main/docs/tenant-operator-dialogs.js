@@ -878,12 +878,20 @@
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
     currentPage=old;old.messages ||= [];
-    const follow=atBottom(chat),top=chat.scrollTop,byId=new Map((old.messages||[]).map(m=>[String(m.id),m]));
+    const follow=atBottom(chat),top=chat.scrollTop;
+    // Only a complete, unanchored history proves absence. A newest-page read
+    // must not remove older messages explicitly loaded by the employee.
+    if(latest.next_before===null&&!latest.anchor_message_id){
+      const present=new Set((latest.messages||[]).map(message=>String(message.id)));
+      old.messages=old.messages.filter(message=>{if(present.has(String(message.id)))return true;[...chat.querySelectorAll('[data-message-id]')].find(node=>node.dataset.messageId===String(message.id))?.remove();return false;});
+      old.next_before=null;if($('operatorEarlier'))$('operatorEarlier').hidden=true;
+    }
+    const byId=new Map((old.messages||[]).map(m=>[String(m.id),m]));
     updateDeliveryEvidence(latest,latest.dialog);updateAudioEvidence(latest,latest.dialog);updateVisualEvidence(latest,latest.dialog);
     for(const message of latest.messages||[]){
       const prior=byId.get(String(message.id));
       if(!prior){if(!(old.messages||[]).length&&chat.textContent.trim()===t('emptyHistory'))chat.replaceChildren();chat.insertAdjacentHTML('beforeend',messageMarkup([message],latest.dialog));old.messages.push(message);byId.set(String(message.id),message);}
-      else {if(prior.body!==message.body&&(!message.message_type||message.message_type==='text')){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
+      else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
     }
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id'].includes(key))old[key]=value;
     currentDialog=old.dialog;displayedPage=old;rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
