@@ -100,3 +100,7 @@ def test_support_responsibility_is_not_a_report_field_and_catalog_has_no_delete(
     assert store.public(raw) == expected
     assert public(raw) == expected
     assert raw['access_responsible_id'] == 11
+
+# Run the same missing-object/field upgrade matrix against native PostgreSQL,
+# not just PGlite. This module's database fixture supplies disposable localhost DBs.
+from test_tenant_support_inbox import test_support_sla_upgrade_cannot_be_hidden_by_schema_readiness

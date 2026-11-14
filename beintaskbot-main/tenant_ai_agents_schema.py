@@ -202,6 +202,7 @@ _SCHEMA_COLUMNS = {
     'saas_support_events': (
         'event_key tenant_id ticket_id '
     ).split(),
+    'saas_support_sla_policies': 'tenant_id response_hours updated_by updated_at'.split(),
     'saas_support_ticket_messages': (
         'created_at event_key message_id tenant_id ticket_id '
     ).split(),
@@ -209,6 +210,7 @@ _SCHEMA_COLUMNS = {
         'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
         'channel_id completion_note completion_outcome conversation_id created_at created_by '
         'description history_scope id knowledge_candidate_requested next_steps reason '
+        'risk_assessment reply_draft priority priority_suggestion priority_reason response_due_at response_due_manual '
         'resolved_at source status suggestions summary summary_agent_binding '
         'summary_scope_hash summary_state tenant_id updated_at '
     ).split(),
@@ -252,6 +254,7 @@ _SCHEMA_INDEXES = [
     'saas_operator_dialog_reads_member_idx',
     'saas_support_open_route_idx',
     'saas_support_queue_idx',
+    'saas_support_attention_idx',
     'saas_support_ticket_messages_order_idx',
     'saas_tenant_webhook_external_id_idx',
     'saas_tenant_webhook_queue_idx',
@@ -323,7 +326,9 @@ def _schema_current(conn):
               ('saas_ai_agent_drafts','saas_ai_agent_drafts_state_check','sending'),
               ('saas_ai_agent_settings','saas_ai_agent_settings_operating_mode_check','simulation'),
               ('saas_ai_agent_settings','saas_ai_agent_settings_support_case_extraction_mode_check','automatic'),
-              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived')
+              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived'),
+              ('saas_support_tickets','saas_support_priority_check','urgent'),
+              ('saas_support_tickets','saas_support_priority_suggestion_check','urgent')
             ) AS expected(relation, name, value)
             WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
               WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name
