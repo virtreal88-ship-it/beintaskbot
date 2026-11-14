@@ -14,6 +14,17 @@ const tests=[];function test(name,fn){tests.push([name,fn]);}
 test('normal bootstrap and reload read two bounded sources; one explicit creation entry',async()=>{
  const b=await mount();try{assert.deepEqual(b.errors,[]);assert.equal(b.d.querySelectorAll('#view-tasks .crm-toolbar-actions .primary').length,1);assert.match(el(b,'nativeTaskCount').textContent,/1.*1.*100/);assert.match(el(b,'kommoTaskCount').textContent,/1.*1.*200/);assert.equal(b.f.calls.some(row=>/refresh=|full=/.test(row.url)),false);el(b,'tasksRefresh').click();await settle();for(const call of b.f.calls.filter(row=>row.url.includes('flow=1'))){const url=new URL(call.url,'https://fixture.test');assert.equal(url.searchParams.get('expected_tenant_id'),b.f.A);assert.equal(url.searchParams.get('expected_user_id'),'11');}assert.equal(posts(b).length,0);el(b,'nativeTaskCreate').click();await settle();assert.equal(el(b,'taskSourceModal').classList.contains('show'),true);assert.equal(el(b,'nativeTaskModal').classList.contains('show'),false);assert.equal(el(b,'tenantTaskModal').classList.contains('show'),false);}finally{b.w.close();}
 });
+test('contact opens only its exact authorized linked deal without opening task',async()=>{
+ const b=await mount();try{
+ const calls=[];b.w.tenantContactsBridge={openEntity:(type,id)=>calls.push([type,id]),openLegacyDeal:id=>calls.push(['kommo',id])};
+ b.f.native[0]={...b.f.native[0],contact_name:'Client',phone:'+994000000000',deal_readable:true};
+ await b.w.tenantTaskFlow.refreshSource('native');
+ const link=b.d.querySelector('#nativeTasksList [data-task-deal-open]');assert(link);link.click();
+ assert.deepEqual(calls,[['deal',b.f.native[0].deal_id]]);assert.equal(b.d.querySelector('#taskFlowCard.show'),null);
+ b.f.native[0].deal_readable=false;await b.w.tenantTaskFlow.refreshSource('native');assert.equal(b.d.querySelector('#nativeTasksList [data-task-deal-open]'),null);
+ assert.match(el(b,'nativeTasksList').textContent,/Client/);assert.equal(posts(b).length,0);
+ }finally{b.w.close();}
+});
 test('loaded-window filtering, true empty, no matches and stale failure are different',async()=>{
  const b=await mount();try{el(b,'taskSearch').value='missing';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));assert.match(el(b,'nativeTasksList').textContent,/совпадений нет/);assert.match(el(b,'nativeTaskCount').textContent,/0.*1/);el(b,'taskSearch').value='';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));b.f.readErrors.native=true;await b.w.tenantTaskFlow.refreshSource('native');assert.match(el(b,'nativeTasksNotice').textContent,/ранее загруженный/);assert.match(el(b,'nativeTasksList').textContent,/PRIVATE task A/);b.f.readErrors.native=false;b.f.native=[];await b.w.tenantTaskFlow.refreshSource('native');assert.match(el(b,'nativeTasksList').textContent,/задач нет/);assert.equal(posts(b).length,0);}finally{b.w.close();}
 });

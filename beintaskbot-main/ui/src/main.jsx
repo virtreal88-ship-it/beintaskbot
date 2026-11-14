@@ -466,7 +466,10 @@ function TasksTable({ rows = [], settings = {} }) {
             {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
-            <Text data-task-client="" fontSize="sm" color="app.ink">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>
+            {[task.contact_name, task.phone].some(Boolean) && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
+              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" color="brand.600" textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
+                <Text fontSize="sm" overflowWrap="anywhere">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>
+              </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{[task.contact_name, task.phone].filter(Boolean).join(" · ")}</Text>)}
             <Text fontSize="sm" color="app.muted">{task.deal_title || ''}{task.responsible_name ? ' · ' + task.responsible_name : ''}</Text>
             <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
           </Box>

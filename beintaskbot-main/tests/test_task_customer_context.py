@@ -15,7 +15,7 @@ def test_empty_customer_references_do_not_query():
     cur = Mock()
     rows = [{'id': '1', 'contact_name': 'Unverified legacy name'}]
     flow._task_customers(cur, profile(), 'native', rows)
-    assert rows == [{'id': '1', 'contact_name': '', 'phone': ''}]
+    assert rows == [{'id': '1', 'contact_name': '', 'phone': '', 'deal_readable': False}]
     cur.execute.assert_not_called()
 
 
@@ -82,3 +82,21 @@ def test_native_authorized_customer_name_and_phone_use_exact_contact_id():
     assert rows[0]['contact_name'] == 'Allowed native' and rows[0]['phone'] == '+994000000004'
     sql, args = cur.execute.call_args.args
     assert 'FALSE' not in sql and args[0] == TENANT and args[1] == [TENANT]
+
+
+def test_native_deal_link_is_independent_of_contact_permission():
+    cur = Mock(); cur.fetchall.side_effect = [[{'id': TENANT}], []]
+    rows = [{'id': '1', 'deal_id': TENANT, 'contact_id': TENANT},
+            {'id': '2', 'deal_id': '00000000-0000-0000-0000-000000000099'}]
+    flow._task_customers(cur, profile(), 'native', rows)
+    sql,args=cur.execute.call_args_list[0].args
+    assert 'd.tenant_id=%s::uuid' in sql and 'd.archived_at IS NULL' in sql and 'FALSE' in sql
+    assert rows[0]['deal_readable'] is True and rows[1]['deal_readable'] is False
+    assert rows[0]['contact_name'] == rows[0]['phone'] == ''
+
+
+def test_kommo_link_only_for_authorized_exact_deal():
+    cur=Mock();cur.fetchall.return_value=[{'id':500}]
+    rows=[{'kommo_lead_id':'500'},{'kommo_lead_id':'501'},{}]
+    flow._task_customers(cur,profile(),'kommo',rows)
+    assert [row['deal_readable'] for row in rows] == [True,False,False]
