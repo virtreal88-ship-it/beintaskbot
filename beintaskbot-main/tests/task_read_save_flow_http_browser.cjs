@@ -44,7 +44,9 @@ assert(origin&&mode&&actor&&initialTask,'Isolated task fixture is required');
   }else if(mode==='granular'){
    assert.equal(await page.evaluate(()=>window.tenantProfileSnapshot.capabilities.modules.tasks),false,'Real /me keeps granular-only coarse navigation hidden');
    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count()>0,true);
-   assert.equal(await page.evaluate(()=>window.tenantTaskFlow.sourceActions('kommo').view),false);
+   assert.equal(await page.evaluate(()=>window.tenantTaskFlow.sourceActions('kommo').view),true);
+   assert.equal(await page.evaluate(()=>window.tenantTaskFlow.sourceActions('kommo').create),false);
+   assert.equal(await page.evaluate(()=>window.tenantTaskFlow.sourceActions('kommo').complete),false);
    await page.locator('#nativeTaskCreate').click();assert.equal(await page.locator('[data-task-create-source=native]').isDisabled(),false);assert.equal(await page.locator('[data-task-create-source=kommo]').isDisabled(),true);
    await page.locator('#taskSourceModal [data-task-flow-close]').click();await nativeForm();const saved=await submitNative('Granular-only native saved task');assert.equal(saved.status(),200);await card('Granular-only native saved task');assert.equal(await page.locator('[data-task-card-edit]').count(),0);assert.equal(await page.evaluate(()=>window.tenantProfileSnapshot.capabilities.modules.tasks),false);assert.equal(writes.length,1);
   }else if(mode==='conflict'){
