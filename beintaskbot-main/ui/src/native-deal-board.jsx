@@ -1,6 +1,6 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {stageStyle} from './deal-stage-style.js';
-import {DealStageBadge} from './deal-stage-badge.jsx';
+import {DealStageBadge, DealStageSelect} from './deal-stage-badge.jsx';
 
 export const dealProfileScope = (data=window.tenantProfileSnapshot||{}) => JSON.stringify([data.member,data.capabilities,data.role_permissions,data.integrations]);
 
@@ -36,10 +36,10 @@ export function NativeDealBoard({rows=[], settings={}}) {
   const appearance=g=>stageStyle(g.color || g.stage_color, Math.max(0,workflows.filter(w=>String(w.pipeline_id)===String(g.pipeline_id)).findIndex(w=>String(w.stage_id)===String(g.stage_id))));
   const stageFor=row=>groups.find(g=>String(g.pipeline_id)===String(row.pipeline_id)&&String(g.stage_id)===String(row.stage_id));
   const card=row=><article key={row.id} data-native-deal-card={row.id} aria-busy={pending===String(row.id)} draggable={canMove(row)} onDragStart={e=>{if(!canMove(row)){e.preventDefault();return;}drag.current=row;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(row.id));}} onDragEnd={()=>{drag.current=null;}} style={{background:'var(--card,#fff)',border:'1px solid var(--line,#ddd)',borderRadius:12,padding:12,marginTop:8}}>
-    <DealStageBadge name={String(stageFor(row)?.stage_name || row.stage_id)} appearance={appearance(stageFor(row) || row)}/><br/>
     <strong>{row.title}</strong><p>{row.contact_name||''}</p>
     <div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button className="outline" onClick={()=>settings.onOpen?.(row.id)}>{c.open}</button>{canMove(row)&&<button className="outline" onClick={()=>settings.onEdit?.(row.id)}>{c.edit}</button>}</div>
-    {settings.canUpdate===true&&row.actions?.update===true&&<label style={{display:'block',marginTop:8}}>{c.move}<select aria-label={`${c.move}: ${row.title}`} disabled={!canMove(row)} value={row.stage_id} onChange={e=>move(row,e.target.value)} style={{display:'block',width:'100%',minHeight:44}}>{targets(row).map(w=><option key={w.stage_id} value={w.stage_id}>{w.stage_name}</option>)}</select></label>}
+    {!(settings.canUpdate===true&&row.actions?.update===true)&&<div><DealStageBadge name={String(stageFor(row)?.stage_name || row.stage_id)} appearance={appearance(stageFor(row) || row)}/></div>}
+    {settings.canUpdate===true&&row.actions?.update===true&&<label style={{display:'block',marginTop:8}}>{c.move}<DealStageSelect appearance={appearance(stageFor(row) || row)} aria-label={`${c.move}: ${row.title}`} disabled={!canMove(row)} value={row.stage_id} onChange={e=>move(row,e.target.value)} >{targets(row).map(w=><option key={w.stage_id} value={w.stage_id}>{w.stage_name}</option>)}</DealStageSelect></label>}
     {canMove(row)&&<button className="outline" aria-label={`${c.drag}: ${row.title}`} style={{touchAction:'none',minHeight:44,marginTop:8}} onPointerDown={e=>{if(e.pointerType==='mouse')return;drag.current=row;e.currentTarget.setPointerCapture(e.pointerId);}} onPointerUp={e=>{const selected=drag.current;drag.current=null;if(!selected||e.pointerType==='mouse')return;const col=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-native-stage]');if(col&&col.dataset.nativePipeline===String(row.pipeline_id))move(row,col.dataset.nativeStage);}} onPointerCancel={()=>{drag.current=null;}}>{c.drag}</button>}
     {pending===String(row.id)&&<p role="status">{c.saving}</p>}
   </article>;
