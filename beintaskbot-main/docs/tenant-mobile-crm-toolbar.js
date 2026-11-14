@@ -16,6 +16,8 @@
  .crm-mobile-toolbar .crm-toolbar-actions button>*{display:none!important}
  .crm-mobile-toolbar .crm-toolbar-actions button::after{content:'';display:block;width:21px;height:21px;margin:auto;background:currentColor;mask:var(--crm-mobile-icon) center/contain no-repeat;-webkit-mask:var(--crm-mobile-icon) center/contain no-repeat}
  .crm-mobile-toolbar .crm-toolbar-actions button{order:1}
+ .crm-mobile-toolbar .crm-toolbar-actions button.loading::after{animation:spin .7s linear infinite}
+ @media(prefers-reduced-motion:reduce){.crm-mobile-toolbar .crm-toolbar-actions button.loading::after{animation:none}}
  .crm-mobile-toolbar label{margin:0!important;min-width:0!important;flex:none!important;gap:0!important}
  .crm-mobile-toolbar label>span{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
  .crm-mobile-toolbar select{height:44px!important;min-height:44px!important;font-size:14px;padding:6px!important;max-width:100%;box-sizing:border-box}
@@ -44,8 +46,8 @@
     input.addEventListener('keydown',event=>{if(media.matches&&event.key==='Escape'){event.preventDefault();event.stopPropagation();show(false,true);}});
     function labels(){
       const label=input.closest('label')?.querySelector('span')?.textContent||input.getAttribute('aria-label')||input.placeholder||({ru:'Поиск',az:'Axtarış',en:'Search'}[window.tenantI18n?.language]||'Search');
-      toggle.setAttribute('aria-label',label);toggle.title=label;toggle.dataset.active=String(!!input.value);if(input.value&&!expanded)show(true);
-      [...actions.querySelectorAll('button')].forEach(button=>{const name=button.textContent.trim();if(name){button.setAttribute('aria-label',name);if(!button.title)button.title=name;}const key=button.id===refreshId?'refresh':button.id==='nativeTaskCreate'||button.id==='nativeDealCreate'?'create':'sync';button.style.setProperty('--crm-mobile-icon',`url("data:image/svg+xml,${encodeURIComponent(svg(key))}")`);});
+      toggle.setAttribute('aria-label',label);toggle.title=label;toggle.dataset.active=String(!!input.value);
+      [...actions.querySelectorAll('button')].forEach(button=>{const name=button.textContent.trim();if(name){button.setAttribute('aria-label',name);if(!button.title||button.title===button.dataset.crmMobileTitle){button.title=name;button.dataset.crmMobileTitle=name;}}const key=button.id===refreshId?'refresh':button.id==='nativeTaskCreate'||button.id==='nativeDealCreate'?'create':'sync';button.style.setProperty('--crm-mobile-icon',`url("data:image/svg+xml,${encodeURIComponent(svg(key))}")`);});
     }
     input.addEventListener('input',()=>{toggle.dataset.active=String(!!input.value);});
     function layout(){
