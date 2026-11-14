@@ -368,6 +368,7 @@ jobs:
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          node tests/test_copilot_permission_label.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_saved_only_copilot_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_knowledge_scope_browser.cjs
