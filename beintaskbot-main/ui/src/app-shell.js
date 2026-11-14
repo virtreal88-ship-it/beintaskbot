@@ -77,10 +77,10 @@ if (document.body.dataset.appUi === 'kwid') {
       const page=button.dataset.view||button.dataset.reportLink
       if(['employees','integrations'].includes(page)&&nav.querySelector('#settingsFamilyNav')){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1}
       if(page==='settings'||page==='profile'){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1;continue}
-      let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')
+      let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label]')
       if(!label){label=document.createElement('span');label.textContent=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()||page}
       for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
-      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
+      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
       label.removeAttribute('data-crm-nav-label')
       label.className='app-nav-label';label.dataset.appNavLabel=page
       label.removeAttribute('data-i18n')
