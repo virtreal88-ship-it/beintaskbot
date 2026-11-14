@@ -16,10 +16,13 @@ def test_customer_details_are_scoped_without_provider_reads(task_flow):
         # The operator can read their marker-owned task but has no access to
         # this deal. A join solely on task visibility would disclose its client.
         conn.execute('UPDATE saas_crm_tasks SET kommo_lead_id=101 WHERE tenant_id=%s::uuid AND kommo_task_id=502', (A,))
+    # Authentication setup writes session rows; establish both cookies before
+    # the read-only baseline, exactly as the existing task-flow regressions do.
+    owner = f['session'].issue(A, 11)
+    operator = f['session'].issue(A, 83)
     before = _state(f)
     async def scenario():
         async with TestClient(TestServer(_app(f))) as http:
-            owner = f['session'].issue(A, 11)
             status, native = await _get(http, owner)
             assert status == 200
             assert any(row['contact_name'] == 'Synthetic task client' and row['phone'] == '+994000000001' for row in native['tasks'])
@@ -28,7 +31,6 @@ def test_customer_details_are_scoped_without_provider_reads(task_flow):
             task = next(row for row in external['tasks'] if row['id'] == '501')
             assert task['contact_name'] == 'Allowed Kommo client' and task['phone'] == '+994000000002'
             assert 'FOREIGN PRIVATE' not in str(external)
-            operator = f['session'].issue(A, 83)
             status, native = await _get(http, operator, actor=83)
             assert status == 200 and native['tasks']
             assert all(row['contact_name'] == row['phone'] == '' for row in native['tasks'])
