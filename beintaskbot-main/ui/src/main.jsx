@@ -469,8 +469,8 @@ function TasksTable({ rows = [], settings = {} }) {
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
             {clientText && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
-              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" color="app.accent" textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
-                <Text as="span" fontSize="sm" color="inherit" fontWeight="500" overflowWrap="anywhere">{clientText}</Text>
+              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" style={{color:"var(--app-accent, #0369a1)"}} textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
+                <Text as="span" fontSize="sm" style={{color:"inherit"}} fontWeight="500" overflowWrap="anywhere">{clientText}</Text>
               </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{clientText}</Text>)}
             {task.responsible_name && <Text fontSize="sm" color="app.muted">{task.responsible_name}</Text>}
             <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
