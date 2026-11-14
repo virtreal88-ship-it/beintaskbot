@@ -1,0 +1,22 @@
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const source=fs.readFileSync('docs/tenant-dialog-composer.js','utf8');
+const shell=()=>`<div class="operator-composer"><textarea id="chatText"></textarea><div class="operator-composer-actions">${['operatorCopilotToggle','operatorAIReply','operatorCopilotVoiceToggle'].map(id=>`<button id="${id}" aria-label="${id}"></button>`).join('')}<button id="sendChat">Send</button></div></div>`;
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+(async()=>{
+ const dom=new JSDOM(shell(),{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document;w.tenantI18n={language:'ru'};let pending=false,sends=0,mics=0,aiCalls=0;w.tenantOperator={member:{tenant_id:'tenant',telegram_id:33},currentDialog:{lead_id:41}};d.getElementById('sendChat').onclick=()=>sends++;d.getElementById('operatorAIReply').onclick=()=>aiCalls++;
+ w.eval(source);const get=id=>d.getElementById(id),p=get('operatorComposerPrimary'),input=get('chatText');
+ assert.equal(p.dataset.action,'voice');assert.equal(p.disabled,true,'no fabricated mic capability');
+ const mic=d.createElement('button');mic.className='operator-voice-mic';mic.onclick=()=>mics++;get('sendChat').before(mic);await settle();assert.equal(p.disabled,false);p.click();assert.equal(mics,1);assert.equal(sends,0);
+ input.value=' text ';input.dispatchEvent(new w.Event('input'));assert.equal(p.dataset.action,'send');p.click();assert.equal(sends,1);assert.equal(mics,1);
+ get('sendChat').disabled=true;await settle();assert.equal(p.disabled,true);p.click();assert.equal(sends,1);
+ get('sendChat').disabled=false;input.value='';pending=true;get('sendChat').textContent='Vəziyyəti yoxla';input.dispatchEvent(new w.Event('input'));assert.equal(p.dataset.action,'send','pending recovery must not record audio');assert.match(p.title,/Проверить/);
+ pending=false;get('sendChat').textContent='Send';input.dispatchEvent(new w.Event('input'));mic.hidden=true;await settle();assert.equal(p.disabled,true,'recording/draft voice state cannot be bypassed');mic.hidden=false;await settle();assert.equal(p.disabled,false);
+ get('operatorAIActionMenu').click();assert.equal(get('operatorAIActionChoices').hidden,false);get('operatorAIReply').click();assert.equal(aiCalls,1);assert.equal(get('operatorAIActionChoices').hidden,true);
+ get('operatorAIActionMenu').click();d.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape'}));assert.equal(get('operatorAIActionChoices').hidden,true);assert.equal(d.activeElement.id,'operatorAIActionMenu');
+ get('operatorAIActionMenu').click();d.body.dispatchEvent(new w.Event('pointerdown',{bubbles:true}));assert.equal(get('operatorAIActionChoices').hidden,true);
+ for(const b of get('operatorAIActionChoices').querySelectorAll('button'))b.disabled=true;await settle();assert.equal(get('operatorAIActionMenu').disabled,true);
+ d.dispatchEvent(new w.Event('tenant-chat-attachments-ready'));assert.equal(d.querySelectorAll('#operatorComposerPrimary').length,1);
+ d.dispatchEvent(new w.Event('tenant-chat-close'));d.body.innerHTML=shell();d.dispatchEvent(new w.Event('tenant-chat-attachments-ready'));assert.equal(d.querySelectorAll('#operatorComposerPrimary').length,1);assert.equal(d.querySelectorAll('.operator-ai-action-caption').length,3);
+ dom.window.close();console.log('PASS compact composer delegates, pending recovery, permission, dismissal and lifecycle');
+})().catch(e=>{console.error(e);process.exitCode=1});
