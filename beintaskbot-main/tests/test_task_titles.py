@@ -102,3 +102,29 @@ async def test_read_denial_precedes_catalog_request(monkeypatch):
     response = await fixture.api['tasks'](Request(query={'flow': '1'}))
     assert response.status == 403
     fixture.crm_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nonempty_task_reads_never_fetch_catalog():
+    request = AsyncMock()
+    service = TaskTypeTitles(request, identity=lambda _: 'a')
+    row = {'text': 'Original task', 'task_type_id': '1'}
+    await service.enrich('t', {'source': 'kommo', 'command': {'task': row}})
+    assert row['display_title'] == 'Original task'
+    request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_tenant_does_not_block_other_tenants():
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def request(tenant, *args, **kwargs):
+        if tenant == 'slow':
+            entered.set()
+            await release.wait()
+        return catalog(tenant)
+    service = TaskTypeTitles(request, identity=lambda _: 'a')
+    slow = asyncio.create_task(service.names('slow'))
+    await entered.wait()
+    assert (await asyncio.wait_for(service.names('fast'), 1))['4229224'] == 'fast'
+    release.set()
+    assert (await slow)['4229224'] == 'slow'
