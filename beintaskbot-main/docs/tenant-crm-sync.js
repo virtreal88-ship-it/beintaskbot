@@ -23,18 +23,18 @@
       } finally { button.disabled = false; }
     };
   }
-  for (const [resource, ids] of Object.entries({leads:['dealsNotice'], tasks:['tasksNotice']})) {
-    boxes[resource] = ids.map(id => {
-      const anchor = document.getElementById(id);
-      if (!anchor) return null;
-      const box = document.createElement('div');
-      box.className = 'notice'; box.setAttribute('role', 'status');
-      anchor.after(box); return box;
-    }).filter(Boolean);
+  for (const [resource, view] of Object.entries({leads:'view-deals',tasks:'view-tasks'})) {
+    const heading=document.querySelector('#'+view+' .top>div');
+    if(!heading){boxes[resource]=[];continue;}
+    const box=document.createElement('span');box.className='crm-sync-status';box.dataset.crmSyncStatus=resource;box.setAttribute('role','status');box.setAttribute('aria-live','polite');box.hidden=true;heading.append(box);boxes[resource]=[box];
   }
   function display(resource, text) {
+    // Completed polling is not a warning banner. Active work and failures remain
+    // visible beside the heading; the orange deal counter keeps its own meaning.
+    const complete=text==='Kommo məlumatları yeniləndi.';
     for (const box of boxes[resource] || []) {
-      box.textContent = text; box.classList.toggle('show', !!text);
+      box.textContent=complete?'':text;box.hidden=complete||!text;
+      box.dataset.failed=String(!!text&&!complete&&!text.startsWith('Kommo fonda'));
     }
   }
   function schedule(epoch) {
