@@ -1022,6 +1022,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_dialog_access import allowed_channels
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at,
                   channel_ids=allowed_channels(cur,tenant,policy))
+                for message in messages:
+                    message['source_conversation_id']=conversation
             else:
                 args=[tenant,history_leads,row['history_channel']];clause=''
                 if anchor_at:
