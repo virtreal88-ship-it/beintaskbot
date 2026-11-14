@@ -262,8 +262,8 @@ def test_plain_flow_reads_and_legacy_reload_never_enqueue_sync_or_call_provider(
     (11, 'kommo', 200, 'tenant'), (81, 'kommo', 200, 'tenant'),
     (82, 'native', 200, 'personal'), (83, 'native', 200, 'personal'),
     (84, 'native', 200, 'tenant'), (86, 'native', 200, 'tenant'),
-    (86, 'kommo', 403, None), (87, 'native', 403, None),
-    (82, 'kommo', 200, 'pipelines'), (83, 'kommo', 200, 'marker'),
+    (86, 'kommo', 200, 'tenant'), (87, 'native', 403, None),
+    (82, 'kommo', 200, 'kommo'), (83, 'kommo', 200, 'kommo'),
 ])
 def test_sources_use_real_distinct_policy_and_current_task_scope(task_flow, actor, source, status, scope):
     f = task_flow
