@@ -464,13 +464,13 @@ function TasksTable({ rows = [], settings = {} }) {
         const clientName = task.deal_title || task.contact_name || '';
         const clientText = [clientName, task.phone && !clientName.includes(task.phone) ? task.phone : ''].filter(Boolean).join(' · ');
         return <Flex key={id} p="4" gap="3" justify="space-between" wrap="wrap" align="start">
-          <Box flex="1" minW="180px">
+          <Box flex="1" minW="180px" display="flex" flexDirection="column" alignItems="flex-start">
             {settings.onOpen ? <Button variant="plain" h="auto" minH="44px" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" data-task-flow-open={id} onClick={() => settings.onOpen(id)}>
               <Text fontWeight="700" color="app.ink" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>
             </Button> : <Text fontWeight="700" color="app.ink">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
             {clientText && (settings.canOpenDeal?.(task) && settings.onOpenDeal ?
-              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" color="brand.600" textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
-                <Text fontSize="sm" overflowWrap="anywhere">{clientText}</Text>
+              <Button data-task-client="" data-task-deal-open={id} type="button" variant="plain" minH="44px" h="auto" p="0" maxW="100%" whiteSpace="normal" textAlign="start" justifyContent="start" color="app.accent" textDecoration="underline" title={labels.deal} onClick={event=>{event.stopPropagation();settings.onOpenDeal(id);}} onPointerDown={event=>event.stopPropagation()} draggable={false}>
+                <Text as="span" fontSize="sm" color="inherit" fontWeight="500" overflowWrap="anywhere">{clientText}</Text>
               </Button> : <Text data-task-client="" fontSize="sm" color="app.ink">{clientText}</Text>)}
             {task.responsible_name && <Text fontSize="sm" color="app.muted">{task.responsible_name}</Text>}
             <Text fontSize="sm" color="app.muted">{labels.due}: {task.due_at ? formatDate(task.due_at) : labels.none}</Text>
