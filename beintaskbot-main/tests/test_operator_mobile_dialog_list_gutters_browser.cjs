@@ -10,7 +10,7 @@ const docs = path.join(repo, 'docs');
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 const route = {
   provider: 'connect', lead_id: 41, channel_id: 'channel-mobile', conversation_id: 'mobile-contact',
-  customer_kind: 'contact', customer_name: 'Caspian Oil with a deliberately long customer name', channel_name: 'Texniki Dəstək', customer_phone: '994993180666', agent_id: 'agent-a', agent_name: 'Agent',
+  customer_kind: 'contact', customer_name: 'Example customer with a deliberately long display name', channel_name: 'Texniki Dəstək', customer_phone: '994500000001', agent_id: 'agent-a', agent_name: 'Agent',
   agent_status: 'manual', can_send: true, controls_allowed: true, available_actions: []
 };
 const messages = [{
@@ -109,7 +109,8 @@ const server = http.createServer((req, res) => {
         assert.ok(chatGeometry.documentWidth <= width + 1, 'opening chat does not introduce horizontal overflow');
         assert.ok(chatGeometry.header.height <= 66, 'mobile header stays one compact toolbar: ' + JSON.stringify(chatGeometry));
         const title = await page.locator('#operatorDialogTitleSlot').boundingBox();
-        const action = await page.locator('[data-operator-create-ticket]').boundingBox().catch(() => null);
+        const action = await page.locator('[data-operator-create-ticket]').boundingBox();
+        assert.ok(action && action.height >= 44 && action.y < chatGeometry.header.height, 'create task keeps a 44px inline touch target');
         const more = await page.locator('#operatorMoreActions summary').boundingBox();
         assert.ok(more.y < chatGeometry.header.height, 'more menu remains in the header row');
         assert.ok(title.width > 60, 'customer title retains useful space');
