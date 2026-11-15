@@ -35,7 +35,8 @@ def test_history_exposes_only_valid_quote_identifiers():
 def test_outbound_transport_passes_canonical_quote(monkeypatch):
     import tenant_connect_transport as transport
     calls=[]
-    def request(key,method,path,body):
+    def request(key,method,path,body,**options):
+        assert options == {'safe_preflight_codes': ('conversation_identity_conflict',)}
         calls.append((key,method,path,body));return {'id':'connect-message'}
     monkeypatch.setattr(transport,'_request',request)
     route={'api_key':'test','channel_id':CA,'conversation_id':'client'}
