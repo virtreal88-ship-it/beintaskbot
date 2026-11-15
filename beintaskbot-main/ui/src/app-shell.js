@@ -199,7 +199,8 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
     // Leave the full visual viewport to forms, native date/select pickers and dialogs.
     const editing=focused?.matches('input:not([type=button]):not([type=submit]),textarea,select,[contenteditable="true"]')&&!nav.contains(focused)
     const modal=[...document.querySelectorAll('[role="dialog"],dialog[open],.modal.show,.ai-agents-modal.show,#operatorDialogBody[data-copilot-open=true] #operatorCopilot')].some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')
-    const suppressed=mobile.matches&&(editing||modal)
+    const conversationOpen=!!document.querySelector('#view-dialogs.active #operatorDialogs[data-conversation-open="true"]')
+    const suppressed=mobile.matches&&(conversationOpen||editing||modal)
     if(sidebar.dataset.bottomNavSuppressed!==String(suppressed))sidebar.dataset.bottomNavSuppressed=String(suppressed)
     sidebar.inert=suppressed
     const height=mobile.matches&&!suppressed?Math.ceil(sidebar.getBoundingClientRect().height):0
@@ -214,7 +215,7 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   }
   function schedule(){if(window.document?.documentElement&&body.isConnected&&!frame)frame=requestAnimationFrame(sync)}
   if(typeof ResizeObserver!=='undefined')new ResizeObserver(schedule).observe(sidebar)
-  new MutationObserver(schedule).observe(body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open','aria-current']})
+  new MutationObserver(schedule).observe(body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open','aria-current','data-conversation-open']})
   document.addEventListener('focusin',schedule)
   document.addEventListener('focusout',schedule)
   window.visualViewport?.addEventListener('resize',schedule)
