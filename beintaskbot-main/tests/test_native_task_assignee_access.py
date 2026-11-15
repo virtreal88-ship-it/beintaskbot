@@ -112,6 +112,24 @@ def _no_tasks(f):
     assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 0
 
 
+def test_task_customer_context_respects_contact_permissions_and_tenant(native):
+    f = native
+    f['db'].execute("UPDATE saas_crm_native_contacts SET phone='+994000000123' WHERE tenant_id=%s::uuid AND id=%s::uuid", (A, f['contact']))
+    f['db'].commit()
+    owner = tasks.task_options(A, 11, deal_id=f['deals'][4])
+    owner_deal = next(row for row in owner['deals'] if str(row['id']) == f['deals'][4])
+    assert owner_deal['contact_phone'] == '+994000000123'
+    worker = tasks.task_options(A, 35, deal_id=f['deals'][4])
+    worker_deal = next(row for row in worker['deals'] if str(row['id']) == f['deals'][4])
+    assert worker_deal['contact_name'] is None and worker_deal['contact_phone'] is None
+    task = tasks.create_task(A, f['deals'][4], 'Synthetic task', 35, created_by=11,
+                             actor_id=11, idempotency_key=str(uuid.uuid4()))
+    assert tasks.get_task(A, str(task['id']), actor_id=11)['contact_phone'] == '+994000000123'
+    assert tasks.get_task(A, str(task['id']), actor_id=35)['contact_phone'] is None
+    foreign = tasks.task_options(B, 22)
+    assert all(row.get('contact_phone') != '+994000000123' for row in foreign['deals'])
+
+
 @pytest.mark.parametrize('actor,target', [(11, 11), (11, 31), (11, 41), (11, 42), (11, 50), (31, 42), (32, 41)])
 def test_real_options_and_create_accept_only_current_usable_task_assignees(native, actor, target):
     f = native
