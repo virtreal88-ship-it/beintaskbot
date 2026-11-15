@@ -16,6 +16,7 @@
       html body[data-app-ui="kwid"] main .panel{padding-left:8px;padding-right:8px}
       html body[data-app-ui="kwid"] :is(#view-tasks,#view-deals) .panel:has(.app-kanban-swipe){padding-left:0!important;padding-right:0!important;border-left:0!important;border-right:0!important;border-radius:0}
       html body[data-app-ui="kwid"] :is(#nativeTasksList,#tasksList,#nativeDealsList,#dealsList):has(.app-kanban-swipe){border-left:0!important;border-right:0!important;border-radius:0}
+      html body[data-app-ui="kwid"] #view-tasks .task-source-panel:has(#tasksList)>h2{display:none!important}
       html body[data-app-ui="kwid"] :is(#view-tasks,#view-deals)>.top{padding-left:8px;padding-right:8px}
       html body[data-app-ui="kwid"] .app-kanban-swipe>[data-kommo-stage-key]{padding-left:8px;padding-right:8px}
       .app-kanban-swipe{display:flex!important;min-width:0;max-width:100%;overflow-x:auto!important;scroll-snap-type:x mandatory!important;gap:8px!important;overscroll-behavior-x:contain}
