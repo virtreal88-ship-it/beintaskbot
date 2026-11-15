@@ -69,6 +69,8 @@ jobs:
           npm ci --prefix ui
           npm run build --prefix ui
           git diff --exit-code -- docs/tenant-chakra-ui.js docs/tenant-chakra-ui.css
+      - name: Mobile bottom navigation viewport and overlay regression
+        run: node tests/test_mobile_bottom_nav_browser.cjs
       - name: PostgreSQL current membership and real cookie HTTP browser scenarios
         run: >-
           python -m pytest -q -rs
@@ -112,4 +114,5 @@ jobs:
           path: |
             beintaskbot-main/tests/artifacts/settings-layout/
             beintaskbot-main/tests/artifacts/mobile-crm-toolbar/
+            beintaskbot-main/artifacts/mobile-bottom-nav/
           if-no-files-found: ignore

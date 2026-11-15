@@ -21,7 +21,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    assert.equal(new URL(page.url()).searchParams.get('view'),'profile');
    assert.equal(await page.locator('#settingsFamilyNav').isVisible(),false);
    assert.equal(await page.locator('[data-settings-page=settings]').count(),0);
-   if(width===390){await page.locator('.app-mobile-menu').click();assert.equal(await page.locator('.nav [data-view=settings]').isVisible(),false);await page.locator('.app-sidebar-backdrop').evaluate(el=>el.click());await page.locator('.app-avatar-button').click();await page.locator('#appUserMenu [data-app-open=settings]').click();}
+   if(width===390){assert.equal(await page.locator('.app-mobile-menu').isVisible(),false);assert.equal(await page.locator('.nav [data-view=settings]').isVisible(),false);await page.locator('.app-avatar-button').click();await page.locator('#appUserMenu [data-app-open=settings]').click();}
    else {await page.locator('.app-avatar-button').click();await page.locator('#appUserMenu [data-app-open=settings]').click();}
    await page.locator('#view-integrations.active').waitFor();
    const tablist=page.locator('.settings-family .app-tab-picker'),employeeTab=page.locator('[data-settings-page=employees]');

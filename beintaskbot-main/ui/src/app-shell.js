@@ -41,7 +41,7 @@ if (document.body.dataset.appUi === 'kwid') {
     const wasOpen=body.dataset.mobileMenu==='open'
     body.dataset.mobileMenu=open?'open':'closed'
     mobileButton.setAttribute('aria-expanded',String(open))
-    sidebar.inert=mobile.matches&&!open
+    sidebar.inert=false
     if(open)collapse.focus()
     else if(wasOpen&&mobile.matches)mobileButton.focus()
   }
@@ -134,6 +134,7 @@ if (document.body.dataset.appUi === 'kwid') {
   new MutationObserver(updateContext).observe(main,{attributes:true,subtree:true,attributeFilter:['class']})
   updateContext()
   updateLanguage()
+  installMobileBottomNav({sidebar,nav,mobile})
 
   function installTabPicker(tablist) {
     if(tablist.dataset.appTabReady)return
@@ -177,4 +178,49 @@ if (document.body.dataset.appUi === 'kwid') {
     event.preventDefault();tabs[next].click();tabs[next].focus()
   })
   decorate()
+}
+
+// Layout only. Keep the original route nodes, listeners, badges and permission state.
+function installMobileBottomNav({sidebar,nav,mobile}) {
+  const body=document.body,root=document.documentElement
+  nav.setAttribute('role','navigation')
+  let frame=0,lastActive=null
+  function sync(){
+    frame=0
+    if(!window.document?.documentElement||!body.isConnected)return
+    const focused=document.activeElement
+    // Leave the full visual viewport to forms, native date/select pickers and dialogs.
+    const editing=focused?.matches('input:not([type=button]):not([type=submit]),textarea,select,[contenteditable="true"]')&&!nav.contains(focused)
+    const modal=[...document.querySelectorAll('[role="dialog"],dialog[open],.modal.show,.ai-agents-modal.show,#operatorDialogBody[data-copilot-open=true] #operatorCopilot')].some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')
+    const suppressed=mobile.matches&&(editing||modal)
+    if(sidebar.dataset.bottomNavSuppressed!==String(suppressed))sidebar.dataset.bottomNavSuppressed=String(suppressed)
+    sidebar.inert=suppressed
+    const height=mobile.matches&&!suppressed?Math.ceil(sidebar.getBoundingClientRect().height):0
+    if(root.style.getPropertyValue('--app-bottom-nav-height')!==height+'px')root.style.setProperty('--app-bottom-nav-height',height+'px')
+    const active=nav.querySelector('[aria-current="page"]')
+    if(mobile.matches&&!suppressed&&active&&active!==lastActive&&active.getClientRects().length){
+      const a=active.getBoundingClientRect(),n=nav.getBoundingClientRect()
+      if(a.left<n.left+8)nav.scrollLeft-=n.left+8-a.left
+      else if(a.right>n.right-8)nav.scrollLeft+=a.right-(n.right-8)
+    }
+    lastActive=active
+  }
+  function schedule(){if(window.document?.documentElement&&body.isConnected&&!frame)frame=requestAnimationFrame(sync)}
+  if(typeof ResizeObserver!=='undefined')new ResizeObserver(schedule).observe(sidebar)
+  new MutationObserver(schedule).observe(body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open','aria-current']})
+  document.addEventListener('focusin',schedule)
+  document.addEventListener('focusout',schedule)
+  window.visualViewport?.addEventListener('resize',schedule)
+  window.visualViewport?.addEventListener('scroll',schedule)
+  mobile.addEventListener('change',schedule)
+  nav.addEventListener('keydown',event=>{
+    if(!mobile.matches||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
+    const items=[...nav.querySelectorAll('[data-view],[data-report-link]')].filter(el=>el.getClientRects().length&&!el.disabled)
+    const item=event.target.closest('[data-view],[data-report-link]'),index=items.indexOf(item)
+    if(index<0)return
+    event.preventDefault()
+    const next=event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowRight'?1:-1)+items.length)%items.length
+    items[next].focus();items[next].scrollIntoView({block:'nearest',inline:'nearest'})
+  })
+  schedule()
 }
