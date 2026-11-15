@@ -1,0 +1,391 @@
+"""Explicit, source-local operator episodes. Disabled until additive migration is reviewed.
+
+No inference from support tickets, AI assignments, role, phone, or group membership.
+"""
+import hashlib
+import json
+import os
+import uuid
+from tenant_linear_policy import TenantLinearError
+
+
+def enabled():
+    return os.getenv('TENANT_DIALOG_LIFECYCLE_ENABLED', '').lower() in {'1', 'true', 'yes'}
+
+
+def migrate(cur):
+    """Explicit deployment preflight only. No automatic DDL or business-row backfill."""
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_episodes (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id), id UUID NOT NULL,
+      channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, lead_id BIGINT NOT NULL,
+      accepted_by BIGINT NOT NULL, operator_id BIGINT NOT NULL,
+      accepted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), closed_at TIMESTAMPTZ,
+      case_id UUID, PRIMARY KEY(tenant_id,id),
+      FOREIGN KEY(tenant_id,channel_id,conversation_id) REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id),
+      FOREIGN KEY(tenant_id,operator_id) REFERENCES saas_tenant_members(tenant_id,telegram_id))''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_workflows (
+      tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+      id UUID NOT NULL,state TEXT NOT NULL CHECK(state IN ('waiting','accepted','closed','dismissed')),
+      operator_id BIGINT, revision BIGINT NOT NULL DEFAULT 0,
+      closed_at TIMESTAMPTZ, last_inbound_id TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      PRIMARY KEY(tenant_id,channel_id,conversation_id),
+      FOREIGN KEY(tenant_id,channel_id,conversation_id) REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id),
+      CHECK((state='waiting' AND operator_id IS NULL) OR (state<>'waiting' AND operator_id IS NOT NULL)))''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_lifecycle_receipts (
+      tenant_id UUID NOT NULL,request_id UUID NOT NULL,actor_id BIGINT NOT NULL,
+      input_hash TEXT NOT NULL,result JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,request_id))''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_dialog_episode_route_idx ON saas_dialog_episodes
+      (tenant_id,channel_id,conversation_id,accepted_at)''')
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_dialog_episode_messages (
+      tenant_id UUID NOT NULL,episode_id UUID NOT NULL,message_id UUID NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      PRIMARY KEY(tenant_id,episode_id,message_id), UNIQUE(tenant_id,message_id),
+      FOREIGN KEY(tenant_id,episode_id) REFERENCES saas_dialog_episodes(tenant_id,id),
+      FOREIGN KEY(message_id) REFERENCES saas_crm_messages(id))""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_dialog_episode_sends (
+      tenant_id UUID NOT NULL,episode_id UUID NOT NULL,channel_id UUID NOT NULL,
+      conversation_id TEXT NOT NULL,request_id UUID NOT NULL,external_id TEXT NOT NULL,
+      PRIMARY KEY(tenant_id,request_id),UNIQUE(tenant_id,channel_id,external_id),
+      FOREIGN KEY(tenant_id,episode_id) REFERENCES saas_dialog_episodes(tenant_id,id))""")
+
+
+def record_dispatch(cur, tenant, channel, conversation, request_id, result):
+    """Only a verified successful provider result inside the final send lock."""
+    if not enabled(): return
+    row=_row(cur,tenant,channel,conversation)
+    if not row or row['state']!='accepted': return
+    external=(result.get('message_id') or result.get('external_message_id')) if isinstance(result,dict) else result
+    if not isinstance(external,str) or not external: return
+    if isinstance(result,dict) and result.get('provider_accepted') is False: return
+    cur.execute("""INSERT INTO saas_dialog_episode_sends(tenant_id,episode_id,channel_id,
+      conversation_id,request_id,external_id) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s)
+      ON CONFLICT DO NOTHING""",(tenant,row['id'],channel,conversation,request_id,external.removeprefix('connect:')))
+
+
+def record_message(cur, tenant, channel, conversation, message_id):
+    """Bind at durable message admission under route lock, never by timestamps.
+
+    A send dispatched in an older episode stays there even if its local receipt
+    is stored after close or after another episode has already been accepted.
+    """
+    if not enabled(): return
+    from tenant_connect_dialog_equivalence import members, canonical
+    conversation=canonical(cur,tenant,channel,conversation)
+    leads=list(members(cur,tenant,channel,conversation).values())
+    cur.execute("""SELECT id,external_id,direction FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel=%s
+        AND kommo_lead_id=ANY(%s::bigint[])""",(tenant,message_id,'connect:'+channel,leads))
+    message=cur.fetchone()
+    if not message: return
+    episode_id=None
+    if message['direction']=='outgoing':
+        cur.execute("""SELECT episode_id FROM saas_dialog_episode_sends WHERE tenant_id=%s::uuid
+          AND channel_id=%s::uuid AND conversation_id=%s AND external_id=%s""",
+          (tenant,channel,conversation,str(message['external_id']).removeprefix('connect:')))
+        sent=cur.fetchone()
+        if sent:episode_id=sent['episode_id']
+        if episode_id is None:
+            cur.execute("""SELECT e.id FROM saas_chat_send_receipts r
+              JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
+                AND e.id::text=r.route->>'lifecycle_episode_id'
+              WHERE r.tenant_id=%s::uuid AND e.channel_id=%s::uuid
+                AND e.conversation_id=%s AND r.lead_id=e.lead_id
+                AND r.message_id IN (%s,%s) LIMIT 1""",
+              (tenant,channel,conversation,str(message['external_id']),str(message['external_id']).removeprefix('connect:')))
+            known=cur.fetchone()
+            if known: episode_id=known['id']
+        if episode_id is None:
+            # A late unknown send may belong to an older episode. Never guess
+            # that an unmatched echo belongs to the currently accepted one.
+            cur.execute("""SELECT 1 FROM saas_chat_send_receipts r
+              JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
+                AND e.id::text=r.route->>'lifecycle_episode_id'
+              WHERE r.tenant_id=%s::uuid AND e.channel_id=%s::uuid
+                AND e.conversation_id=%s AND r.lead_id=e.lead_id
+                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,channel,conversation))
+            if cur.fetchone(): return
+    if episode_id is None:
+        row=_row(cur,tenant,channel,conversation)
+        if row and row['state']=='accepted':episode_id=row['id']
+    if episode_id:
+        cur.execute("""INSERT INTO saas_dialog_episode_messages(tenant_id,episode_id,message_id)
+          VALUES(%s::uuid,%s::uuid,%s::uuid) ON CONFLICT DO NOTHING""",(tenant,episode_id,message_id))
+
+
+def _row(cur, tenant, channel, conversation):
+    from tenant_connect_dialog_equivalence import canonical
+    conversation=canonical(cur,tenant,channel,conversation)
+    cur.execute('''SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s''', (tenant, channel, conversation))
+    return cur.fetchone()
+
+
+def visibility_sql(policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id'):
+    if not enabled(): return 'TRUE'
+    tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
+    actor = int(policy.profile['telegram_id'])
+    return f"""({provider_expr}<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
+      WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
+        AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
+        AND dw.operator_id<>{actor}))"""
+
+
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view'):
+    if not enabled() or provider != 'connect': return
+    # Serialize the final permission check with accept/close/transfer. The caller
+    # retains this transaction until its protected read or network dispatch ends.
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_connect_dialog_equivalence import canonical
+    conversation=canonical(cur,tenant,channel,conversation)
+    lock_dialog(cur, tenant, provider, channel, conversation)
+    row = _row(cur, tenant, channel, conversation)
+    if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor):
+        raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
+    if action != 'view' and (not row or row['state'] != 'accepted'):
+        raise TenantLinearError('Сначала примите диалог.', 409)
+
+
+def ai_blocked(cur, tenant, provider, channel, conversation):
+    if not enabled() or provider != 'connect': return False
+    row = _row(cur, tenant, channel, conversation)
+    return bool(row and row['state'] in {'accepted', 'closed', 'dismissed'})
+
+
+def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is_replay=False):
+    """Called only AFTER a fresh provider incoming message was actually inserted.
+
+    Unknown timestamps, old history, echo and duplicate events cannot reopen.
+    Opening a queue item does not create an episode or a case.
+    """
+    if not enabled() or is_replay or not message_id or not event_at: return
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_connect_dialog_equivalence import canonical
+    conversation=canonical(cur,tenant,channel,conversation)
+    lock_dialog(cur, tenant, 'connect', channel, conversation)
+    cur.execute("""UPDATE saas_dialog_workflows SET
+      state=CASE WHEN state IN ('closed','dismissed') THEN 'waiting' ELSE state END,
+      operator_id=CASE WHEN state IN ('closed','dismissed') THEN NULL ELSE operator_id END,
+      id=CASE WHEN state IN ('closed','dismissed') THEN %s::uuid ELSE id END,
+      revision=revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+        AND last_inbound_id IS DISTINCT FROM %s
+        AND (state NOT IN ('closed','dismissed') OR %s::timestamptz>closed_at)""",
+      (str(uuid.uuid4()),str(message_id),tenant,channel,conversation,str(message_id),event_at))
+    # Do not resume a manually paused AI or the group coordinator as a side effect.
+
+
+def _targets(cur, tenant, policy, channel, actor):
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    from tenant_dialog_access import require_source
+    cur.execute('SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id', (tenant,))
+    members=cur.fetchall(); result=[]
+    for member in members:
+        target=int(member['telegram_id'])
+        if target==actor: continue
+        profile=read_access_profile(cur,tenant,target,lock=True)
+        if not profile: continue
+        p=TenantPolicy({**profile,'tenant_id':tenant})
+        if p.action_scope('dialogs','update') is None and not p.legacy_allows('dialogs'): continue
+        try:
+            require_source(cur,tenant,p,'connect',channel,'view')
+            require_source(cur,tenant,p,'connect',channel,'update')
+        except TenantLinearError: continue
+        result.append({'employee_id':target,'name':member.get('display_name') or str(target)})
+    return result
+
+
+def decorate(cur, tenant, actor, dialog, *, details=True):
+    if not enabled() or dialog.get('provider')!='connect': return dialog
+    row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id'])
+    state=(row or {}).get('state','waiting')
+    own=bool(row and row.get('operator_id')==actor)
+    last={}
+    if details:
+        cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+          AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
+          ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+str(dialog['channel_id']),dialog['lead_id']))
+        last=cur.fetchone() or {}
+    dialog['lifecycle_enabled']=True
+    dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
+        'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
+        'can_accept':state=='waiting' and bool(dialog.get('can_send')),
+        'can_dismiss':state=='waiting' and bool(dialog.get('can_send')) and bool(last),
+        'last_inbound_id':last.get('id'),
+        'can_close':state=='accepted' and own,'can_transfer':state=='accepted' and own,
+        'can_submit_case':state=='closed' and own}
+    if details:
+        cur.execute("""SELECT id::text AS id,accepted_at,closed_at,case_id::text AS case_id
+          FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+            AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL
+          ORDER BY closed_at DESC LIMIT 20""",(tenant,dialog['channel_id'],dialog['conversation_id'],actor))
+        dialog['lifecycle']['completed_episodes']=[{key:(value.isoformat() if hasattr(value,'isoformat') else value)
+            for key,value in episode.items()} for episode in cur.fetchall()]
+    dialog['can_send']=bool(dialog.get('can_send') and own and state=='accepted')
+    if not dialog['can_send']: dialog['send_block_reason']='dialog_accept_required'
+    return dialog
+
+
+def _case(cur, tenant, actor, row):
+    from tenant_support_access import require_create
+    require_create(cur, {'tenant_id':tenant,'telegram_id':actor})
+    cur.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,row['id']))
+    episode=cur.fetchone()
+    if not episode or not episode['closed_at']: raise TenantLinearError('Сначала завершите диалог.',409)
+    if episode.get('case_id'): return str(episode['case_id'])
+    cur.execute("""SELECT 1 FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
+      AND route->>'lifecycle_episode_id'=%s AND state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,str(episode['id'])))
+    if cur.fetchone(): raise TenantLinearError('Отправка сообщения ещё проверяется. Дождитесь её результата перед созданием кейса.',409)
+    cur.execute("""SELECT 1 FROM saas_dialog_episode_sends ds WHERE ds.tenant_id=%s::uuid
+      AND ds.episode_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_dialog_episode_messages em
+        JOIN saas_crm_messages m ON m.tenant_id=em.tenant_id AND m.id=em.message_id
+        WHERE em.tenant_id=ds.tenant_id AND em.episode_id=ds.episode_id
+          AND m.external_id IN (ds.external_id,'connect:'||ds.external_id)) LIMIT 1""",(tenant,episode['id']))
+    if cur.fetchone(): raise TenantLinearError('История отправленного сообщения ещё загружается. Повторите позже.',409)
+    from tenant_connect_dialog_equivalence import members
+    leads=list(members(cur,tenant,str(row['channel_id']),row['conversation_id']).values())
+    ticket_id=str(uuid.uuid4())
+    # A completed episode is a separate historical case, not an upsert into an
+    # unrelated open legacy ticket. No inferred resolution or AI publication.
+    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,
+      reason,description,status,created_by,assigned_to,history_scope,access_responsible_id,
+      summary_state,resolved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,'manual',
+      'Обращение оператора','','resolved',%s,%s,'selected',%s,'unavailable',%s)''',
+      (tenant,ticket_id,row['channel_id'],row['conversation_id'],actor,actor,actor,episode['closed_at']))
+    cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
+      SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
+      WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.kommo_lead_id=ANY(%s::bigint[])
+        AND EXISTS(SELECT 1 FROM saas_dialog_episode_messages em WHERE em.tenant_id=m.tenant_id
+          AND em.episode_id=%s::uuid AND em.message_id=m.id) AND m.direction IN ('incoming','outgoing')
+        ON CONFLICT DO NOTHING''', (tenant,ticket_id,'dialog-episode:'+str(row['id']),tenant,
+            'connect:'+str(row['channel_id']),leads,episode['id']))
+    cur.execute('UPDATE saas_dialog_episodes SET case_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid',(ticket_id,tenant,row['id']))
+    return ticket_id
+
+
+def mutate(profile, payload):
+    if not enabled(): raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
+    from tenant_platform import _connect
+    from tenant_operator_access import access, _resolve_connect_route
+    from tenant_dialog_access import require_source
+    from tenant_ai_dialog_scope import lock_dialog
+    action=payload.get('action')
+    if action not in {'accept','close','transfer','case','dismiss'}: raise TenantLinearError('Неизвестное действие.')
+    request_id=str(uuid.UUID(str(payload.get('request_id'))))
+    revision=payload.get('expected_revision')
+    if type(revision) is not int or revision<0: raise TenantLinearError('Обновите диалог.',409)
+    digest=hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,actor,policy=access(cur,profile,action='update')
+            if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
+            route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
+            channel,conversation=str(route['connect_channel_id']),route['conversation_id']
+            require_source(cur,tenant,policy,'connect',channel,'view')
+            require_source(cur,tenant,policy,'connect',channel,'update')
+            lock_dialog(cur,tenant,'connect',channel,conversation)
+            cur.execute('SELECT * FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request_id))
+            receipt=cur.fetchone()
+            if receipt:
+                if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
+                return receipt['result']
+            row=_row(cur,tenant,channel,conversation)
+            if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
+            if action=='case' and payload.get('episode_id'):
+                # Historical own episodes remain submit-able after a new incoming,
+                # but never bypass current route ownership or source permissions.
+                require_access(cur,tenant,actor,'connect',channel,conversation)
+                cur.execute("""SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid
+                  AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+                  AND operator_id=%s AND closed_at IS NOT NULL""",(tenant,str(uuid.UUID(str(payload['episode_id']))),channel,conversation,actor))
+                historical=cur.fetchone()
+                if not historical: raise TenantLinearError('Завершённое обращение недоступно.',404)
+                case_id=_case(cur,tenant,actor,historical)
+            elif action=='dismiss':
+                if row and row['state']!='waiting': raise TenantLinearError('Диалог уже принят или закрыт.',409)
+                cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                  AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
+                  ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+channel,route['lead_id']))
+                last=cur.fetchone() or {}
+                if not last.get('id') or payload.get('message_id')!=last['id']:
+                    raise TenantLinearError('Появилось новое сообщение. Обновите диалог.',409)
+                cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at,last_inbound_id)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'dismissed',%s,1,clock_timestamp(),%s)
+                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET state='dismissed',
+                  operator_id=EXCLUDED.operator_id,revision=saas_dialog_workflows.revision+1,
+                  closed_at=clock_timestamp(),last_inbound_id=EXCLUDED.last_inbound_id,updated_at=clock_timestamp()""",
+                  (tenant,channel,conversation,str(uuid.uuid4()),actor,last['id']))
+            elif action=='accept':
+                if row and row['state']!='waiting': raise TenantLinearError('Диалог уже принят или завершён.',409)
+                episode_id=str(uuid.uuid4())
+                cur.execute('''INSERT INTO saas_dialog_episodes(tenant_id,id,channel_id,conversation_id,lead_id,accepted_by,operator_id)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s)''',(tenant,episode_id,channel,conversation,route['lead_id'],actor,actor))
+                cur.execute('''INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',%s,1)
+                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET id=EXCLUDED.id,
+                  state='accepted',operator_id=EXCLUDED.operator_id,revision=saas_dialog_workflows.revision+1,
+                  closed_at=NULL,updated_at=clock_timestamp()''',(tenant,channel,conversation,episode_id,actor))
+                # Admission + actual send recheck this episode, without touching
+                # existing group-global human/paused settings or other channels.
+                cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
+                  lease_token=NULL,lease_until=NULL,error_code='operator_accepted',updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s AND state IN ('queued','processing')''',(tenant,channel,conversation))
+            else:
+                if not row or row.get('operator_id')!=actor: raise TenantLinearError('Диалог недоступен.',404)
+                if action=='case':
+                    if row['state']!='closed': raise TenantLinearError('Сначала завершите диалог.',409)
+                    case_id=_case(cur,tenant,actor,row)
+                else:
+                    if row['state']!='accepted': raise TenantLinearError('Диалог уже завершён.',409)
+                    if action=='transfer':
+                        target=payload.get('target_employee_id')
+                        if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor)}:
+                            raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
+                        cur.execute('UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(target,tenant,channel,conversation))
+                        cur.execute('UPDATE saas_dialog_episodes SET operator_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(target,tenant,row['id']))
+                    else:
+                        cur.execute("UPDATE saas_dialog_workflows SET state='closed',revision=revision+1,closed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s RETURNING closed_at",(tenant,channel,conversation))
+                        closed_at=cur.fetchone()['closed_at']
+                        cur.execute('UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(closed_at,tenant,row['id']))
+            current=_row(cur,tenant,channel,conversation)
+            result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
+            if action=='case': result['case_id']=case_id
+            cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
+              VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {})})))
+        conn.commit()
+    return result
+
+
+def record_reconciled_dispatch(cur,tenant,actor,lead,request_id,channel,conversation,result):
+    """Bind a verified status result to its original durable send episode.
+
+    Internal reconciliation only: callers retain current source grants and have
+    verified the provider's exact request/author/source/input receipt contract.
+    This does not authorize a provider send or change the active operator.
+    """
+    if not enabled():return
+    external=result.get('message_id') if isinstance(result,dict) else None
+    if not isinstance(external,str) or not external or result.get('provider_accepted') is not True:
+        raise TenantLinearError('Подтверждённая отправка не найдена.',409)
+    cur.execute("""SELECT e.id FROM saas_chat_send_receipts sr
+      JOIN saas_dialog_episodes e ON e.tenant_id=sr.tenant_id AND e.id::text=sr.route->>'lifecycle_episode_id'
+      WHERE sr.tenant_id=%s::uuid AND sr.actor_id=%s AND sr.lead_id=%s AND sr.request_id=%s::uuid
+        AND sr.state IN ('sending','unknown','accepted') AND e.channel_id=%s::uuid
+        AND e.conversation_id=%s AND e.lead_id=sr.lead_id FOR SHARE OF sr,e""",
+      (tenant,actor,lead,request_id,channel,conversation))
+    episode=cur.fetchone()
+    if not episode:raise TenantLinearError('Исходное обращение отправки не найдено.',409)
+    external=external.removeprefix('connect:')
+    cur.execute('SELECT episode_id,channel_id,conversation_id,external_id FROM saas_dialog_episode_sends WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request_id))
+    previous=cur.fetchone()
+    if previous and (str(previous['episode_id'])!=str(episode['id']) or str(previous['channel_id'])!=str(channel)
+                     or previous['conversation_id']!=conversation or previous['external_id']!=external):
+        raise TenantLinearError('Подтверждение отправки изменилось.',409)
+    cur.execute("""INSERT INTO saas_dialog_episode_sends(tenant_id,episode_id,channel_id,conversation_id,request_id,external_id)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s) ON CONFLICT DO NOTHING""",
+      (tenant,episode['id'],channel,conversation,request_id,external))

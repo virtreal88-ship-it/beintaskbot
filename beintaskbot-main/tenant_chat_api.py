@@ -41,7 +41,8 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
         if lead_id <= 0:
             return web.json_response(
                 {"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
-        if context.policy(profile).kommo_access() or context.policy(profile).action_scope('dialogs','view') is not None:
+        from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+        if lifecycle_enabled() or context.policy(profile).kommo_access() or context.policy(profile).action_scope('dialogs','view') is not None:
             # The old lead-only reader cannot inherit a deal grant to bypass
             # source restrictions. Reuse the current transactional page reader.
             from tenant_chat_history_store import page

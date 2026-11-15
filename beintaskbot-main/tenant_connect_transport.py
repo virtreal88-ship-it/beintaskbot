@@ -1108,6 +1108,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                             facts['fromMe']=True
                         cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                                     (_json(facts),tenant,str(stored['id'])))
+                if stored and stored.get('id'):
+                    from tenant_dialog_lifecycle import record_message
+                    record_message(cur,tenant,channel_id,conversation,str(stored['id']))
                 if (stored and not coordinated and _direct_identity(conversation)
                         and not independent_consultation_receipt
                         and data.get('fromMe') is not False and not _outbound_is_ai(data, stored)
@@ -1128,7 +1131,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 if message_inserted and not independent_consultation_receipt and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
-                    if stored and stored.get('id') and data.get('conversationIdentityConflict') is not True:
+                    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+                    if (not lifecycle_enabled() and stored and stored.get('id')
+                            and data.get('conversationIdentityConflict') is not True):
                         from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                         enqueue_case_extraction(cur,tenant,channel_id,conversation,lead_id,
                             str(stored['id']),actor_id=employee)
@@ -1273,6 +1278,20 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     cur.execute('RELEASE SAVEPOINT consultation_reply')
                     import logging
                     logging.getLogger(__name__).warning('Consultation reply was not linked; original message was preserved')
+            if message_inserted and source_message:
+                from tenant_dialog_lifecycle import record_message
+                record_message(cur,tenant,channel_id,conversation,str(source_message['id']))
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+            from tenant_connect_identity import conflicted
+            if (lifecycle_enabled() and not outbound and message_inserted and not ai_origin and employee is None
+                    and not uncertain_origin and not control_replayed and not identity_conflict
+                    and not role_override and not conflicted(cur,tenant,channel_id,conversation)):
+                from tenant_dialog_lifecycle import note_inbound
+                # Only a new durable customer message may reopen the queue.
+                # Pass the provider timestamp, never our receipt time fallback:
+                # delayed history and duplicate webhooks are not new enquiries.
+                note_inbound(cur, tenant, channel_id, conversation,
+                             str(source_message['id']), event.get('occurred_at'))
             if (not outbound and message_inserted and not ai_origin and employee is None
                     and not uncertain_origin and not control_replayed):
                 # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
@@ -1288,10 +1307,16 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 return accepted
             if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
                 if employee is not None:
-                    stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
-                    from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-                    enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
-                        str(source_message['id']),actor_id=employee)
+                    from tenant_dialog_lifecycle import ai_blocked, enabled as lifecycle_enabled
+                    if ai_blocked(cur,tenant,'connect',channel_id,conversation):
+                        from tenant_ai_agent_connect import mark_operator_reply
+                        mark_operator_reply(tenant,queued_payload[3],channel_id,conversation,connection=conn,actor=employee)
+                    else:
+                        stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
+                    if not lifecycle_enabled():
+                        from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                        enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
+                            str(source_message['id']),actor_id=employee)
                 conn.commit()
                 return True
             from tenant_connect_identity import conflicted
@@ -1301,7 +1326,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 conn.commit()
                 return accepted
             from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-            if message_inserted:
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+            if message_inserted and not lifecycle_enabled():
                 enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
             from tenant_ai_agent_connect import enqueue
             # AI admission is an optional hook on the durable Connect receipt.
@@ -1541,6 +1567,9 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            from tenant_dialog_lifecycle import ai_blocked
+            if ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
+                return None
             if case_followup_binding is not None:
                 from tenant_dialog_consultations import case_developer_followup_current
                 if not case_developer_followup_current(cur,tenant,case_followup_binding,require_automatic_intent=True):
@@ -1709,10 +1738,18 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                 update={**facts,'status':old.get('status') if old.get('status') in {'delivered','read'} else 'sent'}
                 cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                             (_json(update),tenant,str(existing['id'])))
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+            if lifecycle_enabled():
+                cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,'connect:'+external_id,'connect:'+route['channel_id'],lead_id))
+                membership_row=cur.fetchone()
+                if membership_row:
+                    from tenant_dialog_lifecycle import record_message
+                    record_message(cur,tenant,str(route['channel_id']),str(route['conversation_id']),str(membership_row['id']))
             if author != 'AI Agent' and saved:
                 from tenant_ai_agent_connect import mark_operator_reply
                 mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
-                if saved:
+                from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+                if saved and not lifecycle_enabled():
                     from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                     enqueue_case_extraction(cur,tenant,str(route['channel_id']),str(route['conversation_id']),
                         lead_id,str(saved['id']),actor_id=actor)

@@ -373,6 +373,9 @@ def allowed(job: dict, connection=None, *, require_assignment=True) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_lifecycle import ai_blocked
+            if ai_blocked(cur, tenant, 'connect', channel, conversation):
+                return False
             from tenant_connect_identity import conflicted
             if conflicted(cur, tenant, channel, conversation):
                 return False
@@ -440,6 +443,9 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             ensure_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
+            from tenant_dialog_lifecycle import ai_blocked
+            if ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
+                return 0
             cur.execute('SELECT enabled,operating_mode,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             settings = cur.fetchone() or {}
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
@@ -1021,18 +1027,22 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             # involved in that path, so bind only a sole enabled primary that
             # explicitly covers this channel.  Never replace an operator's
             # explicit no-agent choice, and never change the human handoff.
-            candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, allow_human=True)
-            from tenant_ai_group_coordination import stop
-            stop(cur, tenant, conversation_id, actor=actor)
-            cur.execute('''INSERT INTO saas_ai_conversation_state
-              (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
-              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'human','manager_replied')
-              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
-                agent_id=COALESCE(saas_ai_conversation_state.agent_id,
-                  CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
-                state='human',reason='manager_replied',
-                revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
-              (tenant, conversation_id, channel_id, candidate_id))
+            from tenant_dialog_lifecycle import ai_blocked
+            # Episode ownership is a derived pause. Preserve the previous AI
+            # mode so a later enquiry does not resume a manually paused agent.
+            if not ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
+                candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, allow_human=True)
+                from tenant_ai_group_coordination import stop
+                stop(cur, tenant, conversation_id, actor=actor)
+                cur.execute('''INSERT INTO saas_ai_conversation_state
+                  (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
+                  VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'human','manager_replied')
+                  ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
+                    agent_id=COALESCE(saas_ai_conversation_state.agent_id,
+                      CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
+                    state='human',reason='manager_replied',
+                    revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
+                  (tenant, conversation_id, channel_id, candidate_id))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
                 AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id, channel_id))

@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from tenant_chat_api import ChatApiContext, handlers
 
@@ -54,6 +54,17 @@ class ChatApiTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def body(response):
         return json.loads(response.body)
+
+    async def test_lifecycle_blocks_legacy_cached_history_without_direct_reader(self):
+        from tenant_linear_policy import TenantLinearError
+        with patch('tenant_dialog_lifecycle.enabled',return_value=True), \
+             patch('tenant_chat_history_store.page',side_effect=TenantLinearError('Taken by another operator',404)) as guarded:
+            response=await self.api['chat'](Request(lead_id='7'))
+        self.assertEqual(response.status,404)
+        guarded.assert_called_once_with(self.profile,7)
+        self.messages.assert_not_called()
+        self.deal.assert_not_called()
+        self.sync.assert_not_awaited()
 
     async def test_session_and_module_are_required(self):
         self.member.return_value = None

@@ -81,20 +81,31 @@ def require_source(cur, tenant, policy, provider, source='', action='view'):
     if not allowed:raise TenantLinearError('Источник недоступен по вашим правам.',403)
 
 
-def allowed_channels(cur,tenant,policy,action='view'):
-    if scope(policy,action) is None:return None
+def allowed_channels(cur,tenant,policy,action='view',*,conversation=None):
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled, visibility_sql, require_access
+    if scope(policy,action) is None and not (lifecycle_enabled() and conversation):return None
     cur.execute('SELECT connect_channel_id::text AS channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND '+
       sql_filter(policy,"'connect'",'connect_channel_id::text',action),(tenant,))
     channels=sorted(row['channel_id'] for row in cur.fetchall())
+    if lifecycle_enabled() and conversation:
+        cur.execute("SELECT connect_channel_id::text AS channel_id FROM saas_connect_conversations c WHERE tenant_id=%s::uuid AND conversation_id=%s AND "+
+          visibility_sql(policy,"'connect'",'c.connect_channel_id::text','c.conversation_id'),(tenant,conversation))
+        visible={str(row['channel_id']) for row in cur.fetchall()}
+        channels=[channel for channel in channels if channel in visible]
     # Group history and metadata perform subsequent reads. Retain each source
     # grant, not just the primary route, until those reads complete.
-    for channel in channels:require_source(cur,tenant,policy,'connect',channel,action)
+    for channel in channels:
+        require_source(cur,tenant,policy,'connect',channel,action)
+        if lifecycle_enabled() and conversation:
+            require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action)
     return channels
 
 
 def apply_capabilities(cur,tenant,policy,dialog):
     """UI is a projection of the same independent server action scopes."""
-    if not policy.has_scoped_access('dialogs'):return dialog
+    if not policy.has_scoped_access('dialogs'):
+        if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'])
+        return dialog
     can_update=True
     try:require_source(cur,tenant,policy,dialog['provider'],dialog['channel_id'],'update')
     except TenantLinearError:can_update=False
@@ -200,14 +211,20 @@ def require_kommo_lead_read(cur, tenant, policy, lead, deal=None):
 
 def require_lead(cur,tenant,policy,lead,action='view'):
     """Guard older lead-based readers without inheriting CRM permissions."""
-    if scope(policy,action) is None:return
-    cur.execute('''SELECT connect_channel_id FROM saas_connect_conversations
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled, require_access
+    if scope(policy,action) is None and not lifecycle_enabled():return
+    cur.execute('''SELECT connect_channel_id,conversation_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND lead_id=%s''',(tenant,int(lead)))
     row=cur.fetchone()
     if not row and action == 'view':
         require_kommo_lead_read(cur,tenant,policy,lead)
     else:
         require_source(cur,tenant,policy,'connect' if row else 'kommo',str(row['connect_channel_id']) if row else '',action)
+    if row:
+        from tenant_connect_dialog_equivalence import canonical
+        channel=str(row['connect_channel_id'])
+        conversation=canonical(cur,tenant,channel,row['conversation_id'])
+        require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action)
 
 
 def independent_ai_allowed(policy,*,management=False):
@@ -225,8 +242,9 @@ def require_independent_ai(policy,*,management=False):
 
 
 def filter_group(cur,tenant,policy,group):
-    if scope(policy) is None:return group
-    allowed=set(allowed_channels(cur,tenant,policy) or [])
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if scope(policy) is None and not lifecycle_enabled():return group
+    allowed=set(allowed_channels(cur,tenant,policy,conversation=group.get('group_jid')) or [])
     group['channels']=[c for c in group.get('channels',[]) if str(c['channel_id']) in allowed]
     group['assignments']=[a for a in group.get('assignments',[]) if str(a.get('channel_id')) in allowed]
     if str(group.get('sending_channel_id')) not in allowed:
@@ -247,6 +265,8 @@ def lead_message_filter(cur,tenant,policy,lead,*,column='channel',kommo_deal=Non
     if kommo_deal is not None:
         require_kommo_lead_read(cur,tenant,policy,lead,kommo_deal)
         return column+" NOT LIKE 'connect:%%'"
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if lifecycle_enabled():require_lead(cur,tenant,policy,lead)
     if scope(policy) is None:return 'TRUE'
     cur.execute('''SELECT connect_channel_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND lead_id=%s''',(tenant,int(lead)))

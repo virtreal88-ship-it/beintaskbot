@@ -44,6 +44,9 @@ def pilot_scope():
 
 
 def extraction_enabled():
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if lifecycle_enabled():
+        return False
     enabled=os.environ.get('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
     if not enabled:
         return False

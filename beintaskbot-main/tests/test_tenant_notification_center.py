@@ -340,3 +340,22 @@ def test_unavailable_approval_storage_keeps_saved_notifications_visible(ledger,t
     finally:
         ledger.execute('ALTER TABLE isolated_approval_unavailable RENAME TO '+table)
         ledger.commit()
+
+
+def test_lifecycle_hides_consultation_bell_content_without_owner_exception(ready,monkeypatch):
+    import tenant_dialog_lifecycle as lifecycle
+    import tenant_platform
+    local,data,_=ready
+    result,_=prepared(ready)
+    consultations.dispatch(PROFILE,result['id'],data['request_id'])
+    reply(local,result)
+    assert center.listing(PROFILE)['unread_count']==1
+    with local.cursor() as cur:lifecycle.migrate(cur)
+    local.commit()
+    monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED','true')
+    monkeypatch.setattr(tenant_platform,'_connect',lambda:local)
+    lifecycle.mutate({'tenant_id':A,'telegram_id':33},dict(provider='connect',channel_id=CA,
+      conversation_id='client',lead_id=41,action='accept',expected_revision=0,request_id=str(uuid.uuid4())))
+    notice(local,event='dialog:exact',target='/app?'+urlencode({'view':'dialogs','lead_id':'41','channel_id':CA,'conversation_id':'client'}))
+    assert center.listing(PROFILE)['notifications']==[]
+    assert center.listing(PROFILE)['unread_count']==0

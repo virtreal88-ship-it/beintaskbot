@@ -59,6 +59,10 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
                 from tenant_dialog_access import require_source
                 require_source(cur,tenant,policy,'connect',route['channel_id'],'view')
+                from tenant_dialog_lifecycle import require_access
+                from tenant_connect_dialog_equivalence import canonical
+                current_conversation=canonical(cur,tenant,route['channel_id'],route['conversation_id'])
+                require_access(cur,tenant,actor,'connect',route['channel_id'],current_conversation)
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

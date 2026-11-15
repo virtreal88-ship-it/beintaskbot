@@ -117,7 +117,8 @@ def dispatch_guarded(item, callback):
     This also covers first activation of scoped rights after the claim.
     """
     from tenant_scoped_access import scoped_access_enabled
-    if item.get('event') != 'incoming_message' or not scoped_access_enabled():
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if item.get('event') != 'incoming_message' or (not scoped_access_enabled() and not lifecycle_enabled()):
         return callback()
     from tenant_scoped_access_store import read_access_profile
     tenant, actor = str(item['tenant_id']), int(item['recipient_id'])

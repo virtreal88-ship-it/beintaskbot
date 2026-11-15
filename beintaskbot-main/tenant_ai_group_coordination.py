@@ -447,6 +447,9 @@ def stop(cur, tenant, conversation, state='human', reason='manager_replied', act
 def job_allowed(cur, job):
     if job.get('provider') != 'connect' or not group_jid(job.get('conversation_id')):
         return True
+    from tenant_dialog_lifecycle import ai_blocked
+    if ai_blocked(cur, job['tenant_id'], 'connect', job.get('channel_id'), job.get('conversation_id')):
+        return False
     payload = job.get('payload') or {}
     # Old jobs and old drafts carry no coordination fence: never grandfather.
     if not payload.get('group_event_key') or not payload.get('group_revision'):

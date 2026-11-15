@@ -399,7 +399,8 @@ def projection(policy):
     if policy.action_scope('dialogs','view') is not None:
         kommo_scope='TRUE';params=[]
     from tenant_dialog_access import sql_filter
-    dialog_filter=sql_filter(policy)
+    from tenant_dialog_lifecycle import visibility_sql
+    dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(policy,'routes.provider','routes.channel_id','routes.conversation_id')
     from tenant_support_access import sql_filter as support_filter
     ticket_filter=support_filter(policy,'st')
     handoff_filter=support_filter(policy,'ht')
@@ -802,13 +803,18 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+            group_fold='FALSE' if lifecycle_enabled() else "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
+            if lifecycle_enabled():
+                sql=sql.replace('visible AS MATERIALIZED (','eligible AS MATERIALIZED (')
+                sql+=" , visible AS (SELECT eligible.* FROM eligible WHERE provider<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))) "
             cur.execute(sql+""", folded AS (
               SELECT visible.*,row_number() OVER(PARTITION BY CASE
-                WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'
+                WHEN """+group_fold+"""
                 THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END
                 ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible)
               SELECT (SELECT count(DISTINCT CASE
-                WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'
+                WHEN """+group_fold+"""
                 THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END)
                 FILTER(WHERE display_state IN ('human','paused','blocked','error')) FROM visible) AS attention_count,
               (SELECT COALESCE(jsonb_agg(x ORDER BY name),'[]'::jsonb) FROM
@@ -842,7 +848,11 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
             from tenant_dialog_access import apply_capabilities
-            for r in rows:apply_capabilities(cur,tenant,policy,r)
+            from tenant_dialog_lifecycle import decorate as lifecycle_decorate
+            for r in rows:
+                apply_capabilities(cur,tenant,policy,r)
+                lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False)
+            rows=[r for r in rows if (r.get('lifecycle') or {}).get('state') not in {'closed','dismissed'}]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,rows)
                 rows=[_hide_shared_ai(r) for r in rows]
@@ -1011,7 +1021,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if anchor and not before:
                 from tenant_dialog_access import sql_filter
                 # Resolve anchor only within the authorized route / exact tenant group.
-                cur.execute('''SELECT m.id,m.external_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
+                cur.execute('''SELECT m.id,m.external_id,m.kommo_lead_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
                   WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text))) AND '''+sql_filter(policy,"CASE WHEN m.channel LIKE 'connect:%%' THEN 'connect' ELSE 'kommo' END","substring(m.channel from 9)"),
@@ -1019,11 +1029,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
                 if not anchor_row:
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
+                from tenant_dialog_access import require_lead
+                require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 from tenant_dialog_access import allowed_channels
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at,
-                  channel_ids=allowed_channels(cur,tenant,policy))
+                  channel_ids=allowed_channels(cur,tenant,policy,conversation=conversation))
                 for message in messages:
                     message['source_conversation_id']=conversation
             else:
@@ -1088,6 +1100,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
             from tenant_dialog_access import apply_capabilities
             apply_capabilities(cur,tenant,policy,dialog)
+            from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
+            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog)
+            if (dialog.get('lifecycle') or {}).get('can_transfer'):
+                dialog['lifecycle']['transfer_targets']=_targets(cur,tenant,policy,channel,int(profile['telegram_id']))
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)
