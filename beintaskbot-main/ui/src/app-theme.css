@@ -252,3 +252,8 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
   body[data-app-ui="kwid"] #view-dialogs.active{height:calc(var(--operator-visual-height,100dvh) - 104px - var(--app-bottom-nav-height,80px));min-height:0}
   html:has(body[data-app-ui="kwid"]){scroll-padding-bottom:calc(var(--app-bottom-nav-height,80px) + 12px)}
 }
+
+@media(max-width:1023px){
+ body[data-app-ui="kwid"] #appHorizontalScroll{bottom:calc(12px + var(--app-bottom-nav-height,80px))}
+ body[data-app-ui="kwid"]:has(#appHorizontalScroll:not([hidden])) .shell{padding-bottom:calc(var(--app-bottom-nav-height,80px) + 60px)}
+}

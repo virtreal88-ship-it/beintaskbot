@@ -187,10 +187,11 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   let frame=0,lastActive=null
   function sync(){
     frame=0
+    if(!body.isConnected)return
     const focused=document.activeElement
     // Leave the full visual viewport to forms, native date/select pickers and dialogs.
     const editing=focused?.matches('input:not([type=button]):not([type=submit]),textarea,select,[contenteditable="true"]')&&!nav.contains(focused)
-    const modal=[...document.querySelectorAll('[role="dialog"],dialog[open],.modal.show,.ai-agents-modal.show')].some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')
+    const modal=[...document.querySelectorAll('[role="dialog"],dialog[open],.modal.show,.ai-agents-modal.show,#operatorDialogBody[data-copilot-open=true] #operatorCopilot')].some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')
     const suppressed=mobile.matches&&(editing||modal)
     if(sidebar.dataset.bottomNavSuppressed!==String(suppressed))sidebar.dataset.bottomNavSuppressed=String(suppressed)
     sidebar.inert=suppressed
@@ -204,7 +205,7 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
     }
     lastActive=active
   }
-  function schedule(){if(!frame)frame=requestAnimationFrame(sync)}
+  function schedule(){if(body.isConnected&&!frame)frame=requestAnimationFrame(sync)}
   if(typeof ResizeObserver!=='undefined')new ResizeObserver(schedule).observe(sidebar)
   new MutationObserver(schedule).observe(body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open','aria-current']})
   document.addEventListener('focusin',schedule)
