@@ -10,6 +10,8 @@
   const style = document.createElement('style');
   style.textContent = `
 @media(max-width:700px){
+ #view-tasks>.app-mobile-title-row~.top:has(.app-mobile-original-title){display:none!important}
+ #view-deals>.app-mobile-title-row~.top:has(.app-mobile-original-title){margin-bottom:8px!important}
  .crm-mobile-toolbar{position:relative;display:flex;gap:8px;align-items:center;margin:0 0 12px;padding:0;max-width:100%;box-sizing:border-box}
  .crm-mobile-toolbar>.crm-mobile-trigger,.crm-mobile-toolbar>.crm-mobile-create{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px!important;height:44px!important;min-height:44px;min-width:44px;padding:0!important;border-radius:10px;box-sizing:border-box;position:relative}
  .crm-mobile-trigger{border:1px solid var(--line);background:var(--card);color:var(--ink)}
@@ -75,7 +77,7 @@
       if(media.matches){
         originals[1].marker.after(panel);panel.append(create,filterButton,moreButton,filterBox,moreBox);
         filterBox.append(filters);moreBox.append(actions);controls.forEach(({node})=>moreBox.append(node));
-        create.classList.add('crm-mobile-create');create.style.setProperty('--crm-create-icon',`url("data:image/svg+xml,${encodeURIComponent(svg('create'))}")`);
+        create.classList.add('crm-mobile-create');create.style.setProperty('--crm-create-icon',`url("data:image/svg+xml,${encodeURIComponent(svg('create').replace('<svg','<svg xmlns="http://www.w3.org/2000/svg"'))}")`);
       } else {
         [...originals,...controls].forEach(({node,marker})=>marker.after(node));panel.remove();create.classList.remove('crm-mobile-create');create.style.removeProperty('--crm-create-icon');
       }

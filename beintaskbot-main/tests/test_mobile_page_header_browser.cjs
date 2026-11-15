@@ -27,9 +27,9 @@ const shell=read('ui/src/app-shell.js').replace("import themeCss from './app-the
   if(width<=1023){
    await page.evaluate(()=>{const b=document.createElement('button');b.id='dialogConsultationBell';b.innerHTML='bell<span class="notification-unread-badge">3</span>';document.querySelector('[data-app-language]').before(b)});await page.waitForTimeout(80);assert(await page.locator('.app-avatar-unread').isVisible());assert.equal(await page.locator('.app-avatar-unread').innerText(),'3');
    await page.locator('.app-avatar-button').click();const menu=await page.locator('.app-user-menu').boundingBox();assert(menu.x>=0&&menu.x+menu.width<=width&&menu.y+menu.height<=860,'menu inside viewport');
-   fs.mkdirSync(path.join(root,'artifacts/mobile-page-header'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-page-header/${width}-${theme}-menu.png`)});await page.setViewportSize({width:1440,height:860});await page.waitForTimeout(80);assert(await page.locator('.app-topbar-actions #dialogConsultationBell').isVisible());assert.equal(await page.locator('.app-mobile-title-row').count(),0);
+   await page.waitForTimeout(180);fs.mkdirSync(path.join(root,'artifacts/mobile-page-header'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-page-header/${width}-${theme}-menu.png`)});await page.setViewportSize({width:1440,height:860});await page.waitForTimeout(80);assert(await page.locator('.app-topbar-actions #dialogConsultationBell').isVisible());assert.equal(await page.locator('.app-mobile-title-row').count(),0);
   }
-  fs.mkdirSync(path.join(root,'artifacts/mobile-page-header'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-page-header/${width}-${theme}.png`)});assert.deepEqual(errors,[]);await page.close();
+  await page.waitForTimeout(180);fs.mkdirSync(path.join(root,'artifacts/mobile-page-header'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-page-header/${width}-${theme}.png`)});assert.deepEqual(errors,[]);await page.close();
  }
  console.log('PASS browser mobile title/menu/layout and desktop regression');
 }finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});
