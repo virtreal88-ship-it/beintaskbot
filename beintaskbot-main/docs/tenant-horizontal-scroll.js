@@ -12,9 +12,13 @@
     #appHorizontalScroll[hidden]{display:none}
     #appHorizontalScroll input{display:block;width:100%;height:32px;margin:0;cursor:ew-resize;accent-color:var(--app-accent,var(--brand));touch-action:pan-y}
     @media(max-width:700px){
-      body[data-app-ui="kwid"] main{padding-left:max(8px,env(safe-area-inset-left))!important;padding-right:max(8px,env(safe-area-inset-right))!important}
-      body[data-app-ui="kwid"] main .panel{padding-left:8px;padding-right:8px}
-      body[data-app-ui="kwid"] :is(#view-tasks,#view-deals) .panel:has(.app-kanban-swipe){padding-left:0;padding-right:0;border-left:0;border-right:0}
+      html body[data-app-ui="kwid"] main{padding-left:env(safe-area-inset-left,0px)!important;padding-right:env(safe-area-inset-right,0px)!important}
+      html body[data-app-ui="kwid"] main .panel{padding-left:8px;padding-right:8px}
+      html body[data-app-ui="kwid"] :is(#view-tasks,#view-deals) .panel:has(.app-kanban-swipe){padding-left:0!important;padding-right:0!important;border-left:0!important;border-right:0!important;border-radius:0}
+      html body[data-app-ui="kwid"] :is(#nativeTasksList,#tasksList,#nativeDealsList,#dealsList):has(.app-kanban-swipe){border-left:0!important;border-right:0!important;border-radius:0}
+      html body[data-app-ui="kwid"] #view-tasks .task-source-panel:has(#tasksList)>h2{display:none!important}
+      html body[data-app-ui="kwid"] :is(#view-tasks,#view-deals)>.top{padding-left:8px;padding-right:8px}
+      html body[data-app-ui="kwid"] .app-kanban-swipe>[data-kommo-stage-key]{padding-left:8px;padding-right:8px}
       .app-kanban-swipe{display:flex!important;min-width:0;max-width:100%;overflow-x:auto!important;scroll-snap-type:x mandatory!important;gap:8px!important;overscroll-behavior-x:contain}
       .app-kanban-swipe> :is([data-task-column],[data-kommo-stage-key],[data-native-stage]){box-sizing:border-box!important;flex:0 0 100%!important;width:100%!important;min-width:0!important;max-width:100%!important;scroll-snap-align:start;scroll-snap-stop:always;overflow-wrap:anywhere}
     }
