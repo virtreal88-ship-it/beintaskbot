@@ -23,7 +23,7 @@ jobs:
           node-version: '22'
       - run: npm install --prefix .support-test-deps --no-package-lock jsdom@26.1.0 playwright@1.62.1
       - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
-      - run: echo "CHROMIUM_EXECUTABLE_PATH=$(node -e \"console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())\")" >> "$GITHUB_ENV"
+      - run: echo "CHROMIUM_EXECUTABLE_PATH=$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")" >> "$GITHUB_ENV"
       - run: |
           node tests/test_horizontal_scroll_control.cjs
           node tests/test_mobile_crm_toolbar.cjs
