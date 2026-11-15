@@ -290,9 +290,15 @@ def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None
             if policy.has_scoped_access('deals','view'):
                 allowed,values=resource_scope_sql(policy.profile,'deals','view',alias='d')
                 scope+=' AND ('+allowed+')';args.extend(values)
-            cur.execute('''SELECT d.id,d.title,d.contact_id,d.channel_id,d.conversation_id,d.responsible_id,d.pipeline_id,d.stage_id
-              FROM saas_crm_native_deals d WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL'''+scope+
-              ' ORDER BY d.updated_at DESC,d.id LIMIT 200',args)
+            from tenant_crm_native_access import scoped_sql
+            contact_scope,contact_args=scoped_sql(policy.profile,'customers','view','c')
+            cur.execute('''SELECT d.id,d.title,d.contact_id,c.display_name AS contact_name,c.phone AS contact_phone,
+              d.channel_id,d.conversation_id,d.responsible_id,d.pipeline_id,d.stage_id
+              FROM saas_crm_native_deals d
+              LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
+                AND c.archived_at IS NULL AND ('''+contact_scope+''')
+              WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL'''+scope+
+              ' ORDER BY d.updated_at DESC,d.id LIMIT 200',[*contact_args,*args])
             deals=cur.fetchall()
             selected=None
             if task_id:
@@ -313,7 +319,7 @@ def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None
             members=[{'telegram_id':person['telegram_id'],'display_name':person['display_name']}
               for person in people if selected and _eligible(person,selected)]
             members.sort(key=lambda row:(row['display_name'],int(row['telegram_id'])))
-    fields=('id','title','contact_id','channel_id','conversation_id')
+    fields=('id','title','contact_id','contact_name','contact_phone','channel_id','conversation_id')
     return {'deals':[{key:row.get(key) for key in fields} for row in deals], 'members':members,
       'selected_deal_id':str(selected['id']) if selected else None,
       'assignment':{'scope':'tenant' if policy.privileged else 'self','criterion':'active_tasks_assignment' if scoped_access_enabled() else 'active_tasks_view_update',
@@ -337,6 +343,15 @@ def get_task(tenant_id,task_id,*,actor_id=None,operation='view'):
                 policy=TenantPolicy(profile)
                 if not task_access_allowed(policy,row,actor_id,operation):return None
                 row['capabilities']=task_capabilities(policy,row,int(actor_id))
+                if row.get('contact_id'):
+                    from tenant_crm_native_access import scoped_sql
+                    contact_scope,contact_args=scoped_sql(policy.profile,'customers','view','c')
+                    cur.execute('''SELECT c.display_name,c.phone FROM saas_crm_native_contacts c
+                      WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL
+                      AND ('''+contact_scope+')',[tenant_id,row['contact_id'],*contact_args])
+                    contact=cur.fetchone()
+                    row['form_contact_name']=contact.get('display_name') if contact else None
+                    row['contact_phone']=contact.get('phone') if contact else None
             return row
 
 
