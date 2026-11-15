@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -29,7 +30,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);
     await page.locator('.operator-row').first().click();const card=page.locator('[data-native-audio=true]'),audio=card.locator('audio'),load=card.locator('button[data-media-open]'),status=card.locator('[data-media-load-status]');
     await load.waitFor({state:'attached'});assert.equal(await load.isVisible(),false,'no redundant button under the player');assert.equal(mediaRequests,0,'rendering a voice never downloads it');assert.equal(await audio.isVisible(),true,'familiar native player is visible before loading');assert.equal(await card.locator('.operator-audio-controls').getAttribute('aria-disabled'),'true');assert.equal(await card.locator('.operator-audio-controls').evaluate(n=>n.inert),true);assert.equal(await audio.getAttribute('src'),null);assert.match(await card.locator('.operator-audio-heading').innerText(),/0:02/);assert.equal(await card.locator('[data-media-meta]').innerText(),'','unknown size adds no placeholder');
     const missingDurations=await page.evaluate(()=>[null,'',0,undefined].map(duration_seconds=>{const template=document.createElement('template');template.innerHTML=window.tenantOperator.messageMarkup([{source:'connect',id:'empty-duration',external_id:'none',message_type:'voice',duration_seconds}]);return template.content.querySelector('.operator-audio-heading').textContent;}));assert.ok(missingDurations.every(label=>!label.includes('0:00')),'missing duration never invents a zero-length voice');

@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -27,7 +28,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('.app-topbar').waitFor();await page.locator('[data-app-language]').selectOption(language);
+    await page.goto('https://crm.test/app?view=dialogs');await page.locator('.app-topbar').waitFor();await selectAppLanguage(page,language);
     const read=()=>page.evaluate(()=>{const r=selector=>{const n=document.querySelector(selector),box=n.getBoundingClientRect();return {x:box.x,y:box.y,w:box.width,h:box.height,position:getComputedStyle(n).position};};return {search:r('#operatorSearch'),trigger:r('#operatorToolsMenu>summary'),details:r('#operatorToolsMenu'),filter:r('#operatorFiltersToggle'),toolbar:r('.operator-filters'),firstAction:r('#operatorSoundToggle')};});
     const assertStableGeometry=(actual,expected,label)=>{
      assert.equal(actual.position,expected.position,label+' keeps positioning mode');

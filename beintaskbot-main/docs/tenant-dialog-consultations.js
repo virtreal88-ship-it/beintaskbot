@@ -87,7 +87,7 @@
   function button(text,fn){const node=el('button',text);node.type='button';node.className='outline';node.onclick=fn;return node;}
   const viewActive=name=>!!$('view-'+name)?.classList.contains('active');
   function showCopilot(){if(focused&&window.tenantOperator?.showReplyContext)return window.tenantOperator.showReplyContext();const panel=$('operatorCopilot');if(panel?.hidden)$('operatorCopilotToggle')?.click();return !!panel&&!panel.hidden;}
-  function closeNotificationMenu(restore=true){notificationNavigationRevision++;if(!menu)return;menu.hidden=true;bell?.setAttribute('aria-expanded','false');if(restore&&menuReturnFocus?.isConnected)menuReturnFocus.focus({preventScroll:true});}
+  function closeNotificationMenu(restore=true){notificationNavigationRevision++;if(!menu)return;menu.hidden=true;bell?.setAttribute('aria-expanded','false');if(restore&&menuReturnFocus?.isConnected){const target=menuReturnFocus.closest?.('.app-user-menu[hidden]')?document.querySelector('.app-avatar-button'):menuReturnFocus;target?.focus({preventScroll:true});}}
   function openNotificationMenu(){if(!menu)return;menuReturnFocus=document.activeElement;menu.hidden=false;render();void loadNotifications();$('notificationClose')?.focus({preventScroll:true});}
   function notificationTarget(item){const target=new URL(item.target_url||item.url,location.origin);if(target.origin!==location.origin||target.pathname!=='/app')throw Error(notificationCopy('openFailure'));return target;}
   function leaveReplyView(){focused=null;focusedRoute='';$('operatorCopilot')?.classList.remove('dialog-consultation-focus');$('dialogConsultationFocusBar')?.remove();render();}
@@ -330,3 +330,4 @@
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void load();});
   const timer=setInterval(()=>{if(!document.hidden)void load();},60000);window.addEventListener('beforeunload',()=>clearInterval(timer));mount();void load();
 })();
+

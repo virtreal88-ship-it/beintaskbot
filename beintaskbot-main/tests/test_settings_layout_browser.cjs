@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Real production bundle with synthetic authorized API data; no production writes. */
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.PLAYWRIGHT_PATH||'../.support-test-deps/node_modules/playwright');
@@ -12,7 +13,7 @@ for(const width of [390,1440])for(const language of ['ru','az','en']){
  await page.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort());
  await page.goto('https://fixture.local/app?view=settings&lang='+language);
  await page.locator('#view-profile.active').waitFor();
- await page.locator('[data-app-language]').selectOption(language);
+ await selectAppLanguage(page,language);
  await page.locator('.notification-preference-row').first().waitFor();
  await page.locator('.notification-channels input[type=checkbox]').first().waitFor({state:'attached'});
  assert.equal(await page.locator('.notification-channels input[type=checkbox]').count(),6);

@@ -1,5 +1,6 @@
 /* Layout and appearance only: navigation invokes existing page buttons. */
 import themeCss from './app-theme.css?inline'
+import { installMobilePageHeader } from './mobile-page-header.js'
 
 if (document.body.dataset.appUi === 'kwid') {
   const style=document.createElement('style')
@@ -64,7 +65,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_analytics','ai_agents','ai_dashboard','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['employees','integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','deals','customers','companies','hot_orders']},{id:'ai',label:'AI',pages:['ai_analytics','ai_agents','ai_dashboard','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['employees','integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
@@ -90,6 +91,11 @@ if (document.body.dataset.appUi === 'kwid') {
       button.title=label.textContent
       const group=groups.find(group=>group.pages.includes((button.dataset.view||button.dataset.reportLink)))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
       if(button.parentElement!==items)items.append(button)
+    }
+    const crmItems=containers.get('crm')?.querySelector('.app-nav-group-items')
+    if(crmItems){
+      const ordered=groups.find(group=>group.id==='crm').pages.map(page=>crmItems.querySelector(`[data-view="${page}"]`)).filter(Boolean)
+      ordered.forEach((button,index)=>{if(crmItems.children[index]!==button)crmItems.insertBefore(button,crmItems.children[index]||null)})
     }
     const settingsFamily=nav.querySelector('#settingsFamilyNav'),companyItems=containers.get('company')?.querySelector('.app-nav-group-items');
     if(settingsFamily&&companyItems&&settingsFamily.parentElement!==companyItems)companyItems.append(settingsFamily);
@@ -135,6 +141,7 @@ if (document.body.dataset.appUi === 'kwid') {
   updateContext()
   updateLanguage()
   installMobileBottomNav({sidebar,nav,mobile})
+  installMobilePageHeader({topbar,mobile,avatar,userMenu,languageSelect,instructionLink,pageLabel})
 
   function installTabPicker(tablist) {
     if(tablist.dataset.appTabReady)return
@@ -224,3 +231,4 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   })
   schedule()
 }
+

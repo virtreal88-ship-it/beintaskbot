@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -29,7 +30,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);
     await page.locator('.operator-row').first().click();
     const primary=page.locator('#operatorComposerPrimary'),ai=page.locator('#operatorAIActionMenu'),input=page.locator('#chatText');
     await primary.waitFor();assert.equal(await page.locator('#sendChat').isVisible(),false);

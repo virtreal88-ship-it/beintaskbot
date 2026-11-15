@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.join(__dirname,'..'),tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
@@ -14,7 +15,7 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
    else if(name.endsWith('/dialogs/group-participants')){assert.equal(request.method(),'GET');assert.equal(request.postData(),null);assert.equal(url.searchParams.get('channel_id'),channel);assert.equal(url.searchParams.get('conversation_id'),group.conversation_id);if(gate)await gate;result=mode==='available'?{status:'available',observed_at:new Date().toISOString(),phones:['+994500000001','+994500000002'],total:3,unresolved:1}:{status:'unavailable'};}
    return route.fulfill({json:{success:true,result}});
   });
-  await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption('ru');await page.locator('.operator-row').first().click();
+  await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,'ru');await page.locator('.operator-row').first().click();
   const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard');
   await avatar.click();await card.getByText('+994500000001',{exact:true}).waitFor();assert.match(await card.innerText(),/Участников без доступного номера: 1/);
   assert.equal(await card.locator('.operator-roster-row').count(),2);
@@ -35,3 +36,4 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
  }
  console.log('group participants card passed');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
+
