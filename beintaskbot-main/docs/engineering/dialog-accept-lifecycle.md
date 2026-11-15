@@ -34,9 +34,12 @@ No production migration is executed by serving a request or importing this modul
   Pending or uncertain outgoing sends prevent an incomplete case snapshot.
 - Cases are not created by accepting or completing. Explicit case submission pins
   durable message-to-episode membership on the same verified route,
-  including approved aliases. It creates a separate completed manual case, not an
-  upsert into an unrelated old open ticket. No automatic summary, publishing,
-  paid AI generation or developer dispatch is triggered.
+  including approved aliases. Only this explicit action starts budgeted AI
+  suitability analysis: unsuitable returns a reason without a case; suitable
+  creates one knowledge candidate. Eligible automatic publication is subject to
+  original-actor rights and the evidence gates below; otherwise it stays draft.
+  No analysis or publication runs merely because an episode was closed, and no
+  developer dispatch or unrelated old-ticket update is triggered.
 
 ## Additive migration
 

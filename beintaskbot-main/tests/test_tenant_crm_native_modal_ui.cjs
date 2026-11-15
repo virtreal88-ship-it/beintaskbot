@@ -26,6 +26,12 @@ for (const [viewId, createId, formId, modalId] of [
   assert.equal((modal.match(/type="submit"/g)||[]).length,1,`${modalId}: exactly one save action`);
   assert(modal.includes('crm-modal-actions') && modal.includes('Ləğv et') && modal.includes('Yadda saxla'),`${modalId}: cancel and save share the action row`);
 }
+const taskForm=app.slice(app.indexOf('id="nativeTaskForm"'),app.indexOf('id="nativeTaskAssignmentCriterion"'));
+assert(taskForm.indexOf('id="nativeTaskDeal"')<taskForm.indexOf('id="nativeTaskCustomerName"')&&taskForm.indexOf('id="nativeTaskCustomerName"')<taskForm.indexOf('id="nativeTaskResponsible"')&&taskForm.indexOf('id="nativeTaskResponsible"')<taskForm.indexOf('id="nativeTaskDue"')&&taskForm.indexOf('id="nativeTaskDue"')<taskForm.indexOf('id="nativeTaskText"'),'task creation and editing keep linked client context, assignee, deadline, then task text');
+assert(taskForm.includes('<textarea id="nativeTaskText"')&&app.includes('contact_phone')&&app.includes('function renderNativeTaskContact'),'task text stays multiline and client fields come from the linked deal');
+assert(app.includes('#nativeTaskModal .native-task-fields')&&app.includes('@media(max-width:639px){#nativeTaskModal .native-task-fields')&&app.includes('#nativeDealModal .native-deal-fields'),'task and deal forms reflow on mobile using the existing page theme');
+const externalTaskForm=fs.readFileSync(`${__dirname}/../docs/tenant-tasks.js`,'utf8');
+assert(externalTaskForm.indexOf('data-task-external-label="due"')<externalTaskForm.indexOf('data-task-external-label="body"'),'Kommo task creation puts deadline before the text while keeping its separate fields');
 assert(app.includes('data-view="companies"') && app.includes('data-crm-nav-label="companies"'), 'companies live inside the CRM navigation group');
 assert(app.includes("ru:{group:'CRM'") && app.includes("en:{group:'CRM'") && app.includes('tenant-language'), 'CRM navigation supports RU/AZ/EN');
 // Contact handlers moved into the real directory asset; the contact/deal/task
