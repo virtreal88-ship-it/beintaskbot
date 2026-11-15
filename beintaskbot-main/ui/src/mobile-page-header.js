@@ -13,7 +13,10 @@ export function installMobilePageHeader({topbar, mobile, avatar, userMenu, langu
   // Badge is a sibling: existing profile code updates avatar.textContent.
   const badgeDescription=document.createElement('span');badgeDescription.id='appAvatarNotifications';badgeDescription.className='app-visually-hidden';
   avatar.after(badge,badgeDescription);avatar.setAttribute('aria-describedby',badgeDescription.id);
-  let row=null,heading=null,bell=null,bellHome=null,frame=0;
+  let row=null,heading=null,bell=null,bellHome=null,frame=0,avatarFocusOwned=false;
+  avatar.addEventListener('focus',()=>{avatarFocusOwned=true});
+  document.addEventListener('focusin',event=>{if(event.target!==avatar)avatarFocusOwned=false});
+  document.addEventListener('pointerdown',event=>{if(!avatar.contains(event.target))avatarFocusOwned=false},true);
   const copy=()=>({ru:{language:'Язык',notifications:'Уведомления'},az:{language:'Dil',notifications:'Bildirişlər'},en:{language:'Language',notifications:'Notifications'}})[window.tenantI18n?.language||document.documentElement.lang]||{language:'Language',notifications:'Notifications'};
   function put(parent,node,before=null){if(node.parentNode!==parent||(before&&node.nextSibling!==before))parent.insertBefore(node,before);}
   function clearRow(){heading?.classList.remove('app-mobile-original-title');row?.remove();row=null;heading=null;}
@@ -52,6 +55,8 @@ export function installMobilePageHeader({topbar, mobile, avatar, userMenu, langu
     if(languageRow.parentNode!==extras)extras.append(languageRow);
     put(languageRow,languageSelect);put(extras,instructionLink);
     if(bell)put(extras,bell,languageRow);
+    // Moving the existing avatar to the new route must not lose a returned keyboard focus.
+    if(avatarFocusOwned&&document.activeElement!==avatar&&document.activeElement===document.body)avatar.focus({preventScroll:true});
   }
   function schedule(){if(window.document?.documentElement&&main.isConnected&&!frame)frame=requestAnimationFrame(update);}
   const observer=new MutationObserver(schedule);
