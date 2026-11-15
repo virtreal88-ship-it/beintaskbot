@@ -75,7 +75,7 @@
       // Search node is preserved across breakpoint changes, including its value and handlers.
       if(media.matches&&!box.contains(searchNode))box.append(searchNode);
     }
-    const observer=new MutationObserver(labels);observer.observe(actions,{childList:true,subtree:true,characterData:true});
+    const observer=new MutationObserver(labels);observer.observe(actions,{childList:true,subtree:true,characterData:true});if(create)observer.observe(create,{childList:true,subtree:true,characterData:true});
     panels.push({layout,labels});layout();
   }
   media.addEventListener('change',()=>panels.forEach(p=>p.layout()));
