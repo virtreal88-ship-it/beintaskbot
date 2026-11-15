@@ -45,7 +45,9 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     // A stale host/source cannot run an action from an already-open portal.
     await page.evaluate(()=>{document.querySelector('[data-chat-attachment="doc-1"]').dataset.mediaVersion='b'.repeat(64);});await page.waitForFunction(()=>!document.querySelector('.operator-reply-context-menu'));assert.equal(mediaRequests,1);
     // An actual locale change remounts translated controls; an unchanged locale now preserves DOM.
-    await open();await selectAppLanguage(page,'en',{force:true});assert.equal(await menu.count(),0,'language change retires the portal');await selectAppLanguage(page,language,{force:true});
+    await open();await selectAppLanguage(page,'en');assert.equal(await menu.count(),0,'language change retires the portal');await selectAppLanguage(page,language);
+    // On mobile the account menu is reached through Back; reopen the same real dialog.
+    if(!await article.isVisible())await page.locator('.operator-row').first().click();await card.waitFor();
     await article.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();assert.equal(await menu.locator('[data-context-file]').count(),1,'fresh rendering restores the real per-row files');await page.keyboard.press('Escape');
     // Actual desktop right-click and touch hold share one entry point.
     await card.locator('.operator-audio-heading').click({button:'right'});await menu.waitFor();assert.equal(await menu.count(),1);await page.keyboard.press('Escape');
