@@ -12,12 +12,12 @@
  #view-deals .top .eyebrow{display:none}#view-deals #dealCount{font-size:12px;margin:0;padding:3px 6px}
  .crm-mobile-toolbar{display:grid;grid-template-columns:repeat(42,minmax(0,1fr));align-items:center;column-gap:0;row-gap:6px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);margin-bottom:12px;max-width:100%;box-sizing:border-box}
  .crm-mobile-toolbar .crm-toolbar-actions,.crm-mobile-toolbar .task-flow-filters,.crm-mobile-toolbar .deal-source-filters,.crm-mobile-toolbar .task-view-controls,.crm-mobile-toolbar #dealViewControls,.crm-mobile-toolbar [data-task-view-controls],.crm-mobile-toolbar [data-deal-view-controls]{display:contents!important}
- .crm-mobile-toolbar button{grid-column:span 6;order:0;display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:0!important;width:100%!important;height:44px!important;padding:0!important;box-sizing:border-box;position:relative}
+ .crm-mobile-toolbar button{grid-column:span 6;order:0;display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:0!important;width:calc(100% - 6px)!important;max-width:44px;justify-self:center;height:44px!important;padding:0!important;box-sizing:border-box;position:relative}
  #view-tasks .crm-mobile-toolbar button{grid-column:span 7}
- .crm-mobile-toolbar button svg{display:block!important;width:20px!important;height:20px!important;flex:none!important;margin:0!important}
+ .crm-mobile-toolbar button svg{display:block!important;width:18px!important;height:18px!important;flex:none!important;margin:0!important}
  .crm-mobile-toolbar .crm-toolbar-actions button{font-size:0!important;line-height:0}
  .crm-mobile-toolbar .crm-toolbar-actions button>*{display:none!important}
- .crm-mobile-toolbar .crm-toolbar-actions button::after{content:'';display:block;position:absolute;inset:0;width:20px;height:20px;margin:auto;background:currentColor;mask:var(--crm-mobile-icon) center/contain no-repeat;-webkit-mask:var(--crm-mobile-icon) center/contain no-repeat}
+ .crm-mobile-toolbar .crm-toolbar-actions button::after{content:'';display:block;position:absolute;inset:0;width:18px;height:18px;margin:auto;background:currentColor;mask:var(--crm-mobile-icon) center/contain no-repeat;-webkit-mask:var(--crm-mobile-icon) center/contain no-repeat}
  .crm-mobile-toolbar .crm-toolbar-actions button.loading::after{animation:spin .7s linear infinite}
  @media(prefers-reduced-motion:reduce){.crm-mobile-toolbar .crm-toolbar-actions button.loading::after{animation:none}}
  #view-deals:has(#kommoDealSourcePanel[hidden]) .crm-mobile-toolbar #dealViewControls{display:none!important}
