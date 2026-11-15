@@ -15,6 +15,9 @@ for(const width of [320,360,390,430,1280])for(const theme of ['light','dark']){
  const mobile=width<=700;
  assert.equal(await page.locator('.crm-mobile-toolbar').count(),mobile?2:0);
  if(mobile){
+   assert.equal(await page.locator('#view-tasks .top > #nativeTaskCreate').count(),1);
+   assert.equal(await page.locator('#view-deals .top > #nativeDealCreate').count(),1);
+   assert.equal(await page.locator('#kommoTaskCount').isVisible(),false);
    const panel=page.locator('#view-tasks .crm-mobile-toolbar');assert((await panel.boundingBox()).height<=130,'compact two-row toolbar');
    assert.equal(await page.locator('#taskSearch').isVisible(),false);await panel.locator('.crm-mobile-search-toggle').click();await page.locator('#taskSearch').fill('клиент');assert.equal(await page.evaluate(()=>window.searched),'клиент');
    await page.keyboard.press('Escape');assert.equal(await page.locator('#taskSearch').isVisible(),false);assert.equal(await page.locator('#taskSearch').inputValue(),'клиент');
@@ -27,7 +30,7 @@ for(const width of [320,360,390,430,1280])for(const theme of ['light','dark']){
  }
  for(const v of ['tasks','deals']){await page.evaluate(v=>{for(const id of ['tasks','deals'])document.getElementById('view-'+id).classList.toggle('active',id===v);},v);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width} ${v} no overflow`);if(mobile){const p=page.locator('#view-'+v+' .crm-mobile-toolbar');if(v==='deals')assert((await p.boundingBox()).height<=130,'deals compact');
  const geometry=await p.evaluate(el=>({buttons:[...el.querySelectorAll('button')].filter(b=>b.getClientRects().length).map(b=>{const r=b.getBoundingClientRect(),s=b.querySelector('svg'),sr=s?.getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height,svg:sr?{x:sr.x,y:sr.y,w:sr.width,h:sr.height}:null};}),selects:[...el.querySelectorAll('select')].filter(s=>s.getClientRects().length).map(s=>({y:s.getBoundingClientRect().y}))}));
- assert(geometry.buttons.length>=6, 'all actions visible');
+ assert(geometry.buttons.length>=5, 'all actions visible');
  for(const b of geometry.buttons){assert(Math.abs(b.y-geometry.buttons[0].y)<1,`${v} all buttons in first row`);assert(b.w>=30&&b.h>=44,'usable tap target');if(b.svg){assert(Math.abs(b.svg.x+b.svg.w/2-b.x-b.w/2)<1,'icon horizontally centered');assert(Math.abs(b.svg.y+b.svg.h/2-b.y-b.h/2)<1,'icon vertically centered');}}
  const ordered=[...geometry.buttons].sort((a,b)=>a.x-b.x);
  for(let i=1;i<ordered.length;i++)assert(ordered[i].x-(ordered[i-1].x+ordered[i-1].w)>=5.5,`${v} visible spacing between buttons`);
