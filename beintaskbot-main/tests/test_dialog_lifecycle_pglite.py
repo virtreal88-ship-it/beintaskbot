@@ -21,6 +21,9 @@ def episodes(db, monkeypatch):
     send_schema(db)
     with db.cursor() as cur:
         lifecycle.migrate(cur)
+        # Receipts intentionally survive tenant business-row cleanup; isolate
+        # this disposable fixture without adding destructive runtime cleanup.
+        cur.execute('TRUNCATE saas_dialog_lifecycle_receipts')
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Employee','[\"dialogs\",\"support\"]'::jsonb)", (A,))
     db.commit()
     return db

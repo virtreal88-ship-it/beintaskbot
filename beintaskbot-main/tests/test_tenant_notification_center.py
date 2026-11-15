@@ -353,6 +353,7 @@ def test_lifecycle_hides_consultation_bell_content_without_owner_exception(ready
     with local.cursor() as cur:lifecycle.migrate(cur)
     local.commit()
     monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED','true')
+    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED','true')
     monkeypatch.setattr(tenant_platform,'_connect',lambda:local)
     lifecycle.mutate({'tenant_id':A,'telegram_id':33},dict(provider='connect',channel_id=CA,
       conversation_id='client',lead_id=41,action='accept',expected_revision=0,request_id=str(uuid.uuid4())))
