@@ -346,10 +346,11 @@ def get_task(tenant_id,task_id,*,actor_id=None,operation='view'):
                 if row.get('contact_id'):
                     from tenant_crm_native_access import scoped_sql
                     contact_scope,contact_args=scoped_sql(policy.profile,'customers','view','c')
-                    cur.execute('''SELECT c.phone FROM saas_crm_native_contacts c
+                    cur.execute('''SELECT c.display_name,c.phone FROM saas_crm_native_contacts c
                       WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL
                       AND ('''+contact_scope+')',[tenant_id,row['contact_id'],*contact_args])
                     contact=cur.fetchone()
+                    row['form_contact_name']=contact.get('display_name') if contact else None
                     row['contact_phone']=contact.get('phone') if contact else None
             return row
 

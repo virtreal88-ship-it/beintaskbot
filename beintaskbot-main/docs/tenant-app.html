@@ -614,7 +614,7 @@
     const id=$('nativeTaskId').value,epoch=nativeTaskFormEpoch,key=nativeTaskProfileKey,serial=++nativeTaskOptionsSerial;
     nativeTaskStatus='loading';nativeTaskError='';renderNativeTaskForm();if(!nativeTaskAllowed()){nativeTaskStatus=nativeTaskPaused?'auth':'task_access_revoked';renderNativeTaskForm();return}
     try{const {task:t}=await api('/api/platform/crm/native/tasks/'+encodeURIComponent(id)+'?'+new URLSearchParams(nativeTaskIdentity()));if(!nativeTaskCurrent(serial,key,epoch))return;if(!t||String(t.id)!==String(id))throw new Error('invalid_task');
-      $('nativeTaskDeal').innerHTML=`<option value="${esc(t.deal_id)}">${esc(t.deal_title||nativeTaskLabels().deal)}</option>`;$('nativeTaskDeal').value=t.deal_id;$('nativeTaskText').value=t.text;nativeTaskDesiredResponsible=String(t.responsible_id);nativeTaskContactContext={name:t.contact_name||'',phone:t.contact_phone||''};
+      $('nativeTaskDeal').innerHTML=`<option value="${esc(t.deal_id)}">${esc(t.deal_title||nativeTaskLabels().deal)}</option>`;$('nativeTaskDeal').value=t.deal_id;$('nativeTaskText').value=t.text;nativeTaskDesiredResponsible=String(t.responsible_id);nativeTaskContactContext={name:t.form_contact_name||'',phone:t.contact_phone||''};
       if(t.due_at){const dt=new Date(t.due_at);$('nativeTaskDue').value=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,16)}else $('nativeTaskDue').value='';
       nativeTaskVersion=t.updated_at||'';nativeTaskDetailLoading=false;await loadNativeTaskOptions();
     }catch(error){if(nativeTaskCurrent(serial,key,epoch)){nativeTaskStatus='error';nativeTaskError=nativeTaskLabels()[error.message]?error.message:'error';renderNativeTaskForm()}}

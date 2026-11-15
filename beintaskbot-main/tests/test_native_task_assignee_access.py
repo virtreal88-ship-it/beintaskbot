@@ -124,8 +124,10 @@ def test_task_customer_context_respects_contact_permissions_and_tenant(native):
     assert worker_deal['contact_name'] is None and worker_deal['contact_phone'] is None
     task = tasks.create_task(A, f['deals'][4], 'Synthetic task', 35, created_by=11,
                              actor_id=11, idempotency_key=str(uuid.uuid4()))
-    assert tasks.get_task(A, str(task['id']), actor_id=11)['contact_phone'] == '+994000000123'
-    assert tasks.get_task(A, str(task['id']), actor_id=35)['contact_phone'] is None
+    owner_task = tasks.get_task(A, str(task['id']), actor_id=11)
+    assert owner_task['contact_phone'] == '+994000000123' and owner_task['form_contact_name'] == 'Synthetic task customer'
+    worker_task = tasks.get_task(A, str(task['id']), actor_id=35)
+    assert worker_task['contact_phone'] is None and worker_task['form_contact_name'] is None
     foreign = tasks.task_options(B, 22)
     assert all(row.get('contact_phone') != '+994000000123' for row in foreign['deals'])
 
