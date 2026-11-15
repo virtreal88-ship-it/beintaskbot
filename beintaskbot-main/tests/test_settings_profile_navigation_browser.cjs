@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
@@ -34,7 +35,7 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,120));
    await page.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort());
    await page.goto('https://fixture.local/app?view=settings');
    await page.locator('#view-profile.active').waitFor();
-   await page.locator('[data-app-language]').selectOption(language);
+   await selectAppLanguage(page,language);
    await page.locator('#profileName').waitFor();
    await page.locator('#profile-account-settings input').first().waitFor();
    assert.equal(await page.locator('#profilePageTitle').textContent(),words[language].profile);

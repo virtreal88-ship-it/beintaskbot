@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Real application HTML/CSS. Every API/provider request is intercepted locally. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
@@ -29,11 +30,11 @@ async function fixture(browser,width,height,{historyFailure=false,caseFailure=fa
   if(method==='POST'&&/\/copilot$|\/draft$|\/dispatch$|\/send|audio-transcription/.test(name))assert.fail('Unexpected paid/send operation: '+name);
   return route.fulfill({json:{success:true,result}});
  });
- await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption('ru');
- await page.locator('#dialogConsultationBell .notification-unread-badge').getByText('3',{exact:true}).waitFor();
+ await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,'ru');
+ await revealAccountControl(page,'#dialogConsultationBell');await page.locator('#dialogConsultationBell .notification-unread-badge').getByText('3',{exact:true}).waitFor();
  return{context,page,calls,rows,errors,releaseReplies:()=>releaseReplies?.(),async close(){await context.close();}};
 }
-async function openMenu(ctx){const bell=ctx.page.locator('#dialogConsultationBell');if(await bell.isVisible())await bell.click();else{await ctx.page.locator('[data-operator-back]').click();await bell.waitFor();await bell.click();}await ctx.page.locator('[data-notification-id]').first().waitFor();}
+async function openMenu(ctx){const bell=await revealAccountControl(ctx.page,'#dialogConsultationBell');await bell.click();await ctx.page.locator('[data-notification-id]').first().waitFor();}
 const reads=ctx=>ctx.calls.filter(c=>c.method==='POST'&&c.path.startsWith('/api/platform/notifications/')&&c.path.endsWith('/read'));
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});try{
  for(const [width,height]of [[1280,900],[390,844],[390,500]]){

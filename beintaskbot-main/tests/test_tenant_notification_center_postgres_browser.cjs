@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 // Actual local HTTP endpoint and production SQL driver, not a mocked listing.
 const assert=require('node:assert/strict'),fs=require('node:fs');
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
@@ -8,9 +9,9 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   const page=await browser.newPage({viewport:{width,height:844}}),reads=[];page.setDefaultTimeout(10000);
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
   page.on('response',response=>{if(new URL(response.url()).pathname==='/api/platform/notifications')reads.push(response.status());});
-  await page.goto(origin+'/app?view=tasks');await page.locator('[data-app-language]').selectOption('ru');
-  await page.locator('#dialogConsultationBell .notification-unread-badge').getByText('3',{exact:true}).waitFor();
-  await page.locator('#dialogConsultationBell').click();await page.locator('[data-notification-id]').first().waitFor();
+  await page.goto(origin+'/app?view=tasks');await selectAppLanguage(page,'ru');
+  await revealAccountControl(page,'#dialogConsultationBell');await page.locator('#dialogConsultationBell .notification-unread-badge').getByText('3',{exact:true}).waitFor();
+  await (await revealAccountControl(page,'#dialogConsultationBell')).click();await page.locator('[data-notification-id]').first().waitFor();
   assert.equal(await page.locator('[data-notification-id]').count(),3);assert.equal(await page.locator('#dialogConsultationMenu [role=alert]').count(),0);
   await page.locator('[data-notification-filter=all]').click();await page.locator('[data-notification-id]').first().waitFor();assert.equal(await page.locator('[data-notification-id]').count(),3);
   assert.equal((await page.request.get(origin+'/api/platform/notifications?status=all&limit=20',{headers:{'X-Tenant-Id':'00000000-0000-0000-0000-000000000102','X-User-Id':'11'}})).status(),409,'actual HTTP identity gate');

@@ -31,7 +31,8 @@ class AppDesignTests(unittest.TestCase):
         css = (ROOT / 'ui/src/app-theme.css').read_text(encoding='utf-8')
         for mode in ('light', 'dark', 'system'):
             self.assertIn(mode, shell)
-        self.assertIn("sidebar.inert=mobile.matches&&!open", shell)
+        self.assertIn("sidebar.inert=suppressed", shell)
+        self.assertIn("const suppressed=mobile.matches&&(editing||modal)", shell)
         self.assertIn('prefers-reduced-motion:reduce', css)
         self.assertIn('max-width:1023px', css)
         self.assertIn('max-width:639px', css)
@@ -60,7 +61,7 @@ class AppDesignTests(unittest.TestCase):
         app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
         i18n = (ROOT / 'docs/tenant-operator-i18n.js').read_text(encoding='utf-8')
         self.assertIn('data-app-instructions', shell)
-        self.assertIn("pages:['tasks','customers','companies','deals','hot_orders']", shell)
+        self.assertIn("pages:['tasks','deals','customers','companies','hot_orders']", shell)
         self.assertIn("button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label]')", shell)
         self.assertIn('extra!==label)extra.remove()', shell)
         self.assertIn("customers:'Контакты'", shell)

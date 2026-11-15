@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -27,7 +28,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);await page.locator('.operator-row').first().click();await page.locator('#dialogDeveloperMarker').waitFor({state:'attached'});await page.waitForFunction(()=>document.querySelector('#dialogDeveloperMarker')?.disabled===false);
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);await page.locator('.operator-row').first().click();await page.locator('#dialogDeveloperMarker').waitFor({state:'attached'});await page.waitForFunction(()=>document.querySelector('#dialogDeveloperMarker')?.disabled===false);
     const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard'),field=page.locator('#operatorConversationNameInput'),menu=page.locator('#operatorMoreActions');
     assert.equal(await page.locator('#operatorEditConversationName').count(),0);assert.equal(await card.isVisible(),false);assert.equal(await menu.locator('.operator-menu-agent').count(),0,'agent details have one home in the avatar card');
     assert.equal(await page.locator('#operatorClientDeveloperHost #dialogDeveloperMarker').count(),1);assert.equal(await page.locator('#operatorClientDeveloperStatus #dialogDeveloperBadge').count(),1);assert.equal(await page.locator('#operatorDialogTitleSlot #dialogDeveloperBadge').count(),0);

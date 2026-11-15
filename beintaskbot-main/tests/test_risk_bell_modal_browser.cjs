@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Production app shell and UI scripts in Chromium, with synthetic isolated API responses. */
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
@@ -24,8 +25,8 @@ function installRiskFixture(id){
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined),args:['--no-sandbox']});
  const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://test');if(u.pathname.startsWith('/assets/')){const name=path.basename(u.pathname);if(![...assets,'tenant-risk-alert-detail.js','tenant-risk-alert-detail.css'].includes(name)){res.writeHead(404);return res.end()}res.writeHead(200,{'content-type':name.endsWith('.css')?'text/css':'text/javascript'});return res.end(fs.readFileSync(path.join(docs,name)))}res.writeHead(200,{'content-type':'text/html'});res.end(appHtml().replace('</body>','<script src="/assets/tenant-risk-alert-detail.js"></script></body>'));});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
- async function mount(width,view){const context=await browser.newContext({viewport:{width,height:844}}),page=await context.newPage(),errors=[];await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installRiskFixture,id);page.on('pageerror',e=>errors.push(e.message));await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view='+view+'&lang=en');await page.locator('#dialogConsultationBell').waitFor();return{context,page,errors}}
- async function open(page){await page.locator('#dialogConsultationBell').click();await page.locator('[data-notification-id] [data-notification-action=open]').click()}
+ async function mount(width,view){const context=await browser.newContext({viewport:{width,height:844}}),page=await context.newPage(),errors=[];await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installRiskFixture,id);page.on('pageerror',e=>errors.push(e.message));await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view='+view+'&lang=en');await page.locator('#dialogConsultationBell').waitFor({state:'attached'});return{context,page,errors}}
+ async function open(page){await (await revealAccountControl(page,'#dialogConsultationBell')).click();await page.locator('[data-notification-id] [data-notification-action=open]').click()}
  try{
   for(const width of [390,1440])for(const view of ['dialogs','support']){
    const b=await mount(width,view);try{const {page}=b,original=page.url();let navigations=0;page.on('framenavigated',frame=>{if(frame===page.mainFrame())navigations++});

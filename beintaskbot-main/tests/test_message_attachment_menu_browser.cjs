@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -29,7 +30,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);await page.locator('.operator-row').first().click();
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);await page.locator('.operator-row').first().click();
     const article=page.locator('article[data-message-id="voice-row"]'),card=article.locator('[data-native-audio]'),menu=page.locator('.operator-reply-context-menu');await card.waitFor();
     assert.equal(await card.locator('summary').filter({hasText:'⋯'}).count(),0);
     const open=async()=>{await article.focus();await page.keyboard.press('Shift+F10');await menu.waitFor();};
@@ -44,7 +45,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     // A stale host/source cannot run an action from an already-open portal.
     await page.evaluate(()=>{document.querySelector('[data-chat-attachment="doc-1"]').dataset.mediaVersion='b'.repeat(64);});await page.waitForFunction(()=>!document.querySelector('.operator-reply-context-menu'));assert.equal(mediaRequests,1);
     // An actual locale change remounts translated controls; an unchanged locale now preserves DOM.
-    await open();await page.locator('[data-app-language]').selectOption('en',{force:true});assert.equal(await menu.count(),0,'language change retires the portal');await page.locator('[data-app-language]').selectOption(language,{force:true});
+    await open();await selectAppLanguage(page,'en',{force:true});assert.equal(await menu.count(),0,'language change retires the portal');await selectAppLanguage(page,language,{force:true});
     await article.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();assert.equal(await menu.locator('[data-context-file]').count(),1,'fresh rendering restores the real per-row files');await page.keyboard.press('Escape');
     // Actual desktop right-click and touch hold share one entry point.
     await card.locator('.operator-audio-heading').click({button:'right'});await menu.waitFor();assert.equal(await menu.count(),1);await page.keyboard.press('Escape');

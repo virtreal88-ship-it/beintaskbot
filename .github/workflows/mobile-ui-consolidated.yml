@@ -1,0 +1,39 @@
+name: Mobile header and compact CRM controls
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/ui/src/**'
+      - 'beintaskbot-main/docs/tenant-chakra-ui.js'
+      - 'beintaskbot-main/docs/tenant-mobile-crm-toolbar.js'
+      - 'beintaskbot-main/tests/*mobile*'
+      - '.github/workflows/mobile-ui-consolidated.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mobile-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .support-test-deps --no-package-lock jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: echo "CHROMIUM_EXECUTABLE_PATH=$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")" >> "$GITHUB_ENV"
+      - run: |
+          node tests/test_mobile_page_header_ui.cjs
+          node tests/test_mobile_page_header_shell.cjs
+          node tests/test_analytics_nav_label.cjs
+          node tests/test_mobile_crm_toolbar.cjs
+          node tests/test_mobile_page_header_browser.cjs
+          node tests/test_mobile_crm_toolbar_browser.cjs
+          node tests/test_mobile_kanban_swipe_browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-ui-screenshots
+          path: beintaskbot-main/tests/artifacts/
