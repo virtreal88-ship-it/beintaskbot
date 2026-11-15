@@ -266,7 +266,7 @@ def snapshot(cur,profile,data):
         body_limit=max(0,(remaining if internal_episode else min(excerpt_limit,remaining))-(len(marker) if employee_submission else 0))
         body=redact(row.get('body'),names)
         if pinned_rows is not None and len(body)>body_limit:
-            raise TenantLinearError('Полное обращение не помещается в лимит контекста. Анализ не запускался; текст не обрезан.',413)
+            raise TenantLinearError(f'Полное обращение превышает лимит {MAX_CONTEXT} символов для анализа. Анализ не запускался; текст сохранён целиком и не обрезан.',413)
         if employee_submission and len(body)>body_limit:
             truncation=' [Truncated; do not infer omitted contents]'
             body=body[:max(0,body_limit-len(truncation))]+truncation

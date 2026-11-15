@@ -167,6 +167,7 @@ def test_full_text_never_silently_trimmed_or_paid(episodes,ready):
     db.execute('UPDATE saas_crm_messages SET body=%s WHERE id=%s::uuid',('long complete text '*1500,ids[0]));db.commit()
     with pytest.raises(TenantLinearError) as blocked:command('case',2,episode_id=episode)
     assert blocked.value.status==413 and generation.call_count==0
+    assert '12000' in str(blocked.value) and 'не обрезан' in str(blocked.value)
     assert not db.execute('SELECT * FROM saas_knowledge_extractions')
 
 
