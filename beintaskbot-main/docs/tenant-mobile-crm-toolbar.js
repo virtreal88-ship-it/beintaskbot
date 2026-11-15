@@ -6,6 +6,12 @@
   const style=document.createElement('style');style.textContent=`
 .crm-mobile-search-toggle{display:none}.crm-mobile-search-box{display:contents}
 @media(max-width:700px){
+ #view-tasks .top,#view-deals .top{display:flex!important;flex-wrap:nowrap!important;align-items:center!important}
+ #view-tasks .top>div:first-child,#view-deals .top>div:first-child{flex:1 1 auto!important;min-width:0}
+ #view-tasks .top>.crm-mobile-create,#view-deals .top>.crm-mobile-create{flex:0 0 44px;width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:0}
+ .crm-mobile-create::after{content:'+';font-size:26px;line-height:1}
+ .crm-mobile-create[hidden]{display:none!important}
+ #kommoTaskCount{display:none!important}
  #view-tasks .top,#view-deals .top{margin-bottom:10px;gap:8px}
  #view-tasks .top h1,#view-deals .top h1{font-size:23px;margin:0}
  #view-deals .top>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -41,6 +47,8 @@
 }`;document.head.append(style);
   for(const [viewId,filterSelector,searchId,refreshId] of [['view-tasks','.task-flow-filters','taskSearch','tasksRefresh'],['view-deals','.deal-source-filters','dealSearch','dealsRefresh']]){
     const view=document.getElementById(viewId),filters=view?.querySelector(filterSelector),actions=view?.querySelector('.crm-toolbar-actions'),input=document.getElementById(searchId);if(!view||!filters||!actions||!input)continue;
+    const create=actions.querySelector('#nativeTaskCreate,#nativeDealCreate'),createMark=document.createComment('crm create');
+    if(create)create.before(createMark);
     const panel=document.createElement('div');panel.className='crm-mobile-toolbar';
     const actionMark=document.createComment('crm actions'),filterMark=document.createComment('crm filters');actions.before(actionMark);filters.before(filterMark);
     const searchNode=input.closest('label')||input,searchMark=document.createComment('crm search');searchNode.before(searchMark);
@@ -53,17 +61,21 @@
     function labels(){
       const label=input.closest('label')?.querySelector('span')?.textContent||input.getAttribute('aria-label')||input.placeholder||({ru:'Поиск',az:'Axtarış',en:'Search'}[window.tenantI18n?.language]||'Search');
       toggle.setAttribute('aria-label',label);toggle.title=label;toggle.dataset.active=String(!!input.value);
-      [...actions.querySelectorAll('button')].forEach(button=>{const name=button.textContent.trim();if(name){button.setAttribute('aria-label',name);if(!button.title||button.title===button.dataset.crmMobileTitle){button.title=name;button.dataset.crmMobileTitle=name;}}const key=button.id===refreshId?'refresh':button.id==='nativeTaskCreate'||button.id==='nativeDealCreate'?'create':'sync';button.style.setProperty('--crm-mobile-icon',`url("data:image/svg+xml,${encodeURIComponent(svg(key))}")`);});
+      [...actions.querySelectorAll('button'),...(create?[create]:[])].forEach(button=>{const name=button.textContent.trim();if(name){button.setAttribute('aria-label',name);if(!button.title||button.title===button.dataset.crmMobileTitle){button.title=name;button.dataset.crmMobileTitle=name;}}const key=button.id===refreshId?'refresh':button.id==='nativeTaskCreate'||button.id==='nativeDealCreate'?'create':'sync';button.style.setProperty('--crm-mobile-icon',`url("data:image/svg+xml,${encodeURIComponent(svg(key))}")`);});
     }
     input.addEventListener('input',()=>{toggle.dataset.active=String(!!input.value);});
     function layout(){
       if(media.matches){filterMark.after(panel);panel.append(actions,filters);filters.append(toggle,box);if(input.value)show(true);else show(expanded);}
       else{actionMark.after(actions);filterMark.after(filters);searchMark.after(searchNode);panel.remove();toggle.remove();box.remove();}
+      if(create){
+        if(media.matches){view.querySelector('.top').append(create);create.classList.add('crm-mobile-create');}
+        else{createMark.after(create);create.classList.remove('crm-mobile-create');}
+      }
       labels();
       // Search node is preserved across breakpoint changes, including its value and handlers.
       if(media.matches&&!box.contains(searchNode))box.append(searchNode);
     }
-    const observer=new MutationObserver(labels);observer.observe(actions,{childList:true,subtree:true,characterData:true});
+    const observer=new MutationObserver(labels);observer.observe(actions,{childList:true,subtree:true,characterData:true});if(create)observer.observe(create,{childList:true,subtree:true,characterData:true});
     panels.push({layout,labels});layout();
   }
   media.addEventListener('change',()=>panels.forEach(p=>p.layout()));
