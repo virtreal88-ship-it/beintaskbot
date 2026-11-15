@@ -82,9 +82,9 @@ def _group_echo_facts(data, stored, channel, conversation):
 
 
 class ConnectPreflightError(TenantPlatformError):
-    """Known refusal returned before a customer voice provider submission."""
+    """Known refusal returned before a provider submission."""
     def __init__(self, code: str):
-        super().__init__('Connect refused the voice send before provider submission.')
+        super().__init__('Connect refused the send before provider submission.')
         self.code = code
 
 
@@ -1317,7 +1317,9 @@ def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=No
     body = {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id}
     if quoted_message_id: body['quotedExternalMessageId']=quoted_message_id
     endpoint='/quoted-once' if quoted_message_id and quoted_once_scope(route.get('tenant_id'),route['channel_id']) else '/messages'
-    result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + endpoint, body)
+    # Only this endpoint/code pair proves refusal before queue/provider submission.
+    result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + endpoint, body,
+                      **({'safe_preflight_codes': ('conversation_identity_conflict',)} if endpoint == '/messages' else {}))
     # A missing endpoint, timeout or malformed receipt never falls back to the old queue.
     if endpoint=='/quoted-once':
         _validate_quoted_once(result,route,client_message_id,quoted_message_id)

@@ -5,7 +5,7 @@ from tenant_chat_send_store import dispatch_guarded, reserve, mark_sending, fini
 from tenant_chat_send_provider import send
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
-from tenant_connect_transport import send as send_connect, record_outbound as record_connect_outbound, quoted_delivery_status, quoted_once_scope
+from tenant_connect_transport import ConnectPreflightError, send as send_connect, record_outbound as record_connect_outbound, quoted_delivery_status, quoted_once_scope
 
 
 async def run(session, data, request, wait_slot, logger):
@@ -52,7 +52,12 @@ async def run(session, data, request, wait_slot, logger):
     except TenantLinearError:
         await asyncio.to_thread(finish, item, 'blocked')
         raise
-    except Exception:
+    except Exception as failure:
+        if is_connect and isinstance(failure, ConnectPreflightError) and failure.code == 'conversation_identity_conflict':
+            await asyncio.to_thread(finish, item, 'blocked')
+            error = TenantLinearError('Mesaj göndərilmədi. WhatsApp dialoqunun nömrə və LID tarixçələri arasında ziddiyyət var. Administrator dialoq bağlantısını yoxlamalıdır.', 409)
+            error.keep_request = False
+            raise error from None
         try:
             await asyncio.to_thread(finish, item, 'unknown' if external_started else 'blocked')
         except Exception:
