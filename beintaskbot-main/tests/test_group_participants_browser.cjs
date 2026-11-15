@@ -22,7 +22,7 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
   assert.match(await card.locator('.operator-roster-count').innerText(),/3/);
   assert.equal(await card.locator('.operator-roster-meta').getAttribute('open'),null);
   await card.getByRole('button',{name:'Поиск участников'}).click();
-  const search=card.getByRole('searchbox',{name:'Поиск участников'});await search.fill('000002');
+  const search=card.getByRole('searchbox',{name:'Поиск участников'});await search.fill('000002');await search.press('Enter');assert.equal(calls.some(c=>c.name.endsWith('/dialogs/display-name')),false);
   assert.equal(await card.locator('.operator-roster-row:visible').count(),1);
   await search.fill('99999');await card.getByText('Участники не найдены',{exact:true}).waitFor();
   await card.getByRole('button',{name:'Поиск участников'}).click();assert.equal(await card.locator('.operator-roster-row:visible').count(),2);
