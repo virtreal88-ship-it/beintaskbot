@@ -237,15 +237,15 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
 /* Mobile bottom navigation reuses the permitted desktop route buttons. */
 @media(max-width:1023px){
   body[data-app-ui="kwid"] .shell{padding-bottom:var(--app-bottom-nav-height,80px)}
-  body[data-app-ui="kwid"] .shell>aside{position:fixed;inset:auto 0 0;width:100%;height:auto;min-height:0;transform:none;transition:none;z-index:40;border:0;border-top:1px solid var(--app-line);background:var(--app-surface);padding:4px max(4px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px,env(safe-area-inset-left));box-shadow:0 -3px 12px #0000000a}
+  body[data-app-ui="kwid"] .shell>aside{position:fixed;inset:auto 0 0;width:100%;height:auto;min-height:0;transform:none;transition:none;z-index:40;border:0;border-top:1px solid var(--app-line);background:var(--app-surface);padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);box-shadow:0 -3px 12px #0000000a}
   body[data-app-ui="kwid"] .shell>aside>:not(.nav){display:none!important}
   body[data-app-ui="kwid"] .app-mobile-menu,body[data-app-ui="kwid"] .app-sidebar-backdrop{display:none!important}
   body[data-app-ui="kwid"] .shell>aside[data-bottom-nav-suppressed="true"]{display:none}
-  body[data-app-ui="kwid"] .shell>aside .nav{flex-direction:row;align-items:stretch;gap:4px;margin:0;padding:0 0 4px;overflow-x:auto;overflow-y:hidden;min-width:0;max-width:100%;scrollbar-width:thin;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scroll-padding-inline:8px}
+  body[data-app-ui="kwid"] .shell>aside .nav{flex-direction:row;align-items:stretch;gap:0;margin:0;padding:0;overflow-x:auto;overflow-y:hidden;min-width:0;max-width:100%;scrollbar-width:thin;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scroll-padding-inline:8px}
   body[data-app-ui="kwid"] .shell>aside .app-nav-group:not([hidden]),body[data-app-ui="kwid"] .shell>aside .app-nav-group-items{display:contents}
   body[data-app-ui="kwid"] .shell>aside .app-nav-group-title{display:none}
-  body[data-app-ui="kwid"] .shell>aside .nav :is([data-view],[data-report-link],#settingsFamilyNav){position:relative;flex:0 0 auto;flex-direction:column;justify-content:center;gap:3px;width:72px;min-width:64px;min-height:58px;padding:5px 4px;text-align:center;font-size:11px;line-height:14px}
-  body[data-app-ui="kwid"] .shell>aside .app-nav-label{display:block!important;width:100%!important;height:auto!important;font-size:11px;line-height:14px;white-space:normal;overflow-wrap:anywhere}
+  body[data-app-ui="kwid"] .shell>aside .nav :is([data-view],[data-report-link],#settingsFamilyNav){position:relative;flex:0 0 auto;flex-direction:column;justify-content:center;gap:2px;width:64px;min-width:64px;min-height:52px;padding:4px 2px;text-align:center;font-size:10px;line-height:13px}
+  body[data-app-ui="kwid"] .shell>aside .app-nav-label{display:block!important;width:100%!important;height:auto!important;font-size:10px;line-height:13px;white-space:normal;overflow-wrap:anywhere}
   body[data-app-ui="kwid"] .shell>aside .nav :is(#dialogsAttentionCount,#supportUnresolvedCount,#supportCasesPending){position:absolute;top:2px;right:10px;width:auto;height:auto;max-width:32px;font-size:9px;line-height:12px;padding:0 3px;overflow:hidden}
   body[data-app-ui="kwid"] .shell>aside .nav :is([data-view],[data-report-link],#settingsFamilyNav):focus-visible{outline:2px solid var(--app-accent);outline-offset:-2px}
   /* The chat has its own viewport-sized scroll area rather than document flow. */
@@ -288,12 +288,12 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
  body[data-app-ui="kwid"][data-mobile-page-header="inline"] .app-topbar-context{display:none}
  body[data-app-ui="kwid"] .app-mobile-title-row .app-topbar-actions{position:relative;gap:0;margin:0}
  body[data-app-ui="kwid"] .app-avatar-button{width:40px;height:40px;flex:none}
- body[data-app-ui="kwid"] .app-avatar-unread{position:absolute;right:-3px;top:-3px;min-width:17px;height:17px;padding:0 4px;border-radius:12px;background:var(--app-accent);color:white;font-size:10px;line-height:17px;text-align:center;pointer-events:none}
+ body[data-app-ui="kwid"] .app-avatar-unread{position:absolute;right:0;top:0;min-width:17px;height:17px;padding:0 4px;border-radius:12px;background:var(--app-accent);color:white;font-size:10px;line-height:17px;text-align:center;pointer-events:none}
  body[data-app-ui="kwid"] .app-user-menu{position:fixed;top:calc(60px + env(safe-area-inset-top,0px));right:max(8px,env(safe-area-inset-right,0px));width:280px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 80px - env(safe-area-inset-bottom,0px));overflow-y:auto;overscroll-behavior:contain;z-index:120}
  body[data-app-ui="kwid"] .app-mobile-account-extras{display:flex;flex-direction:column}
  body[data-app-ui="kwid"] .app-account-language{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:4px 10px;min-height:44px;font-size:13px}
  body[data-app-ui="kwid"] .app-account-language select{width:auto;min-height:36px;margin:0}
- body[data-app-ui="kwid"] .app-user-menu .app-instructions-link{display:flex;min-height:44px;border:0;margin:0;padding:9px 10px;font-size:13px;color:var(--app-ink)}
+ body[data-app-ui="kwid"] .app-user-menu .app-instructions-link{display:flex;justify-content:flex-start;width:100%;height:auto;box-sizing:border-box;min-height:44px;border:0;margin:0;padding:9px 10px;font-size:13px;color:var(--app-ink)}
  body[data-app-ui="kwid"] .app-user-menu .app-instructions-link span{display:inline}
  body[data-app-ui="kwid"] .app-user-menu #dialogConsultationBell{width:100%;min-height:44px;justify-content:flex-start}
  body[data-app-ui="kwid"] .app-user-menu #dialogConsultationBell::after{content:attr(data-mobile-label);font-size:13px}
