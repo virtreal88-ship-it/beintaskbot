@@ -265,6 +265,7 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
 
 @media(min-width:761px) and (max-width:1023px){body[data-app-ui="kwid"]{--app-dialog-top:96px}}
 @media(max-width:900px){
+ body[data-app-ui="kwid"]{--app-dialog-top:64px}
  body[data-app-ui="kwid"]:has(#view-dialogs.active) main{padding-bottom:0!important}
  body[data-app-ui="kwid"] #operatorListScroll{display:block;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
  body[data-app-ui="kwid"] .operator-list-pane #operatorRows{flex:none;overflow:visible}

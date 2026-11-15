@@ -8,7 +8,7 @@ const shell=read('ui/src/app-shell.js').replace("import themeCss from './app-the
 for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark']){
  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent(html);await page.evaluate(()=>document.querySelectorAll('.nav [data-view],.nav [data-report-link]').forEach(el=>{el.hidden=false;el.style.removeProperty('display')}));await page.evaluate(theme=>{window.tenantI18n={language:'ru',t:key=>key};localStorage?.setItem?.('tenant-app-theme',theme)},theme).catch(()=>page.evaluate(()=>window.tenantI18n={language:'ru',t:key=>key}));
- await page.addScriptTag({content:shell});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
+ await page.addScriptTag({content:shell});await page.addStyleTag({content:dialogCSS});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
  await page.waitForTimeout(80);
  const sidebar=page.locator('.shell>aside'),nav=sidebar.locator('.nav');
  if(width<=1023){
@@ -45,12 +45,12 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   const composer=await page.locator('#composer').boundingBox();box=await sidebar.boundingBox();assert(composer.y+composer.height<=box.y,'composer clear of bottom bar');
   if(width<=900){
    // Include the real dialog module's late-injected fullscreen selectors (not a generic section).
-   await page.addStyleTag({content:dialogCSS});
+
    await page.evaluate(()=>{document.querySelector('main').innerHTML='<section id="view-dialogs" class="view active"><div id="operatorDialogs" data-conversation-open="false"><div class="operator-workspace"><div class="operator-list-pane"><div class="operator-filters" style="height:44px;flex:none">Search</div><div id="operatorListScroll"><div id="operatorRows">'+Array.from({length:30},(_,i)=>'<button class="operator-row">Conversation '+i+'</button>').join('')+'</div><button id="operatorMore">Show more</button></div></div></div></div></section>';window.scrollTo(0,0)});
    await page.waitForTimeout(100);
    assert(await page.locator('#operatorMore').evaluate(el=>el.getBoundingClientRect().top>innerHeight),'more is after rows, not pinned in viewport');
    await page.locator('#operatorListScroll').evaluate(el=>el.scrollTop=el.scrollHeight);await page.waitForTimeout(80);
-   const more=await page.locator('#operatorMore').boundingBox();box=await sidebar.boundingBox();assert(more.y+more.height<=box.y,'last pagination button visible above nav');assert(box.y-more.y-more.height<=20,'no empty black band after pagination');
+   const more=await page.locator('#operatorMore').boundingBox();box=await sidebar.boundingBox();assert(more.y+more.height<=box.y,'last pagination button visible above nav');assert(box.y-more.y-more.height<=20,'no empty black band after pagination: '+JSON.stringify({more,nav:box}));
    await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/list-end-${width}-${theme}.png`)});
 
    await page.evaluate(()=>{document.querySelector('main').innerHTML='<section id="view-dialogs" class="view active"><div id="operatorDialogs" data-conversation-open="true"><div class="operator-workspace" data-selected="true"><div class="operator-conversation-pane"><header style="height:58px;flex:none">Client</header><div class="operator-conversation-content"><div class="operator-dialog-body"><div class="operator-chat-main"><div class="operator-chat-scrollarea" style="overflow:auto"><div style="height:2000px">Messages</div></div><div class="operator-composer" style="flex:none"><textarea id="chatText">draft</textarea><button id="sendChat">Send</button></div></div></div></div></div></div></div></section>';window.scrollTo(0,0)});
