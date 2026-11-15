@@ -56,3 +56,35 @@ def test_subscription_upgrade_is_additive_and_calls_are_explicit_opt_in():
     assert result[:2] == previous
     assert all(event in result for event in transport.CONNECT_WEBHOOK_EVENTS)
     with pytest.raises(ValueError): transport._preserved_webhook_events({})
+
+
+def test_additive_subscription_upgrade_readback_preserves_everything(monkeypatch):
+    before={'id':'hook','url':'https://crm.example/api/platform/connect/webhook','active':True,'events':['custom.event']}
+    calls=[]
+    def request(key,method,path,data=None):
+        calls.append((method,path,data))
+        return {'data':[{**before,'events':['custom.event','concurrent.event','call.missed']}]}
+    monkeypatch.setattr(transport,'_request',request)
+    assert transport._upgrade_missed_call_subscription('test-key',before)
+    assert calls[0] == ('POST','/v1/webhooks/hook/events',{'add':['call.missed'],'expectedUrl':before['url']})
+    assert len(calls)==2 and all(c[0]!='PATCH' for c in calls)
+
+
+@pytest.mark.parametrize('change',[{'active':False},{'url':'https://other.example/api/platform/connect/webhook'},{'events':['call.missed']},{'id':'other'}])
+def test_upgrade_never_repairs_concurrent_conflict(monkeypatch,change):
+    before={'id':'hook','url':'https://crm.example/api/platform/connect/webhook','active':True,'events':['custom.event']}
+    calls=[]
+    def request(key,method,path,data=None):
+        calls.append(method)
+        return {'data':[{**before,'events':['custom.event','call.missed'],**change}]}
+    monkeypatch.setattr(transport,'_request',request)
+    with pytest.raises(ValueError):transport._upgrade_missed_call_subscription('test-key',before)
+    assert calls==['POST','GET']
+
+
+def test_old_connect_or_disabled_subscription_is_not_replaced(monkeypatch):
+    def unavailable(*args,**kwargs):raise RuntimeError('404 old Connect')
+    monkeypatch.setattr(transport,'_request',unavailable)
+    hook={'id':'hook','url':'https://crm.example/api/platform/connect/webhook','active':True,'events':[]}
+    with pytest.raises(RuntimeError):transport._upgrade_missed_call_subscription('test-key',hook)
+    with pytest.raises(ValueError):transport._upgrade_missed_call_subscription('test-key',{**hook,'active':False})

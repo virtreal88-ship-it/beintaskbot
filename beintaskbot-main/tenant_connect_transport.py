@@ -795,8 +795,32 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
     return result
 
 
+def _upgrade_missed_call_subscription(api_key, current):
+    """Atomic additive endpoint; old Connect safely fails without any PATCH."""
+    webhook_id = str(current.get('id') or '')
+    url = str(current.get('url') or '')
+    events = current.get('events')
+    if (not webhook_id or not url.startswith('https://')
+            or not url.rstrip('/').endswith('/api/platform/connect/webhook')
+            or current.get('active') is not True
+            or not isinstance(events, list) or any(not isinstance(x, str) for x in events)):
+        raise ValueError('Invalid existing managed subscription')
+    if 'call.missed' in events:
+        return False
+    _request(api_key, 'POST', '/v1/webhooks/' + webhook_id + '/events',
+             {'add': ['call.missed'], 'expectedUrl': url})
+    hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
+    matches = [hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id]
+    if (len(matches) != 1 or matches[0].get('url') != url
+            or matches[0].get('active') is not current.get('active')
+            or not isinstance(matches[0].get('events'), list)
+            or not set([*events, 'call.missed']).issubset(matches[0]['events'])):
+        raise ValueError('Subscription addition readback mismatch')
+    return True
+
+
 def sync_webhook_subscriptions() -> int:
-    """Upgrade only Beintaskbot-owned Connect webhooks after deployment.
+    """Add missed calls only to existing active CRM webhooks after deployment.
 
     This keeps existing company installations working without asking an owner
     to disconnect/reconnect a channel. The API key and webhook id remain
@@ -819,10 +843,8 @@ def sync_webhook_subscriptions() -> int:
             current = next((hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id), None)
             if current is None:
                 continue
-            events = _preserved_webhook_events(current)
-            if events == current['events']:
+            if not _upgrade_missed_call_subscription(api_key, current):
                 continue
-            _request(api_key, 'PATCH', '/v1/webhooks/' + webhook_id, {'events': events})
             updated += 1
         except Exception:
             # A single stale external webhook must never prevent the HTTP API
