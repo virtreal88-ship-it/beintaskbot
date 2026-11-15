@@ -11,12 +11,23 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
    let result={items:[],tickets:[],agents:[],members:[]};
    if(name.endsWith('/dialogs/history'))result={dialog:group,messages:[],next_before:null};
    else if(name.endsWith('/dialogs'))result={dialogs:[group],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],next_offset:null};
-   else if(name.endsWith('/dialogs/group-participants')){assert.equal(request.method(),'GET');assert.equal(request.postData(),null);assert.equal(url.searchParams.get('channel_id'),channel);assert.equal(url.searchParams.get('conversation_id'),group.conversation_id);if(gate)await gate;result=mode==='available'?{status:'available',observed_at:new Date().toISOString(),phones:['+994500000001'],total:2,unresolved:1}:{status:'unavailable'};}
+   else if(name.endsWith('/dialogs/group-participants')){assert.equal(request.method(),'GET');assert.equal(request.postData(),null);assert.equal(url.searchParams.get('channel_id'),channel);assert.equal(url.searchParams.get('conversation_id'),group.conversation_id);if(gate)await gate;result=mode==='available'?{status:'available',observed_at:new Date().toISOString(),phones:['+994500000001','+994500000002'],total:3,unresolved:1}:{status:'unavailable'};}
    return route.fulfill({json:{success:true,result}});
   });
   await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption('ru');await page.locator('.operator-row').first().click();
   const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard');
   await avatar.click();await card.getByText('+994500000001',{exact:true}).waitFor();assert.match(await card.innerText(),/Участников без доступного номера: 1/);
+  assert.equal(await card.locator('.operator-roster-row').count(),2);
+  assert.equal(await card.locator('.operator-roster-avatar svg').count(),2);
+  assert.match(await card.locator('.operator-roster-count').innerText(),/3/);
+  assert.equal(await card.locator('.operator-roster-meta').getAttribute('open'),null);
+  await card.getByRole('button',{name:'Поиск участников'}).click();
+  const search=card.getByRole('searchbox',{name:'Поиск участников'});await search.fill('000002');await search.press('Enter');assert.equal(calls.some(c=>c.name.endsWith('/dialogs/display-name')),false);
+  assert.equal(await card.locator('.operator-roster-row:visible').count(),1);
+  await search.fill('99999');await card.getByText('Участники не найдены',{exact:true}).waitFor();
+  await card.getByRole('button',{name:'Поиск участников'}).click();assert.equal(await card.locator('.operator-roster-row:visible').count(),2);
+  assert.equal(await card.locator('.operator-roster-list').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
+  assert.equal(calls.filter(c=>c.name.endsWith('/dialogs/group-participants')).length,1);
   const box=await card.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width);assert.equal(calls.some(c=>c.name.endsWith('/dialogs/display-name')),false);
   await page.keyboard.press('Escape');mode='unavailable';await avatar.click();await card.getByText('Коннектор пока не передал состав группы.').waitFor();assert.equal(await card.getByText('+994500000001',{exact:true}).count(),0);
   await page.keyboard.press('Escape');mode='available';gate=new Promise(r=>release=r);await avatar.click();await card.getByText('Загрузка…',{exact:true}).waitFor();await page.keyboard.press('Escape');release();gate=null;await page.waitForTimeout(50);assert.equal(await card.isVisible(),false);
