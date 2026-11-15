@@ -257,3 +257,8 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
  body[data-app-ui="kwid"] #appHorizontalScroll{bottom:calc(12px + var(--app-bottom-nav-height,80px))}
  body[data-app-ui="kwid"]:has(#appHorizontalScroll:not([hidden])) .shell{padding-bottom:calc(var(--app-bottom-nav-height,80px) + 60px)}
 }
+
+/* Open mobile conversations use a separate fullscreen layout in the dialog module. */
+@media(max-width:900px){
+ body[data-app-ui="kwid"] #view-dialogs.active:has(#operatorDialogs[data-conversation-open=true]){height:calc(var(--operator-visual-height,100dvh) - var(--app-bottom-nav-height,80px))}
+}
