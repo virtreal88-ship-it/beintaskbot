@@ -16,11 +16,11 @@ console.log('Monotonic delivery evidence tests passed');
 
 assert.match(source.slice(source.indexOf('  function updateDeliveryEvidence('),source.indexOf('  async function refreshAudioEvidence(')),/retainDeliveryEvidence\(currentPage,latest\)/);
 
-// Compact 1/2/3 receipts are rendered only from explicit normalized evidence.
+// Compact 1/2/2 receipts are rendered only from explicit normalized evidence.
 context.esc=String;context.deliveryCopy=state=>({sent:'Sent',delivered:'Delivered',read:'Read'}[state]||state);
 const markupStart=source.indexOf('  function deliveryMarkup('),markupEnd=source.indexOf('  const completionText=',markupStart);
 vm.runInContext(source.slice(markupStart,markupEnd),context);
-for(const [state,count,width] of [['sent',1,14],['delivered',2,19],['read',3,24]]){
+for(const [state,count,width] of [['sent',1,14],['delivered',2,19],['read',2,19]]){
  const html=context.deliveryMarkup(row(state));
  assert.equal((html.match(/<path /g)||[]).length,count);
  assert.ok(html.includes('width="'+width+'" height="14"'));
