@@ -69,6 +69,8 @@ jobs:
           npm ci --prefix ui
           npm run build --prefix ui
           git diff --exit-code -- docs/tenant-chakra-ui.js docs/tenant-chakra-ui.css
+      - name: Mobile bottom navigation viewport and overlay regression
+        run: node tests/test_mobile_bottom_nav_browser.cjs
       - name: PostgreSQL current membership and real cookie HTTP browser scenarios
         run: >-
           python -m pytest -q -rs
@@ -85,7 +87,6 @@ jobs:
           node tests/test_tenant_workspace.cjs
           node tests/test_settings_family_ui.cjs
           node tests/test_settings_family_browser.cjs
-          node tests/test_mobile_bottom_nav_browser.cjs
           node tests/test_settings_layout_browser.cjs
           node tests/test_task_columns.mjs
           node tests/test_tasks_kanban_ui.cjs

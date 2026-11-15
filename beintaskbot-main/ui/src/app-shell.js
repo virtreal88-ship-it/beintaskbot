@@ -187,7 +187,7 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   let frame=0,lastActive=null
   function sync(){
     frame=0
-    if(!body.isConnected)return
+    if(!window.document?.documentElement||!body.isConnected)return
     const focused=document.activeElement
     // Leave the full visual viewport to forms, native date/select pickers and dialogs.
     const editing=focused?.matches('input:not([type=button]):not([type=submit]),textarea,select,[contenteditable="true"]')&&!nav.contains(focused)
@@ -205,7 +205,7 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
     }
     lastActive=active
   }
-  function schedule(){if(body.isConnected&&!frame)frame=requestAnimationFrame(sync)}
+  function schedule(){if(window.document?.documentElement&&body.isConnected&&!frame)frame=requestAnimationFrame(sync)}
   if(typeof ResizeObserver!=='undefined')new ResizeObserver(schedule).observe(sidebar)
   new MutationObserver(schedule).observe(body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open','aria-current']})
   document.addEventListener('focusin',schedule)
