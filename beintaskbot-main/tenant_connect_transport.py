@@ -28,7 +28,16 @@ from tenant_connect_direct_identity import (
 )
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
-CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated', 'call.missed')
+CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
+CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, 'call.missed')
+
+
+def _preserved_webhook_events(current):
+    events = current.get('events')
+    if not isinstance(events, list) or any(not isinstance(event, str) for event in events):
+        raise ValueError('Cannot safely inspect webhook events')
+    return list(dict.fromkeys([*events, *CONNECT_WEBHOOK_EVENTS]))
+
 
 
 class ConnectWebhookError(TenantPlatformError):
@@ -640,7 +649,7 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
                             and str(row.get('url') or '').rstrip('/') == callback_url.rstrip('/')), None)
             if current:
                 _request(key, 'PATCH', '/v1/webhooks/' + str(previous['webhook_id']),
-                         {'active': True, 'events': list(CONNECT_WEBHOOK_EVENTS)})
+                         {'active': True, 'events': _preserved_webhook_events(current)})
                 hook = current
                 webhook_secret = str(previous['webhook_secret'])
         except Exception:
@@ -806,7 +815,14 @@ def sync_webhook_subscriptions() -> int:
             api_key = str(credentials.get('api_key') or '')
             if not webhook_id or not api_key:
                 continue
-            _request(api_key, 'PATCH', '/v1/webhooks/' + webhook_id, {'events': list(CONNECT_WEBHOOK_EVENTS)})
+            hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
+            current = next((hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id), None)
+            if current is None:
+                continue
+            events = _preserved_webhook_events(current)
+            if events == current['events']:
+                continue
+            _request(api_key, 'PATCH', '/v1/webhooks/' + webhook_id, {'events': events})
             updated += 1
         except Exception:
             # A single stale external webhook must never prevent the HTTP API
@@ -855,7 +871,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
         return ingest_health(raw, signature, event)
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
     event_type = str(event.get('type') or '')
-    if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):
+    if event_type not in CONNECT_ACCEPTED_EVENTS or not event_id or not isinstance(data, dict):
         raise ConnectWebhookError('invalid_event', 'Connect webhook formatı düzgün deyil.', 400)
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:

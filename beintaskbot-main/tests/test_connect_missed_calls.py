@@ -46,3 +46,13 @@ def test_call_service_events_never_enter_ai_context_or_consume_history_limit():
     lines,missing=history(rows,{})
     assert missing == 0
     assert len(lines) == 1 and lines[0]['text'] == 'Hello'
+
+
+def test_subscription_upgrade_is_additive_and_calls_are_explicit_opt_in():
+    assert 'call.missed' not in transport.CONNECT_WEBHOOK_EVENTS
+    assert 'call.missed' in transport.CONNECT_ACCEPTED_EVENTS
+    previous=['custom.event','call.missed']
+    result=transport._preserved_webhook_events({'events':previous})
+    assert result[:2] == previous
+    assert all(event in result for event in transport.CONNECT_WEBHOOK_EVENTS)
+    with pytest.raises(ValueError): transport._preserved_webhook_events({})

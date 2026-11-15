@@ -37,7 +37,7 @@ def test_reconfigure_reuses_existing_webhook_and_secret():
     def request(key,method,path,data=None):
         requests.append((key,method,path,data))
         if method=='GET' and path=='/v1/channels': return {'data':[{'id':CHANNEL,'name':'Support','status':'connected'}]}
-        if method=='GET' and path=='/v1/webhooks': return {'data':[{'id':'hook-1','url':CALLBACK,'active':True}]}
+        if method=='GET' and path=='/v1/webhooks': return {'data':[{'id':'hook-1','url':CALLBACK,'active':True,'events':list(transport.CONNECT_WEBHOOK_EVENTS)}]}
         return {'id':'hook-1'}
 
     profile={'tenant_id':TENANT,'role':'owner'}
@@ -72,7 +72,7 @@ def test_adding_channel_preserves_existing_active_channels_and_subscription(subm
         if method=='GET' and path=='/v1/channels':
             return {'data':[{'id':CHANNEL,'name':'Existing','status':'connected'},
                             {'id':channel2,'name':'Additional','status':'pending_qr'}]}
-        if method=='GET' and path=='/v1/webhooks':return {'data':[{'id':'hook-1','url':CALLBACK,'active':True}]}
+        if method=='GET' and path=='/v1/webhooks':return {'data':[{'id':'hook-1','url':CALLBACK,'active':True,'events':list(transport.CONNECT_WEBHOOK_EVENTS)}]}
         return {'id':'hook-1'}
     with patch.object(transport,'_stored_connect_credentials',return_value={'api_key':'same-api'}) as stored, \
          patch.object(transport,'_owner'), patch.object(transport,'_tenant_connect_lock',return_value=nullcontext()), \
