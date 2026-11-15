@@ -69,8 +69,10 @@ def validate(cur,profile,data,training):
     try:start=ids.index(selected[0]);end=ids.index(selected[-1])
     except ValueError:raise TenantLinearError('Границы изменились. Обновите выбор.',409) from None
     if start>end or ids[start:end+1]!=selected:raise TenantLinearError('Выберите непрерывный фрагмент обращения.',409)
-    key=store.digest(['employee_case',tenant,data['channel_id'],data['conversation_id'],selected[0],selected[-1],agent['agent_id']])
-    return {**agent,'submission_key':key,'first_message_id':selected[0],'last_message_id':selected[-1]}
+    from tenant_dialog_episode_cases import episode_id
+    episode=episode_id(profile)
+    key=store.digest(['employee_episode_case' if episode else 'employee_case',tenant,data['channel_id'],data['conversation_id'],selected[0],selected[-1],agent['agent_id'],*([episode] if episode else [])])
+    return {**agent,'submission_key':key,'first_message_id':selected[0],'last_message_id':selected[-1],**({'episode_id':episode} if episode else {})}
 
 
 def submit(profile,data):

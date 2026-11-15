@@ -139,3 +139,37 @@ def test_unknown_status_reconciliation_keeps_original_episode_and_no_send_grant(
     with readers.cursor() as cur:lifecycle.record_message(cur,A,CA,'client',message)
     assert str(readers.execute('SELECT episode_id FROM saas_dialog_episode_messages WHERE message_id=%s::uuid',(message,))[0]['episode_id'])==original
     readers.commit()
+
+
+def test_unknown_outbound_echo_before_reconciliation_stays_unbound_then_old_episode(readers):
+    """A late echo cannot become part of a new operator's accepted episode."""
+    import json
+    from tenant_chat_send_schema import ensure_schema
+    ensure_schema(readers)
+    request_id=str(uuid.uuid4()); external=str(uuid.uuid4()); message=str(uuid.uuid4())
+    original=command()['lifecycle']['id']
+    readers.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,11,%s::uuid,41,'hash','unknown',%s::jsonb)",
+                    (A,request_id,json.dumps({'lifecycle_episode_id':original})))
+    readers.commit()
+    command('close',1)
+    with readers.cursor() as cur:
+        lifecycle.note_inbound(cur,A,CA,'client',str(uuid.uuid4()),'2099-01-01T00:00:00Z')
+    readers.commit()
+    current=command(revision=3,actor=33)['lifecycle']['id']
+    assert current != original
+    readers.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,41,%s,%s,'outgoing','late provider echo')",
+                    (message,A,'connect:'+external,'connect:'+CA))
+    with readers.cursor() as cur:
+        lifecycle.record_message(cur,A,CA,'client',message)
+    assert not readers.execute('SELECT episode_id FROM saas_dialog_episode_messages WHERE message_id=%s::uuid',(message,))
+    readers.commit()
+    with readers.cursor() as cur:
+        lifecycle.record_reconciled_dispatch(cur,A,11,41,request_id,CA,'client',
+                                             {'provider_accepted':True,'message_id':external})
+        lifecycle.record_message(cur,A,CA,'client',message)
+        lifecycle.record_message(cur,A,CA,'client',message)  # duplicate admission is inert
+    bindings=readers.execute('SELECT episode_id FROM saas_dialog_episode_messages WHERE message_id=%s::uuid',(message,))
+    assert len(bindings)==1
+    assert str(bindings[0]['episode_id'])==original
+    assert not readers.execute('SELECT 1 FROM saas_dialog_episode_messages WHERE episode_id=%s::uuid AND message_id=%s::uuid',(current,message))
+    readers.commit()

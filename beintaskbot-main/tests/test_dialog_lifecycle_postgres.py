@@ -18,6 +18,7 @@ def worker(dsn, actor, request, barrier, output, operation='mutate'):
     import tenant_dialog_lifecycle as lifecycle
     from tenant_linear_policy import TenantLinearError
     os.environ['TENANT_DIALOG_LIFECYCLE_ENABLED']='true'
+    os.environ['TENANT_DIALOG_ACCEPT_ENABLED']='true'
     tenant_platform._connect=lambda:psycopg.connect(dsn,row_factory=dict_row)
     try:
         barrier.wait(20)

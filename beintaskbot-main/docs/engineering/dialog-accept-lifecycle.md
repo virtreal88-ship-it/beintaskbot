@@ -1,10 +1,8 @@
 # Explicit dialog lifecycle: rollout and review
 
-**Draft integration blocker:** the current explicit case writer is still a
-support-ticket snapshot prototype. It does not yet create a card in the separate
-Cases (knowledge candidates) section. Final manual-AI versus native-draft behavior
-is awaiting the owner decision. Do not enable this branch until that path is
-completed and verified.
+**Draft release gates:** full native PostgreSQL concurrency CI, final permission
+review and the explicit episode AI/publication path must pass before activation.
+The draft PR itself does not enable production behavior or apply its schema.
 
 Status: prepared behind `TENANT_DIALOG_LIFECYCLE_ENABLED`, default **off**.
 Do not enable in production until this change's full CI (including native PostgreSQL
@@ -50,7 +48,14 @@ messages, rights, AI assignments or provider records are rewritten or deleted.
 
 Run the migration with the application's authorized database connection in a
 controlled deployment transaction, after migration approval; commit only on
-success. Then verify table/constraint presence, and enable the rollout flag.
+success. Then verify table/constraint presence. Keep `TENANT_DIALOG_ACCEPT_ENABLED=false`
+while rolling out `TENANT_DIALOG_LIFECYCLE_ENABLED=true` to every process. No
+exclusive workflow may be created during this guard-only phase. Confirm all
+serving replicas and workers use the guard-enabled revision, then enable
+`TENANT_DIALOG_ACCEPT_ENABLED=true`. Old replicas in this second phase already
+enforce ownership and merely reject new claims until replaced. Never mix legacy
+unguarded replicas with accepting replicas. A fully drained maintenance window
+is the alternative.
 Deploying code with the flag off does not create these tables or change behavior.
 If the flag is mistakenly enabled before migration, operations fail closed rather
 than falling back to unowned source-wide access.
@@ -90,3 +95,28 @@ Run the lifecycle tests plus the existing scoped dialogs, channel/group isolatio
 attachments, chat send, consultations, notifications and support suites. Browser
 checks must cover stale open tabs, repeated actions, transfer, clear-on-denial,
 mobile/desktop, and legacy behavior with the rollout flag off.
+
+## Full episode AI coverage and publication limits
+
+The internal episode submission uses the existing analyzer maximum of 80 messages
+and 12,000 characters of complete text (plus its existing token/budget checks).
+It does not inherit the separate public 30-message selection limit. Neither a
+message nor the episode is silently truncated. If the complete pinned evidence
+cannot fit, preflight rejects before any model call or paid reservation. The full
+episode remains stored. This is an explicit limitation, not a successful analysis.
+
+To support larger episodes, a later bounded workflow must first freeze the full
+message manifest and media coverage, price/reserve a total request budget, then
+extract evidence in deterministic bounded chunks and synthesize ONE case. Every
+chunk needs a durable completion receipt and the final synthesis must cover all
+manifest IDs. Any missing/unknown chunk stops publication and cannot silently
+retry spending. No per-chunk cases or automatic analysis of unrelated history.
+The current patch does not implement or enable this multi-call workflow.
+
+Automatic publication is more conservative than draft generation: original actor
+needs existing publication authority, the exact assigned agent/version must still
+match, customer confirmation and current source evidence must pass, and procedural
+steps must literally occur in pinned operator text. Attachments in the no-paid-media
+path, unsupported/paraphrased procedures or insufficient authority leave a draft
+with a reason. This prevents a model's suitability assertion from becoming an
+authorization or invented instruction. Existing redaction and audit remain in force.

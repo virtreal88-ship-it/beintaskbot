@@ -15,6 +15,7 @@ import tenant_dialog_lifecycle as lifecycle
 def episodes(db, monkeypatch):
     import tenant_platform
     monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED', 'true')
+    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED', 'true')
     monkeypatch.setattr(tenant_platform, '_connect', lambda: db)
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db)
@@ -146,14 +147,13 @@ def test_explicit_case_captures_durable_membership_not_timestamps(episodes):
             insert_message(episodes,'inside-future',created_at='2099-01-01T00:00:00Z')]
     command('close',1)
     after=insert_message(episodes,'after')
-    request=payload('case',2)
-    first=lifecycle.mutate(PROFILE,request)
-    assert lifecycle.mutate(PROFILE,request)==first
-    assert command('case',2)['case_id']==first['case_id']
-    rows=episodes.execute('SELECT message_id::text FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid',(A,first['case_id']))
-    assert {r['message_id'] for r in rows}==set(inside)
-    assert before not in {r['message_id'] for r in rows} and after not in {r['message_id'] for r in rows}
-    assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==1
+    from tenant_dialog_episode_cases import scoped,snapshot_rows
+    selected=state(episodes)['id']
+    with episodes.cursor() as cur:
+        rows=snapshot_rows(cur,scoped(PROFILE,selected),{'channel_id':CA,'conversation_id':'client','history_mode':'channel'},{})
+    assert {str(r['id']) for r in rows}==set(inside)
+    assert before not in {str(r['id']) for r in rows} and after not in {str(r['id']) for r in rows}
+    assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
 
 
 def test_case_waits_for_pending_dispatch_and_local_history(episodes):
@@ -174,8 +174,11 @@ def test_case_waits_for_pending_dispatch_and_local_history(episodes):
     message=insert_message(episodes,'connect:provider-delayed',direction='outgoing')
     rows=episodes.execute('SELECT episode_id::text,message_id::text FROM saas_dialog_episode_messages');episodes.commit()
     assert rows==[{'episode_id':accepted['id'],'message_id':message}]
-    result=command('case',2)
-    assert episodes.execute('SELECT message_id::text FROM saas_support_ticket_messages WHERE ticket_id=%s::uuid',(result['case_id'],))==[{'message_id':message}]
+    from tenant_dialog_episode_cases import scoped,snapshot_rows
+    with episodes.cursor() as cur:
+        rows=snapshot_rows(cur,scoped(PROFILE,accepted['id']),{'channel_id':CA,'conversation_id':'client','history_mode':'channel'},{})
+    assert [str(row['id']) for row in rows]==[message]
+    assert not episodes.execute('SELECT * FROM saas_support_tickets')
 
 
 def test_delayed_old_send_stays_in_original_episode_after_new_acceptance(episodes):
@@ -253,3 +256,18 @@ def test_source_binding_revocation_and_none_scope_cannot_be_bypassed_by_claim(ep
     settings['33']['access_scopes']['dialogs']['update']='none'
     episodes.execute("UPDATE saas_tenant_workflow_policies SET value=%s::jsonb WHERE tenant_id=%s::uuid AND policy_key='members'",(json.dumps(settings),A));episodes.commit()
     with pytest.raises(TenantLinearError):command('close',1,actor=33)
+
+
+def test_admission_gate_does_not_disable_existing_ownership(episodes,monkeypatch):
+    command(actor=33)
+    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED','false')
+    with episodes.cursor() as cur:
+        with pytest.raises(TenantLinearError) as denied:
+            lifecycle.require_access(cur,A,11,'connect',CA,'client')
+        assert denied.value.status==404
+    episodes.rollback()
+    command('close',1,actor=33)
+    with pytest.raises(TenantLinearError) as denied:
+        command('accept',2,actor=33)
+    assert denied.value.status==409
+    assert state(episodes)['state']=='closed'

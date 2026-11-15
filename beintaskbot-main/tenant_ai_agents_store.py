@@ -1089,7 +1089,7 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
     from contextlib import nullcontext
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
-        ensure_schema(conn)
+        if connection is None:ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             if creating:
