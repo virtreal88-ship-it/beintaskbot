@@ -10,12 +10,14 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
     const board=kind==='tasks'?'<div data-task-kanban data-horizontal-scroll>':kind==='kommo'?'<div data-horizontal-scroll>':'<div data-native-deal-board><div>';
     await page.setContent('<style>body{margin:0}main{padding:16px;box-sizing:border-box}main div:has(>section){display:flex;overflow-x:auto;gap:16px;max-width:100%}</style><body data-app-ui="kwid"><main><section id="view-'+(kind==='tasks'?'tasks':'deals')+'"><article class="panel">'+board+columns(kind==='tasks'?'data-task-column':kind==='kommo'?'data-kommo-stage-key':'data-native-stage')+'</div>'+(kind==='native'?'</div>':'')+'</article></section></main></body>');
     await page.addScriptTag({content:fs.readFileSync('docs/tenant-horizontal-scroll.js','utf8')});
+    await page.addStyleTag({content:fs.readFileSync('ui/src/app-theme.css','utf8')});
     const scroll=page.locator('.app-kanban-swipe');await scroll.waitFor();
     assert.equal(await scroll.locator('[data-drag]').first().evaluate(e=>getComputedStyle(e).touchAction),'none');
     const mobile=width<=700;
     const geometry=await scroll.evaluate(e=>({width:e.clientWidth,column:e.firstElementChild.getBoundingClientRect().width,snap:getComputedStyle(e).scrollSnapType}));
     if(!mobile){assert.equal(geometry.column,280);assert.equal(geometry.snap,'none');continue;}
-    assert.equal(geometry.width,width-16,'screen width minus safe 8px gutters');
+    assert.equal(geometry.width,width,'screen width without redundant gutters despite late app theme');
+    const bounds=await scroll.boundingBox();assert(Math.abs(bounds.x)<1&&Math.abs(bounds.x+bounds.width-width)<1,'board meets both viewport edges');
     assert.equal(geometry.column,geometry.width,'one complete column');
     assert.equal(geometry.snap,'x mandatory');
     assert(await page.locator('#appHorizontalScroll').evaluate(e=>e.hidden),'no floating slider on mobile kanban');
