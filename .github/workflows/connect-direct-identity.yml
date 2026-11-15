@@ -56,6 +56,8 @@ jobs:
           PYTHONPATH: tests/isolated_database_guard:.:tests
         run: >-
           python -m pytest -q --tb=short
+          tests/test_connect_missed_calls.py
+          tests/test_connect_missed_calls_postgres.py
           tests/test_connect_conflict_diagnostics.py
           tests/test_connect_phone_evidence.py
           tests/test_connect_owner_identity.py
@@ -79,3 +81,6 @@ jobs:
           tests/test_group_coordination.py::test_staff_registration_requires_owner_and_observed_company_identity
           tests/test_group_coordination.py::test_signed_group_authorship
 
+
+      - name: Missed call presentation
+        run: node tests/test_connect_missed_calls_ui.cjs

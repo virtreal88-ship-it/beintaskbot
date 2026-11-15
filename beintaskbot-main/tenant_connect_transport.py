@@ -28,7 +28,7 @@ from tenant_connect_direct_identity import (
 )
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
-CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
+CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated', 'call.missed')
 
 
 class ConnectWebhookError(TenantPlatformError):
@@ -860,6 +860,13 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
         raise ConnectWebhookError('missing_route', 'Connect webhook kanal məlumatı yoxdur.', 400)
+    call_occurred = None
+    if event_type == 'call.missed':
+        from tenant_connect_calls import validate
+        try:
+            call_occurred = validate(event)
+        except ValueError as exc:
+            raise ConnectWebhookError('invalid_call', 'Invalid missed call event.', 400) from exc
     metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None
@@ -937,6 +944,18 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
+            if call_occurred is not None:
+                if not inserted_event:
+                    conn.commit()
+                    return True
+                from tenant_connect_calls import record
+                lead_id = _upsert_conversation(cur, tenant, channel_id, conversation, metadata)
+                try:
+                    record(cur, tenant, channel_id, conversation, lead_id, data, call_occurred)
+                except ValueError as exc:
+                    raise ConnectWebhookError('call_scope_conflict', 'Call scope mismatch.', 409) from exc
+                conn.commit()
+                return True  # No AI, consultation, takeover, media or customer-reply job.
             outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
             independent_consultation_receipt=False
             # Only this verified ingestion boundary can attest provider receipts.
