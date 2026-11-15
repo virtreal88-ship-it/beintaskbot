@@ -29,6 +29,15 @@ from tenant_connect_direct_identity import (
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
+CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, 'call.missed')
+
+
+def _preserved_webhook_events(current):
+    events = current.get('events')
+    if not isinstance(events, list) or any(not isinstance(event, str) for event in events):
+        raise ValueError('Cannot safely inspect webhook events')
+    return list(dict.fromkeys([*events, *CONNECT_WEBHOOK_EVENTS]))
+
 
 
 class ConnectWebhookError(TenantPlatformError):
@@ -640,7 +649,7 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
                             and str(row.get('url') or '').rstrip('/') == callback_url.rstrip('/')), None)
             if current:
                 _request(key, 'PATCH', '/v1/webhooks/' + str(previous['webhook_id']),
-                         {'active': True, 'events': list(CONNECT_WEBHOOK_EVENTS)})
+                         {'active': True, 'events': _preserved_webhook_events(current)})
                 hook = current
                 webhook_secret = str(previous['webhook_secret'])
         except Exception:
@@ -786,8 +795,32 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
     return result
 
 
+def _upgrade_missed_call_subscription(api_key, current):
+    """Atomic additive endpoint; old Connect safely fails without any PATCH."""
+    webhook_id = str(current.get('id') or '')
+    url = str(current.get('url') or '')
+    events = current.get('events')
+    if (not webhook_id or not url.startswith('https://')
+            or not url.rstrip('/').endswith('/api/platform/connect/webhook')
+            or current.get('active') is not True
+            or not isinstance(events, list) or any(not isinstance(x, str) for x in events)):
+        raise ValueError('Invalid existing managed subscription')
+    if 'call.missed' in events:
+        return False
+    _request(api_key, 'POST', '/v1/webhooks/' + webhook_id + '/events',
+             {'add': ['call.missed'], 'expectedUrl': url})
+    hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
+    matches = [hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id]
+    if (len(matches) != 1 or matches[0].get('url') != url
+            or matches[0].get('active') is not current.get('active')
+            or not isinstance(matches[0].get('events'), list)
+            or not set([*events, 'call.missed']).issubset(matches[0]['events'])):
+        raise ValueError('Subscription addition readback mismatch')
+    return True
+
+
 def sync_webhook_subscriptions() -> int:
-    """Upgrade only Beintaskbot-owned Connect webhooks after deployment.
+    """Add missed calls only to existing active CRM webhooks after deployment.
 
     This keeps existing company installations working without asking an owner
     to disconnect/reconnect a channel. The API key and webhook id remain
@@ -806,7 +839,12 @@ def sync_webhook_subscriptions() -> int:
             api_key = str(credentials.get('api_key') or '')
             if not webhook_id or not api_key:
                 continue
-            _request(api_key, 'PATCH', '/v1/webhooks/' + webhook_id, {'events': list(CONNECT_WEBHOOK_EVENTS)})
+            hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
+            current = next((hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id), None)
+            if current is None:
+                continue
+            if not _upgrade_missed_call_subscription(api_key, current):
+                continue
             updated += 1
         except Exception:
             # A single stale external webhook must never prevent the HTTP API
@@ -855,11 +893,18 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
         return ingest_health(raw, signature, event)
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
     event_type = str(event.get('type') or '')
-    if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):
+    if event_type not in CONNECT_ACCEPTED_EVENTS or not event_id or not isinstance(data, dict):
         raise ConnectWebhookError('invalid_event', 'Connect webhook formatı düzgün deyil.', 400)
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
         raise ConnectWebhookError('missing_route', 'Connect webhook kanal məlumatı yoxdur.', 400)
+    call_occurred = None
+    if event_type == 'call.missed':
+        from tenant_connect_calls import validate
+        try:
+            call_occurred = validate(event)
+        except ValueError as exc:
+            raise ConnectWebhookError('invalid_call', 'Invalid missed call event.', 400) from exc
     metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None
@@ -937,6 +982,18 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
+            if call_occurred is not None:
+                if not inserted_event:
+                    conn.commit()
+                    return True
+                from tenant_connect_calls import record
+                lead_id = _upsert_conversation(cur, tenant, channel_id, conversation, metadata)
+                try:
+                    record(cur, tenant, channel_id, conversation, lead_id, data, call_occurred)
+                except ValueError as exc:
+                    raise ConnectWebhookError('call_scope_conflict', 'Call scope mismatch.', 409) from exc
+                conn.commit()
+                return True  # No AI, consultation, takeover, media or customer-reply job.
             outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
             independent_consultation_receipt=False
             # Only this verified ingestion boundary can attest provider receipts.
