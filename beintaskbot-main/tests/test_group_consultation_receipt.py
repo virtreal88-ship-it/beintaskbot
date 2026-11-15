@@ -46,8 +46,11 @@ def test_operator_group_unknown_never_falls_back_to_retrying_messages_endpoint(m
 def test_operator_direct_send_stays_on_existing_route(monkeypatch):
     route={'api_key':'synthetic','channel_id':str(uuid.uuid4()),'conversation_id':'994501234567@s.whatsapp.net'}
     request_id=str(uuid.uuid4());calls=[]
-    monkeypatch.setattr(transport,'_request',lambda key,method,path,payload:
-        (calls.append((path,payload)) or {'id':'connect-direct-id'}))
+    def request(key,method,path,payload,**options):
+        assert options == {'safe_preflight_codes': ('conversation_identity_conflict',)}
+        calls.append((path,payload))
+        return {'id':'connect-direct-id'}
+    monkeypatch.setattr(transport,'_request',request)
     assert transport.send(route,'hello',request_id)=='connect-direct-id'
     assert calls==[(f"/v1/channels/{route['channel_id']}/messages",{
         'conversationId':route['conversation_id'],'type':'text','text':'hello','clientMessageId':request_id})]

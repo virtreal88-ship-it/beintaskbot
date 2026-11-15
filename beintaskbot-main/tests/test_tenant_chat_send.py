@@ -118,6 +118,30 @@ class Service(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(raised.exception.keep_request)
         self.finish.assert_called_once_with(self.item, 'unknown')
 
+    async def test_connect_identity_preflight_is_blocked_without_resend(self):
+        from tenant_connect_transport import ConnectPreflightError
+        self.item['connection'] = ['connect', 'channel']
+        sender = Mock(side_effect=ConnectPreflightError('conversation_identity_conflict'))
+        with patch.dict(self.module.run.__globals__, {'send_connect': sender}):
+            with self.assertRaises(TenantLinearError) as raised: await self.run_send()
+        self.finish.assert_called_once_with(self.item, 'blocked')
+        sender.assert_called_once()
+        self.assertFalse(raised.exception.keep_request)
+        self.assertIn('WhatsApp', str(raised.exception))
+        self.assertNotIn('Kommo', str(raised.exception))
+
+    async def test_other_connect_failures_still_unknown_without_resend(self):
+        from tenant_connect_transport import ConnectPreflightError
+        for failure in (RuntimeError('timeout'), ConnectPreflightError('unrecognized_code')):
+            self.finish.reset_mock()
+            self.item['connection'] = ['connect', 'channel']
+            sender = Mock(side_effect=failure)
+            with patch.dict(self.module.run.__globals__, {'send_connect': sender}):
+                with self.assertRaises(TenantLinearError) as raised: await self.run_send()
+            self.finish.assert_called_once_with(self.item, 'unknown')
+            sender.assert_called_once()
+            self.assertTrue(raised.exception.keep_request)
+
     async def test_lost_receipt_write_does_not_resend(self):
         self.finish.side_effect = RuntimeError('database unavailable')
         with self.assertRaises(TenantLinearError) as raised: await self.run_send()
@@ -129,5 +153,22 @@ class Service(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TenantLinearError): await self.run_send()
         self.send.assert_not_called(); self.mark.assert_not_called()
 
+
+
+class ConnectPreflightTransport(unittest.TestCase):
+    def test_only_exact_preflight_refusal_is_known(self):
+        from tenant_connect_transport import send as connect_send, ConnectPreflightError
+        route = {'api_key': 'test-key', 'channel_id': 'channel', 'conversation_id': '994500000000@s.whatsapp.net'}
+        for status, body, known in ((409, {'error': 'conversation_identity_conflict'}, True),
+                                    (409, {'error': 'message_scope_conflict'}, False),
+                                    (500, {'error': 'conversation_identity_conflict'}, False),
+                                    (409, {}, False)):
+            response = Mock(status_code=status)
+            response.json.return_value = body
+            with patch('tenant_connect_transport.requests.request', return_value=response) as post:
+                with self.assertRaises(Exception) as raised:
+                    connect_send(route, 'test', INPUT['request_id'])
+            self.assertEqual(isinstance(raised.exception, ConnectPreflightError), known)
+            post.assert_called_once()
 
 if __name__ == '__main__': unittest.main()
