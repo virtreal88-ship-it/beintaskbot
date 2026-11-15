@@ -20,8 +20,8 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no page overflow');
   const items=nav.locator('[data-view]:visible');const count=await items.count();assert(count>5,'every permitted route is retained');
   const compact=await items.evaluateAll(items=>items.map(el=>{const b=el.getBoundingClientRect(),icon=el.querySelector('span:first-child').getBoundingClientRect(),label=el.querySelector('.app-nav-label').getBoundingClientRect();return {width:b.width,iconOffset:Math.abs(icon.x+icon.width/2-b.x-b.width/2),labelOffset:Math.abs(label.x+label.width/2-b.x-b.width/2),textAlign:getComputedStyle(el).textAlign}}));
-  for(const item of compact){assert.equal(item.width,72,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
-  assert(await items.nth(3).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least four sections visible without scrolling at 320px');
+  for(const item of compact){assert.equal(item.width,64,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
+  assert(await items.nth(4).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least five sections visible without scrolling at 320px');
   fs.mkdirSync(path.join(root,'artifacts/mobile-bottom-nav'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/compact-${width}-${theme}.png`)});
   await items.last().focus();await page.keyboard.press('Home');assert(await items.first().evaluate(el=>el===document.activeElement));
   await page.keyboard.press('End');assert(await items.last().evaluate(el=>el===document.activeElement));
