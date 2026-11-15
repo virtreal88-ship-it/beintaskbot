@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('../.support-test-deps/node_modules/jsdom');
 const root = path.join(__dirname, '..');
-const shell = fs.readFileSync(path.join(root, 'ui/src/app-shell.js'), 'utf8').replace("import themeCss from './app-theme.css?inline'", "const themeCss=''");
+const shell = fs.readFileSync(path.join(root, 'ui/src/app-shell.js'), 'utf8').replace("import { installMobilePageHeader } from './mobile-page-header.js'", fs.readFileSync(path.join(root,'ui/src/mobile-page-header.js'),'utf8').replace('export function','function')).replace("import themeCss from './app-theme.css?inline'", "const themeCss=''");
 (async () => {
   for (const mobile of [false, true]) {
     const dom = new JSDOM(fs.readFileSync(path.join(root, 'docs/tenant-app.html'), 'utf8'), { url: 'https://crm.test/app', runScripts: 'outside-only' });

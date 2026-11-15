@@ -1,3 +1,4 @@
+const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -28,7 +29,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
    };
    await page.route('**/*',routeApp);
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);await page.locator('.operator-row').first().click();
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);await page.locator('.operator-row').first().click();
     const card=id=>page.locator('article[data-message-id="'+id+'"] [data-chat-attachment]'),cachedCard=card('cached-photo'),thumb=card('thumbnail-photo'),empty=card('placeholder-photo');
     await cachedCard.scrollIntoViewIfNeeded();await cachedCard.locator('[data-media-preview=image]').waitFor();assert.equal(await cachedCard.locator('[data-media-open]').isVisible(),false,'cached bytes show an actual photo without a redundant Load action');assert.equal(mediaRequests,0,'automatic cached-only reads never start provider downloads');
     await thumb.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('[data-chat-attachment="thumbnail-photo"]')?.dataset.mediaPreviewState==='retryable');assert.equal(await thumb.locator('[data-media-thumbnail]').isVisible(),true);assert.match(await thumb.locator('[data-media-thumbnail]').evaluate(n=>getComputedStyle(n).filter),/blur/);assert.equal(await thumb.locator('.operator-media-analysis').isVisible(),false,'AI status is a separate collapsed detail');

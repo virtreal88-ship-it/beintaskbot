@@ -28,7 +28,7 @@
   let profile=window.tenantProfileSnapshot||null,identity='',epoch=0,overlay=null,display=null,fromRoute=false,returnFocus=null;
   const memberOf=data=>data?.member||null;
   const scopeOf=data=>{const m=memberOf(data);return m?`${m.tenant_id||''}:${m.telegram_id||''}:${m.role||''}:${m.active===true}`:'';};
-  function close(removeParam=false,restoreFocus=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus;returnFocus=null;if(restoreFocus&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
+  function close(removeParam=false,restoreFocus=false){epoch++;const wasOpen=!!overlay;overlay?.remove();overlay=null;display=null;const clearRoute=removeParam&&fromRoute;fromRoute=false;if(clearRoute){const url=new URL(location.href);url.searchParams.delete('risk_alert_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}const target=returnFocus?.closest?.('.app-user-menu[hidden]')?document.querySelector('.app-avatar-button'):returnFocus;returnFocus=null;if(restoreFocus&&wasOpen&&target?.isConnected&&!target.closest('[hidden], [inert], [aria-hidden="true"]'))target.focus({preventScroll:true});}
   function addText(parent,tag,value,cls){const node=document.createElement(tag);node.textContent=String(value??'');if(cls)node.className=cls;parent.append(node);return node;}
   function stamp(value){const date=new Date(value);return value&&!Number.isNaN(date.getTime())?new Intl.DateTimeFormat({ru:'ru-RU',az:'az-AZ',en:'en-GB'}[language()],{dateStyle:'medium',timeStyle:'short'}).format(date):'';}
   function showAlert(alert){
@@ -121,3 +121,4 @@
   window.addEventListener('popstate',()=>void route());
   if(profile)apply(profile);else if(new URL(location.href).searchParams.has('risk_alert_id'))document.addEventListener('tenant-profile',event=>apply(event.detail),{once:true});
 })();
+

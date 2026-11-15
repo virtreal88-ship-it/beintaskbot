@@ -1,3 +1,4 @@
+const {selectAppLanguage}=require('./account_controls_browser.cjs');
 const assert=require('node:assert/strict');
 const {fixture,server,message,launch,deferred}=require('./visible_media_fixture.cjs');
 (async()=>{const browser=await launch();try{
@@ -9,7 +10,7 @@ const {fixture,server,message,launch,deferred}=require('./visible_media_fixture.
    {...message('voice','audio'),has_transcription:true,audio_transcript:'Saved voice transcript'});
   const f=await fixture(browser,s,{width,messages:rows});try{
    await f.context.addInitScript(()=>{window.copiedText='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.copiedText=text}});});
-   await f.open(()=>f.page.locator('[data-app-language]').selectOption(language));
+   await f.open(()=>selectAppLanguage(f.page,language));
    const colors={};
    for(const state of states){
     const article=f.page.locator('article[data-message-id="status-'+state+'"]');await article.scrollIntoViewIfNeeded();
