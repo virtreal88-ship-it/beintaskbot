@@ -55,7 +55,13 @@
     filterButton.onclick=()=>toggle(filterBox);moreButton.onclick=()=>toggle(moreBox);
     panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&open){event.preventDefault();event.stopPropagation();close(true);}});
     document.addEventListener('pointerdown',event=>{if(open&&!panel.contains(event.target))close();},true);
-    panel.addEventListener('focusout',()=>{queueMicrotask(()=>{if(open&&!panel.contains(document.activeElement))close();});});
+    panel.addEventListener('focusout',event=>{
+      // During a pointer focus transition activeElement may briefly be body. Closing in
+      // a microtask hides the target before its click. Prefer the announced target;
+      // for null relatedTarget defer until the complete focus transition has finished.
+      if(event.relatedTarget){if(open&&!panel.contains(event.relatedTarget))close();return;}
+      setTimeout(()=>{if(open&&!panel.contains(document.activeElement))close();},0);
+    });
     // Close after an action, without stealing focus from a dialog it may have opened.
     moreBox.addEventListener('click',event=>{if(event.target.closest('button')&&!event.target.closest('button').disabled)queueMicrotask(()=>{const stillInside=moreBox.contains(document.activeElement);close(stillInside);});});
     function labels(){

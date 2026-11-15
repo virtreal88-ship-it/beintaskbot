@@ -3,13 +3,14 @@ const {chromium}=require(process.env.PLAYWRIGHT_PATH||'../.support-test-deps/nod
 const root=path.resolve(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const html=read('docs/tenant-app.html').replace(/<script\b[\s\S]*?<\/script>/gi,'');
 const dialogCSS=[...read('docs/tenant-operator-dialogs.js').matchAll(/(?:workspaceStyle|mobileStyle)\.textContent\+?=`([^`]*)`/g)].map(m=>m[1]).join('\n');
-const shell=read('ui/src/app-shell.js').replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(read('ui/src/app-theme.css')));
+const shell=read('ui/src/app-shell.js').replace("import { installMobilePageHeader } from './mobile-page-header.js'",read('ui/src/mobile-page-header.js').replace('export function','function')).replace("import themeCss from './app-theme.css?inline'",'const themeCss='+JSON.stringify(read('ui/src/app-theme.css')));
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
 for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark']){
  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent(html);await page.evaluate(()=>document.querySelectorAll('.nav [data-view],.nav [data-report-link]').forEach(el=>{el.hidden=false;el.style.removeProperty('display')}));await page.evaluate(theme=>{window.tenantI18n={language:'ru',t:key=>key};localStorage?.setItem?.('tenant-app-theme',theme)},theme).catch(()=>page.evaluate(()=>window.tenantI18n={language:'ru',t:key=>key}));
  await page.addScriptTag({content:shell});await page.addStyleTag({content:dialogCSS});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
  await page.waitForTimeout(80);
+ assert.deepEqual(errors,[],'shell and header must execute before layout assertions');
  const sidebar=page.locator('.shell>aside'),nav=sidebar.locator('.nav');
  if(width<=1023){
   assert.equal(await page.locator('.app-mobile-menu').isVisible(),false);
@@ -19,8 +20,8 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no page overflow');
   const items=nav.locator('[data-view]:visible');const count=await items.count();assert(count>5,'every permitted route is retained');
   const compact=await items.evaluateAll(items=>items.map(el=>{const b=el.getBoundingClientRect(),icon=el.querySelector('span:first-child').getBoundingClientRect(),label=el.querySelector('.app-nav-label').getBoundingClientRect();return {width:b.width,iconOffset:Math.abs(icon.x+icon.width/2-b.x-b.width/2),labelOffset:Math.abs(label.x+label.width/2-b.x-b.width/2),textAlign:getComputedStyle(el).textAlign}}));
-  for(const item of compact){assert.equal(item.width,88,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
-  assert(await items.nth(2).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least three sections visible without scrolling at 320px');
+  for(const item of compact){assert.equal(item.width,72,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
+  assert(await items.nth(3).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least four sections visible without scrolling at 320px');
   fs.mkdirSync(path.join(root,'artifacts/mobile-bottom-nav'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/compact-${width}-${theme}.png`)});
   await items.last().focus();await page.keyboard.press('Home');assert(await items.first().evaluate(el=>el===document.activeElement));
   await page.keyboard.press('End');assert(await items.last().evaluate(el=>el===document.activeElement));
@@ -66,3 +67,4 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
  assert.deepEqual(errors,[]);fs.mkdirSync(path.join(root,'artifacts/mobile-bottom-nav'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/${width}-${theme}.png`)});await page.close();console.log('PASS',width,theme);
 }
 }finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});
+

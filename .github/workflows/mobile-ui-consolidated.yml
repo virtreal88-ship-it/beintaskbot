@@ -36,4 +36,6 @@ jobs:
         if: always()
         with:
           name: mobile-ui-screenshots
-          path: beintaskbot-main/tests/artifacts/
+          path: |
+            beintaskbot-main/tests/artifacts/
+            beintaskbot-main/artifacts/

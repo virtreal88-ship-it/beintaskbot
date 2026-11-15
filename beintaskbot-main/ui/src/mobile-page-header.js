@@ -19,6 +19,7 @@ export function installMobilePageHeader({topbar, mobile, avatar, userMenu, langu
   function clearRow(){heading?.classList.remove('app-mobile-original-title');row?.remove();row=null;heading=null;}
   function update(){
     frame=0;
+    if(!window.document?.documentElement||!main.isConnected)return;
     const found=document.getElementById('dialogConsultationBell');
     if(found&&found!==bell){bell=found;bellHome=document.createComment('notification home');actions.insertBefore(bellHome,languageHome);}
     const labels=copy();if(languageLabel.textContent!==labels.language)languageLabel.textContent=labels.language;
@@ -52,7 +53,7 @@ export function installMobilePageHeader({topbar, mobile, avatar, userMenu, langu
     put(languageRow,languageSelect);put(extras,instructionLink);
     if(bell)put(extras,bell,languageRow);
   }
-  function schedule(){if(!frame)frame=requestAnimationFrame(update);}
+  function schedule(){if(window.document?.documentElement&&main.isConnected&&!frame)frame=requestAnimationFrame(update);}
   const observer=new MutationObserver(schedule);
   observer.observe(main,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});
   observer.observe(topbar,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','aria-label','style','class']});
