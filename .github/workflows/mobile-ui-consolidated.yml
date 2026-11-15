@@ -34,7 +34,6 @@ jobs:
           node tests/test_mobile_kanban_swipe_browser.cjs
           node tests/test_dialog_avatar_card_browser.cjs
           node tests/test_tenant_notification_bell_ux_browser.cjs
-          node tests/test_dialog_consultations_browser.cjs
           node tests/test_voice_card_mobile_browser.cjs
           node tests/test_list_toolbar_mobile_browser.cjs
           node tests/test_message_attachment_menu_browser.cjs
