@@ -77,6 +77,14 @@ class CRMStorage(unittest.TestCase):
         self.assertEqual(page.args[1][-2:], [200, 0])
         self.conn.commit.assert_not_called()
 
+    def test_deal_detail_has_same_verified_provenance_as_board(self):
+        self.cur.fetchone.return_value = {'kommo_lead_id': 7, 'raw': {'id': 7}}
+        with patch('tenant_kommo_board_provenance.revisions', return_value={'7': 'a'*64}) as proof:
+            row = self.store.get_deal(tenant_id='a', kommo_lead_id=7)
+        proof.assert_called_once_with(self.cur, 'a', 'leads', [7], expected_raw={'7': {'id': 7}})
+        self.assertEqual(row['source_revision'], 'a'*64)
+        self.conn.commit.assert_not_called()
+
     def test_latest_messages_keep_chronology_and_limit(self):
         self.cur.fetchall.return_value = []
         self.store.list_messages(tenant_id='a', kommo_lead_id=7, limit=1000)
@@ -103,7 +111,7 @@ class CRMStorage(unittest.TestCase):
         self.assertEqual(self.cur.executemany.call_args.args[1][0][0], 'fixed-id')
         self.cur.fetchone.return_value = {'kommo_lead_id': 7}
         self.assertEqual(store.get_deal(tenant_id='a', kommo_lead_id=7), {'visible': True})
-        payload.assert_called_once_with({'kommo_lead_id': 7})
+        payload.assert_called_once_with({'kommo_lead_id': 7, 'source_revision': None})
 
     def test_no_platform_or_provider_dependency(self):
         source = (Path(__file__).resolve().parents[1] / 'tenant_crm_repository.py').read_text(encoding='utf-8')
