@@ -28,6 +28,8 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
  assert(Math.abs(heading.task-heading.deals)<=2,JSON.stringify({width,heading}));
  await page.locator('#kommoTaskViewControls button').first().waitFor();
  assert.equal(await page.locator('.task-view-controls:visible').count(),1);
+ const assertBoardGap=async()=>{const gap=await page.evaluate(()=>{const view=document.querySelector('#view-tasks');const mobile=view.querySelector('.crm-mobile-toolbar');const toolbar=mobile&&mobile.getBoundingClientRect().height?mobile:view.querySelector(':scope>.task-flow-filters');const panel=Array.from(view.querySelectorAll(':scope>.task-source-panel')).find(el=>!el.hidden);return panel.getBoundingClientRect().top-toolbar.getBoundingClientRect().bottom;});assert(gap>=11&&gap<=20,JSON.stringify({width,gap,message:'filters and task board need a compact visible gap'}));};
+ await assertBoardGap();
  const controls=page.locator('#kommoTaskViewControls button');assert.equal(await controls.count(),2);
  for(const button of await controls.all()){assert.equal((await button.innerText()).trim(),'');assert(await button.getAttribute('aria-label'));assert(await button.getAttribute('title'));const box=await button.boundingBox();assert(box.width>=44&&box.height>=44);}
  if(width>=1080){const boxes=await Promise.all(['#taskSearch','#taskStatus','#kommoTaskViewControls'].map(s=>page.locator(s).boundingBox()));assert(Math.abs(boxes[0].y-boxes[1].y)<1);assert(Math.abs(boxes[0].y-boxes[2].y)<1);}
@@ -58,5 +60,7 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
  await page.selectOption('#taskFeedSource','kommo');await page.waitForFunction(()=>!taskFeedSource.disabled);
  assert.equal(await page.locator('#kommoTaskCount').isVisible(),true,'Kommo count remains visible on mobile');
  assert.equal(await page.locator('#nativeTaskCount').isVisible(),false);
+ if(width<=700) await page.locator('#view-tasks .crm-mobile-filter').click();
+ await assertBoardGap();
  await context.close();}
 }console.log('PASS real app + shipped board: source persistence/reload, one panel, table mode retained, mobile bounds');}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});
