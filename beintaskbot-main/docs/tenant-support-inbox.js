@@ -89,7 +89,7 @@
       #supportDetail .support-modal-card{padding:20px;border-radius:14px}
       #supportDetail .support-card-header{top:-20px;padding-top:4px}
       #supportDetail .support-card-header h2{font-size:19px;font-weight:650}
-      #supportDetail #supportClose{width:40px;min-height:40px!important;padding:0;font-size:26px;font-weight:400;border-radius:50%;border:0;background:var(--paper);color:var(--muted)}
+      #supportDetail #supportClose{width:44px;min-height:44px!important;padding:0;font-size:26px;font-weight:400;border-radius:50%;border:0;background:var(--paper);color:var(--muted)}
       #supportDetail .support-case-tabs button{min-height:40px}
       #supportDetail .support-primary-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
       #supportDetail .support-primary-actions button{min-height:38px;padding:8px 12px;white-space:normal;font:inherit;font-size:13px}
@@ -117,8 +117,8 @@
         #supportInbox .support-case-cell{grid-column:1/-1}#supportInbox .support-state-cell{grid-row:2;grid-column:1}#supportInbox .support-owner-cell{grid-row:2;grid-column:2;text-align:right;max-width:145px}
         #supportInbox .support-date-cell{grid-column:1/-1}#supportInbox .support-date-cell .support-cell-label{display:inline;margin-right:5px}
         #supportDetail .support-modal-card{padding:16px;border-radius:0}#supportDetail .support-card-header{top:-16px}
-        #supportDetail .support-primary-actions{gap:6px}#supportDetail .support-primary-actions button{min-height:40px;padding:8px;font-size:12px}
-        #supportDetail #supportResolve{width:36px;padding:0}#supportDetail .support-save-actions{bottom:-16px}
+        #supportDetail .support-primary-actions{gap:6px}#supportDetail .support-primary-actions button{min-height:44px;padding:8px;font-size:12px}
+        #supportDetail #supportResolve{width:44px;padding:0}#supportDetail #supportMoreActions>summary{width:44px;height:44px}#supportDetail .support-save-actions{bottom:-16px}
       }`;document.head.append(style);
   }
   const summaryRequests=new Map(),summaryRequestStates=new Map(),caseTabs=new Map();
