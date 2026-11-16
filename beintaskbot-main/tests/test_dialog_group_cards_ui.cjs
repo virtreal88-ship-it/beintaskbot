@@ -30,7 +30,7 @@ single=true;
 for(const state of ['waiting','accepted','closed']){
  visible=[{...a,lifecycle:{...a.lifecycle,state}}];
  await w.tenantOperator.refresh();await tick();
- assert.equal(d.querySelector('.operator-row > .operator-lifecycle-badge').dataset.lifecycleState,state);assert(d.querySelector('#operatorComposerSource').hidden,'single source has no picker');
+ assert.equal(d.querySelector('.operator-row-indicators > .operator-lifecycle-badge').dataset.lifecycleState,state);assert(d.querySelector('#operatorComposerSource').hidden,'single source has no picker');
  assert.equal(d.querySelectorAll('.operator-unread-count').length,1);
  assert.equal(d.querySelector('.operator-unread-count').textContent,'2');
 }

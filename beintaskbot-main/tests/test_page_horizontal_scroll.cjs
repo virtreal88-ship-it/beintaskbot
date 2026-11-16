@@ -50,7 +50,10 @@ setTimeout(async()=>{
  document.querySelector('main').insertAdjacentHTML('beforeend','<div class="table" id="dealsList"><div class="row"><div>Long readable title '+ 'words '.repeat(50)+'</div><div class="hide-mobile">Stage</div><div class="hide-mobile">Message</div><div>Date</div></div></div><div class="table" id="nativeCompaniesList"><div class="row"><div>Company</div><div><button>Edit</button></div></div></div><section id="supportCases"><div class="support-cases-list"><table class="support-cases-table"><thead><tr>'+Array.from({length:8},(_,i)=>'<th>Column '+i+'</th>').join('')+'</tr></thead><tbody><tr>'+Array.from({length:8},(_,i)=>'<td>Value '+i+'</td>').join('')+'</tr></tbody></table></div></section>');
  const list=document.getElementById('dealsList'),cases=document.querySelector('.support-cases-list');
  list.scrollLeft=100;cases.scrollLeft=100;
- await new Promise(r=>setTimeout(r,200));
+ // The control recomputes visibility in requestAnimationFrame after the dialog
+ // closes and the new scroll regions are inserted. A timer alone does not
+ // guarantee that a rendering opportunity occurred under headless virtual time.
+ await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
  const range=document.querySelector('#appHorizontalScroll input');
  range.value='500';range.dispatchEvent(new Event('input',{bubbles:true}));
  const controlRect=document.getElementById('appHorizontalScroll').getBoundingClientRect();
@@ -80,7 +83,7 @@ try {
   assert(r.columnsVisible&&r.caseColumns,'table columns remain accessible');
   assert.equal(r.caseRow,'table-row');
   assert(!r.riskPanel&&!r.riskFetch,'risk review absent from Linear');
-  assert(!r.controlHidden&&r.controlWidth<=r.viewport*.3&&r.controlRight<=r.viewport,'compact bottom-right control');
+  assert(!r.controlHidden&&r.controlWidth<=r.viewport*.3&&r.controlRight<=r.viewport,'compact bottom-right control: '+JSON.stringify(r));
   if(width<=760) assert(r.twoCellList.scroll<=r.twoCellList.width,'ordinary two-cell lists remain responsive');
   if(r.list.width<720) assert(r.listMoved,'narrow list scrolls');
   if(r.cases.width<980) assert(r.casesMoved,'narrow case table scrolls');
