@@ -5,13 +5,23 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
  try {
   for(const kind of ['native','kommo']){
    const page=await browser.newPage({viewport:{width:390,height:850},hasTouch:true});
-   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-   const shell='<html lang="en"><body data-app-ui="kwid"><section id="view-deals"><div id="nativeDealsList"></div><div id="dealsList"></div></section><div id="outside" style="height:100px">Outside board</div></body></html>';
+   const errors=[];page.on('pageerror',error=>errors.push(error.stack||error.message));
+   // Use the shipped shell: app-shell initializes .shell > aside > .nav.
+   // Strip all scripts so only the bundle under test runs, with mocked reads below.
+   const shell=fs.readFileSync('docs/tenant-app.html','utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
    // A real origin is required by the production bundle's browser storage APIs.
    // Fulfill only this fixture document; every other network request is blocked.
    await page.route('**/*',route=>route.request().url()==='https://fixture.test/app'?route.fulfill({contentType:'text/html',body:shell}):route.abort());
    await page.goto('https://fixture.test/app');
-   await page.evaluate(()=>{
+   await page.evaluate(kind=>{
+    document.documentElement.lang='en';
+    document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-deals'));
+    document.getElementById('nativeDealSourcePanel').hidden=kind!=='native';
+    document.getElementById('kommoDealSourcePanel').hidden=kind!=='kommo';
+    document.getElementById('aiDashboard')?.remove(); // unrelated dashboard not mounted in this test
+    const outside=document.createElement('div');outside.id='outside';outside.textContent='Fixture drop cancellation area';
+    outside.style.cssText='position:fixed;bottom:0;left:0;width:100%;height:60px;background:white;z-index:9999';
+    document.body.append(outside);
     window.opened=[];window.edited=[];window.writes=[];window.drags=[];
     window.tenantViewDemand={watch(){}};
     document.addEventListener('dragstart',()=>window.drags.push('start'));
@@ -20,7 +30,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
      if(options.method && options.method!=='GET'){window.writes.push(url);throw Error('Unexpected write');}
      return {ok:true,json:async()=>({success:true,catalog:[{pipeline_id:10,name:'Fixture',stages:[{stage_id:100,name:'New'},{stage_id:101,name:'Working'},{stage_id:102,name:'Done'}]}],hidden_stage_keys:[],move_stage_targets:[{pipeline_id:10,stage_id:100},{pipeline_id:10,stage_id:101}],move_stage_sources:[{pipeline_id:10,stage_id:100}],move_context:{tenant_id:'fixture',user_id:'7'}})};
     };
-   });
+   },kind);
    await page.addScriptTag({content:fs.readFileSync('docs/tenant-chakra-ui.js','utf8')});
    await page.waitForFunction(()=>typeof window.tenantChakraCRM?.renderNativeDeals==='function'&&typeof window.tenantChakraCRM?.renderDeals==='function').catch(error=>{throw new Error('CRM fixture boot failed: '+errors.join('; ')+'; '+error.message);});
    assert.deepEqual(errors,[],kind+' bundle initializes without browser errors');
@@ -32,6 +42,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    const card=page.locator(kind==='native'?'[data-native-deal-card]':'[data-deal-open-surface]').first();
    await card.waitFor();
    await card.locator('select').waitFor();
+   await card.scrollIntoViewIfNeeded();
    const count=()=>page.evaluate(()=>window.opened.length);
    // Real pointer on padding, not the title.
    await card.click({position:{x:5,y:5}});assert.equal(await count(),1,kind+' surface opens');
