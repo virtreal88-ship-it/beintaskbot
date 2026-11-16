@@ -2,7 +2,7 @@
 import copy
 import json
 import unittest
-from unittest.mock import Mock, MagicMock, AsyncMock
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from datetime import datetime, timezone
 from test_tenant_tasks import person
 from test_tenant_hot_orders import load
@@ -104,6 +104,12 @@ class NoticePolicyTests(unittest.TestCase):
 
 
 class ConnectPushOutboxTests(unittest.TestCase):
+    def setUp(self):
+        from tenant_dialog_rollout import RolloutState
+        rollout_guard = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout_guard.start()
+        self.addCleanup(rollout_guard.stop)
+
     def test_connect_message_uses_existing_push_outbox_once_without_telegram(self):
         from tenant_crm_notice_store import plan_connect_message as enqueue
         from unittest.mock import patch
@@ -154,6 +160,10 @@ class ConnectPushOutboxTests(unittest.TestCase):
 
 class OutboxTests(unittest.TestCase):
     def setUp(self):
+        from tenant_dialog_rollout import RolloutState
+        rollout_guard = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout_guard.start()
+        self.addCleanup(rollout_guard.stop)
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.p=member();self.row=task()
