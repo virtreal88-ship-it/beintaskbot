@@ -6,6 +6,7 @@ on:
       - 'beintaskbot-main/docs/tenant-kommo-deal-card.js'
       - 'beintaskbot-main/docs/tenant-deal-completion.js'
       - 'beintaskbot-main/docs/tenant-support-inbox.js'
+      - 'beintaskbot-main/tests/test_support_workspace_browser.cjs'
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-deal-chat.js'
       - 'beintaskbot-main/docs/tenant-chat-history.js'
@@ -57,6 +58,14 @@ jobs:
           node tests/test_tenant_chat_send_ui.cjs
           node tests/test_deal_chat_first_page_browser.cjs
           node tests/test_helper_modal_mobile_browser.cjs
+      - name: Support workspace and existing case actions
+        run: |
+          node tests/test_tenant_support_inbox_ui.cjs
+          node tests/test_tenant_support_inbox_display_name.cjs
+          node tests/test_support_inbox_scopes_ui.cjs
+          node tests/test_support_notification_bridge_ui.cjs
+          CHROMIUM_PATH="$CHROMIUM_EXECUTABLE_PATH" node tests/test_support_ticket_modal_browser.cjs
+          node tests/test_support_workspace_browser.cjs
       - run: |
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_kommo_reference_forms.cjs
@@ -71,3 +80,4 @@ jobs:
           path: |
             beintaskbot-main/tests/artifacts/kommo-*.png
             beintaskbot-main/tests/artifacts/deal-first-page/
+            beintaskbot-main/output/support-workspace/
