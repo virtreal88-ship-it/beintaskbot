@@ -55,6 +55,7 @@ jobs:
           node tests/test_tenant_chat_history_ui.cjs
           node tests/test_tenant_chat_send_ui.cjs
           node tests/test_deal_chat_first_page_browser.cjs
+          node tests/test_helper_modal_mobile_browser.cjs
       - run: |
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_kommo_reference_forms.cjs

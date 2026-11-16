@@ -675,7 +675,7 @@
     const media=m.media_url||['picture','image','photo','video','file','document','voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
     return `<div data-chat-id="${esc(m.external_id)}" style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''} style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div data-chat-body>${esc(m.body||'Media mesajı')}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}"><button type="button" class="outline">Faylı aç</button><span role="status"></span></div>`:''}<small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`;
   }
-  function closeDeal(){chatRevision++;chatController?.abort();dealChat=null;$('dealModal').classList.remove('show');document.dispatchEvent(new CustomEvent('tenant-chat-close'));}
+  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;dealChat=null;$('dealModal').classList.remove('show');if(owned)document.dispatchEvent(new CustomEvent('tenant-chat-close'));}
   for(const event of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(event,closeDeal);
   document.addEventListener('tenant-profile',()=>{if(chatController&&chatProfileKey!==dealProfileKey)closeDeal();});
   function loadChat(){return dealChat?.reload();}
