@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {spawnSync} = require('node:child_process');
+const {spawn} = require('node:child_process');
 const assert = require('node:assert/strict');
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'docs/tenant-app.html'), 'utf8');
@@ -52,7 +52,7 @@ setTimeout(async()=>{
  list.scrollLeft=100;cases.scrollLeft=100;
  // The control recomputes visibility in requestAnimationFrame after the dialog
  // closes and the new scroll regions are inserted. A timer alone does not
- // guarantee that a rendering opportunity occurred under headless virtual time.
+ // guarantee that a rendering opportunity occurred before measurement.
  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
  const range=document.querySelector('#appHorizontalScroll input');
  range.value='500';range.dispatchEvent(new Event('input',{bubbles:true}));
@@ -63,14 +63,58 @@ setTimeout(async()=>{
 },0);
 </script>`;
 if (process.argv[2] === '--fixture') { fs.writeFileSync(process.argv[3],fixture); fs.rmSync(dir,{recursive:true,force:true}); process.exit(0); }
+// Use the browser's real rendering clock. --dump-dom with virtual time can
+// advance all timers without ever running the controller's animation frame.
+async function runBrowser(width) {
+ const child=spawn(process.env.CHROMIUM||'chromium',[
+  `--user-data-dir=${dir}/profile-${width}`,'--headless','--no-sandbox',
+  '--disable-gpu','--no-proxy-server','--allow-file-access-from-files',
+  '--remote-debugging-pipe','about:blank'
+ ],{stdio:['ignore','ignore','pipe','pipe','pipe']});
+ const pending=new Map(),events=new Map();let sequence=0,buffer='',stderr='';
+ const fail=error=>{for(const item of pending.values())item.reject(error);pending.clear();for(const item of events.values())item.reject(error);events.clear();};
+ child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-5000);});
+ for(const stream of [child.stdio[3],child.stdio[4]])stream.on('error',error=>fail(new Error(`Chromium pipe failed: ${error.message}; ${stderr}`)));
+ child.on('error',fail);
+ child.on('exit',(code,signal)=>fail(new Error(`Chromium exited (${code}/${signal}): ${stderr}`)));
+ child.stdio[4].on('data',chunk=>{
+  buffer+=chunk.toString();let boundary;
+  while((boundary=buffer.indexOf('\0'))>=0){
+   const raw=buffer.slice(0,boundary);buffer=buffer.slice(boundary+1);if(!raw)continue;
+   const message=JSON.parse(raw);
+   if(message.id){const item=pending.get(message.id);if(item){pending.delete(message.id);message.error?item.reject(new Error(JSON.stringify(message.error))):item.resolve(message.result);}}
+   else {const key=`${message.sessionId||''}:${message.method}`,item=events.get(key);if(item){events.delete(key);item.resolve(message.params);}}
+  }
+ });
+ const send=(method,params={},sessionId)=>new Promise((resolve,reject)=>{
+  const id=++sequence;pending.set(id,{resolve,reject});
+  child.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0');
+ });
+ const event=(method,sessionId)=>new Promise((resolve,reject)=>events.set(`${sessionId}:${method}`,{resolve,reject}));
+ const deadline=setTimeout(()=>{fail(new Error(`Browser fixture timed out at width ${width}: ${stderr}`));child.kill();},30000);
+ try {
+  const {targetId}=await send('Target.createTarget',{url:'about:blank'});
+  const {sessionId}=await send('Target.attachToTarget',{targetId,flatten:true});
+  await send('Target.activateTarget',{targetId});
+  await send('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
+  await send('Page.enable',{},sessionId);
+  const loaded=event('Page.loadEventFired',sessionId);
+  await send('Page.navigate',{url:`file://${file}`},sessionId);
+  await loaded;
+  const result=await send('Runtime.evaluate',{
+   expression:`new Promise((resolve,reject)=>{let attempts=0;const check=()=>{const result=document.getElementById('result');if(result)return resolve(JSON.parse(result.textContent));if(++attempts>200)return reject(new Error('Fixture did not complete'));setTimeout(check,50);};check();})`,
+   awaitPromise:true,returnByValue:true
+  },sessionId);
+  assert(!result.exceptionDetails,'browser completed fixture: '+JSON.stringify(result.exceptionDetails));
+  assert(result.result?.value,'browser returned fixture measurements');
+  return result.result.value;
+ } finally {clearTimeout(deadline);child.kill();}
+}
+(async()=>{
 try {
  fs.writeFileSync(file,fixture);
  for (const width of [1440,800,500,390]) {
-  const run=spawnSync(process.env.CHROMIUM||'chromium',[`--user-data-dir=${dir}/profile-${width}`,'--headless','--no-sandbox','--disable-gpu','--no-proxy-server','--allow-file-access-from-files',`--window-size=${width},1000`,'--virtual-time-budget=3000','--dump-dom',`file://${file}`],{encoding:'utf8',maxBuffer:8*1024*1024,timeout:30000});
-  assert.equal(run.status,0,run.stderr);
-  const match=run.stdout.match(/<pre id="result">(\{[^<]+\})<\/pre>/);
-  assert(match,'browser completed fixture: '+run.stdout.slice(-5000));
-  const r=JSON.parse(match[1]);
+  const r=await runBrowser(width);
   assert(r.sameRow&&r.moved&&r.board.scroll>r.board.width,'Linear columns scroll in one row');
   assert.equal(r.cardWrap,'anywhere');
   assert(r.columnPopup,'status selector opens a dialog with one control per status');
@@ -90,3 +134,4 @@ try {
   console.log('PASS:',JSON.stringify(r));
  }
 } finally {fs.rmSync(dir,{recursive:true,force:true});}
+})().catch(error=>{console.error(error);process.exitCode=1;});
