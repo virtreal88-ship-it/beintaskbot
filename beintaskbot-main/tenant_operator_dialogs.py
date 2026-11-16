@@ -788,6 +788,35 @@ def _hide_shared_ai(dialog):
                   agent_status='restricted', agent_status_reason='ai_management_restricted')
     return dialog
 
+def _fold_group_routes(rows):
+    """Fold authorized exact group routes after filtering, before pagination.
+
+    Each selectable source keeps its own lifecycle and sending route. Never
+    use a title, phone alias or message similarity as a group identity.
+    """
+    from tenant_ai_group_coordination import group_jid
+    result, groups = [], {}
+    for row in rows:
+        conversation = row.get('conversation_id', '')
+        if row.get('provider') != 'connect' or not group_jid(conversation):
+            result.append(row)
+            continue
+        key = conversation  # rows already belong to one authorized tenant
+        if key not in groups:
+            representative = dict(row)
+            representative['group_sources'] = [dict(row)]
+            groups[key] = representative
+            result.append(representative)
+        else:
+            representative = groups[key]
+            representative['group_sources'].append(dict(row))
+            representative['unread_count'] = max(
+                int(representative.get('unread_count') or 0), int(row.get('unread_count') or 0))
+    for row in groups.values():
+        row['group_sources'].sort(key=lambda source: (str(source.get('channel_name') or ''), str(source['channel_id']), source['lead_id']))
+    return result
+
+
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False):
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -805,15 +834,11 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
             rollout=rollout_guard(cur,tenant)
-            group_fold='FALSE' if rollout.enforced else "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
+            group_fold= "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
             if rollout.enforced:
                 sql=sql.replace('visible AS MATERIALIZED (','eligible AS MATERIALIZED (')
                 sql+=" , visible AS (SELECT eligible.* FROM eligible WHERE provider<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))) "
-            cur.execute(sql+""", folded AS (
-              SELECT visible.*,row_number() OVER(PARTITION BY CASE
-                WHEN """+group_fold+"""
-                THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END
-                ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible)
+            cur.execute(sql+"""
               SELECT (SELECT count(DISTINCT CASE
                 WHEN """+group_fold+"""
                 THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END)
@@ -822,8 +847,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 (SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible) x) AS channels,
               (SELECT COALESCE(jsonb_agg(x ORDER BY name),'[]'::jsonb) FROM
                 (SELECT DISTINCT agent_id::text AS id,agent_name AS name FROM visible WHERE agent_id IS NOT NULL) x) AS agents,
-              (SELECT COALESCE(jsonb_agg(folded ORDER BY last_message_at DESC NULLS LAST,provider,lead_id),'[]'::jsonb)
-                FROM folded WHERE logical_rank=1) AS dialogs""",params)
+              (SELECT COALESCE(jsonb_agg(visible ORDER BY last_message_at DESC NULLS LAST,provider,lead_id),'[]'::jsonb)
+                FROM visible) AS dialogs""",params)
             snapshot=cur.fetchone()
             count=int(snapshot['attention_count']);channels=snapshot['channels'];agents=snapshot['agents'];rows=snapshot['dialogs']
             from tenant_operator_list_snapshot import ListSnapshot
@@ -884,6 +909,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=[r for r in rows if str(r.get('agent_id') or '')==selected_agent]
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
+            rows=_fold_group_routes(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
     return {'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
@@ -943,7 +969,7 @@ def mark_all_read(profile, payload=None):
     if payload not in (None, {}):
         raise TenantLinearError('Некорректный запрос.')
     snapshot=listing(profile,all_rows=True)
-    targets=[row for row in snapshot.get('dialogs',[])
+    targets=[row for card in snapshot.get('dialogs',[]) for row in card.get('group_sources',[card])
              if int(row.get('unread_count') or 0)>0 and row.get('last_message_id')]
     updated=0
     for row in targets:
