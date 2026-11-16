@@ -10,7 +10,7 @@
   const style = document.createElement('style');
   style.textContent = `
 @media(max-width:700px){
- #view-tasks>.app-mobile-title-row~.top:has(.app-mobile-original-title){display:none!important}
+ #view-tasks>.app-mobile-title-row~.top:has(.app-mobile-original-title){margin-bottom:8px!important}
  #view-deals>.app-mobile-title-row~.top:has(.app-mobile-original-title){margin-bottom:8px!important}
  .crm-mobile-toolbar{position:relative;display:flex;gap:8px;align-items:center;margin:0 0 12px;padding:0;max-width:100%;box-sizing:border-box}
  .crm-mobile-toolbar>.crm-mobile-trigger,.crm-mobile-toolbar>.crm-mobile-create{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px!important;height:44px!important;min-height:44px;min-width:44px;padding:0!important;border-radius:10px;box-sizing:border-box;position:relative}
@@ -36,7 +36,6 @@
  .crm-mobile-inline-search input,input.crm-mobile-inline-search{display:block;width:100%!important;min-width:0!important;height:44px;box-sizing:border-box;padding:10px!important;font-size:16px!important}
  .crm-mobile-toolbar [hidden]{display:none!important}
  #view-tasks [data-task-flow-label=intro],#view-tasks [data-task-flow-label=windowHint],#taskSyncHint{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;overflow:hidden;clip-path:inset(50%)}
- #kommoTaskCount{display:none!important}
  #taskFeedPreferenceNotice:empty,#dealFeedPreferenceNotice:empty{display:none}
 }`;
   document.head.append(style);
