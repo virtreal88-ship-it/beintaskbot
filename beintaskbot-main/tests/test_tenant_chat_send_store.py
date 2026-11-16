@@ -30,7 +30,8 @@ class Store(unittest.TestCase):
             {'tenant_platform', 'tenant_chat_send_schema', 'tenant_policy'})
         self.person = {**SESSION, 'active': True, 'tenant_status': 'active', 'role': 'manager'}
         self.integration = {'status': 'connected', 'secrets': b'encrypted', 'account_domain': 'client.kommo.com', 'connected_at': 'version'}
-        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, None, None, self.integration]
+        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, None, None]
+        self.cur.fetchall.return_value = [self.integration]
 
     def reserve(self, existing=None, busy=None):
         self.cur.fetchone.side_effect = [*self.authority_rows, existing, busy]
@@ -87,6 +88,67 @@ class Store(unittest.TestCase):
         self.assertEqual(credentials['access_token'], 'tenant-key')
         self.assertIn("state='preparing'", self.cur.execute.call_args.args[0])
         self.conn.commit.assert_called_once()
+
+    def manual(self):
+        self.integration.update(provider='kommo_manual')
+        self.fernet.decrypt.return_value = (
+            '{"access_token":"manual-key","provider":"kommo_manual","tenant_id":"' + TENANT + '"}'
+        ).encode()
+
+    def test_manual_connection_can_reserve_and_send_with_current_secret(self):
+        self.manual()
+        item = self.reserve()
+        self.assertEqual(item['connection'], ['manual:client.kommo.com', 'version'])
+        self.cur.fetchone.side_effect = [*self.authority_rows, {'route': {}}, {'request_id': INPUT['request_id']}]
+        _, credentials = self.module.mark_sending(item, {'talk_id': 3})
+        self.assertEqual(credentials, {'account_domain': 'client.kommo.com', 'access_token': 'manual-key'})
+        sql = next(c.args[0] for c in self.cur.execute.call_args_list if 'SELECT provider,account_domain' in c.args[0])
+        self.assertIn("provider IN ('kommo','kommo_manual')", sql)
+        self.assertIn("ORDER BY CASE WHEN provider='kommo' THEN 0 ELSE 1 END FOR SHARE", sql)
+
+    def test_disconnected_oauth_falls_back_to_manual_not_broken_connected_oauth(self):
+        self.manual()
+        oauth = {**self.integration, 'provider': 'kommo', 'status': 'disconnected'}
+        self.cur.fetchall.return_value = [oauth, self.integration]
+        self.assertEqual(self.reserve()['connection'][0], 'manual:client.kommo.com')
+        oauth.update(status='connected', secrets=None)
+        with self.assertRaises(TenantLinearError): self.reserve()
+
+    def test_connected_oauth_keeps_priority_and_existing_identity(self):
+        manual = {**self.integration, 'provider': 'kommo_manual'}
+        self.cur.fetchall.return_value = [self.integration, manual]
+        self.assertEqual(self.reserve()['connection'], ['client.kommo.com', 'version'])
+
+    def test_manual_mode_switch_stops_before_dispatch_even_same_domain_and_generation(self):
+        self.manual()
+        item = self.reserve()
+        self.integration['provider'] = 'kommo'
+        self.cur.fetchone.side_effect = [*self.authority_rows, {'route': {}}]
+        callback = Mock()
+        with self.assertRaises(TenantLinearError): self.module.dispatch_guarded(item, {}, callback)
+        callback.assert_not_called()
+
+    def test_manual_secret_tenant_and_provider_are_validated_before_send_and_upload(self):
+        self.manual()
+        item = self.reserve()
+        for invalid in (b'{"access_token":"key","tenant_id":"other","provider":"kommo_manual"}',
+                        ('{"access_token":"key","tenant_id":"'+TENANT+'","provider":"kommo"}').encode(),
+                        b'not-json'):
+            self.fernet.decrypt.return_value = invalid
+            self.cur.fetchone.side_effect = [*self.authority_rows, {'route': {}}]
+            with self.assertRaises(TenantLinearError): self.module.mark_sending(item, {'talk_id': 3})
+            self.cur.fetchone.side_effect = self.authority_rows
+            with self.assertRaises(TenantLinearError): self.module.upload_credentials(item)
+        self.assertFalse(any("SET state='sending'" in c.args[0] for c in self.cur.execute.call_args_list))
+
+    def test_manual_disconnect_blocks_before_dispatch(self):
+        self.manual()
+        item = self.reserve()
+        self.integration['status'] = 'disconnected'
+        self.cur.fetchone.side_effect = self.authority_rows
+        callback = Mock()
+        with self.assertRaises(TenantLinearError): self.module.dispatch_guarded(item, {}, callback)
+        callback.assert_not_called()
 
     def test_existing_group_send_retains_early_ai_handoff(self):
         item={'key':(TENANT,20,INPUT['request_id']),'command':INPUT,'connection':['connect','channel','123456789012345@g.us'],'quote':None}
