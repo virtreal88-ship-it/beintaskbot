@@ -22,6 +22,10 @@ window.fetch=async url=>{requests.push(url);return {ok:true,json:async()=>url.en
 setTimeout(async()=>{
  document.getElementById('tlNav').click();
  await new Promise(r=>setTimeout(r,0));
+ // Let the asynchronous board render and the scroll controller's initial
+ // scrollbar/layout pass settle before measuring the pre-open baseline.
+ await document.fonts.ready;
+ await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
  const board=document.getElementById('tlBoard');
  const columnTrigger=document.getElementById('tlColumnsOpen'),columnDialog=document.getElementById('tlColumnDialog');
  const triggerBefore=columnTrigger.getBoundingClientRect();
@@ -33,6 +37,7 @@ setTimeout(async()=>{
  const popupRows=columnDialog.querySelectorAll('input[data-linear-column-toggle]').length;
  const popupBox=columnDialog.getBoundingClientRect();
  const triggerAfter=columnTrigger.getBoundingClientRect();
+ const popupTriggerGeometry={before:triggerBefore.toJSON(),after:triggerAfter.toJSON()};
  const popupNoShift=Math.abs(triggerBefore.x-triggerAfter.x)<.5&&Math.abs(triggerBefore.y-triggerAfter.y)<.5&&Math.abs(triggerBefore.width-triggerAfter.width)<.5;
  const lightContrast=contrast(getComputedStyle(columnDialog).color,getComputedStyle(columnDialog).backgroundColor);
  document.documentElement.dataset.appTheme='dark';
@@ -58,7 +63,7 @@ setTimeout(async()=>{
  range.value='500';range.dispatchEvent(new Event('input',{bubbles:true}));
  const controlRect=document.getElementById('appHorizontalScroll').getBoundingClientRect();
  const twoCellList=document.getElementById('nativeCompaniesList');
- const result={twoCellList:measure(twoCellList),controlHidden:document.getElementById('appHorizontalScroll').hidden,controlWidth:controlRect.width,controlRight:controlRect.right,rangeValue:range.value,viewport:innerWidth,documentWidth:document.documentElement.scrollWidth,board:measure(board),sameRow:top.every(x=>x===top[0]),moved,cardWrap:getComputedStyle(document.querySelector('.tl-card')).overflowWrap,list:measure(list),listMoved:list.scrollLeft>0,columnsVisible:[...list.querySelectorAll('.hide-mobile')].every(x=>getComputedStyle(x).display!=='none'),cases:measure(cases),casesMoved:cases.scrollLeft>0,caseRow:getComputedStyle(cases.querySelector('tbody tr')).display,caseColumns:[...cases.querySelectorAll('td')].every(x=>getComputedStyle(x).display==='table-cell'),columnPopup:popupOpen&&popupRows===6,columnPopupFocus:popupFocus,columnPopupNoShift:popupNoShift,columnPopupFits:popupFits,columnLightContrast:lightContrast,columnDarkContrast:darkContrast,columnKeyboardClose:keyboardClose,riskPanel:!!document.getElementById('tlRiskReview'),riskFetch:requests.some(x=>x.includes('/risks/'))};
+ const result={popupTriggerGeometry,twoCellList:measure(twoCellList),controlHidden:document.getElementById('appHorizontalScroll').hidden,controlWidth:controlRect.width,controlRight:controlRect.right,rangeValue:range.value,viewport:innerWidth,documentWidth:document.documentElement.scrollWidth,board:measure(board),sameRow:top.every(x=>x===top[0]),moved,cardWrap:getComputedStyle(document.querySelector('.tl-card')).overflowWrap,list:measure(list),listMoved:list.scrollLeft>0,columnsVisible:[...list.querySelectorAll('.hide-mobile')].every(x=>getComputedStyle(x).display!=='none'),cases:measure(cases),casesMoved:cases.scrollLeft>0,caseRow:getComputedStyle(cases.querySelector('tbody tr')).display,caseColumns:[...cases.querySelectorAll('td')].every(x=>getComputedStyle(x).display==='table-cell'),columnPopup:popupOpen&&popupRows===6,columnPopupFocus:popupFocus,columnPopupNoShift:popupNoShift,columnPopupFits:popupFits,columnLightContrast:lightContrast,columnDarkContrast:darkContrast,columnKeyboardClose:keyboardClose,riskPanel:!!document.getElementById('tlRiskReview'),riskFetch:requests.some(x=>x.includes('/risks/'))};
  document.body.insertAdjacentHTML('beforeend','<pre id="result">'+JSON.stringify(result)+'</pre>');
 },0);
 </script>`;
@@ -125,7 +130,7 @@ try {
   assert(r.columnPopup,'status selector opens a dialog with one control per status');
   assert(r.columnPopupFocus,'the first checkbox receives keyboard focus on open');
   assert(r.columnKeyboardClose,'Escape closes the dialog and restores focus to its trigger');
-  assert(r.columnPopupNoShift,'opening the status dialog does not move toolbar controls');
+  assert(r.columnPopupNoShift,'opening the status dialog does not move toolbar controls: '+JSON.stringify(r));
   assert(r.columnPopupFits,'dialog remains inside desktop/mobile viewport');
   assert(r.columnLightContrast>=4.5&&r.columnDarkContrast>=4.5,'status labels meet contrast in light and dark themes');
   assert(r.documentWidth<=r.viewport,'no page-level horizontal overflow');
