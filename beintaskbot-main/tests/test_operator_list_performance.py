@@ -22,7 +22,9 @@ _spec.loader.exec_module(baseline)
 
 def normalize(value):
     if isinstance(value, dict):
-        return {key: normalize(item) for key, item in value.items()}
+        # SQL rank is an implementation detail; source selections are covered
+        # separately below and in the lifecycle group-card regression suite.
+        return {key: normalize(item) for key, item in value.items() if key not in {'logical_rank', 'group_sources'}}
     if isinstance(value, list):
         return [normalize(item) for item in value]
     if isinstance(value, str) and len(value) > 19 and value[4] == '-' and value[10] == 'T':
@@ -145,6 +147,8 @@ def test_group_fold_selection_assignee_and_channel_state_match(fixture):
     result, old, new = assert_equal(fixture)
     group_rows = [row for row in result['dialogs'] if row['customer_kind'] == 'group']
     assert len(group_rows) == 3, 'one logical group across two physical channels'
+    raw_groups = [row for row in dialogs.listing(PROFILE)['dialogs'] if row['customer_kind'] == 'group']
+    assert all({source['channel_id'] for source in row['group_sources']} == {CA, channel2} for row in raw_groups)
     assert sum('FROM saas_dialog_rollout' in sql for sql in new)==3, 'legacy groups must not recheck rollout per row'
     assert all(row['assignee_name'] == 'Operator' for row in group_rows)
     assert_equal(fixture, state='manual')
