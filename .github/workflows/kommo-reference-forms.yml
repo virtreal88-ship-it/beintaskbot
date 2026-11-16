@@ -4,6 +4,7 @@ on:
     paths:
       - 'beintaskbot-main/docs/tenant-task*.js'
       - 'beintaskbot-main/docs/tenant-kommo-deal-card.js'
+      - 'beintaskbot-main/docs/tenant-kommo-deal-note-create.js'
       - 'beintaskbot-main/docs/tenant-deal-completion.js'
       - 'beintaskbot-main/docs/tenant-support-inbox.js'
       - 'beintaskbot-main/docs/tenant-app.html'
@@ -36,7 +37,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt pytest pytest-asyncio
-      - run: python -m unittest discover -s tests -p 'test_kommo_task_update.py' && python -m unittest discover -s tests -p 'test_kommo_deal_notes.py' && python -m unittest discover -s tests -p 'test_kommo_reference_assets.py'
+      - run: python -m unittest discover -s tests -p 'test_kommo_task_update.py' && python -m unittest discover -s tests -p 'test_kommo_deal_notes.py' && python -m unittest discover -s tests -p 'test_kommo_note_create.py' && python -m unittest discover -s tests -p 'test_kommo_reference_assets.py'
       - run: python -m unittest tests.test_kommo_deal_move tests.test_kommo_board_provenance
       - uses: actions/setup-node@v4
         with:
@@ -59,6 +60,8 @@ jobs:
       - run: |
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_kommo_reference_forms.cjs
+          node tests/test_kommo_task_due_card.cjs
+          node tests/test_kommo_note_create_ui.cjs
           node tests/test_deal_info_actions.cjs
           node tests/test_tenant_deal_completion_ui.cjs
           node tests/test_kommo_reference_forms_browser.cjs

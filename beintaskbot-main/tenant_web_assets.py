@@ -113,6 +113,7 @@ ASSETS = (
     ('/assets/tenant-hot-order-completion.js', 'tenant-hot-order-completion.js', 'no-cache'),
     ('/assets/tenant-crm-sync.js', 'tenant-crm-sync.js', 'no-store'),
     ('/assets/tenant-task-flow.js', 'tenant-task-flow.js', 'no-store'),
+    ('/assets/tenant-kommo-deal-note-create.js', 'tenant-kommo-deal-note-create.js', 'no-store'),
     ('/assets/tenant-kommo-deal-card.js', 'tenant-kommo-deal-card.js', 'no-store'),
     ('/assets/tenant-tasks.js', 'tenant-tasks.js', 'no-cache, max-age=0, must-revalidate'),
 )

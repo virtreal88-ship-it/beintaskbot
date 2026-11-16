@@ -115,10 +115,21 @@ class TenantKommo:
         Never refresh or retry here: token persistence could deadlock those locks,
         and replay after a lost PATCH response could overwrite a newer edit.
         """
-        if (binding.provider != 'kommo' or method not in ('GET','PATCH')
-                or not (re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path)
-                    or (method == 'GET' and re.fullmatch(r'leads/[1-9][0-9]*/notes',path)))):
+        scalar = bool(re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path))
+        notes = bool(re.fullmatch(r'leads/[1-9][0-9]*/notes', path))
+        note = bool(re.fullmatch(r'leads/[1-9][0-9]*/notes/[1-9][0-9]*', path))
+        if binding.provider != 'kommo' or not ((method in ('GET', 'PATCH') and scalar)
+                or (method == 'GET' and (notes or note)) or (method == 'POST' and notes)):
             raise self.context.platform_error('Scalar CRM request is invalid.')
+        if method == 'POST':
+            if (not isinstance(json_body, list) or len(json_body) != 1
+                    or not isinstance(json_body[0], dict) or set(json_body[0]) != {'note_type', 'params'}
+                    or json_body[0]['note_type'] != 'common' or not isinstance(json_body[0]['params'], dict)
+                    or set(json_body[0]['params']) != {'text'}):
+                raise self.context.platform_error('CRM note fields are invalid.')
+            text = json_body[0]['params']['text']
+            if not isinstance(text, str) or not text.strip() or len(text) > 10000 or '\x00' in text:
+                raise self.context.platform_error('CRM note text is invalid.')
         fields=set(json_body) if isinstance(json_body,dict) else set()
         if path.startswith('tasks/'):
             allowed={'text'} if fields=={'text'} else {'complete_till'}
