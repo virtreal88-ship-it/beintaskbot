@@ -32,7 +32,7 @@ class Notes(unittest.TestCase):
         return result,provider,cur
     def test_authorized_read_only_exact_paths(self):
         result,provider,cur=self.run_read({'id':12,'pipeline_id':2})
-        self.assertEqual(result,{'notes':[],'has_more':False})
+        self.assertEqual(result,{'notes':[],'has_more':False,'can_create':False})
         self.assertEqual([c.args[1:] for c in provider.call_args_list],[('GET','leads/12'),('GET','leads/12/notes')])
         self.assertIn(TENANT,cur.execute.call_args.args[1])
     def test_wrong_live_lead_stops_notes(self):

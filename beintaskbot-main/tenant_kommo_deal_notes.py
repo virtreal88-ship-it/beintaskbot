@@ -48,11 +48,18 @@ def read_sync(profile, lead_id, request):
                     policy.can_read_kommo_chat({**remote, 'tenant_id': tenant, 'raw': remote})):
                 raise TaskFlowError('task_forbidden', 403)
             result = sanitize_notes(request(binding, 'GET', 'leads/' + lead_id + '/notes'), lead_id)
+            from tenant_kommo_note_create import can_create
+            result['can_create'] = can_create(current, cached) and can_create(current, {**remote, 'tenant_id': tenant, 'raw': remote})
             return result
 
 
-def handler(*, member, bound_request, logger):
+def handler(*, member, bound_request, logger, origin=None):
     async def handle(request):
+        if request.method == 'POST' or 'request_id' in request.rel_url.query:
+            from tenant_kommo_note_create import handler as create_handler
+            if not origin:
+                raise web.HTTPForbidden()
+            return await create_handler(member=member, bound_request=bound_request, logger=logger, origin=origin)(request)
         try:
             profile = member(request)
             if not profile:

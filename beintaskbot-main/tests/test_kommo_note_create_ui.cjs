@@ -1,0 +1,10 @@
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom'),fs=require('node:fs'),assert=require('node:assert/strict');
+const dom=new JSDOM('<div id="root"><header></header><div data-related-notes></div></div>',{url:'https://fixture.test',runScripts:'dangerously'}),w=dom.window,d=w.document;
+w.eval(fs.readFileSync(__dirname+'/../docs/tenant-kommo-deal-note-create.js','utf8'));
+(async()=>{let writes=0,reads=0,command;const scope={expected_tenant_id:'t',expected_user_id:'u'};
+w.tenantKommoDealNoteCreate.mount({container:d.getElementById('root'),leadId:'7',scope,current:()=>true,canCreate:true,flow:{api:async(url,opts)=>{assert.equal(opts.scope,scope);if(opts.method==='POST'){writes++;command=opts.body;throw Object.assign(Error('timeout'),{unknown:false,keepRequest:true});}reads++;return {state:'confirmed',request_id:command.request_id,lead_id:'7',note:{id:81,text:command.text}};}}});
+d.querySelector('[data-related-note-create]').click();d.querySelector('textarea').value='<img src=x onerror=alert(1)>';
+await d.querySelector('form').onsubmit({preventDefault(){}});assert.equal(writes,1);assert.equal(d.querySelector('textarea').disabled,true);
+await d.querySelector('form').onsubmit({preventDefault(){}});assert.equal(writes,1);assert.equal(reads,1);assert.equal(d.querySelector('textarea').value,'');assert.equal(d.querySelectorAll('img').length,0);assert.match(d.querySelector('article').textContent,/<img/);
+const other=d.createElement('div');other.innerHTML='<header></header><div data-related-notes></div>';d.body.append(other);w.tenantKommoDealNoteCreate.mount({container:other,leadId:'8',scope,current:()=>true,canCreate:false,flow:{}});assert.equal(other.querySelector('button'),null);
+console.log('PASS note creation scoped command, unknown GET-only check, escaped content, denied creation');w.close();})().catch(e=>{console.error(e);process.exitCode=1;w.close()});

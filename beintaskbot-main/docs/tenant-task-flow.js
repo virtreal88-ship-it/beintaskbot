@@ -131,7 +131,7 @@
     // Save the original command before sending. An ambiguous response offers
     // read-only verification, never another PATCH under a fresh command ID.
     sessionStorage.setItem(storage,JSON.stringify(command));
-    try{const result=await api('/api/platform/crm/tasks/reschedule',{method:'POST',scope,body:command});applyMoveReceipt(result,command,scope);}
+    try{const result=await api('/api/platform/crm/tasks/reschedule',{method:'POST',scope,body:command});applyMoveReceipt(result,command,scope);return result;}
     catch(error){if(current(scope)&&!error.unknown&&!error.stale)sessionStorage.removeItem(storage);throw error;}
     finally{if(current(scope))renderSource('kommo');}
   }
@@ -217,17 +217,35 @@
     }catch(error){if(!current(scope)||card!==value)return;if(!checking&&!error.unknown||error.keepRequest===false)sessionStorage.removeItem(storage);value.message=error.unknown||checking&&error.keepRequest!==false?text().unknown:text().conflict;value.needsRefresh=!textUpdatePending(row.id);}
     finally{if(current(scope)&&card===value){value.saving=false;renderCard();}}
   }
+  const localDue=value=>{const d=new Date(value);return value&&!Number.isNaN(d.getTime())?new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16):'';};
+  async function saveCardDue(){
+    const value=card,scope=capture(),input=$('kommoTaskDue');
+    if(!value||value.source!=='kommo'||value.saving||value.actions?.reschedule!==true||value.task.status!=='open')return;
+    const row=value.task,pending=pendingMove('kommo',row.id);
+    let due;
+    if(!pending){if(!input?.value||!input.reportValidity())return;due=new Date(input.value).toISOString();if(new Date(due).getTime()<=Date.now()){input.setCustomValidity(text().unavailable);input.reportValidity();return;}if(new Date(due).getTime()===new Date(row.due_at).getTime())return;}
+    value.saving=true;renderCard();
+    try{
+      if(pending){const result=await api('/api/platform/crm/tasks/reschedule?'+new URLSearchParams({request_id:pending.request_id}),{scope});applyMoveReceipt(result,pending,scope);due=result.due_at;value.task={...row,due_at:due,source_revision:result.source_revision};}
+      else {const result=await moveKommoDue(row,due,scope);if(!current(scope)||card!==value)return;value.task={...row,due_at:result.due_at,source_revision:result.source_revision};}
+      if(current(scope)&&card===value)value.message=text().saved+text()[row.status];
+    }catch(error){if(current(scope)&&card===value){if(error.keepRequest===false)sessionStorage.removeItem(moveStorageKey('kommo',row.id));value.message=error.unknown||pending&&error.keepRequest!==false?text().unknown:text().conflict;value.needsRefresh=!pendingMove('kommo',row.id);}}
+    finally{if(current(scope)&&card===value){value.saving=false;renderCard();}}
+  }
   function renderCard(){if(!card?.task)return;const c=text(),f=formLabels(),row=card.task,source=card.source,actions=card.actions||{},body=$('taskFlowCardBody');$('taskFlowCardTitle').textContent=cleanText(row.display_title||row.text);$('taskFlowCard').querySelector('[data-task-card-close]').setAttribute('aria-label',c.close);
     const field=(label,value)=>`<div class="task-detail-field"><b>${esc(label)}</b><div ${label===c.status?'data-task-card-status':''}>${esc(value||c.none)}</div></div>`;
-    body.innerHTML=source==='kommo'?`<div class="task-detail-fields">${field(f.contact,row.contact_name)}${field(f.phone,row.phone)}${field(c.assignee,row.responsible_name)}${field(c.due,date(row.due_at))}${field(c.deal,row.deal_title)}${field(c.status,c[row.status])}</div><label class="task-detail-description"><b>${esc(f.body)}</b><textarea id="kommoTaskText" data-task-description rows="4" maxlength="3500" ${actions.edit_text===true&&row.status==='open'&&row.source_revision&&!textUpdatePending(row.id)&&!card.saving?'':'readonly'}>${esc(card.textDraft??textUpdatePending(row.id)?.text??cleanText(row.text))}</textarea></label>`:`<p class="sub">${esc(c[source])}</p><div class="meta">${field(c.status,c[row.status])}${field(c.assignee,row.responsible_name)}${field(c.due,date(row.due_at))}${field(c.deal,row.deal_title)}</div>`;
+    body.innerHTML=source==='kommo'?`<div class="task-detail-fields">${field(f.contact,row.contact_name)}${field(f.phone,row.phone)}${field(c.assignee,row.responsible_name)}${actions.reschedule===true&&row.status==='open'&&row.source_revision?`<label class="task-detail-field"><b>${esc(c.due)}</b><input id="kommoTaskDue" type="datetime-local" required value="${esc(localDue(row.due_at))}" ${card.saving||pendingMove('kommo',row.id)||textUpdatePending(row.id)?'disabled':''}></label>`:field(c.due,date(row.due_at))}${field(c.deal,row.deal_title)}${field(c.status,c[row.status])}</div><label class="task-detail-description"><b>${esc(f.body)}</b><textarea id="kommoTaskText" data-task-description rows="4" maxlength="3500" ${actions.edit_text===true&&row.status==='open'&&row.source_revision&&!textUpdatePending(row.id)&&!card.saving?'':'readonly'}>${esc(card.textDraft??textUpdatePending(row.id)?.text??cleanText(row.text))}</textarea></label>`:`<p class="sub">${esc(c[source])}</p><div class="meta">${field(c.status,c[row.status])}${field(c.assignee,row.responsible_name)}${field(c.due,date(row.due_at))}${field(c.deal,row.deal_title)}</div>`;
+    if($('kommoTaskDue'))$('kommoTaskDue').onchange=()=>{ $('kommoTaskDue').setCustomValidity('');void saveCardDue();};
     if($('kommoTaskText'))$('kommoTaskText').oninput=event=>{card.textDraft=event.target.value};
     const notice=$('taskFlowCardNotice');notice.textContent=card.message||'';notice.classList.toggle('show',!!card.message);
     const footer=$('taskFlowCardActions');footer.replaceChildren();
     const add=(label,callback,attribute)=>{const button=document.createElement('button');button.className='outline';button.type='button';button.textContent=label;if(attribute)button.setAttribute(attribute,'');button.onclick=callback;footer.append(button);};
+    if(source==='kommo'&&pendingMove('kommo',row.id)){add(c.check,saveCardDue,'data-task-due-check');footer.lastChild.disabled=!!card.saving;}
     if(source==='kommo'&&card.needsRefresh)add(c.readAgain,async()=>{const value=card,scope=capture();try{const data=await read('kommo',{task_id:row.id},scope);if(card!==value||!current(scope))return;if(!rowValid('kommo',data.task)||data.task.id!==row.id)throw Error('invalid_task');value.task=data.task;value.actions=data.sources?.find(item=>item.source==='kommo')||{};value.needsRefresh=false;value.message='';renderCard();}catch{if(card===value&&current(scope)){value.message=c.unavailable;renderCard();}}});
-    if(source==='kommo'&&actions.edit_text===true&&row.status==='open'&&row.source_revision){add(card.saving?f.saving:textUpdatePending(row.id)?c.check:f.save,saveKommoText,'data-task-text-save');footer.lastChild.disabled=!!card.saving;}
+    if(source==='kommo'&&actions.edit_text===true&&row.status==='open'&&row.source_revision){add(card.saving?f.saving:textUpdatePending(row.id)?c.check:f.save,saveKommoText,'data-task-text-save');footer.lastChild.disabled=!!card.saving||!!pendingMove('kommo',row.id);}
     if(source==='native'){if(actions.update===true)add(c.edit,()=>edit(row.id),'data-task-card-edit');if(row.status==='open'&&actions.complete===true)add(c.complete,()=>changeState(row.id,'complete'),'data-task-card-state');if(row.status==='completed'&&(row.capabilities?actions.reopen===true:actions.complete===true))add(c.reopen,()=>changeState(row.id,'reopen'),'data-task-card-state');if(actions.archive===true)add(c.archive,()=>changeState(row.id,'archive'),'data-task-card-archive');}
     else if(actions.complete===true&&row.status==='open'){if(Number.isSafeInteger(Number(row.id))){add(c.complete,()=>{},'data-task-complete');footer.lastChild.setAttribute('data-task-complete',row.id);}else{const reason=document.createElement('p');reason.textContent=c.unsafeComplete;footer.append(reason);}}
+    if(source==='kommo'&&(card.saving||pendingMove('kommo',row.id)))footer.querySelectorAll('button').forEach(button=>{if(!button.hasAttribute('data-task-due-check')||card.saving)button.disabled=true;});
     }
   async function open(source,id,{push=true,revision=routeRevision}={}){
     id=taskId(source,id);if(!id||!allowed()||!visible())return false;
