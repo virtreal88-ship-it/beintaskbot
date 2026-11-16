@@ -12,6 +12,20 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
    const host=document.getElementById('modalContent');host.innerHTML='<div class="meta"><div>Client</div><div>Phone</div><div><b>Stage</b>New</div></div><div class="chat-placeholder"><div id="chatRows">History</div><div><textarea id="chatText"></textarea></div></div>';document.getElementById('dealModal').classList.add('show');
    window.tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,pipeline_id:1,status_id:10,stage_name:'Новое',pipeline_name:'Продажи',source_revision:'a'.repeat(64)},isCurrent:()=>true,api:async()=>({move_context:{tenant_id:'tenant',user_id:'actor'},catalog:[{pipeline_id:1,name:'Продажи',stages:[{stage_id:10,name:'Новое',color:'#ffe08b'},{stage_id:11,name:'Обсуждение',color:'#88aaff'}]},{pipeline_id:2,name:'Другая доступная воронка',stages:[{stage_id:20,name:'Длинное название этапа '.repeat(8),color:'#aaffaa'}]}],move_stage_sources:[{pipeline_id:1,stage_id:10},{pipeline_id:1,stage_id:11},{pipeline_id:2,stage_id:20}],move_stage_targets:[{pipeline_id:1,stage_id:10},{pipeline_id:1,stage_id:11},{pipeline_id:2,stage_id:20}]})});
   },theme);
+  // Capture the finished UI, not the opacity-zero first frame of app-appear.
+  await page.evaluate(async()=>{
+   await document.fonts.ready;
+   const modal=document.getElementById('dealModal');
+   await Promise.all(modal.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{})));
+   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  });
+  await page.waitForFunction(()=>{
+   const card=document.querySelector('#dealModal .modal-card'),css=getComputedStyle(card);
+   return css.opacity==='1'&&css.transform==='none'&&card.getAnimations().every(a=>a.playState==='finished');
+  });
+  const painted=await page.locator('#dealModal .modal-card').evaluate(n=>({opacity:getComputedStyle(n).opacity,background:getComputedStyle(n).backgroundColor}));
+  assert.equal(painted.opacity,'1','screenshot captures opaque finished card');
+  assert(/^rgb\(/.test(painted.background),'card background is opaque');
   fs.mkdirSync(path.join(__dirname,'artifacts'),{recursive:true});
   await page.screenshot({path:path.join(__dirname,`artifacts/kommo-stage-reference-${width}-${theme}.png`)});
   const diagnostics=await page.locator('#dealModal .modal-card,.deal-stage-bar,.deal-stage-pill').evaluateAll(ns=>ns.map(n=>{const r=n.getBoundingClientRect(),c=getComputedStyle(n);return {className:n.className,x:r.x,y:r.y,width:r.width,height:r.height,border:c.border,padding:c.padding,boxSizing:c.boxSizing};}));
