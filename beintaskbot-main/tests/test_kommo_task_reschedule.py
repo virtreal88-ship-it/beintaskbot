@@ -143,5 +143,5 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         import tenant_kommo
         from types import SimpleNamespace
         service=tenant_kommo.TenantKommo(SimpleNamespace(platform_error=RuntimeError))
-        for path,body in [('tasks/12',{'text':'no'}),('tasks/12',{'complete_till':False}),('tasks/12',{'complete_till':0}),('tasks/12/other',{'complete_till':3}),('tasks/12',{'complete_till':3,'is_completed':True})]:
+        for path,body in [('tasks/12',{'text':False}),('tasks/12',{'complete_till':False}),('tasks/12',{'complete_till':0}),('tasks/12/other',{'complete_till':3}),('tasks/12',{'complete_till':3,'is_completed':True})]:
             with self.assertRaises(RuntimeError):await service.request_bound(BINDING,'PATCH',path,json_body=body)

@@ -116,12 +116,15 @@ class TenantKommo:
         and replay after a lost PATCH response could overwrite a newer edit.
         """
         if (binding.provider != 'kommo' or method not in ('GET','PATCH')
-                or not re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path)):
+                or not (re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path)
+                    or (method == 'GET' and re.fullmatch(r'leads/[1-9][0-9]*/notes',path)))):
             raise self.context.platform_error('Scalar CRM request is invalid.')
-        allowed = {'complete_till'} if path.startswith('tasks/') else {'status_id'} if isinstance(json_body,dict) and set(json_body)=={'status_id'} and path.startswith('leads/') else {'name','custom_fields_values'}
+        allowed = ({'text'} if isinstance(json_body,dict) and set(json_body)=={'text'} else {'complete_till'}) if path.startswith('tasks/') else {'status_id'} if isinstance(json_body,dict) and set(json_body)=={'status_id'} and path.startswith('leads/') else {'name','custom_fields_values'}
         if method == 'PATCH' and (not isinstance(json_body,dict) or not json_body
                 or set(json_body)-allowed or any(type(json_body[key]) is not int or json_body[key] <= 0 for key in set(json_body)&{'complete_till','status_id'})):
             raise self.context.platform_error('Scalar CRM fields are invalid.')
+        if method == 'PATCH' and path.startswith('tasks/') and 'text' in json_body and (not isinstance(json_body['text'],str) or len(json_body['text'])>4000 or '\x00' in json_body['text']):
+            raise self.context.platform_error('Scalar CRM task text is invalid.')
         def run():
             credentials=self.context.credentials(tenant_id=binding.tenant_id)
             expected_mode='manual' if binding.connection_generation.startswith('kommo_manual:') else 'oauth'

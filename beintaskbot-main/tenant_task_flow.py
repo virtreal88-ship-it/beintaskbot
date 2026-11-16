@@ -163,7 +163,7 @@ def _sources(policy):
     return [dict(source='native', view=native,
         create=policy.allows_action('tasks', 'create'), update=policy.allows_action('tasks', 'update'),
         complete=native if scoped_access_enabled() else policy.allows_action('tasks','update'), archive=policy.allows_action('tasks', 'delete'), sync=False),
-        dict(source='kommo', view=external, create=external_write, update=False, reschedule=external,
+        dict(source='kommo', view=external, create=external_write, update=False, edit_text=external, reschedule=external,
             complete=external_write, archive=False, sync=external_write and policy.privileged)]
 
 

@@ -1,0 +1,40 @@
+name: Kommo reference forms
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/docs/tenant-task*.js'
+      - 'beintaskbot-main/docs/tenant-kommo-deal-card.js'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/tenant_kommo*.py'
+      - 'beintaskbot-main/tests/test_kommo_reference_forms*'
+      - '.github/workflows/kommo-reference-forms.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reference-forms:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_kommo_task_update.py' && python -m unittest discover -s tests -p 'test_kommo_deal_notes.py' && python -m unittest discover -s tests -p 'test_kommo_reference_assets.py'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .support-test-deps --no-package-lock jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: |
+          node tests/test_task_read_save_flow_ui.cjs
+          node tests/test_kommo_reference_forms.cjs
+          node tests/test_kommo_reference_forms_browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kommo-reference-forms
+          path: beintaskbot-main/tests/artifacts/kommo-*.png
