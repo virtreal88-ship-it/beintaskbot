@@ -22,7 +22,7 @@ function installFixture(config={}){
     let result;
     if(url.pathname==='/api/platform/crm/tasks'&&url.searchParams.get('flow')==='1'&&method==='GET'){
       const source=url.searchParams.get('source'),items=f[source];if(f.readErrors[source])return response({success:false,error:'task_unavailable'},503);if(!f.flags.find(row=>row.source===source)?.view)return response({success:false,error:'task_forbidden'},403);
-      result={source,sources:f.flags,shown:items.length,limit:source==='native'?100:200,has_more:false,scope:'tenant',state:items.length?'ready':'empty'};
+      result={source,sources:f.flags,shown:items.length,limit:source==='native'?100:200,has_more:config.hasMore===true,scope:'tenant',state:items.length?'ready':'empty'};
       if(url.searchParams.has('request_id')){const request=url.searchParams.get('request_id');result.command=f.commands[request]||{source,request_id:request,state:'not_confirmed',task_id:null,task:null,cache_state:'not_applicable'};}
       else if(url.searchParams.has('task_id')){result.task=items.find(row=>row.id===url.searchParams.get('task_id'));if(!result.task)return response({success:false,error:'task_not_found'},404);}
       else result.tasks=items;
