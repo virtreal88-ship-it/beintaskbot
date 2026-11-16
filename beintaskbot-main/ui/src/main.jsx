@@ -1,3 +1,4 @@
+import {useDealCardActivation} from './deal-card-activation.js';
 import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
 import { NativeDealBoard, dealProfileScope } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -573,6 +574,7 @@ function TasksView({ rows = [], settings = {} }) {
 }
 
 function DealTable({ rows = [], customer = false, onOpen, catalog = [] }) {
+  const cardActivation=useDealCardActivation(onOpen);
   const stages = new Map(dealColumns(rows, catalog).map(stage => [stage.key, stage]));
   if (!rows.length) return <Empty>Bu filtr üzrə məlumat tapılmadı.</Empty>;
   return (
@@ -600,7 +602,10 @@ function DealTable({ rows = [], customer = false, onOpen, catalog = [] }) {
                 key={deal.kommo_lead_id}
                 cursor="pointer"
                 _hover={{ bg: "app.raised" }}
-                onClick={() => onOpen?.(deal.kommo_lead_id)}
+                {...cardActivation(deal.kommo_lead_id)}
+                data-deal-open-surface={deal.kommo_lead_id}
+                role="row"
+                aria-label={deal.contact_name || deal.name}
               >
                 <Table.Cell>
                   <Text fontWeight="600" color="app.ink">
@@ -630,7 +635,14 @@ function DealTable({ rows = [], customer = false, onOpen, catalog = [] }) {
   );
 }
 
+function dealCardPreview(deal) {
+  if (deal.last_message) return deal.last_message;
+  const name = String(deal.name || '').trim();
+  return name === `Lead #${deal.kommo_lead_id}` ? '' : name;
+}
+
 function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets = [], moveSources = [], completionApproval = false, moveContext }) {
+  const cardActivation=useDealCardActivation(onOpen);
   const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
   const drag=useRef(null),busy=useRef(false),moveSnapshots=useRef(new Map()),revision=useRef(0),alive=useRef(true);
   useEffect(()=>{setDisplayRows(previous=>rows.map(row=>{const key=String(row.kommo_lead_id),snapshot=moveSnapshots.current.get(key);if(!snapshot)return row;if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision===snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}if(snapshot.confirmed&&snapshot.baseRevision&&row.source_revision&&row.source_revision!==snapshot.baseRevision&&row.source_revision!==snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}return snapshot.row||previous.find(item=>String(item.kommo_lead_id)===key)||row;}));},[rows]);
@@ -678,25 +690,26 @@ function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets 
                 shadow="xs"
                 cursor="pointer"
                 _hover={{ shadow: "md", borderColor: "brand.500" }}
-                onClick={() => onOpen?.(deal.kommo_lead_id)}
+                {...cardActivation(deal.kommo_lead_id)}
+                data-deal-open-surface={deal.kommo_lead_id}
+                aria-label={deal.contact_name || deal.name}
               >
                 <Card.Body p="4">
-                  <Text fontWeight="600">{deal.contact_name || deal.name}</Text>
+                  <Text fontWeight="600">{deal.contact_name || dealCardPreview({...deal,last_message: ''}) || (document.documentElement.lang === 'ru' ? 'Сделка' : document.documentElement.lang === 'en' ? 'Deal' : 'Sövdələşmə')}</Text>
                   {!(moveContext&&targets(deal).length>0)&&<DealStageBadge name={stage} appearance={appearance}/>}
                   {!!moveContext&&targets(deal).length>0&&<Box onClick={event=>event.stopPropagation()}><DealStageSelect appearance={appearance} aria-label={document.documentElement.lang==='ru'?'Изменить этап':document.documentElement.lang==='en'?'Change stage':'Mərhələni dəyiş'} disabled={!!pending||!canIdentifyKommoDeal(deal)} title={!canIdentifyKommoDeal(deal)?(document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'):undefined} value={deal.status_id} onChange={event=>move(deal,event.target.value)} >{catalog.filter(p=>String(p.pipeline_id)===String(deal.pipeline_id)).flatMap(p=>(p.stages||[]).filter(t=>String(t.stage_id)===String(deal.status_id)||targets(deal).some(a=>String(a.stage_id)===String(t.stage_id))).map(t=><option key={t.stage_id} value={t.stage_id}>{t.name}</option>))}</DealStageSelect>{!canIdentifyKommoDeal(deal)&&<Text fontSize="xs" color="app.muted">{document.documentElement.lang==='ru'?'Сначала синхронизируйте и обновите сделки':document.documentElement.lang==='en'?'Sync and refresh deals first':'Əvvəlcə sövdələşmələri sinxronlaşdırıb yeniləyin'}</Text>}<button type="button" disabled={!movable(deal)} aria-label={document.documentElement.lang==='ru'?'Перенести сделку':document.documentElement.lang==='en'?'Move deal':'Sövdələşməni daşı'} style={{touchAction:'none',minHeight:44}} onPointerDown={event=>{if(event.pointerType==='mouse'||!movable(deal))return;drag.current=deal;event.currentTarget.setPointerCapture(event.pointerId);}} onPointerCancel={()=>{drag.current=null;}} onPointerUp={event=>{const row=drag.current;drag.current=null;if(!row||event.pointerType==='mouse')return;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-kommo-stage-key]')?.dataset.kommoStageKey;if(target&&target.startsWith(String(row.pipeline_id)+':'))move(row,target.slice(target.indexOf(':')+1));}}>↔</button></Box>}
                   <Text fontSize="sm" color="app.muted">
                     {deal.phone || "Telefon yoxdur"}
                   </Text>
-                  <Text mt="2" fontSize="xs" color="app.muted" lineClamp="2">
-                    {deal.last_message || deal.name}
-                  </Text>
+                  {!!dealCardPreview(deal) && <Text data-deal-preview="" mt="2" fontSize="xs" color="app.muted" lineClamp="2">
+                    {dealCardPreview(deal)}
+                  </Text>}
                   <Flex
                     mt="3"
                     justify="space-between"
                     fontSize="xs"
                     color="app.muted"
                   >
-                    <span>#{deal.kommo_lead_id}</span>
                     <span>
                       {formatDate(deal.source_updated_at || deal.synced_at)}
                     </span>
