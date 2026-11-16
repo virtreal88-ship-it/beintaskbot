@@ -8,8 +8,8 @@
 #dealModal.deal-conversation .modal-head{border-bottom:0}
 .deal-stage-bar{position:relative;isolation:isolate;flex:none;display:flex;align-items:center;flex-direction:column;justify-content:center;min-height:44px;padding:0;gap:0;box-sizing:border-box}
 .deal-stage-bar::before{content:"";position:absolute;z-index:-1;left:0;right:0;top:20px;height:3px;background:#fade96}
-.deal-stage-pill{display:flex;align-items:stretch;width:75.2%;max-width:520px;height:26px;box-sizing:border-box;border:1px solid #cdd1d4;border-radius:10px;background:#fff;color:#879aa8}
-.deal-stage-pill>.deal-pipeline-name{display:block;box-sizing:border-box;flex:0 0 39.5%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 12px;border:0;background:none;color:#879aa8;font:400 15px/20px Arial,sans-serif}
+.deal-stage-pill{display:flex;align-items:stretch;width:75.2%;max-width:520px;height:26px;box-sizing:border-box;border:1px solid #cdd1d4;border-radius:10px;background:#fff;color:#657986}
+.deal-stage-pill>.deal-pipeline-name{display:block;box-sizing:border-box;flex:0 0 39.5%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 12px;border:0;background:none;color:#657986;font:400 15px/20px Arial,sans-serif}
 #dealModal .deal-stage-trigger{position:relative;display:flex;align-items:center;gap:10px;box-sizing:border-box;flex:1;min-width:0;max-width:none;height:24px;min-height:0;padding:0 12px 0 15px;border:0;border-left:1px solid #cdd1d4;border-radius:0 9px 9px 0;background:#fade96!important;color:#363b44;font:400 15px/20px Arial,sans-serif;opacity:1}
 .deal-stage-trigger::before{content:"";position:absolute;inset:-10px 0}
 .deal-stage-trigger::after{content:"";flex:none;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 2px 3px 0}
@@ -55,9 +55,9 @@
     const stageBar=document.createElement('div');stageBar.className='deal-stage-bar';
     const stageLabel=({ru:'Этап сделки',az:'Sövdələşmə mərhələsi',en:'Deal stage'}[window.tenantI18n?.language]||'Deal stage');
     const pipeline=document.createElement('span'),trigger=document.createElement('button'),feedback=document.createElement('span');
-    pipeline.className='deal-pipeline-name';pipeline.textContent=deal.pipeline_name||stageLabel;
+    pipeline.className='deal-pipeline-name';pipeline.textContent=deal.pipeline_name||stageLabel;pipeline.title=pipeline.textContent;
     trigger.type='button';trigger.className='deal-stage-trigger';trigger.textContent=(deal.stage_name||stageLabel)+' ▾';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
-    const triggerLabel=document.createElement('span');triggerLabel.className='deal-stage-trigger-label';triggerLabel.textContent=deal.stage_name||stageLabel;trigger.replaceChildren(triggerLabel);
+    const triggerLabel=document.createElement('span');triggerLabel.className='deal-stage-trigger-label';triggerLabel.textContent=deal.stage_name||stageLabel;trigger.title=triggerLabel.textContent;trigger.replaceChildren(triggerLabel);
     const pill=document.createElement('div');pill.className='deal-stage-pill';pill.append(pipeline,trigger);
     feedback.setAttribute('role','status');stageBar.append(pill,feedback);head.after(stageBar);
     const picker=document.createElement('div');picker.className='deal-stage-picker';picker.hidden=true;
@@ -85,8 +85,8 @@
       };
       const render=()=>{
         const catalog=catalogFor(stageRow.pipeline_id);
-        pipeline.textContent=catalog?.name||stageRow.pipeline_name||stageLabel;
-        triggerLabel.textContent=stageRow.stage_name||stageLabel;
+        pipeline.textContent=catalog?.name||stageRow.pipeline_name||stageLabel;pipeline.title=pipeline.textContent;
+        triggerLabel.textContent=stageRow.stage_name||stageLabel;trigger.title=triggerLabel.textContent;
         trigger.disabled=busy||!permitted()||!policy.move_context||!window.tenantKommoStageMove?.canIdentify(stageRow)||!(policy.catalog||[]).some(p=>targetsFor(p.pipeline_id).length);
         pipelineSelect.replaceChildren();
         for(const p of policy.catalog||[]){if(String(p.pipeline_id)===String(stageRow.pipeline_id)||targetsFor(p.pipeline_id).length)pipelineSelect.add(new Option(p.name||String(p.pipeline_id),String(p.pipeline_id)));}
