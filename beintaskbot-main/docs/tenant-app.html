@@ -229,6 +229,14 @@
 #taskFlowCard [data-task-card-close]{flex:0 0 44px;width:44px;height:44px;padding:0;display:grid;place-items:center;color:var(--ink)}
 #taskFlowCard [data-task-card-close]:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 #taskFlowCardActions:empty{display:none}
+/* No content may peek above the pinned task title; keep desktop outer spacing. */
+#taskFlowCard .modal-card{padding-top:0}
+@media(max-width:600px){
+  #taskFlowCard{padding-top:env(safe-area-inset-top);align-items:start}
+  #taskFlowCard .modal-card{max-height:calc(100dvh - env(safe-area-inset-top) - max(12px,env(safe-area-inset-bottom)))}
+  #taskFlowCard #taskFlowCardActions{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
 </style>
 </head>
 <body data-app-ui="kwid">

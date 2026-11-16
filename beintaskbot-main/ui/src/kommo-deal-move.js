@@ -7,21 +7,22 @@ const message=key=>(stageCopy[globalThis.document?.documentElement?.lang]||stage
 // Persist the immutable command before send. An uncertain request is only
 // verified under its original ID; never manufacture a retry PATCH.
 export function canIdentifyKommoDeal(row){return /^[a-f0-9]{64}$/.test(row.source_revision||'')&&['kommo_lead_id','pipeline_id','status_id'].every(key=>typeof row[key]==='number'?Number.isSafeInteger(row[key])&&row[key]>0:/^[1-9][0-9]{0,18}$/.test(String(row[key])));}
-export async function moveKommoDeal(row, target, context) {
+export async function moveKommoDeal(row, target, context, targetPipeline=row.pipeline_id) {
   if(!canIdentifyKommoDeal(row))throw Error(message('refresh'));
   const key=`kommo-stage:${context.tenant_id}:${context.user_id}:${row.kommo_lead_id}`;
   const expected=Number(row.raw?.updated_at)||Math.floor(Date.parse(row.source_updated_at)/1000);
   const payload={source_revision:row.source_revision,lead_id:String(row.kommo_lead_id),expected_pipeline_id:String(row.pipeline_id),expected_status_id:String(row.status_id),expected_updated_at:String(expected),stage_id:String(target)};
+  if(String(targetPipeline)!==String(row.pipeline_id))payload.target_pipeline_id=String(targetPipeline);
   if(!Number.isSafeInteger(expected)||expected<=0)throw Error(message('refresh'));
   let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error(message('storage'));}
-  if(saved&&String(saved.stage_id)!==String(target))throw Error(message('previous'));
+  if(saved&&(String(saved.stage_id)!==String(target)||String(saved.target_pipeline_id||saved.expected_pipeline_id)!==String(targetPipeline)))throw Error(message('previous'));
   const command=saved||{...payload,request_id:crypto.randomUUID()};
   try{sessionStorage.setItem(key,JSON.stringify(command));}catch{throw Error(message('saved'));}
   let response,result;
   try{response=saved?await fetch('/api/platform/crm/deals/move-stage?'+new URLSearchParams({request_id:command.request_id,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id}),{credentials:'same-origin'}):await fetch('/api/platform/crm/deals/move-stage',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({...command,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id})});result=await response.json();}
   catch{throw Error(message('unknown'));}
   if(!response.ok||!result.success){if(result.keep_request===false)sessionStorage.removeItem(key);throw Error(message(result.error==='kommo_stage_forbidden'?'denied':result.error==='kommo_deal_changed'?'changed':result.error==='board_source_sync_required'?'refresh':'unknown'));}
-  if(result.state!=='confirmed'||String(result.lead_id)!==String(row.kommo_lead_id)||String(result.pipeline_id)!==String(row.pipeline_id)||String(result.status_id)!==String(target)||!Number.isSafeInteger(result.updated_at)||!/^[a-f0-9]{64}$/.test(result.source_revision||''))throw Error(message('receipt'));
+  if(result.state!=='confirmed'||String(result.lead_id)!==String(row.kommo_lead_id)||String(result.pipeline_id)!==String(targetPipeline)||String(result.status_id)!==String(target)||!Number.isSafeInteger(result.updated_at)||!/^[a-f0-9]{64}$/.test(result.source_revision||''))throw Error(message('receipt'));
   sessionStorage.removeItem(key);
-  return {...row,source_revision:result.source_revision,status_id:result.status_id,source_updated_at:new Date(result.updated_at*1000).toISOString(),raw:{...row.raw,status_id:result.status_id,updated_at:result.updated_at}};
+  return {...row,pipeline_id:result.pipeline_id,source_revision:result.source_revision,status_id:result.status_id,source_updated_at:new Date(result.updated_at*1000).toISOString(),raw:{...row.raw,pipeline_id:result.pipeline_id,status_id:result.status_id,updated_at:result.updated_at}};
 }

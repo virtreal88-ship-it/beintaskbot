@@ -101,3 +101,26 @@ def test_bound_transport_does_not_follow_redirect_to_another_record_or_account(t
     with pytest.raises(ValueError, match='not accepted'):
         asyncio.run(service.request_bound(binding, 'PATCH', 'leads/10', json_body={'name': 'New'}))
     assert calls == [('PATCH', 'https://synthetic.kommo.com/api/v4/leads/10', b'{"name": "New"}')]
+
+
+@pytest.mark.parametrize('status', [301, 401, 403, 404, 429, 500])
+@pytest.mark.parametrize('path,category', [
+    ('leads/10', 'leads'), ('leads/10/notes', 'notes'),
+    ('contacts/10', 'contacts'), ('tasks/10', 'tasks')])
+def test_bound_rejection_logs_only_status_and_fixed_category(transport, caplog, status, path, category):
+    service, binding, send, _ = transport
+    send.return_value.status_code = status
+    send.return_value.content = b'private-provider-response'
+    with caplog.at_level('WARNING', logger='tenant_kommo'):
+        with pytest.raises(ValueError, match='Scalar CRM request was not accepted'):
+            asyncio.run(service.request_bound(binding, 'GET', path))
+    assert caplog.messages == [f'Kommo bound request rejected: status={status} category={category}']
+    assert send.call_count == 1
+    assert send.call_args.kwargs['allow_redirects'] is False
+
+
+def test_bound_success_does_not_emit_rejection_diagnostic(transport, caplog):
+    service, binding, _, _ = transport
+    with caplog.at_level('WARNING', logger='tenant_kommo'):
+        asyncio.run(service.request_bound(binding, 'GET', 'leads/10'))
+    assert caplog.messages == []

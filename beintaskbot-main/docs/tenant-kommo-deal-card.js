@@ -3,14 +3,26 @@
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const labels=()=>({ru:{tasks:'Задачи',notes:'Заметки',create:'Создать задачу',emptyTasks:'В загруженной части списка задач этой сделки нет.',emptyNotes:'Заметок нет.',loading:'Загружаем…',error:'Не удалось загрузить. Повторите открытие карточки.',limited:'Показана только загруженная часть списка.',chat:'Переписка'},az:{tasks:'Tapşırıqlar',notes:'Qeydlər',create:'Tapşırıq yarat',emptyTasks:'Yüklənmiş siyahıda bu sövdələşmənin tapşırığı yoxdur.',emptyNotes:'Qeyd yoxdur.',loading:'Yüklənir…',error:'Yükləmək mümkün olmadı. Kartı yenidən açın.',limited:'Siyahının yalnız yüklənmiş hissəsi göstərilir.',chat:'Yazışma'},en:{tasks:'Tasks',notes:'Notes',create:'Create task',emptyTasks:'No tasks for this deal in the loaded list.',emptyNotes:'No notes.',loading:'Loading…',error:'Could not load. Reopen the card to retry.',limited:'Only the loaded part of the list is shown.',chat:'Conversation'}}[window.tenantI18n?.language]||{tasks:'Tapşırıqlar',notes:'Qeydlər',create:'Tapşırıq yarat',emptyTasks:'Tapşırıq yoxdur.',emptyNotes:'Qeyd yoxdur.',loading:'Yüklənir…',error:'Yükləmə xətası',limited:'Yüklənmiş hissə',chat:'Yazışma'});
   const style=document.createElement('style');style.textContent='.kommo-deal-sections{margin-top:20px;display:grid;gap:22px}.kommo-deal-section{min-width:0}.kommo-deal-section header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.kommo-deal-section h3{margin:0;font-size:14px;color:var(--muted);font-weight:600}.kommo-related-card{display:block;width:100%;box-sizing:border-box;text-align:left;padding:14px;margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;overflow-wrap:anywhere;white-space:pre-wrap}.kommo-related-card small{display:block;color:var(--muted);margin-bottom:8px;font-size:12px}.kommo-note-card{border-left-color:#efb957}.kommo-deal-section button{min-height:44px}.kommo-deal-chat-title{font-size:14px;color:var(--muted);margin:24px 0 12px}#dealModal .modal-card{max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;width:calc(100% - 24px);padding-bottom:max(22px,env(safe-area-inset-bottom))}#dealModal.deal-conversation{padding:0}#dealModal.deal-conversation>.modal-card{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;padding:0;display:flex;flex-direction:column;overflow:hidden}#dealModal.deal-conversation .modal-head{position:static;flex:none;display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);margin:0}#dealModal .deal-chat-identity{flex:1;min-width:0}#dealModal .deal-chat-identity h2{font-size:17px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#dealModal .deal-chat-phone{font-size:14px;margin-top:4px;overflow-wrap:anywhere}#dealModal .deal-info-toggle,#dealModal #closeModal{flex:none;min-width:44px;min-height:44px}#dealModal.deal-conversation #modalContent{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}#dealModal.deal-conversation .chat-placeholder{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;border-radius:0;padding:0;overflow:hidden}#dealModal.deal-conversation .deal-chat-history{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 16px}#dealModal.deal-conversation #chatRows{max-height:none;overflow:visible}#dealModal.deal-conversation .chat-placeholder>div:not(.deal-chat-history){flex:none;padding:10px 16px;margin:0!important}#dealModal.deal-conversation .deal-info-panel{min-height:0;flex:1;overflow:auto;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}#dealModal.deal-conversation [hidden]{display:none!important}#dealModal.deal-conversation #chatText{min-width:0;color:var(--ink);background:var(--card)!important}#dealModal.deal-conversation .chat-placeholder{padding-bottom:env(safe-area-inset-bottom)}#dealModal.deal-conversation .chat-placeholder>.deal-chat-compose{flex:0 1 auto;min-height:0;max-height:60%;overflow:auto;overscroll-behavior:contain;box-sizing:border-box}#dealModal.deal-conversation .deal-chat-compose textarea{max-height:min(160px,20dvh);overflow-y:auto!important;min-height:44px;box-sizing:border-box}#dealModal.deal-conversation #tcAiResult{min-width:0;overflow-wrap:anywhere}#dealModal.deal-conversation .deal-chat-compose>div:first-child{min-width:0}#dealModal.deal-conversation .deal-chat-compose button{max-width:100%;white-space:normal}';document.head.append(style);
-  const stageStyle=document.createElement('style');stageStyle.textContent='.deal-stage-bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;justify-content:center;padding:6px 16px 10px;gap:0;border-bottom:2px solid #ffe08b}.deal-stage-bar>span:first-child{box-sizing:border-box;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:9px 12px;border:1px solid var(--line);border-radius:12px 0 0 12px;color:var(--muted);font-size:13px}.deal-stage-bar select{box-sizing:border-box;min-width:0;max-width:60%;padding:9px 12px;border:1px solid var(--line);border-radius:0 12px 12px 0;background:#ffe08b;color:#293436;font:inherit;font-size:14px;min-height:38px}.deal-stage-bar>[role=status]:not(:empty){flex-basis:100%;padding:6px;color:var(--ink);font-size:12px;overflow-wrap:anywhere}';document.head.append(stageStyle);
+  const stageStyle=document.createElement('style');stageStyle.textContent=`
+.deal-stage-bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;justify-content:center;padding:6px 16px 10px;gap:10px;border-bottom:2px solid #ffe08b}
+.deal-stage-bar>.deal-pipeline-name{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0!important;border-radius:0;background:none!important;color:var(--muted);font-size:13px}
+.deal-stage-trigger{box-sizing:border-box;min-width:0;max-width:60%;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:#ffe08b!important;color:#293436;font:inherit;font-size:14px;min-height:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.deal-stage-bar>[role=status]:not(:empty){flex-basis:100%;padding:6px;color:var(--ink);font-size:12px;overflow-wrap:anywhere}
+.deal-stage-picker{position:absolute;inset:0;z-index:60;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+.deal-stage-sheet{width:100%;max-width:520px;max-height:80dvh;overflow:auto;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0003}
+.deal-stage-sheet header{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+.deal-stage-sheet select{flex:1;min-width:0;max-width:100%;font:inherit;font-weight:600;color:var(--ink);background:var(--card);border:0;min-height:44px}
+.deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;padding:16px;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
+.deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,#ffe08b)}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
+@media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+`;document.head.append(stageStyle);
   const date=value=>{const d=new Date(typeof value==='number'?value*1000:value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString():'';};
   function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent}){
     const c=labels(),container=document.createElement('div');container.className='kommo-deal-sections';container.innerHTML=`<section class="kommo-deal-section"><header><h3>${esc(c.tasks)}</h3><button type="button" class="primary" data-related-create hidden>+ ${esc(c.create)}</button></header><div data-related-tasks role="status">${esc(c.loading)}</div></section><section class="kommo-deal-section"><header><h3>${esc(c.notes)}</h3></header><div data-related-notes role="status">${esc(c.loading)}</div></section>`;
     const chat=host.querySelector('.chat-placeholder');host.insertBefore(container,chat);if(chat){const heading=document.createElement('h3');heading.className='kommo-deal-chat-title';heading.textContent=c.chat;chat.before(heading);}
     // Conversation-first card: related content stays available behind Info, not above chat.
     const modal=document.getElementById('dealModal'),head=modal.querySelector('.modal-head');
-    modal.querySelectorAll('.deal-stage-bar').forEach(node=>node.remove());
+    modal.querySelectorAll('.deal-stage-bar,.deal-stage-picker').forEach(node=>node.remove());
     const previousTitle=document.getElementById('modalTitle');if(previousTitle&&previousTitle.parentElement!==head)head.prepend(previousTitle);
     head.querySelectorAll('[data-deal-header-extra]').forEach(node=>node.remove());
     modal.classList.add('deal-conversation');modal.querySelector('.modal-card').setAttribute('role','dialog');modal.querySelector('.modal-card').setAttribute('aria-modal','true');modal.querySelector('.modal-card').setAttribute('aria-labelledby','modalTitle');
@@ -34,41 +46,80 @@
     // Reuse the board's policy catalog and immutable, receipt-verified move command.
     const stageBar=document.createElement('div');stageBar.className='deal-stage-bar';
     const stageLabel=({ru:'Этап сделки',az:'Sövdələşmə mərhələsi',en:'Deal stage'}[window.tenantI18n?.language]||'Deal stage');
-    const pipeline=document.createElement('span'),select=document.createElement('select'),feedback=document.createElement('span');
-    pipeline.textContent=deal.pipeline_name||stageLabel;select.setAttribute('aria-label',stageLabel);select.disabled=true;
-    select.add(new Option(deal.stage_name||stageLabel,String(deal.status_id||'')));feedback.setAttribute('role','status');
-    stageBar.append(pipeline,select,feedback);head.after(stageBar);
+    const pipeline=document.createElement('span'),trigger=document.createElement('button'),feedback=document.createElement('span');
+    pipeline.className='deal-pipeline-name';pipeline.textContent=deal.pipeline_name||stageLabel;
+    trigger.type='button';trigger.className='deal-stage-trigger';trigger.textContent=(deal.stage_name||stageLabel)+' ▾';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
+    feedback.setAttribute('role','status');stageBar.append(pipeline,trigger,feedback);head.after(stageBar);
+    const picker=document.createElement('div');picker.className='deal-stage-picker';picker.hidden=true;
+    const sheet=document.createElement('section');sheet.className='deal-stage-sheet';sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',stageLabel);
+    const pickerHead=document.createElement('header'),pipelineSelect=document.createElement('select'),dismiss=document.createElement('button'),choices=document.createElement('div');
+    pipelineSelect.setAttribute('aria-label',({ru:'Сменить воронку',az:'Vərəqi dəyiş',en:'Change pipeline'}[window.tenantI18n?.language]||'Change pipeline'));pipelineSelect.dataset.dealPipelinePicker='';
+    dismiss.type='button';dismiss.textContent='×';dismiss.setAttribute('aria-label',({ru:'Закрыть',az:'Bağla',en:'Close'}[window.tenantI18n?.language]||'Close'));
+    pickerHead.append(pipelineSelect,dismiss);sheet.append(pickerHead,choices);picker.append(sheet);modal.querySelector('.modal-card').append(picker);
+    const closePicker=()=>{picker.hidden=true;trigger.setAttribute('aria-expanded','false');if(current())trigger.focus();};
+    dismiss.onclick=closePicker;picker.onclick=e=>{if(e.target===picker)closePicker();};
+    picker.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closePicker();}else if(e.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,select')].filter(n=>!n.disabled);if(!nodes.length)return;const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};
     let stageRow={...deal},busy=false;
     void Promise.resolve().then(()=>api('/api/platform/crm/deal-board-preferences')).then(policy=>{
       if(!current())return;
-      const catalog=policy.catalog?.find(p=>String(p.pipeline_id)===String(deal.pipeline_id));
-      if(catalog?.name)pipeline.textContent=catalog.name;
-      const targets=(policy.move_stage_targets||[]).filter(t=>String(t.pipeline_id)===String(deal.pipeline_id));
-      const permitted=()=> (policy.move_stage_sources||[]).some(t=>String(t.pipeline_id)===String(stageRow.pipeline_id)&&String(t.stage_id)===String(stageRow.status_id));
+      const sources=policy.move_stage_sources||[],baseTargets=policy.move_stage_targets||[];
+      const catalogFor=id=>policy.catalog?.find(p=>String(p.pipeline_id)===String(id));
+      const permitted=()=>sources.some(t=>String(t.pipeline_id)===String(stageRow.pipeline_id)&&String(t.stage_id)===String(stageRow.status_id));
+      const targetsFor=id=>{
+        // Completing in another pipeline would bypass the approval workflow.
+        // First choose a regular stage there, then use its successful stage.
+        const same=String(id)===String(stageRow.pipeline_id);
+        const targets=baseTargets.filter(t=>String(t.pipeline_id)===String(id)&&(same||Number(t.stage_id)!==142));
+        if(same&&policy.move_stage_completion_requires_approval)for(const t of sources){if(String(t.pipeline_id)===String(id)&&Number(t.stage_id)===142&&!targets.some(a=>Number(a.stage_id)===142))targets.push(t);}
+        return targets;
+      };
       const render=()=>{
-        select.replaceChildren();
-        const rows=[...(catalog?.stages||[])].filter(t=>String(t.stage_id)===String(stageRow.status_id)||targets.some(a=>String(a.stage_id)===String(t.stage_id)));
-        if(!rows.some(t=>String(t.stage_id)===String(stageRow.status_id)))rows.unshift({stage_id:stageRow.status_id,name:stageRow.stage_name||stageLabel});
-        for(const item of rows)select.add(new Option(item.name||String(item.stage_id),String(item.stage_id)));
-        select.value=String(stageRow.status_id||'');
-        select.disabled=busy||!permitted()||!targets.length||!policy.move_context||!window.tenantKommoStageMove?.canIdentify(stageRow);
-      };render();
-      select.onchange=async()=>{
-        const target=select.value;if(busy||!current()||!permitted()||!targets.some(t=>String(t.stage_id)===target))return;
-        if(target===String(stageRow.status_id))return;
-        busy=true;select.disabled=true;feedback.textContent='';
+        const catalog=catalogFor(stageRow.pipeline_id);
+        pipeline.textContent=catalog?.name||stageRow.pipeline_name||stageLabel;
+        trigger.textContent=(stageRow.stage_name||stageLabel)+' ▾';
+        trigger.disabled=busy||!permitted()||!policy.move_context||!window.tenantKommoStageMove?.canIdentify(stageRow)||!(policy.catalog||[]).some(p=>targetsFor(p.pipeline_id).length);
+        pipelineSelect.replaceChildren();
+        for(const p of policy.catalog||[]){if(String(p.pipeline_id)===String(stageRow.pipeline_id)||targetsFor(p.pipeline_id).length)pipelineSelect.add(new Option(p.name||String(p.pipeline_id),String(p.pipeline_id)));}
+        pipelineSelect.value=String(stageRow.pipeline_id);pipelineSelect.disabled=busy||pipelineSelect.options.length<2;
+        renderChoices();
+      };
+      const renderChoices=()=>{
+        choices.replaceChildren();const targetPipeline=pipelineSelect.value,catalog=catalogFor(targetPipeline),targets=targetsFor(targetPipeline);
+        for(const item of catalog?.stages||[]){
+          const selected=String(targetPipeline)===String(stageRow.pipeline_id)&&String(item.stage_id)===String(stageRow.status_id);
+          if(!selected&&!targets.some(t=>String(t.stage_id)===String(item.stage_id)))continue;
+          const button=document.createElement('button');button.type='button';button.className='deal-stage-choice';button.dataset.stageId=String(item.stage_id);button.dataset.pipelineId=targetPipeline;button.setAttribute('aria-pressed',String(selected));
+          const dot=document.createElement('span'),name=document.createElement('span'),check=document.createElement('span');dot.className='deal-stage-dot';if(/^#[a-fA-F0-9]{6}$/.test(item.color||''))dot.style.setProperty('--stage-color',item.color);name.className='deal-stage-choice-name';name.textContent=item.name||String(item.stage_id);check.textContent=selected?'✓':'';button.append(dot,name,check);button.disabled=busy||!permitted()||selected;
+          button.onclick=()=>void choose(targetPipeline,String(item.stage_id));choices.append(button);
+        }
+      };
+      pipelineSelect.onchange=renderChoices;
+      trigger.onclick=()=>{if(trigger.disabled||!current())return;render();picker.hidden=false;trigger.setAttribute('aria-expanded','true');(pipelineSelect.disabled?dismiss:pipelineSelect).focus();};
+      const updateMeta=()=>{const stageMeta=info.querySelector('.meta>div:nth-child(3)');if(stageMeta?.querySelector('b')){const label=stageMeta.querySelector('b');stageMeta.replaceChildren(label,document.createTextNode(stageRow.stage_name));}};
+      const choose=async(targetPipeline,target)=>{
+        if(busy||!current()||!permitted()||!targetsFor(targetPipeline).some(t=>String(t.stage_id)===target))return;
+        if(target===String(stageRow.status_id)&&targetPipeline===String(stageRow.pipeline_id))return;
+        busy=true;trigger.disabled=true;feedback.textContent='';closePicker();
+        const catalog=catalogFor(targetPipeline);
         try{
-          const updated=await window.tenantKommoStageMove.move(stageRow,target,policy.move_context);
+          if(target==='142'){
+            if(targetPipeline!==String(stageRow.pipeline_id)||!window.tenantDealCompletion)throw Error('Completion unavailable');
+            const result=await window.tenantDealCompletion.request(stageRow.kommo_lead_id,policy.move_context);
+            if(!current()||result.cancelled)return;
+            if(result.approval_pending){feedback.textContent='Təsdiq gözləyir';return;}
+            if(result.completed){stageRow={...stageRow,source_revision:null,status_id:142,stage_name:catalog?.stages?.find(t=>Number(t.stage_id)===142)?.name||'Uğurla tamamlandı'};Object.assign(deal,stageRow);updateMeta();return;}
+            throw Error('Completion unavailable');
+          }
+          const updated=await window.tenantKommoStageMove.move(stageRow,target,policy.move_context,targetPipeline);
           if(!current())return;
-          stageRow={...updated,stage_name:catalog?.stages?.find(t=>String(t.stage_id)===target)?.name||stageRow.stage_name};
-          Object.assign(deal,stageRow);
-          const stageMeta=info.querySelector('.meta>div:nth-child(3)');
-          if(stageMeta?.querySelector('b')){const label=stageMeta.querySelector('b');stageMeta.replaceChildren(label,document.createTextNode(stageRow.stage_name));}
+          stageRow={...updated,pipeline_name:catalog?.name||stageRow.pipeline_name,stage_name:catalog?.stages?.find(t=>String(t.stage_id)===target)?.name||stageRow.stage_name};
+          Object.assign(deal,stageRow);updateMeta();
           document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete',{detail:{tenant_id:policy.move_context.tenant_id,resources:['leads']}}));
         }catch(error){if(current())feedback.textContent=error.message||'Stage update failed';}
-        finally{busy=false;if(current())render();}
+        finally{busy=false;if(current()){render();if(!trigger.disabled&&(picker.contains(document.activeElement)||document.activeElement===document.body))trigger.focus();}}
       };
-    }).catch(()=>{if(current())select.disabled=true;});
+      render();
+    }).catch(()=>{if(current())trigger.disabled=true;});
 
     const tasks=container.querySelector('[data-related-tasks]');
     if(!flow){tasks.textContent=c.error;}else void flow.read('kommo',{},scope).then(result=>{

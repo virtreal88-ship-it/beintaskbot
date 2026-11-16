@@ -439,7 +439,13 @@
   document.addEventListener('tenant-chat-open',event=>{
     const lead=event.detail.lead_id,version=epoch;if(!member||!allowed())return;
     const host=$('modalContent');if(!host||$('supportCreateFromChat')||host.querySelector('[data-operator-dialog]'))return;
-    const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';button.textContent=t('createTicket');(host.querySelector('#dealInfoPanel')||host).prepend(button);
+    const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';
+    const infoToggle=$('dealModal')?.querySelector('.deal-info-toggle');
+    if(infoToggle){
+      button.textContent='+';button.title=t('createTicket');button.setAttribute('aria-label',t('createTicket'));
+      button.dataset.dealHeaderExtra='1';button.style.cssText='flex:none;min-width:44px;min-height:44px';
+      infoToggle.before(button);
+    }else{button.textContent=t('createTicket');(host.querySelector('#dealInfoPanel')||host).prepend(button);}
     button.onclick=async()=>{if(button.disabled)return;button.disabled=true;try{const operator=await ensureManualCaseUI();if(version!==epoch||!button.isConnected)return;if(!operator.hasRight('support')||!operator.hasRight('dialogs'))throw Error(t('noAccess'));button.disabled=false;await operator.openManualCaseCreate({provider:'connect',lead_id:lead,...(event.detail.channel_id?{channel_id:event.detail.channel_id}:{}),...(event.detail.conversation_id?{conversation_id:event.detail.conversation_id}:{})},button,()=>version===epoch&&button.isConnected);}catch(error){if(version===epoch&&button.isConnected){button.disabled=false;notice(error.message);}}};
 
   });

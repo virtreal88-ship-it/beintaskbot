@@ -41,7 +41,7 @@ def execute_sync(profile, payload, request, *, operation, path, prepare, verifie
                 if not binding: raise TaskFlowError('board_connection_unavailable',409)
                 if asdict(binding) != store.state.get('board_binding'): raise TaskFlowError('board_connection_changed',409)
                 current, _ = _profiles(cur, tenant, actor)
-                if authorize_cached: authorize_cached(cur,current,payload)
+                if authorize_cached: authorize_cached(cur,current,payload,unknown=unknown)
                 from tenant_kommo_board_provenance import require as require_source
                 current_revision=require_source(cur,binding,entity,ident,store.state.get('confirmed_source_revision') if done else payload.get('source_revision'),allow_latest=unknown)
                 cur.execute('''SELECT request_id FROM saas_task_commands WHERE tenant_id=%s::uuid

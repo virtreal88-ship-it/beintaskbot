@@ -29,7 +29,7 @@ def normalize(data):
         'expected_due_at':timestamp(data['expected_due_at'],nullable=True),'due_at':timestamp(data['due_at'])}
 
 
-def authorize_cached(cur,profile,payload):
+def authorize_cached(cur,profile,payload, *, unknown=False):
     if profile.get('active') is not True or not _rows(cur,profile,'kommo',task_id=payload['task_id']):
         raise TaskFlowError('task_forbidden',403)
 

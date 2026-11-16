@@ -24,3 +24,13 @@ Task client fields are read in a single bounded cached lookup. Native fields
 follow customer-view scope; Kommo fields require access to the related deal.
 A creator-owned task alone does not reveal a client from an inaccessible deal.
 No additional provider request is made.
+
+The conversation card's stage picker can browse other currently assigned Kommo
+pipelines. Browsing is read-only: a move requires an explicit stage selection.
+The command's optional `target_pipeline_id` is paired with that configured stage;
+legacy same-pipeline payloads remain byte-for-byte compatible after normalization.
+Both the source and destination grants are rechecked at execution and verification.
+A synced destination cache is accepted only for unknown/done commands, never a new
+write. Cache pipeline/stage names, raw IDs, provenance and receipt commit together.
+Cross-pipeline successful completion (142) is excluded: first choose a regular
+stage in the destination, then complete through its existing approval flow.

@@ -119,9 +119,17 @@ class TenantKommo:
                 or not (re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path)
                     or (method == 'GET' and re.fullmatch(r'leads/[1-9][0-9]*/notes',path)))):
             raise self.context.platform_error('Scalar CRM request is invalid.')
-        allowed = ({'text'} if isinstance(json_body,dict) and set(json_body)=={'text'} else {'complete_till'}) if path.startswith('tasks/') else {'status_id'} if isinstance(json_body,dict) and set(json_body)=={'status_id'} and path.startswith('leads/') else {'name','custom_fields_values'}
+        fields=set(json_body) if isinstance(json_body,dict) else set()
+        if path.startswith('tasks/'):
+            allowed={'text'} if fields=={'text'} else {'complete_till'}
+        elif path.startswith('leads/') and fields in ({'status_id'},{'pipeline_id','status_id'}):
+            # Pipeline moves must carry one explicit mapped stage, never a
+            # pipeline alone or mixed text/contact/ownership changes.
+            allowed=fields
+        else:
+            allowed={'name','custom_fields_values'}
         if method == 'PATCH' and (not isinstance(json_body,dict) or not json_body
-                or set(json_body)-allowed or any(type(json_body[key]) is not int or json_body[key] <= 0 for key in set(json_body)&{'complete_till','status_id'})):
+                or set(json_body)-allowed or any(type(json_body[key]) is not int or json_body[key] <= 0 for key in set(json_body)&{'complete_till','status_id','pipeline_id'})):
             raise self.context.platform_error('Scalar CRM fields are invalid.')
         if method == 'PATCH' and path.startswith('tasks/') and 'text' in json_body and (not isinstance(json_body['text'],str) or len(json_body['text'])>4000 or '\x00' in json_body['text']):
             raise self.context.platform_error('Scalar CRM task text is invalid.')
@@ -140,6 +148,12 @@ class TenantKommo:
             # A redirect is not the authorized exact record, and 307/308 would
             # replay a PATCH automatically. Never follow or accept one here.
             if response.status_code < 200 or response.status_code >= 300:
+                # Fixed categories only: never log account, record IDs, URL,
+                # credentials, request/response bodies or provider error text.
+                category = 'notes' if path.endswith('/notes') else path.split('/', 1)[0]
+                logging.getLogger(__name__).warning(
+                    'Kommo bound request rejected: status=%s category=%s',
+                    response.status_code, category)
                 raise self.context.platform_error('Scalar CRM request was not accepted.')
             payload=response.json() if response.content else {}
             if not isinstance(payload,dict):
