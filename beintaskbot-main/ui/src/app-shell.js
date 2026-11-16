@@ -100,6 +100,7 @@ if (document.body.dataset.appUi === 'kwid') {
       const group=groups.find(group=>group.pages.includes((button.dataset.view||button.dataset.reportLink)))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
       if(button.parentElement!==items)items.append(button)
     }
+    if(mobile.matches)reportItems.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('role','menuitem'));
     const crmItems=containers.get('crm')?.querySelector('.app-nav-group-items')
     if(crmItems){
       const ordered=groups.find(group=>group.id==='crm').pages.map(page=>crmItems.querySelector(`[data-view="${page}"]`)).filter(Boolean)
