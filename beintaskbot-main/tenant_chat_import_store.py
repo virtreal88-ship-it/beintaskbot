@@ -27,8 +27,8 @@ def authorize(session: dict, lead: int) -> str:
                 raise TenantLinearError('Çat tarixçəsi üçün icazəniz yoxdur.', 403)
             from tenant_dialog_access import require_kommo_lead_read
             require_kommo_lead_read(cur,tenant,policy,lead,deal=deal)
-            cur.execute("SELECT account_domain,connected_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected'", (tenant,))
-            integration = cur.fetchone()
-            if not integration or not integration.get('account_domain'):
+            from tenant_crm_sync_store import connection_id
+            connection = connection_id(cur, tenant, lock=True)
+            if not connection:
                 raise TenantLinearError('Kommo qoşulmayıb.', 409)
-    return str(integration['account_domain']) + ':' + str(integration['connected_at'])
+    return connection

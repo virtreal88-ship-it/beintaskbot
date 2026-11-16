@@ -114,16 +114,23 @@ class Store(unittest.TestCase):
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.policy=Mock();self.policy.can_read_kommo_chat.return_value=True
         self.policy.profile = {'tenant_id': TENANT}
+        self.cur.fetchall.return_value=[]
         self.module=load('tenant_chat_import_store',{'_connect':Mock(return_value=self.conn),'_ensure_schema':Mock(),
             '_read_tenant_workflow':Mock(return_value={}), 'TenantPolicy':lambda profile:self.policy}, {'tenant_platform','tenant_policy'})
 
     def test_no_credentials_selected_and_all_queries_tenant_scoped(self):
-        self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},{'kommo_lead_id':7},None,
-                                      {'account_domain':'company.kommo.com','connected_at':'date'}]
+        self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},{'kommo_lead_id':7},None]
+        self.cur.fetchall.return_value=[{'provider':'kommo','status':'connected','account_domain':'company.kommo.com','connected_at':'date'}]
         self.assertEqual(self.module.authorize(SESSION,7),'company.kommo.com:date')
         for call in self.cur.execute.call_args_list:
             self.assertIn('tenant_id',call.args[0]);self.assertEqual(call.args[1][0],TENANT)
             self.assertNotIn('secrets',call.args[0])
+
+    def test_manual_connection_identity_matches_sender(self):
+        self.cur.fetchone.side_effect=[{'active':True,'tenant_status':'active'},{'kommo_lead_id':7},None]
+        self.cur.fetchall.return_value=[{'provider':'kommo','status':'disconnected'},
+            {'provider':'kommo_manual','status':'connected','account_domain':'company.kommo.com','connected_at':'date'}]
+        self.assertEqual(self.module.authorize(SESSION,7),'manual:company.kommo.com:date')
 
     def test_revoked_or_deleted_deal_and_missing_connection_fail_closed(self):
         for rows in [[None],[{'active':False,'tenant_status':'active'}],
