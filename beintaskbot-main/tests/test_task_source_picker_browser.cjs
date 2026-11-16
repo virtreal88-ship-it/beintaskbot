@@ -18,7 +18,9 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
   const task=document.querySelector('#view-tasks .top'),deal=document.querySelector('#view-deals .top');
   const clone=deal.cloneNode(true);clone.querySelector('h1').textContent=task.querySelector('h1').textContent;clone.querySelector('h1').className=task.querySelector('h1').className;
   clone.querySelector('#dealCount').textContent=document.querySelector('#kommoTaskCount').textContent;
-  const actions=task.querySelector('.crm-toolbar-actions');if(actions)clone.querySelector('.crm-toolbar-actions').replaceWith(actions.cloneNode(true));else clone.querySelector('.crm-toolbar-actions').remove();
+  // On mobile the real toolbar moves both pages' actions out of .top.
+  const actions=task.querySelector('.crm-toolbar-actions'),clonedActions=clone.querySelector('.crm-toolbar-actions');
+  if(actions){if(clonedActions)clonedActions.replaceWith(actions.cloneNode(true));else clone.append(actions.cloneNode(true));}else clonedActions?.remove();
   clone.style.width=task.getBoundingClientRect().width+'px';clone.style.position='absolute';clone.style.visibility='hidden';
   document.querySelector('#view-tasks').append(clone);
   const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();clone.remove();return {task:a.height,deals:b.height};
@@ -40,7 +42,9 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
   const task=document.querySelector('#view-tasks .top'),deal=document.querySelector('#view-deals .top');
   const clone=deal.cloneNode(true);clone.querySelector('h1').textContent=task.querySelector('h1').textContent;clone.querySelector('h1').className=task.querySelector('h1').className;
   clone.querySelector('#dealCount').textContent=document.querySelector('.task-header-counts p:not([hidden])').textContent;
-  const actions=task.querySelector('.crm-toolbar-actions');if(actions)clone.querySelector('.crm-toolbar-actions').replaceWith(actions.cloneNode(true));else clone.querySelector('.crm-toolbar-actions').remove();
+  // On mobile the real toolbar moves both pages' actions out of .top.
+  const actions=task.querySelector('.crm-toolbar-actions'),clonedActions=clone.querySelector('.crm-toolbar-actions');
+  if(actions){if(clonedActions)clonedActions.replaceWith(actions.cloneNode(true));else clone.append(actions.cloneNode(true));}else clonedActions?.remove();
   clone.style.width=task.getBoundingClientRect().width+'px';clone.style.position='absolute';clone.style.visibility='hidden';
   document.querySelector('#view-tasks').append(clone);
   const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();clone.remove();return {task:a.height,deals:b.height};
