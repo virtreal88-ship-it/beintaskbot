@@ -205,12 +205,10 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   function sync(){
     frame=0
     if(!window.document?.documentElement||!body.isConnected)return
-    const focused=document.activeElement
-    // Leave the full visual viewport to forms, native date/select pickers and dialogs.
-    const editing=focused?.matches('input:not([type=button]):not([type=submit]),textarea,select,[contenteditable="true"]')&&!nav.contains(focused)
+    // Search/input focus alone must not hide navigation; overlays and open chat still do.
     const modal=[...document.querySelectorAll('[role="dialog"],dialog[open],.modal.show,.ai-agents-modal.show,#operatorDialogBody[data-copilot-open=true] #operatorCopilot')].some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')
     const conversationOpen=!!document.querySelector('#view-dialogs.active #operatorDialogs[data-conversation-open="true"]')
-    const suppressed=mobile.matches&&(conversationOpen||editing||modal)
+    const suppressed=mobile.matches&&(conversationOpen||modal)
     if(sidebar.dataset.bottomNavSuppressed!==String(suppressed))sidebar.dataset.bottomNavSuppressed=String(suppressed)
     sidebar.inert=suppressed
     const height=mobile.matches&&!suppressed?Math.ceil(sidebar.getBoundingClientRect().height):0
