@@ -100,7 +100,7 @@ def route(cur,tenant,policy,channel,conversation,*,manual=False):
     if not isinstance(conversation,str) or not conversation or len(conversation)>200:
         raise TenantLinearError('Диалог недоступен.',404)
     found=assert_route(cur,tenant,policy,'connect',conversation,channel)
-    sql,params=projection(policy)
+    sql,params=projection(cur, policy)
     cur.execute(sql+"SELECT * FROM visible WHERE provider='connect' AND channel_id=%s AND conversation_id=%s AND channel_active=TRUE",
         (tenant,tenant,*params,enabled('AI_AGENTS_ENABLED'),channel,conversation))
     visible=cur.fetchone()
@@ -201,7 +201,7 @@ def destinations(profile):
             tenant,_,policy=access(cur,profile,'dialogs')
             from tenant_operator_dialogs import projection
             from tenant_ai_agent_runtime_flags import enabled
-            sql,params=projection(policy)
+            sql,params=projection(cur, policy)
             cur.execute(sql+"SELECT channel_id,conversation_id,customer_name,channel_name FROM visible v WHERE provider='connect' AND channel_active=TRUE AND EXISTS(SELECT 1 FROM saas_dialog_developer_markers m WHERE m.tenant_id=%s::uuid AND m.channel_id::text=v.channel_id AND m.conversation_id=v.conversation_id AND m.enabled=TRUE) ORDER BY last_message_at DESC NULLS LAST",
                 (tenant,tenant,*params,enabled('AI_AGENTS_ENABLED'),tenant))
             return {'destinations':[dict(r) for r in cur.fetchall()]}

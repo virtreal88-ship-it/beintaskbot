@@ -44,9 +44,6 @@ def pilot_scope():
 
 
 def extraction_enabled():
-    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-    if lifecycle_enabled():
-        return False
     enabled=os.environ.get('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
     if not enabled:
         return False
@@ -58,7 +55,8 @@ def extraction_enabled():
 
 def _configured(cur, tenant, channel, happened_at=None, conversation=None):
     """Check the global guard and tenant/channel scope at every queue fence."""
-    if not extraction_enabled():
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if lifecycle_enabled(cur, tenant) or not extraction_enabled():
         return None
     from tenant_connect_identity import conflicted
     if conversation and conflicted(cur, tenant, channel, conversation):
@@ -212,6 +210,12 @@ def claim():
             row=cur.fetchone()
             if not row:
                 conn.commit();return None
+            # A tenant may activate after the candidate scan; its shared fence
+            # is nonblocking and is retained until this claim commits.
+            if not _configured(cur, row['tenant_id'], row['channel_id'], row.get('last_message_at'), row['conversation_id']):
+                cur.execute("UPDATE saas_knowledge_live_queue SET state='blocked',error_code='live_extraction_scope_changed',updated_at=now() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s", (row['tenant_id'],row['channel_id'],row['conversation_id']))
+                conn.commit()
+                return None
             cur.execute("UPDATE saas_knowledge_live_queue SET state='running',lease_until=now()+(%s * interval '1 second'),updated_at=now() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s",
               (LEASE_SECONDS,row['tenant_id'],row['channel_id'],row['conversation_id']))
         conn.commit()
@@ -275,11 +279,17 @@ def tick():
         if not isinstance(message_at,datetime):
             message_at=datetime.fromisoformat(str(message_at).replace('Z','+00:00'))
         end_at=(message_at+timedelta(microseconds=1)).isoformat()
-        response=analyze(profile,{
-          'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
-          'conversation_id':item['conversation_id'],'history_mode':'channel',
-          'period_start':(pilot_scope() or {}).get('start_after') or (item.get('extraction_started_at').isoformat() if isinstance(item.get('extraction_started_at'),datetime) else str(item.get('extraction_started_at') or item['last_message_at'])),'period_end':end_at},
-          before_provider=lambda: require_extraction_enabled(item))
+        # Hold the tenant shared fence over the complete provider call. A
+        # callback-only check releases its lock too early and races activation.
+        with _connect() as fence_conn:
+            with fence_conn.cursor() as fence_cur:
+                if not _configured(fence_cur,item['tenant_id'],item['channel_id'],item.get('last_message_at'),item.get('conversation_id')):
+                    raise LiveExtractionDisabled()
+                response=analyze(profile,{
+                  'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
+                  'conversation_id':item['conversation_id'],'history_mode':'channel',
+                  'period_start':(pilot_scope() or {}).get('start_after') or (item.get('extraction_started_at').isoformat() if isinstance(item.get('extraction_started_at'),datetime) else str(item.get('extraction_started_at') or item['last_message_at'])),'period_end':end_at},
+                  before_provider=lambda: require_extraction_enabled(item))
         request=response.get('request') or {}
         state=request.get('status')
         if state=='partial':

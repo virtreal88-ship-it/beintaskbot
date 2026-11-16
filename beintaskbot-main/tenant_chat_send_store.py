@@ -11,6 +11,8 @@ from tenant_connect_transport import connect_route
 
 def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status=None):
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
+    from tenant_dialog_rollout import guard
+    guard(cur, tenant)
     from tenant_scoped_access_store import read_access_profile
     profile=read_access_profile(cur,tenant,actor,lock=True)
     if not profile or profile['active'] is not True or profile['tenant_status'] != 'active':
@@ -26,7 +28,7 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
     if connect:
         require_source(cur,tenant,policy,'connect',connect['channel_id'],'update')
         from tenant_dialog_lifecycle import require_access, enabled as lifecycle_enabled
-        if lifecycle_status is not None and lifecycle_enabled():
+        if lifecycle_status is not None and lifecycle_enabled(cur, tenant):
             # Read-only delivery status/reconciliation of this actor's durable
             # operation. Never used by reserve, upload, mark_sending or dispatch.
             from tenant_ai_dialog_scope import lock_dialog
@@ -38,7 +40,7 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
                 AND e.conversation_id=%s AND e.lead_id=sr.lead_id''',
               (tenant,actor,str(uuid.UUID(str(lifecycle_status))),lead_id,connect['channel_id'],connect['conversation_id']))
             if not cur.fetchone():raise TenantLinearError('Сохранённая отправка не найдена.',404)
-        elif lifecycle_receipt is not None and lifecycle_enabled():
+        elif lifecycle_receipt is not None and lifecycle_enabled(cur, tenant):
             # Internal persistence only, never send/upload authority. An accepted
             # dispatch receipt proves the operation before close/transfer.
             request_id,external_id=lifecycle_receipt
@@ -116,7 +118,10 @@ def reserve(session, command):
             if cur.fetchone():
                 conn.commit()
                 raise TenantLinearError('Bu çatda başqa göndərmə yoxlanılır. Kommo-da vəziyyəti yoxlayın.', 409)
-            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing')", (*key, command['lead_id'], fingerprint(command)))
+            from tenant_dialog_rollout import guard
+            rollout = guard(cur, profile['tenant_id'])
+            generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
+            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps({'lifecycle_generation':generation})))
         conn.commit()
     return {'key': key, 'command': command, 'connection': connection, 'profile': profile, 'quote':quote}
 
@@ -132,6 +137,14 @@ def mark_sending(item, route):
         if is_group:conn.commit()
         with conn.cursor() as cur:
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
+            from tenant_dialog_rollout import guard
+            rollout = guard(cur, profile['tenant_id'])
+            generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
+            cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid FOR UPDATE',item['key'])
+            prepared = cur.fetchone() or {}
+            if (prepared.get('route') or {}).get('lifecycle_generation',0) != generation:
+                raise TenantLinearError('Режим диалога изменился. Подготовьте новую отправку.',409)
+            route = {**route, 'lifecycle_generation':generation}
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
             if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
@@ -139,7 +152,7 @@ def mark_sending(item, route):
             if integration.get('provider') == 'connect':
                 credentials = integration['route']
                 from tenant_dialog_lifecycle import ai_blocked, enabled as lifecycle_enabled
-                managed=lifecycle_enabled() and ai_blocked(cur,profile['tenant_id'],'connect',credentials['channel_id'],credentials['conversation_id'])
+                managed=lifecycle_enabled(cur, profile['tenant_id']) and ai_blocked(cur,profile['tenant_id'],'connect',credentials['channel_id'],credentials['conversation_id'])
                 if is_group and not managed:
                     stop_group(cur,profile['tenant_id'],credentials['conversation_id'],reason='verified_employee_reply',actor=profile['telegram_id'])
             else:
@@ -152,7 +165,7 @@ def mark_sending(item, route):
                 route={**route,'quote_protocol':True,'quote_message_id':item['command']['quote_message_id'],'quote_channel_id':connection[1],
                     'quote_conversation_id':connection[2],'quoted_external_message_id':item['quote']}
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _row as lifecycle_row
-            if connection[0]=='connect' and lifecycle_enabled():
+            if connection[0]=='connect' and lifecycle_enabled(cur, profile['tenant_id']):
                 episode=lifecycle_row(cur,profile['tenant_id'],connection[1],connection[2])
                 route={**route,'lifecycle_episode_id':str(episode['id'])}
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',route=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='preparing' RETURNING request_id", (json.dumps(route), *item['key']))
@@ -277,21 +290,32 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
     unbinding serialize against this boundary. An operation already accepted
     by the provider cannot be recalled; receipts retain that ordering.
     """
-    from tenant_scoped_access import scoped_access_enabled
     from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-    if not scoped_access_enabled() and not lifecycle_enabled() and item.get('connection',[None])[0]=='connect':
-        return callback(expected_credentials,*args,**kwargs)
+    from tenant_scoped_access import scoped_access_enabled
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard
+            rollout=guard(cur,item['key'][0])
+            # Preserve the original unscoped legacy final-dispatch behavior,
+            # but never outside the shared activation barrier.
+            if not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
+                return callback(expected_credentials,*args,**kwargs)
             profile,connection,integration=authority(cur,
               {'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            from tenant_dialog_rollout import guard
+            rollout = guard(cur, profile['tenant_id'])
+            generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
+            cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',item['key'])
+            saved = cur.fetchone() or {}
+            if (saved.get('route') or {}).get('lifecycle_generation',0) != generation:
+                raise TenantLinearError('Режим диалога изменился. Подготовьте новую отправку.',409)
             if connection!=item['connection']:
                 raise TenantLinearError('Источник диалога изменился.',409)
             if connection[0]=='connect':
                 current=integration['route']
                 if any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id')):
                     raise TenantLinearError('Источник диалога изменился.',409)
-            if connection[0]=='connect' and lifecycle_enabled():
+            if connection[0]=='connect' and lifecycle_enabled(cur, profile['tenant_id']):
                 from tenant_dialog_lifecycle import _row as lifecycle_row
                 current_episode=lifecycle_row(cur,profile['tenant_id'],connection[1],connection[2])
                 cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',item['key'])

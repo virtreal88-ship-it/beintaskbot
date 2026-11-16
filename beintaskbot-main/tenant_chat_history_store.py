@@ -17,6 +17,8 @@ def page(session: dict, lead_id: object, cursor: str = '', limit: object = 120) 
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard
+            guard(cur, tenant)
             from tenant_scoped_access import scoped_access_enabled
             if scoped_access_enabled():
                 from tenant_scoped_access_store import read_access_profile

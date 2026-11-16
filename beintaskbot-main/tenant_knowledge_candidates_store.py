@@ -135,7 +135,7 @@ def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
         # merge's source contact name, which is not stored on the canonical row.
         from tenant_operator_dialogs import projection
         from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-        sql,scopes=projection(policy)
+        sql,scopes=projection(cur, policy)
         cur.execute(sql+'''SELECT customer_name FROM visible WHERE provider='connect' AND lead_id=%s
           AND channel_id=%s AND conversation_id=%s''',
           (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),int(chosen['lead_id']),

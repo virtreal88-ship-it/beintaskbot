@@ -10,6 +10,8 @@ def access(cur, profile, permission='dialogs',action='view'):
     tenant=identifier(profile.get('tenant_id'))
     try: actor=int(profile.get('telegram_id'))
     except (TypeError,ValueError): raise TenantLinearError('Нет доступа.',403) from None
+    from tenant_dialog_rollout import guard
+    guard(cur, tenant)
     from tenant_scoped_access_store import read_access_profile
     row=read_access_profile(cur,tenant,actor,lock=True)
     if not row or row.get('active') is not True or not tenant_status_allows_management(row.get('tenant_status')):

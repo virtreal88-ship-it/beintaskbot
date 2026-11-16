@@ -1,0 +1,33 @@
+name: Stable composer attachment initialization
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/docs/tenant-customer-media-ui.js'
+      - 'beintaskbot-main/tests/test_composer_media_first_paint_browser.cjs'
+      - '.github/workflows/composer-first-paint.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  composer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .support-test-deps --no-package-lock playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: echo "CHROMIUM_EXECUTABLE_PATH=$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")" >> "$GITHUB_ENV"
+      - run: |
+          node tests/test_composer_media_first_paint_browser.cjs
+          node tests/test_customer_media_browser.cjs
+          node tests/test_dialog_composer_browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: composer-first-paint
+          path: beintaskbot-main/artifacts/

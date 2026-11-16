@@ -4,10 +4,12 @@
 review and the explicit episode AI/publication path must pass before activation.
 The draft PR itself does not enable production behavior or apply its schema.
 
-Status: prepared behind `TENANT_DIALOG_LIFECYCLE_ENABLED`, default **off**.
-Do not enable in production until this change's full CI (including native PostgreSQL
-concurrency tests), access-path review and the additive schema migration are approved.
-No production migration is executed by serving a request or importing this module.
+Status: tenant-scoped staged rollout under development. Activation is stored in
+`saas_dialog_rollout`, never selected by a process environment flag. All production
+migration, activation and data changes remain separately gated. No runtime DDL.
+A tenant without an activated row retains legacy behavior; shadow also retains
+legacy behavior and creates no episodes. Missing/unreadable rollout schema fails
+closed. This revision therefore requires the additive schema before deployment.
 
 ## Behavior
 
@@ -43,25 +45,46 @@ No production migration is executed by serving a request or importing this modul
 
 ## Additive migration
 
-`tenant_dialog_lifecycle.migrate(cursor)` creates five new tables and one index:
-`saas_dialog_episodes`, `saas_dialog_workflows`, `saas_dialog_lifecycle_receipts`,
-`saas_dialog_episode_messages`, `saas_dialog_episode_sends`.
-Foreign keys retain tenant, employee and Connect route integrity. No old tickets,
-messages, rights, AI assignments or provider records are rewritten or deleted.
+`tenant_dialog_lifecycle.migrate(cursor)` creates six tables and one index:
+`saas_dialog_rollout`, `saas_dialog_episodes`, `saas_dialog_workflows`,
+`saas_dialog_lifecycle_receipts`, `saas_dialog_episode_messages`,
+`saas_dialog_episode_sends`. No existing messages, cases or rights are rewritten.
 
-Run the migration with the application's authorized database connection in a
-controlled deployment transaction, after migration approval; commit only on
-success. Then verify table/constraint presence. Keep `TENANT_DIALOG_ACCEPT_ENABLED=false`
-while rolling out `TENANT_DIALOG_LIFECYCLE_ENABLED=true` to every process. No
-exclusive workflow may be created during this guard-only phase. Confirm all
-serving replicas and workers use the guard-enabled revision, then enable
-`TENANT_DIALOG_ACCEPT_ENABLED=true`. Old replicas in this second phase already
-enforce ownership and merely reject new claims until replaced. Never mix legacy
-unguarded replicas with accepting replicas. A fully drained maintenance window
-is the alternative.
-Deploying code with the flag off does not create these tables or change behavior.
-If the flag is mistakenly enabled before migration, operations fail closed rather
-than falling back to unowned source-wide access.
+Required rollout order, after a verified backup/restore plan and explicit approval:
+
+1. Check current main/worker revision, backup, transactions/locks, pending sends,
+   connector contracts and all process/job inventories. Production has multiple
+   tenants: activation is for one explicitly identified tenant, never global.
+2. Apply only the additive migration in a short transaction with bounded
+   `lock_timeout` and `statement_timeout`; abort and roll back on contention.
+   Verify tables, constraints and indexes. Do not backfill ownership.
+3. Deploy the compatible revision with every tenant still legacy (or explicitly
+   shadow). Shadow is observation-only, not a half-enabled exclusive queue.
+   Verify all serving processes, workers, draining instances and old jobs have
+   finished. A running old binary does not acquire the new barrier: the new code
+   CANNOT protect against its later use. Do not activate on heartbeat alone.
+4. In a dedicated transaction call the authorized tenant transition with the
+   expected generation, mode active and admission enabled together. It uses a
+   nonblocking exclusive tenant advisory lock: an in-flight protected operation
+   causes 409 with no change, rather than an unbounded wait. Retry only after the
+   operation ends. No exclusive ownership is created with admission disabled.
+5. Validate owner and employee views, first-wins claim, transfer, source isolation,
+   incoming reopen, stale tabs, delivery reconciliation, manual cases and budgets.
+   No real customer message or paid AI call is implied by this read-only smoke.
+
+Normal protected operations hold the shared tenant transaction barrier through
+final dispatch/read. Send receipts pin rollout generation; prepared legacy sends
+cannot silently become sends in a new exclusive episode. This intentionally
+requires a new preparation after a generation change, never an automatic resend.
+The operational rollout must prohibit redeploy/rollback to pre-feature binaries
+once any tenant has activated; an independent infrastructure minimum-version
+fence is not implemented by this patch and would require separate authorization.
+
+Activation is latched. Neither env flags nor changing admission to false restores
+source-wide visibility. Emergency admission stop leaves existing ownership guards
+on, and can prevent waiting dialogs from being accepted/sent: it is a controlled
+stop, not a seamless rollback. Use a compatible forward fix. Never delete the
+rollout/workflow tables or rows as a rollback strategy.
 
 There is intentionally no automatic ownership backfill: old history cannot prove
 which employee accepted an episode. Existing dialogs start as waiting. Existing
@@ -74,6 +97,10 @@ already delivered to a device cannot be recalled by this change.
 - Taking away the assigned employee's source access leaves an accepted route
   inaccessible (fail-closed). No owner takeover exception or forced reassignment
   is invented. An explicit recovery workflow is a separate product decision.
+- Pre-rollout uncertain send receipts have no proven episode. An unmatched late
+  echo stays unbound; manual case analysis on that exact route is blocked before
+  any AI cost until its uncertain send is reconciled. No retry or fabricated
+  episode binding is performed by rollout.
 - A provider without reliable incoming timestamps cannot automatically reopen a
   closed route. Connector event contracts must be verified in smoke testing.
 - Late messages with provider time before close remain history, not a new episode.
@@ -82,9 +109,6 @@ already delivered to a device cannot be recalled by this change.
   episode. This does not grant access to the other WhatsApp source.
 - Closing while a provider call is already in progress waits on the same route
   lock. A message already dispatched cannot be unsent.
-- Disabling the flag restores the old source-wide behavior. Do not treat a blind
-  flag rollback as a safe way to preserve exclusive ownership. Prefer forward
-  correction or temporarily disable dialog access through an authorized process.
 - The preexisting AI group coordination mechanism can deduplicate group events
   across sources. This patch must not weaken that mechanism or accidentally use
   its group-wide assigned_to field as human ownership.
@@ -97,7 +121,7 @@ Native multiprocessing tests are mandatory before enabling the feature.
 Run the lifecycle tests plus the existing scoped dialogs, channel/group isolation,
 attachments, chat send, consultations, notifications and support suites. Browser
 checks must cover stale open tabs, repeated actions, transfer, clear-on-denial,
-mobile/desktop, and legacy behavior with the rollout flag off.
+mobile/desktop, and legacy/shadow behavior for unactivated tenants.
 
 ## Full episode AI coverage and publication limits
 

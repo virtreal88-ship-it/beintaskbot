@@ -31,6 +31,9 @@
  .crm-mobile-more-panel .task-view-controls,.crm-mobile-more-panel #dealViewControls{margin:8px 0 0!important}
  .crm-mobile-more-panel [data-task-view-controls],.crm-mobile-more-panel [data-deal-view-controls]{display:flex;flex-wrap:wrap;gap:6px}
  #view-deals:has(#kommoDealSourcePanel[hidden]) .crm-mobile-more-panel #dealViewControls{display:none!important}
+ .crm-mobile-toolbar>.crm-mobile-inline-search{display:block;flex:1 1 0;min-width:0!important;width:auto!important;margin:0!important}
+ .crm-mobile-inline-search>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .crm-mobile-inline-search input,input.crm-mobile-inline-search{display:block;width:100%!important;min-width:0!important;height:44px;box-sizing:border-box;padding:10px!important;font-size:16px!important}
  .crm-mobile-toolbar [hidden]{display:none!important}
  #view-tasks [data-task-flow-label=intro],#view-tasks [data-task-flow-label=windowHint],#taskSyncHint{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;overflow:hidden;clip-path:inset(50%)}
  #kommoTaskCount{display:none!important}
@@ -41,7 +44,9 @@
     const view = document.getElementById(viewId), filters = view?.querySelector(filterSelector), actions = view?.querySelector('.crm-toolbar-actions'), create = document.getElementById(createId);
     if (!view || !filters || !actions || !create) continue;
     const remember = node => { const marker=document.createComment('crm responsive position');node.before(marker);return {node,marker}; };
-    const originals = [remember(actions),remember(filters),remember(create)];
+    const search=view.querySelector(viewId==='view-tasks'?'#taskSearch':'#dealSearch');
+    const searchNode=search?.closest('label')||search;
+    const originals = [remember(actions),remember(filters),remember(create),...(searchNode?[remember(searchNode)]:[])];
     const controls = [...filters.querySelectorAll('.task-view-controls,#dealViewControls')].map(remember);
     const panel = document.createElement('div');panel.className='crm-mobile-toolbar';
     const filterBox=document.createElement('div'), moreBox=document.createElement('div');
@@ -68,18 +73,18 @@
     moreBox.addEventListener('click',event=>{if(event.target.closest('button')&&!event.target.closest('button').disabled)queueMicrotask(()=>{const stillInside=moreBox.contains(document.activeElement);close(stillInside);});});
     function labels(){
       const language=window.tenantI18n?.language||document.documentElement.lang||'az';
-      const copy=({ru:['Фильтры и поиск','Другие действия'],en:['Filters and search','More actions'],az:['Filtrlər və axtarış','Digər əməliyyatlar']})[language]||['Filtrlər və axtarış','Digər əməliyyatlar'];
+      const copy=({ru:['Фильтры','Другие действия'],en:['Filters','More actions'],az:['Filtrlər','Digər əməliyyatlar']})[language]||['Filtrlər və axtarış','Digər əməliyyatlar'];
       [[filterButton,filterBox,copy[0]],[moreButton,moreBox,copy[1]]].forEach(([b,box,label])=>{b.setAttribute('aria-label',label);b.title=label;box.setAttribute('aria-label',label);});
       const name=create.textContent.trim();if(media.matches&&name){create.setAttribute('aria-label',name);create.title=name;}
     }
     function layout(){
       close();
       if(media.matches){
-        originals[1].marker.after(panel);panel.append(create,filterButton,moreButton,filterBox,moreBox);
+        originals[1].marker.after(panel);panel.append(create,filterButton,moreButton,filterBox,moreBox);if(searchNode){searchNode.classList.add('crm-mobile-inline-search');panel.prepend(searchNode);}
         filterBox.append(filters);moreBox.append(actions);controls.forEach(({node})=>moreBox.append(node));
         create.classList.add('crm-mobile-create');create.style.setProperty('--crm-create-icon',`url("data:image/svg+xml,${encodeURIComponent(svg('create').replace('<svg','<svg xmlns="http://www.w3.org/2000/svg"'))}")`);
       } else {
-        [...originals,...controls].forEach(({node,marker})=>marker.after(node));panel.remove();create.classList.remove('crm-mobile-create');create.style.removeProperty('--crm-create-icon');
+        [...originals,...controls].forEach(({node,marker})=>marker.after(node));panel.remove();searchNode?.classList.remove('crm-mobile-inline-search');create.classList.remove('crm-mobile-create');create.style.removeProperty('--crm-create-icon');
       }
       labels();
     }

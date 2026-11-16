@@ -12,15 +12,16 @@ import tenant_dialog_lifecycle as lifecycle
 
 
 @pytest.fixture
-def episodes(db, monkeypatch):
+def episodes(db, monkeypatch, request):
     import tenant_platform
-    monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED', 'true')
-    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED', 'true')
     monkeypatch.setattr(tenant_platform, '_connect', lambda: db)
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db)
     with db.cursor() as cur:
         lifecycle.migrate(cur)
+        from tenant_dialog_rollout import transition
+        mode=getattr(request,'param','active')
+        transition(cur,A,mode=mode,admission_enabled=mode=='active',expected_generation=0)
         # Receipts intentionally survive tenant business-row cleanup; isolate
         # this disposable fixture without adding destructive runtime cleanup.
         cur.execute('TRUNCATE saas_dialog_lifecycle_receipts')
@@ -87,7 +88,10 @@ def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     transfer=payload('transfer',1,target_employee_id=11)
     result=lifecycle.mutate({'tenant_id':A,'telegram_id':33},transfer)
     assert result['lifecycle']['operator_id']==11
-    assert lifecycle.mutate({'tenant_id':A,'telegram_id':33},transfer)==result
+    # Idempotency never grants the former operator access after transfer.
+    with pytest.raises(TenantLinearError) as replay:
+        lifecycle.mutate({'tenant_id':A,'telegram_id':33},transfer)
+    assert replay.value.status==404
     with episodes.cursor() as cur:
         with pytest.raises(TenantLinearError):lifecycle.require_access(cur,A,33,'connect',CA,'client')
         lifecycle.require_access(cur,A,11,'connect',CA,'client','update')
@@ -108,7 +112,7 @@ def test_ai_and_visibility_stay_exact_source_and_tenant(episodes):
     hidden_policy=SimpleNamespace(profile={'tenant_id':A,'telegram_id':33,'role':'owner'})
     allowed_policy=SimpleNamespace(profile={'tenant_id':A,'telegram_id':11,'role':'owner'})
     for policy,visible in [(hidden_policy,False),(allowed_policy,True)]:
-        sql=lifecycle.visibility_sql(policy,"'connect'","c.connect_channel_id::text",'c.conversation_id')
+        sql=lifecycle.visibility_sql(cur,policy,"'connect'","c.connect_channel_id::text",'c.conversation_id')
         assert bool(episodes.execute('SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid AND '+sql,(A,))) is visible
     episodes.commit()
 
@@ -219,22 +223,32 @@ def test_dismiss_requires_current_incoming_and_creates_no_episode_or_case(episod
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
 
 
-def test_feature_off_preserves_legacy_reads_ai_and_avoids_lifecycle_writes(episodes,monkeypatch):
-    command(actor=33)
-    before=state(episodes)
-    monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED','false')
+@pytest.mark.parametrize('episodes',['legacy','shadow'],indirect=True)
+def test_unactivated_tenant_preserves_legacy_reads_ai_and_no_episode_writes(episodes):
     with episodes.cursor() as cur:
         lifecycle.require_access(cur,A,11,'connect',CA,'client','update')
         assert lifecycle.ai_blocked(cur,A,'connect',CA,'client') is False
-        assert lifecycle.visibility_sql(SimpleNamespace(profile={'tenant_id':A,'telegram_id':11}))=='TRUE'
+        assert lifecycle.visibility_sql(cur,SimpleNamespace(profile={'tenant_id':A,'telegram_id':11}))=='TRUE'
         dialog={'provider':'connect','channel_id':CA,'conversation_id':'client','can_send':True}
         assert lifecycle.decorate(cur,A,11,dict(dialog))==dialog
         lifecycle.note_inbound(cur,A,CA,'client','new-disabled','2099-01-01T00:00:00Z')
     episodes.commit()
-    assert state(episodes)==before
-    with pytest.raises(TenantLinearError) as disabled:command('close',1,actor=33)
+    assert state(episodes) is None
+    with pytest.raises(TenantLinearError) as disabled:command()
     assert disabled.value.status==409
-    assert state(episodes)==before
+    assert state(episodes) is None
+
+
+def test_env_flags_cannot_disable_activated_ownership(episodes,monkeypatch):
+    command(actor=33)
+    monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED','false')
+    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED','false')
+    with episodes.cursor() as cur:
+        with pytest.raises(TenantLinearError) as denied:
+            lifecycle.require_access(cur,A,11,'connect',CA,'client','view')
+        assert denied.value.status==404
+    episodes.rollback()
+    assert state(episodes)['operator_id']==33
 
 
 def test_source_binding_revocation_and_none_scope_cannot_be_bypassed_by_claim(episodes,monkeypatch):
@@ -263,7 +277,10 @@ def test_source_binding_revocation_and_none_scope_cannot_be_bypassed_by_claim(ep
 
 def test_admission_gate_does_not_disable_existing_ownership(episodes,monkeypatch):
     command(actor=33)
-    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED','false')
+    from tenant_dialog_rollout import transition
+    with episodes.cursor() as cur:
+        transition(cur,A,mode='active',admission_enabled=False,expected_generation=1)
+    episodes.commit()
     with episodes.cursor() as cur:
         with pytest.raises(TenantLinearError) as denied:
             lifecycle.require_access(cur,A,11,'connect',CA,'client')

@@ -4,23 +4,25 @@ No inference from support tickets, AI assignments, role, phone, or group members
 """
 import hashlib
 import json
-import os
 import uuid
 from tenant_linear_policy import TenantLinearError
 
 
-def enabled():
-    return os.getenv('TENANT_DIALOG_LIFECYCLE_ENABLED', '').lower() in {'1', 'true', 'yes'}
+def enabled(cur, tenant):
+    from tenant_dialog_rollout import guard
+    return guard(cur, tenant).enforced
 
 
-def acceptance_enabled():
-    # Two-phase rollout: every reader must enforce ownership before the first
-    # process may create an exclusive claim during a rolling deployment.
-    return enabled() and os.getenv('TENANT_DIALOG_ACCEPT_ENABLED', '').lower() in {'1','true','yes'}
+def acceptance_enabled(cur, tenant):
+    from tenant_dialog_rollout import guard
+    state = guard(cur, tenant)
+    return state.enforced and state.admission_enabled
 
 
 def migrate(cur):
     """Explicit deployment preflight only. No automatic DDL or business-row backfill."""
+    from tenant_dialog_rollout import migrate as migrate_rollout
+    migrate_rollout(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_episodes (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id), id UUID NOT NULL,
       channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, lead_id BIGINT NOT NULL,
@@ -59,7 +61,7 @@ def migrate(cur):
 
 def record_dispatch(cur, tenant, channel, conversation, request_id, result):
     """Only a verified successful provider result inside the final send lock."""
-    if not enabled(): return
+    if not enabled(cur, tenant): return
     row=_row(cur,tenant,channel,conversation)
     if not row or row['state']!='accepted': return
     external=(result.get('message_id') or result.get('external_message_id')) if isinstance(result,dict) else result
@@ -76,7 +78,7 @@ def record_message(cur, tenant, channel, conversation, message_id):
     A send dispatched in an older episode stays there even if its local receipt
     is stored after close or after another episode has already been accepted.
     """
-    if not enabled(): return
+    if not enabled(cur, tenant): return
     from tenant_connect_dialog_equivalence import members, canonical
     conversation=canonical(cur,tenant,channel,conversation)
     leads=list(members(cur,tenant,channel,conversation).values())
@@ -103,6 +105,14 @@ def record_message(cur, tenant, channel, conversation, message_id):
             known=cur.fetchone()
             if known: episode_id=known['id']
         if episode_id is None:
+            # Pre-rollout receipts have no episode to join. Their delayed echo
+            # cannot be inferred to belong to the currently accepted episode.
+            cur.execute("""SELECT 1 FROM saas_chat_send_receipts r
+              WHERE r.tenant_id=%s::uuid AND r.lead_id=ANY(%s::bigint[])
+                AND COALESCE(r.route->>'lifecycle_episode_id','')=''
+                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,leads))
+            if cur.fetchone():return
+        if episode_id is None:
             # A late unknown send may belong to an older episode. Never guess
             # that an unmatched echo belongs to the currently accepted one.
             cur.execute("""SELECT 1 FROM saas_chat_send_receipts r
@@ -128,8 +138,8 @@ def _row(cur, tenant, channel, conversation):
     return cur.fetchone()
 
 
-def visibility_sql(policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id'):
-    if not enabled(): return 'TRUE'
+def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id'):
+    if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
     return f"""({provider_expr}<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
@@ -139,7 +149,7 @@ def visibility_sql(policy, provider_expr='routes.provider', channel_expr='routes
 
 
 def require_access(cur, tenant, actor, provider, channel, conversation, action='view'):
-    if not enabled() or provider != 'connect': return
+    if not enabled(cur, tenant) or provider != 'connect': return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
     from tenant_ai_dialog_scope import lock_dialog
@@ -154,7 +164,7 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
 
 
 def ai_blocked(cur, tenant, provider, channel, conversation):
-    if not enabled() or provider != 'connect': return False
+    if not enabled(cur, tenant) or provider != 'connect': return False
     row = _row(cur, tenant, channel, conversation)
     return bool(row and row['state'] in {'accepted', 'closed', 'dismissed'})
 
@@ -165,7 +175,7 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     Unknown timestamps, old history, echo and duplicate events cannot reopen.
     Opening a queue item does not create an episode or a case.
     """
-    if not enabled() or is_replay or not message_id or not event_at: return
+    if not enabled(cur, tenant) or is_replay or not message_id or not event_at: return
     from tenant_ai_dialog_scope import lock_dialog
     from tenant_connect_dialog_equivalence import canonical
     conversation=canonical(cur,tenant,channel,conversation)
@@ -204,7 +214,7 @@ def _targets(cur, tenant, policy, channel, actor):
 
 
 def decorate(cur, tenant, actor, dialog, *, details=True):
-    if not enabled() or dialog.get('provider')!='connect': return dialog
+    if not enabled(cur, tenant) or dialog.get('provider')!='connect': return dialog
     row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id'])
     state=(row or {}).get('state','waiting')
     own=bool(row and row.get('operator_id')==actor)
@@ -217,8 +227,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True):
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
-        'can_accept':state=='waiting' and acceptance_enabled() and bool(dialog.get('can_send')),
-        'can_dismiss':state=='waiting' and acceptance_enabled() and bool(dialog.get('can_send')) and bool(last),
+        'can_accept':state=='waiting' and acceptance_enabled(cur, tenant) and bool(dialog.get('can_send')),
+        'can_dismiss':state=='waiting' and acceptance_enabled(cur, tenant) and bool(dialog.get('can_send')) and bool(last),
         'last_inbound_id':last.get('id'),
         'can_close':state=='accepted' and own,'can_transfer':state=='accepted' and own,
         'can_submit_case':state=='closed' and own}
@@ -239,25 +249,34 @@ def mutate(profile, payload):
     if payload.get('action')=='case':
         from tenant_dialog_episode_cases import submit
         return submit(profile,payload)
-    if not enabled(): raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
     from tenant_platform import _connect
     from tenant_operator_access import access, _resolve_connect_route
     from tenant_dialog_access import require_source
     from tenant_ai_dialog_scope import lock_dialog
     action=payload.get('action')
     if action not in {'accept','close','transfer','case','dismiss'}: raise TenantLinearError('Неизвестное действие.')
-    if action in {'accept','dismiss'} and not acceptance_enabled():
-        raise TenantLinearError('Приём новых диалогов ещё не включён. Обновление очереди завершается.',409)
     request_id=str(uuid.UUID(str(payload.get('request_id'))))
     revision=payload.get('expected_revision')
     if type(revision) is not int or revision<0: raise TenantLinearError('Обновите диалог.',409)
     digest=hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     with _connect() as conn:
         with conn.cursor() as cur:
+            tenant = str(uuid.UUID(str(profile.get('tenant_id'))))
+            if not enabled(cur, tenant):
+                raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
+            if action in {'accept','dismiss'} and not acceptance_enabled(cur, tenant):
+                raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
+            target = None
+            if action == 'transfer':
+                target=payload.get('target_employee_id')
+                # Preserve all existing locked membership/source checks, but
+                # acquire them BEFORE the route lock to avoid lock inversion.
+                if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor)}:
+                    raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)
@@ -265,6 +284,7 @@ def mutate(profile, payload):
             receipt=cur.fetchone()
             if receipt:
                 if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
+                require_access(cur,tenant,actor,'connect',channel,conversation,'view')
                 return receipt['result']
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
@@ -302,9 +322,6 @@ def mutate(profile, payload):
                 if not row or row.get('operator_id')!=actor: raise TenantLinearError('Диалог недоступен.',404)
                 if row['state']!='accepted': raise TenantLinearError('Диалог уже завершён.',409)
                 if action=='transfer':
-                    target=payload.get('target_employee_id')
-                    if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor)}:
-                        raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
                     cur.execute('UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(target,tenant,channel,conversation))
                     cur.execute('UPDATE saas_dialog_episodes SET operator_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(target,tenant,row['id']))
                 else:
@@ -328,7 +345,7 @@ def record_reconciled_dispatch(cur,tenant,actor,lead,request_id,channel,conversa
     verified the provider's exact request/author/source/input receipt contract.
     This does not authorize a provider send or change the active operator.
     """
-    if not enabled():return
+    if not enabled(cur, tenant):return
     external=result.get('message_id') if isinstance(result,dict) else None
     if not isinstance(external,str) or not external or result.get('provider_accepted') is not True:
         raise TenantLinearError('Подтверждённая отправка не найдена.',409)

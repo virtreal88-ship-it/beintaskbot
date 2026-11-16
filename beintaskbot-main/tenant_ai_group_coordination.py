@@ -58,6 +58,8 @@ def create_schema(conn):
 
 
 def lock_group(cur, tenant, conversation):
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     if group_jid(conversation):
         cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                     ('ai-group:' + json.dumps([str(tenant), 'connect', conversation]),))
@@ -568,6 +570,8 @@ def configure(profile, data):
                 cur.execute("SET LOCAL lock_timeout = '1500ms'")
                 cur.execute("SET LOCAL statement_timeout = '5000ms'")
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, profile['tenant_id'])
             policy = _mutation_policy(cur, profile)
             tenant, actor = _authorize(cur, profile)
             lock_group(cur, tenant, conversation)

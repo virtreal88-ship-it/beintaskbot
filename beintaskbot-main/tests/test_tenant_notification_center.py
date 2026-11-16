@@ -350,10 +350,11 @@ def test_lifecycle_hides_consultation_bell_content_without_owner_exception(ready
     consultations.dispatch(PROFILE,result['id'],data['request_id'])
     reply(local,result)
     assert center.listing(PROFILE)['unread_count']==1
-    with local.cursor() as cur:lifecycle.migrate(cur)
+    with local.cursor() as cur:
+        lifecycle.migrate(cur)
+        from tenant_dialog_rollout import transition
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
     local.commit()
-    monkeypatch.setenv('TENANT_DIALOG_LIFECYCLE_ENABLED','true')
-    monkeypatch.setenv('TENANT_DIALOG_ACCEPT_ENABLED','true')
     monkeypatch.setattr(tenant_platform,'_connect',lambda:local)
     lifecycle.mutate({'tenant_id':A,'telegram_id':33},dict(provider='connect',channel_id=CA,
       conversation_id='client',lead_id=41,action='accept',expected_revision=0,request_id=str(uuid.uuid4())))

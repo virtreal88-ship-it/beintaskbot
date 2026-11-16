@@ -14,6 +14,8 @@ def _access(cur, profile):
     if not isinstance(profile, dict):
         raise TenantLinearError('Нет доступа.', 403)
     tenant = identifier(profile.get('tenant_id'))
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     try:
         actor = int(profile.get('telegram_id'))
     except (TypeError, ValueError):
@@ -89,7 +91,7 @@ def _eligible(cur, tenant, actor, policy):
         consult_guard = ('TRUE' if module_allowed('dialogs') else 'FALSE') + ' AND '+sql_filter(policy,"'connect'",'c.channel_id::text')+''' AND r.id IS NOT NULL AND v.lead_id IS NOT NULL AND ch.active=TRUE'''
         consult_guard += ' AND (c.case_id IS NULL OR ' + ('TRUE' if module_allowed('support') else 'FALSE') + ')'
         from tenant_dialog_lifecycle import visibility_sql
-        consult_guard += ' AND '+visibility_sql(policy,"'connect'",'c.channel_id::text','c.conversation_id')
+        consult_guard += ' AND '+visibility_sql(cur,policy,"'connect'",'c.channel_id::text','c.conversation_id')
         if ready.get('links'):
             consult_guard += ''' AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
               WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.channel_id AND dl.source_id=c.conversation_id AND dl.active)'''
@@ -177,7 +179,7 @@ def _eligible(cur, tenant, actor, policy):
         AND cv.connect_channel_id::text=p.target_channel AND p.target_conversation<>'' AND cc.active=TRUE
         AND encode(convert_to(cv.conversation_id,'UTF8'),'hex')=''' + _parameter_bytes('p.target_conversation') + ')'
     from tenant_dialog_lifecycle import visibility_sql
-    dialog_guard=dialog_guard[:-1]+' AND '+visibility_sql(policy,"'connect'",'cv.connect_channel_id::text','cv.conversation_id')+')'
+    dialog_guard=dialog_guard[:-1]+' AND '+visibility_sql(cur,policy,"'connect'",'cv.connect_channel_id::text','cv.conversation_id')+')'
     if dialog_scope is not None:
         dialog_guard='('+dialog_guard+') AND '+sql_filter(policy,"'connect'",'p.target_channel')
     deal_scope, deal_args = [], []

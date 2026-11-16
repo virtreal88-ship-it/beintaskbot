@@ -14,6 +14,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
     is_connect = message_id.startswith('connect:')
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard
+            guard(cur, tenant)
             from tenant_scoped_access import scoped_access_enabled
             if scoped_access_enabled():
                 from tenant_scoped_access_store import read_access_profile

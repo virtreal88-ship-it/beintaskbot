@@ -946,6 +946,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if len(matches) != 1:
                 raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
             tenant = matches[0]
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
@@ -1132,7 +1134,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                     from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-                    if (not lifecycle_enabled() and stored and stored.get('id')
+                    if (not lifecycle_enabled(cur, tenant) and stored and stored.get('id')
                             and data.get('conversationIdentityConflict') is not True):
                         from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                         enqueue_case_extraction(cur,tenant,channel_id,conversation,lead_id,
@@ -1283,7 +1285,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 record_message(cur,tenant,channel_id,conversation,str(source_message['id']))
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             from tenant_connect_identity import conflicted
-            if (lifecycle_enabled() and not outbound and message_inserted and not ai_origin and employee is None
+            if (lifecycle_enabled(cur, tenant) and not outbound and message_inserted and not ai_origin and employee is None
                     and not uncertain_origin and not control_replayed and not identity_conflict
                     and not role_override and not conflicted(cur,tenant,channel_id,conversation)):
                 from tenant_dialog_lifecycle import note_inbound
@@ -1313,7 +1315,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                         mark_operator_reply(tenant,queued_payload[3],channel_id,conversation,connection=conn,actor=employee)
                     else:
                         stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
-                    if not lifecycle_enabled():
+                    if not lifecycle_enabled(cur, tenant):
                         from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                         enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
                             str(source_message['id']),actor_id=employee)
@@ -1327,7 +1329,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 return accepted
             from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-            if message_inserted and not lifecycle_enabled():
+            if message_inserted and not lifecycle_enabled(cur, tenant):
                 enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
             from tenant_ai_agent_connect import enqueue
             # AI admission is an optional hook on the durable Connect receipt.
@@ -1566,6 +1568,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         _schema(conn)
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
             from tenant_dialog_lifecycle import ai_blocked
             if ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
@@ -1716,6 +1720,8 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
         _schema(conn)
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
@@ -1739,7 +1745,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                 cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                             (_json(update),tenant,str(existing['id'])))
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-            if lifecycle_enabled():
+            if lifecycle_enabled(cur, tenant):
                 cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,'connect:'+external_id,'connect:'+route['channel_id'],lead_id))
                 membership_row=cur.fetchone()
                 if membership_row:
@@ -1749,7 +1755,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                 from tenant_ai_agent_connect import mark_operator_reply
                 mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
                 from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-                if saved and not lifecycle_enabled():
+                if saved and not lifecycle_enabled(cur, tenant):
                     from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                     enqueue_case_extraction(cur,tenant,str(route['channel_id']),str(route['conversation_id']),
                         lead_id,str(saved['id']),actor_id=actor)

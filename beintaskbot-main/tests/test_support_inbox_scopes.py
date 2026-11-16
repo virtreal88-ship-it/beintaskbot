@@ -134,7 +134,7 @@ def test_dialog_projection_does_not_leak_ticket_fields(db,seeded):
     db.execute('UPDATE saas_support_tickets SET assigned_to=32 WHERE tenant_id=%s',(A,));db.commit()
     with db.cursor() as cur:
         _,_,policy=access(cur,profile,'dialogs')
-        sql,args=projection(policy)
+        sql,args=projection(cur,policy)
         cur.execute(sql+"SELECT conversation_id,assigned_to FROM visible WHERE provider='connect' AND conversation_id LIKE 'case-%%' ORDER BY conversation_id",(A,A,*args,False))
         rows=cur.fetchall()
     assert [r['assigned_to'] for r in rows]==[32,None,None,None]

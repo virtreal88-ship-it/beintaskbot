@@ -85,7 +85,7 @@ def own_receipt(session, lead_id, request_id):
         ensure_manual_schema(conn)
         with conn.cursor() as cur:
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-            options={'lifecycle_status':request_id} if lifecycle_enabled() else {}
+            options={'lifecycle_status':request_id} if lifecycle_enabled(cur, session['tenant_id']) else {}
             profile, connection, integration = authority(cur, session, lead_id,**options)
             cur.execute('''SELECT state,message_id,route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
               AND actor_id=%s AND lead_id=%s AND request_id=%s::uuid''',
@@ -136,12 +136,12 @@ def record_acceptance(session, item, receipt):
         conn.commit()
         with conn.cursor() as cur:
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-            receipt_options={'lifecycle_status':request_id} if lifecycle_enabled() else {}
+            receipt_options={'lifecycle_status':request_id} if lifecycle_enabled(cur, session['tenant_id']) else {}
             profile, connection, _ = authority(cur, session, item['lead_id'],**receipt_options)
             if connection != item['connection'] or connection[0] != 'connect':
                 raise TenantLinearError('Dialoqa giriş dəyişib.', 409)
             lock_dialog(cur, tenant, 'connect', connection[1], connection[2])
-            if lifecycle_enabled():
+            if lifecycle_enabled(cur, session['tenant_id']):
                 from tenant_dialog_lifecycle import record_reconciled_dispatch
                 record_reconciled_dispatch(cur,tenant,actor,item['lead_id'],request_id,connection[1],connection[2],receipt)
             cur.execute('''SELECT state,route,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s
@@ -188,7 +188,7 @@ def record_acceptance(session, item, receipt):
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,'','audio','',now(),%s::jsonb)''',
                             (uuid.uuid4(), tenant, item['lead_id'], external, 'connect:' + connection[1], author, _json(facts)))
-            if lifecycle_enabled():
+            if lifecycle_enabled(cur, session['tenant_id']):
                 from tenant_dialog_lifecycle import record_message
                 cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,external,'connect:'+connection[1],item['lead_id']))
                 membership_row=cur.fetchone()

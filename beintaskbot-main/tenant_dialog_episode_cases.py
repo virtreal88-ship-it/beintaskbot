@@ -35,6 +35,14 @@ def _closed(cur,profile,channel,conversation,selected):
       (tenant,selected,channel,conversation,actor))
     episode=cur.fetchone()
     if not episode:raise TenantLinearError('Завершённое обращение недоступно.',404)
+    from tenant_connect_dialog_equivalence import members
+    leads=list(members(cur,tenant,channel,conversation).values())
+    cur.execute("""SELECT 1 FROM saas_chat_send_receipts r
+      WHERE r.tenant_id=%s::uuid AND r.lead_id=ANY(%s::bigint[])
+        AND COALESCE(r.route->>'lifecycle_episode_id','')=''
+        AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,leads))
+    if cur.fetchone():
+        raise TenantLinearError('В этом диалоге осталась старая отправка с неподтверждённым результатом. Сначала проверьте её статус; анализ кейса не запущен.',409)
     cur.execute('''SELECT 1 FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
       AND route->>'lifecycle_episode_id'=%s AND state IN ('preparing','sending','unknown') LIMIT 1''',(tenant,selected))
     if cur.fetchone():raise TenantLinearError('Отправка сообщения ещё проверяется. Дождитесь результата.',409)
@@ -79,7 +87,6 @@ def submit(profile,payload):
     from tenant_support_access import require_create
     from tenant_operator_case_submission import assignment
     import tenant_knowledge_candidates_store as store
-    if not enabled():raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
     if payload.get('provider')!='connect':raise TenantLinearError('Выберите источник Connect.')
     try:
         uuid.UUID(str(payload.get('request_id')))
@@ -88,6 +95,8 @@ def submit(profile,payload):
     except (KeyError,ValueError,TypeError):raise TenantLinearError('Обновите диалог.',409) from None
     with _connect() as conn:
         with conn.cursor() as cur:
+            if not enabled(cur, profile['tenant_id']):
+                raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
             tenant,actor,_=access(cur,profile,action='update')
             require_create(cur,profile)
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)

@@ -1,0 +1,36 @@
+name: Compact mobile task drag handle
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/ui/src/main.jsx'
+      - 'beintaskbot-main/ui/src/app-theme.css'
+      - 'beintaskbot-main/docs/tenant-chakra-ui.js'
+      - 'beintaskbot-main/tests/test_task_move*'
+      - 'beintaskbot-main/tests/test_mobile_task_grip_browser.cjs'
+      - '.github/workflows/mobile-task-grip.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  task-grip:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .support-test-deps --no-package-lock playwright@1.62.1 jsdom@26.1.0
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: echo "CHROMIUM_EXECUTABLE_PATH=$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")" >> "$GITHUB_ENV"
+      - run: |
+          node tests/test_task_move_ui.cjs
+          node tests/test_mobile_task_grip_browser.cjs
+          node tests/test_task_move_browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-task-grip
+          path: beintaskbot-main/artifacts/

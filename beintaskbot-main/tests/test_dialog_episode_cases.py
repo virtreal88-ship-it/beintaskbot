@@ -219,3 +219,15 @@ def test_confirmed_result_with_invented_instruction_stays_draft(episodes,ready):
     result=command('case',2,episode_id=episode)
     assert result['publication']['state']=='draft' and 'Шаги решения' in result['publication']['reason']
     assert not db.execute('SELECT * FROM saas_knowledge_candidate_sources')
+
+
+def test_legacy_unknown_send_blocks_case_before_ai_cost(episodes,ready):
+    db,generation,_=ready
+    episode,_=close_with_messages(db)
+    db.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,11,%s::uuid,41,'legacy','unknown','{}'::jsonb)",(A,str(uuid.uuid4())))
+    db.commit()
+    with pytest.raises(TenantLinearError) as blocked:
+        lifecycle.mutate(PROFILE,payload('case',2,episode_id=episode))
+    assert blocked.value.status==409
+    assert 'старая отправка' in str(blocked.value)
+    assert generation.call_count==0

@@ -176,6 +176,8 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
     Explicit operator assignments (including an explicit no-agent choice),
     Human/Pause, identity quarantine and inactive routes are immutable here.
     """
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     from tenant_ai_dialog_scope import lock_dialog
     from tenant_ai_agent_access import tenant_status_allows_ai
     from tenant_connect_identity import conflicted
@@ -373,6 +375,8 @@ def allowed(job: dict, connection=None, *, require_assignment=True) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             from tenant_dialog_lifecycle import ai_blocked
             if ai_blocked(cur, tenant, 'connect', channel, conversation):
                 return False
@@ -442,6 +446,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
             from tenant_dialog_lifecycle import ai_blocked
             if ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
@@ -751,6 +757,8 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
     a separate idempotent client-dialog job anchored to the latest customer
     message in the same open case and captures the active conversation revision.
     """
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     if not quoted_message_id:return False
     # Every client continuation shares the dialog fence with customer admission,
     # final send and case edits. Read the route first, then revalidate it below.
@@ -932,6 +940,8 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, job['tenant_id'])
             lock_dialog(cur,job['tenant_id'],'connect',job['channel_id'],job['conversation_id'])
             recorded = handoff_recorded(cur, job)
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
@@ -969,6 +979,8 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             from tenant_connect_dialog_equivalence import lead_members
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
@@ -1018,6 +1030,8 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             channel_id = lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
             cur.execute("SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s", (tenant, channel_id, conversation_id, int(lead_id)))
             if not cur.fetchone():
@@ -1058,6 +1072,8 @@ def group_context(job, rows, through):
     from tenant_connect_group_history import page
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, job['tenant_id'])
             cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
               AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s''',
               (job['tenant_id'],job['channel_id'],job['conversation_id'],job['lead_id']))

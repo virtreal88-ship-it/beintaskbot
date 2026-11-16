@@ -18,10 +18,10 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   assert.equal(await sidebar.evaluate(el=>el.inert),false);
   assert(await nav.evaluate(el=>el.scrollWidth>el.clientWidth),'overflow scrolls within bar');
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no page overflow');
-  const items=nav.locator('[data-view]:visible');const count=await items.count();assert(count>5,'every permitted route is retained');
+  const items=nav.locator(':is([data-view],[data-report-link]):visible');const count=await items.count();assert(count>5,'every permitted route is retained');
   const compact=await items.evaluateAll(items=>items.map(el=>{const b=el.getBoundingClientRect(),icon=el.querySelector('span:first-child').getBoundingClientRect(),label=el.querySelector('.app-nav-label').getBoundingClientRect();return {width:b.width,iconOffset:Math.abs(icon.x+icon.width/2-b.x-b.width/2),labelOffset:Math.abs(label.x+label.width/2-b.x-b.width/2),textAlign:getComputedStyle(el).textAlign}}));
-  for(const item of compact){assert.equal(item.width,72,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
-  assert(await items.nth(3).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least four sections visible without scrolling at 320px');
+  for(const item of compact){assert.equal(item.width,64,'route must be a compact tile, never viewport-wide');assert(item.iconOffset<1,'icon centered');assert(item.labelOffset<1,'label box centered');assert.equal(item.textAlign,'center');}
+  assert(await items.nth(4).evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'at least five sections visible without scrolling at 320px');
   fs.mkdirSync(path.join(root,'artifacts/mobile-bottom-nav'),{recursive:true});await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/compact-${width}-${theme}.png`)});
   await items.last().focus();await page.keyboard.press('Home');assert(await items.first().evaluate(el=>el===document.activeElement));
   await page.keyboard.press('End');assert(await items.last().evaluate(el=>el===document.activeElement));
@@ -56,10 +56,11 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
 
    await page.evaluate(()=>{document.querySelector('main').innerHTML='<section id="view-dialogs" class="view active"><div id="operatorDialogs" data-conversation-open="true"><div class="operator-workspace" data-selected="true"><div class="operator-conversation-pane"><header style="height:58px;flex:none">Client</header><div class="operator-conversation-content"><div class="operator-dialog-body"><div class="operator-chat-main"><div class="operator-chat-scrollarea" style="overflow:auto"><div style="height:2000px">Messages</div></div><div class="operator-composer" style="flex:none"><textarea id="chatText">draft</textarea><button id="sendChat">Send</button></div></div></div></div></div></div></div></section>';window.scrollTo(0,0)});
    await page.waitForTimeout(250);
-   let send=await page.locator('#sendChat').boundingBox();box=await sidebar.boundingBox();assert(send.y+send.height<=box.y,'real fullscreen send button above menu');
+   let send=await page.locator('#sendChat').boundingBox();assert.equal(await sidebar.isVisible(),false,'open conversation hides menu without focus');assert(send.y+send.height<=900,'composer uses full viewport');
    await page.locator('#chatText').focus();await page.setViewportSize({width,height:450});await page.waitForTimeout(100);assert.equal(await sidebar.isVisible(),false);send=await page.locator('#sendChat').boundingBox();assert(send.y+send.height<=450,'keyboard viewport retains send button');assert.equal(await page.locator('#chatText').inputValue(),'draft');
-   await page.locator('#chatText').blur();await page.setViewportSize({width,height:900});await page.waitForTimeout(100);send=await page.locator('#sendChat').boundingBox();box=await sidebar.boundingBox();assert(send.y+send.height<=box.y,'closing keyboard restores composer above nav');
+   await page.locator('#chatText').blur();await page.setViewportSize({width,height:900});await page.waitForTimeout(100);send=await page.locator('#sendChat').boundingBox();assert.equal(await sidebar.isVisible(),false,'closing keyboard must not restore menu while chat is open');assert(send.y+send.height<=900,'composer retains full viewport');
    await page.screenshot({path:path.join(root,`artifacts/mobile-bottom-nav/fullscreen-chat-${width}-${theme}.png`)});
+   await page.evaluate(()=>document.getElementById('operatorDialogs').dataset.conversationOpen='false');await page.waitForTimeout(60);assert.equal(await sidebar.isVisible(),true,'attribute-only close restores nav');
   }
   await page.setViewportSize({width:1440,height:900});await page.waitForTimeout(50);assert.equal(await sidebar.evaluate(el=>getComputedStyle(el).position),'sticky');assert.equal(await sidebar.evaluate(el=>el.inert),false);
   await page.setViewportSize({width,height:900});await page.waitForTimeout(50);assert((await sidebar.boundingBox()).y>790);

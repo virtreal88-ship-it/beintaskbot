@@ -96,7 +96,7 @@ def test_receipt_persistence_after_close_requires_exact_dispatch_proof(readers,m
     request_id=str(uuid.uuid4());external=str(uuid.uuid4())
     result=command()
     readers.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,11,%s::uuid,41,'hash','sending',%s::jsonb)",
-                    (A,request_id,json.dumps({'lifecycle_episode_id':result['lifecycle']['id']})))
+                    (A,request_id,json.dumps({'lifecycle_episode_id':result['lifecycle']['id'],'lifecycle_generation':1})))
     readers.commit()
     route={'channel_id':CA,'conversation_id':'client','api_key':'test-only'}
     monkeypatch.setattr(sender,'connect_route',lambda *args,**kwargs:route)
@@ -172,4 +172,37 @@ def test_unknown_outbound_echo_before_reconciliation_stays_unbound_then_old_epis
     assert len(bindings)==1
     assert str(bindings[0]['episode_id'])==original
     assert not readers.execute('SELECT 1 FROM saas_dialog_episode_messages WHERE episode_id=%s::uuid AND message_id=%s::uuid',(current,message))
+    readers.commit()
+
+
+@pytest.mark.parametrize('generation',[None,0,2])
+def test_stale_prepared_send_generation_never_dispatches(readers,monkeypatch,generation):
+    import json
+    from tenant_chat_send_schema import ensure_schema
+    ensure_schema(readers)
+    request_id=str(uuid.uuid4())
+    result=command()
+    receipt={'lifecycle_episode_id':result['lifecycle']['id']}
+    if generation is not None:receipt['lifecycle_generation']=generation
+    readers.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,11,%s::uuid,41,'hash','sending',%s::jsonb)", (A,request_id,json.dumps(receipt)))
+    readers.commit()
+    route={'channel_id':CA,'conversation_id':'client','api_key':'test-only'}
+    monkeypatch.setattr(sender,'connect_route',lambda *args,**kwargs:route)
+    item={'key':(A,11,request_id),'command':{'lead_id':41,'request_id':request_id},'connection':['connect',CA,'client']}
+    calls=[]
+    with pytest.raises(TenantLinearError) as denied:
+        sender.dispatch_guarded(item,route,lambda *args:calls.append(args))
+    assert denied.value.status==409
+    assert calls==[]
+
+
+def test_legacy_unknown_echo_cannot_attach_to_current_episode(readers):
+    from tenant_chat_send_schema import ensure_schema
+    ensure_schema(readers)
+    readers.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,11,%s::uuid,41,'hash','unknown','{}'::jsonb)",(A,str(uuid.uuid4())))
+    readers.commit();command()
+    message=str(uuid.uuid4())
+    readers.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,41,%s,%s,'outgoing','legacy late echo')",(message,A,'connect:'+str(uuid.uuid4()),'connect:'+CA))
+    with readers.cursor() as cur:lifecycle.record_message(cur,A,CA,'client',message)
+    assert not readers.execute('SELECT 1 FROM saas_dialog_episode_messages WHERE message_id=%s::uuid',(message,))
     readers.commit()

@@ -1,5 +1,16 @@
 """Lifecycle takeover guards: no provider calls, tenant/source exact scope."""
 from unittest.mock import MagicMock, patch
+import pytest
+from tenant_dialog_rollout import RolloutState
+
+@pytest.fixture(autouse=True)
+def tenant_rollout(monkeypatch):
+    # These unit tests isolate route/AI behavior. Real advisory locking and
+    # persisted tenant states are exercised in native rollout tests.
+    state = {"value": RolloutState("active", True, True, 1)}
+    monkeypatch.setattr("tenant_dialog_rollout.guard", lambda cur, tenant, **kw: state["value"])
+    return state
+
 
 import tenant_ai_agent_connect as ai
 import tenant_ai_group_coordination as groups
@@ -75,7 +86,8 @@ def test_operator_receipt_stays_channel_local_for_managed_episode():
     assert job_writes[0].args[1]==(TENANT,CONVERSATION,CHANNEL)
 
 
-def test_legacy_operator_receipt_preserves_existing_group_stop():
+def test_legacy_operator_receipt_preserves_existing_group_stop(tenant_rollout):
+    tenant_rollout["value"] = RolloutState()
     conn,cur=connection()
     cur.fetchone.return_value={'present':True}
     with patch.object(ai,'ensure_schema'), patch.object(ai,'lock_dialog',return_value=CHANNEL), \

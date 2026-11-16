@@ -41,9 +41,9 @@ async def deliver(bot, private_key: str, claims: dict, logger) -> None:
             if not item['send']: continue
             loop = asyncio.get_running_loop()
             async def bounded_attempt():
-                from tenant_scoped_access import scoped_access_enabled
-                from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-                if (not scoped_access_enabled() and not lifecycle_enabled()) or item.get('event') != 'incoming_message':
+                # Incoming-message dispatch always retains a tenant fence,
+                # including legacy/shadow; bound its provider wait uniformly.
+                if item.get('event') != 'incoming_message':
                     return await attempt(item, channel, bot, text=message, parts=message_parts,
                         push_sender=send_push, private_key=private_key, claims=claims)
                 try:
