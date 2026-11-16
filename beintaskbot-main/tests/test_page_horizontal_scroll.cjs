@@ -108,7 +108,12 @@ async function runBrowser(width) {
   assert(!result.exceptionDetails,'browser completed fixture: '+JSON.stringify(result.exceptionDetails));
   assert(result.result?.value,'browser returned fixture measurements');
   return result.result.value;
- } finally {clearTimeout(deadline);child.kill();}
+ } finally {
+  clearTimeout(deadline);
+  if(child.exitCode===null&&child.signalCode===null){
+   await new Promise(resolve=>{child.once('close',resolve);child.kill();});
+  }
+ }
 }
 (async()=>{
 try {
@@ -133,5 +138,5 @@ try {
   if(r.cases.width<980) assert(r.casesMoved,'narrow case table scrolls');
   console.log('PASS:',JSON.stringify(r));
  }
-} finally {fs.rmSync(dir,{recursive:true,force:true});}
+} finally {fs.rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 })().catch(error=>{console.error(error);process.exitCode=1;});
