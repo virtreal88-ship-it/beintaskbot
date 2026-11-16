@@ -672,6 +672,7 @@
       $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>${idLabel}</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
       $('modalContent').querySelector('.meta')?.insertAdjacentHTML('afterend',`<button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}" style="margin-top:12px">Dublikatları tap</button>`);
       $('dealModal').classList.add('show');
+      window.tenantKommoDealCard?.mount({host:$('modalContent'),deal:x,api,isCurrent:()=>revision===chatRevision&&identity===chatIdentity()});
       document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
       if(window.tenantChatSend)window.tenantChatSend.bind({api,identity,leadId:x.kommo_lead_id,me:state.me,
         isCurrent:()=>revision===chatRevision&&identity===chatIdentity(),reload:()=>loadChat(x.kommo_lead_id)});
@@ -810,6 +811,7 @@
 <script src="/assets/tenant-chat-import.js"></script>
 <script src="/assets/tenant-task-flow.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
+<script src="/assets/tenant-kommo-deal-card.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
 <script src="/assets/tenant-deal-completion.js"></script>
 <script src="/assets/tenant-diagnostics.js"></script>
