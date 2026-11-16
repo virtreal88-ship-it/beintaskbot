@@ -10,12 +10,12 @@
   function mount({api,id,member,signal,isCurrent,line,first}) {
     const box=$('chatRows'),scroller=box.closest('.deal-chat-history'),c=copy();
     const status=document.createElement('div');status.className='deal-chat-status';status.style.cssText='font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;gap:6px;align-items:center';status.setAttribute('role','status');box.before(status);
-    let loaded=false,flight=null,queued=null,revision=0;
+    let loaded=false,flight=null,queued=null,refreshFlight=null,revision=0;
     const valid=()=>isCurrent()&&!signal.aborted&&box===$('chatRows');
     const announce=(name,detail={})=>document.dispatchEvent(new CustomEvent(name,{detail:{lead_id:id,...detail}}));
     const notice=(message,action,label=c.retry)=>{status.replaceChildren(document.createTextNode(message));if(action){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=label;button.onclick=action;status.append(' ',button);}};
     const denied=error=>[401,403,404,409].includes(error.status);
-    function failure(error){if(!valid()||error.name==='AbortError')return;if(denied(error)){loaded=false;box.replaceChildren();announce('tenant-chat-history-reset');notice(error.message);document.querySelectorAll('#chatText,#sendChat,#tcComposerPrimary,#tcAiMenuToggle').forEach(n=>n.disabled=true);}else notice(loaded?c.stale:error.message,()=>load(true));}
+    function failure(error){if(!valid()||error.name==='AbortError')return;if(denied(error)){revision++;loaded=false;box.replaceChildren();announce('tenant-chat-history-reset');notice(error.message);document.querySelectorAll('#chatText,#sendChat,#tcComposerPrimary,#tcAiMenuToggle').forEach(n=>n.disabled=true);}else notice(loaded?c.stale:error.message,()=>load(true));}
     function apply(data,reset=false){
       if(!valid())return;
       const messages=data.messages||[],nodes=new Map([...box.querySelectorAll('[data-chat-id]')].map(n=>[n.dataset.chatId,n]));
@@ -44,17 +44,22 @@
       notice(data.stale?c.stale:(messages.length||box.children.length?'':c.empty),data.stale?()=>load(true):null);
       if(scroller&&(bottom||reset||!nodes.size))scroller.scrollTop=scroller.scrollHeight;
     }
-    async function refresh(){
+    function refresh(){
+      if(refreshFlight)return refreshFlight;
+      const serial=revision;
       const query=new URLSearchParams({lead_id:id,limit:size,recent:'1',refresh:'1',expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
       notice(c.updating);
-      try{const data=await api('/api/platform/crm/chat?'+query,{signal});if(valid())apply(data);}
-      catch(error){failure(error);}
+      refreshFlight=(async()=>{
+        try{const data=await api('/api/platform/crm/chat?'+query,{signal});if(valid()&&serial===revision)apply(data);}
+        catch(error){if(serial===revision||denied(error))failure(error);}
+      })().finally(()=>{refreshFlight=null;});
+      return refreshFlight;
     }
     function load(provider=false,prefetched,reset=false){
       if(flight){if(!queued)queued=flight.then(()=>{queued=null;return valid()?load(provider,undefined,reset):undefined;});return queued;}
       const serial=++revision;
       if(!loaded)notice(c.loading);
-      flight=(async()=>{const result=await(prefetched||read({api,id,member,signal}));if(!valid()||serial!==revision)return;if(result.error){failure(result.error);return;}apply(result.data,reset);if(provider&&valid())await refresh();})().finally(()=>{flight=null;});
+      flight=(async()=>{const result=await(prefetched||read({api,id,member,signal}));if(!valid()||serial!==revision)return;if(result.error){failure(result.error);return;}apply(result.data,reset);if(provider&&valid())void refresh();})().finally(()=>{flight=null;});
       return flight;
     }
     void load(true,first);
