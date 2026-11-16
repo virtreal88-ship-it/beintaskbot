@@ -8,7 +8,7 @@ const shell=read('ui/src/app-shell.js').replace("import { installMobilePageHeade
 for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark']){
  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent(html);await page.evaluate(()=>document.querySelectorAll('.nav [data-view],.nav [data-report-link]').forEach(el=>{el.hidden=false;el.style.removeProperty('display')}));await page.evaluate(theme=>{window.tenantI18n={language:'ru',t:key=>key};localStorage?.setItem?.('tenant-app-theme',theme)},theme).catch(()=>page.evaluate(()=>window.tenantI18n={language:'ru',t:key=>key}));
- await page.addScriptTag({content:shell});await page.addStyleTag({content:dialogCSS});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
+ await page.addScriptTag({content:shell});await page.addScriptTag({content:read('docs/tenant-mobile-crm-toolbar.js')});await page.addStyleTag({content:dialogCSS});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
  await page.waitForTimeout(80);
  assert.deepEqual(errors,[],'shell and header must execute before layout assertions');
  const sidebar=page.locator('.shell>aside'),nav=sidebar.locator('.nav');
@@ -27,6 +27,20 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   await page.keyboard.press('End');assert(await items.last().evaluate(el=>el===document.activeElement));
   let last=await items.last().boundingBox();assert(last.x>=0&&last.x+last.width<=width+1,'last route reachable horizontally');
   await page.evaluate(()=>{const b=document.querySelector('.nav [data-view=tasks]');b.addEventListener('click',()=>window.routeClicks=(window.routeClicks||0)+1);b.click();b.click()});assert.equal(await page.evaluate(()=>window.routeClicks),2,'original listeners retained');
+  // Search uses identical visual treatment and never suppresses navigation.
+  const styles=[];
+  for(const view of ['tasks','deals']){
+    await page.evaluate(view=>{document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id==='view-'+view));document.dispatchEvent(new Event('tenant-view'));},view);
+    const search=page.locator(view==='tasks'?'#taskSearch':'#dealSearch');
+    await search.focus();await search.fill('saved query');await page.waitForTimeout(60);
+    assert.equal(await sidebar.isVisible(),true,'search focus must retain navigation');
+    assert.equal(await sidebar.evaluate(el=>el.inert),false);
+    styles.push(await search.evaluate(el=>{const s=getComputedStyle(el);return ['backgroundColor','color','border','borderRadius','height','fontSize','padding'].map(key=>s[key])}));
+    await page.setViewportSize({width,height:450});await page.waitForTimeout(60);assert.equal(await sidebar.isVisible(),true,'keyboard-sized viewport retains nav');
+    await search.blur();await page.setViewportSize({width,height:900});await page.waitForTimeout(60);
+    assert.equal(await search.inputValue(),'saved query','query survives focus and viewport transitions');
+  }
+  if(width<=700)assert.deepEqual(styles[0],styles[1],'task and deal search visual styles match');
   // Permission updates, including hidden inline styles, remain authoritative.
   await page.evaluate(()=>{document.querySelector('.nav [data-view=finance]').hidden=true;document.querySelector('.nav [data-view=deals]').style.display='none'});
   assert.equal(await nav.locator('[data-view=finance]').isVisible(),false);assert.equal(await nav.locator('[data-view=deals]').isVisible(),false);
@@ -38,8 +52,8 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   await page.evaluate(()=>{const d=document.createElement('div');d.id='testModal';d.className='modal show';d.setAttribute('role','dialog');d.innerHTML='<div class="modal-card"><input type="date" id="date"><button id="cancel">Close</button></div>';document.body.append(d)});
   await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),false);await page.locator('#date').focus();assert.equal(await sidebar.isVisible(),false);
   await page.evaluate(()=>document.getElementById('testModal').remove());await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);
-  // Date/select/keyboard editor outside modal also do not sit under menu.
-  await page.evaluate(()=>{document.querySelector('main').innerHTML='<textarea id="keyboard"></textarea>';window.scrollTo(0,0)});await page.locator('#keyboard').focus();await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),false);
+  // Input focus outside a dialog must preserve the menu.
+  await page.evaluate(()=>{document.querySelector('main').innerHTML='<textarea id="keyboard"></textarea>';window.scrollTo(0,0)});await page.locator('#keyboard').focus();await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);
   await page.setViewportSize({width,height:450});await page.locator('#keyboard').fill('draft');await page.locator('#keyboard').blur();await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);await page.setViewportSize({width,height:900});
   // Viewport-sized dialog chat must reserve measured bottom menu, not hard-coded pixels.
   await page.evaluate(()=>{document.querySelector('main').innerHTML='<section id="view-dialogs" class="view active" style="display:flex;flex-direction:column"><div style="overflow:auto;flex:1;min-height:0"><div style="height:2000px">history</div></div><button id="composer" style="height:44px;flex:none">Send</button></section>';window.scrollTo(0,0)});await page.waitForTimeout(50);

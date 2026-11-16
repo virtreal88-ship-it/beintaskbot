@@ -113,7 +113,7 @@
     counter.title=showCount?c.count.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length)).replace('{limit}',String(state.page.limit))+(state.page.has_more?' · '+c.more:''):'';
     if(counter.title)counter.setAttribute('aria-label',counter.title);else counter.removeAttribute('aria-label');
   }
-  function render(){const c=text();document.querySelectorAll('[data-task-flow-label]').forEach(node=>node.textContent=c[node.dataset.taskFlowLabel]||'');$('nativeTaskCreate').textContent='+ '+c.create;$('nativeTaskCreate').disabled=!allowed()||!['native','kommo'].some(canEnter);for(const option of $('taskStatus').options)option.textContent=c[option.value];for(const source of ['native','kommo'])renderSource(source);translateModal();renderSync();renderSourcePicker();}
+  function render(){const c=text();$('taskSearch').placeholder=c.search;document.querySelectorAll('[data-task-flow-label]').forEach(node=>node.textContent=c[node.dataset.taskFlowLabel]||'');$('nativeTaskCreate').textContent='+ '+c.create;$('nativeTaskCreate').disabled=!allowed()||!['native','kommo'].some(canEnter);for(const option of $('taskStatus').options)option.textContent=c[option.value];for(const source of ['native','kommo'])renderSource(source);translateModal();renderSync();renderSourcePicker();}
   function moveStorageKey(source,id){const who=identity();return `task-deadline:${who.expected_tenant_id}:${who.expected_user_id}:${source}:${id}`;}
   function pendingMove(source,id){try{const value=JSON.parse(sessionStorage.getItem(moveStorageKey(source,id))||'null');return value&&uuid(value.request_id)&&value.task_id===id&&typeof value.due_at==='string'?value:null;}catch{return null;}}
   function applyMoveReceipt(result,command,scope){
