@@ -1,7 +1,8 @@
 """Prepare complete bounded history before any cache write."""
 import asyncio
 from typing import Callable, Awaitable
-from tenant_chat_reader import read_conversations
+from tenant_chat_reader import read_conversations, read_recent_conversations
+from datetime import datetime, timezone
 from tenant_policy import TenantPolicy
 from tenant_platform import TenantPlatformError
 
@@ -10,7 +11,7 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
                member: Callable[[str, int], dict | None], get_deal: Callable[..., dict | None],
                list_messages: Callable[..., list[dict]], upsert_messages: Callable[..., int],
                upsert_deals: Callable[..., int], normalize: Callable[[dict, str], dict],
-               channel: Callable[[dict], str]) -> list[dict]:
+               channel: Callable[[dict], str], *, recent=False) -> list[dict]:
     tenant = str(profile['tenant_id'])
 
     async def authorize() -> tuple[dict, dict]:
@@ -20,8 +21,18 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
             raise TenantPlatformError('Çat tarixçəsi üçün icazəniz yoxdur.')
         return current, deal
 
-    await authorize()
-    conversations = await read_conversations(tenant, lead_id, request)
+    _, snapshot = await authorize()
+    if recent:
+        # Overlap the cached watermark to include same-second arrivals. No
+        # provider URL, conversation name or phone number is used as identity.
+        value = snapshot.get('last_message_at')
+        try:
+            stamp = value.timestamp() if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+        except (ValueError, TypeError):
+            stamp = datetime.now(timezone.utc).timestamp() - 86400
+        conversations = await read_recent_conversations(tenant, lead_id, request, max(0, int(stamp) - 300))
+    else:
+        conversations = await read_conversations(tenant, lead_id, request)
     normalized, seen = [], {}
     for talk, messages in conversations:
         for raw in messages:
@@ -48,5 +59,7 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
             await asyncio.to_thread(upsert_deals, tenant_id=tenant, deals=[{
                 **deal, 'last_message':latest.get('body') or '', 'last_message_at':latest.get('happened_at'),
                 'channel':latest.get('channel') or '', 'raw':deal.get('raw') or {}}])
+    if recent:
+        return []  # HTTP boundary reauthorizes and reads exactly one cached page.
     cached = await asyncio.to_thread(list_messages, tenant_id=tenant, kommo_lead_id=lead_id)
     return [row for row in cached if not str(row.get('channel') or '').startswith('connect:')]

@@ -22,10 +22,11 @@
       button.disabled=true;button.textContent='Yüklənir…';button.setAttribute('aria-busy','true');notice.textContent='';
       const scroller=$('dealModal')?.querySelector('.deal-chat-history')||$('dealModal')?.querySelector('.modal-card');
       try{
-        const query=new URLSearchParams({lead_id:selected,cursor,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+        const query=new URLSearchParams({lead_id:selected,cursor,limit:40,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
         const response=await fetch('/api/platform/crm/chat/history?'+query,{credentials:'same-origin',cache:'no-store'});
         const result=await response.json();if(!valid())return;
         if(!response.ok||!result.success){const error=new Error(result.error||'Tarixçə yüklənmədi.');error.status=response.status;throw error;}
+        box.querySelectorAll('[data-chat-id]').forEach(node=>seen.add(node.dataset.chatId));
         const fresh=(result.messages||[]).filter(row=>!seen.has(String(row.external_id)));
         const oldHeight=scroller?.scrollHeight,oldTop=scroller?.scrollTop;
         box.insertAdjacentHTML('afterbegin',fresh.map(line).join(''));
@@ -34,7 +35,7 @@
         if(scroller)scroller.scrollTop=oldTop+scroller.scrollHeight-oldHeight;
         if(!cursor){button.hidden=true;notice.textContent='Saxlanmış tarixçənin əvvəlinə çatdınız.';}
         document.dispatchEvent(new CustomEvent('tenant-chat-history-added',{detail:{lead_id:selected}}));
-      }catch(error){if(valid()){if([403,409].includes(error.status)){box.textContent=error.message;host.remove();cursor=null;}else notice.textContent=error.message;}}
+      }catch(error){if(valid()){if([401,403,404,409].includes(error.status)){box.textContent=error.message;host.remove();cursor=null;}else notice.textContent=error.message;}}
       finally{button.disabled=false;button.textContent='Daha çox';button.setAttribute('aria-busy','false');}
     };
   }
@@ -42,6 +43,7 @@
     if(identity(member)!==identity(event.detail.member)){epoch++;detail=null;clear();}
     member=event.detail.member;
   });
+  document.addEventListener('tenant-chat-close',()=>{epoch++;detail=null;clear();});
   document.addEventListener('tenant-chat-open',event=>{epoch++;lead=event.detail.lead_id;detail=null;clear();});
   document.addEventListener('tenant-chat-history-reset',event=>{if(String(event.detail.lead_id)===String(lead)){epoch++;detail=null;clear();}});
   document.addEventListener('tenant-chat-loaded',event=>{

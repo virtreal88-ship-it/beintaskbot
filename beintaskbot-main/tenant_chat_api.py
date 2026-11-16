@@ -53,6 +53,8 @@ def _legacy_messages_guarded(context, profile, lead_id):
 
 
 def handlers(context: ChatApiContext) -> dict[str, Callable]:
+    from tenant_chat_recent import handler
+    recent = handler(context)
     async def chat(request: web.Request) -> web.Response:
         profile = context.member(request)
         if not _can_read(context, profile):
@@ -65,6 +67,8 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
         if lead_id <= 0:
             return web.json_response(
                 {"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
+        if request.rel_url.query.get('recent') == '1':
+            return await recent(request, lead_id)
         from tenant_linear_policy import TenantLinearError
         try:
             lifecycle_active=await asyncio.to_thread(_lifecycle_active,profile)

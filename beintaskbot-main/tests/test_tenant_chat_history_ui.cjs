@@ -7,6 +7,7 @@ function fixture(){
     set id(value){this._id=value;nodes.set(value,this);}get id(){return this._id;}
     append(...items){this.children.push(...items);}before(item){this.beforeNode=item;}
     remove(){nodes.delete(this.id);this.isConnected=false;}
+    querySelectorAll(){return [];}
     setAttribute(){}insertAdjacentHTML(where,text){this.html=text+this.html;}
   }
   const rows=new Element();rows.id='chatRows';

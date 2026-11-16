@@ -92,3 +92,32 @@ async def read_conversations(tenant: str, lead_id: int, request: KommoRequest) -
     async with asyncio.timeout(40):
         talks = await read_talks(tenant, lead_id, request)
         return [(talk, await read_messages(tenant, talk, request)) for talk in talks]
+
+
+async def read_recent_conversations(tenant, lead_id, request, since):
+    """One bounded incremental page per talk; never silently accept a gap.
+
+    Kommo documents created_at[from], but not a sort guarantee. Restrict the
+    window instead of assuming page 1 is the tail. Overflow stays visibly stale;
+    the separate history importer is responsible for larger backlogs.
+    """
+    async with asyncio.timeout(12):
+        talks = await read_talks(tenant, lead_id, request)
+        result = []
+        for talk in talks:
+            talk_id = int(talk.get('talk_id') or talk.get('id'))
+            payload = await request(tenant, 'GET', f'talks/{talk_id}/messages', params={
+                'limit': 50, 'page': 1, 'filter[created_at][from]': since})
+            messages = rows(payload, 'messages')
+            if continuation(payload) or len(messages) >= 50:
+                raise fail()
+            seen = {}
+            for message in messages:
+                if str(message.get('chat_id') or '') != str(talk['chat_id']) or not message.get('id'):
+                    raise fail()
+                key = str(message['id'])
+                if key in seen and seen[key] != message:
+                    raise fail()
+                seen[key] = message
+            result.append((talk, list(seen.values())))
+        return result

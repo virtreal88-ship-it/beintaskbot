@@ -37,7 +37,7 @@
     const infoLabel=({ru:'Инфо',az:'Məlumat',en:'Info'}[window.tenantI18n?.language]||'Məlumat');
     infoButton.textContent='ⓘ';infoButton.title=infoLabel;infoButton.setAttribute('aria-label',infoLabel);infoButton.setAttribute('aria-controls',info.id);infoButton.setAttribute('aria-expanded','false');
     head.insertBefore(infoButton,document.getElementById('closeModal'));
-    const setInfo=open=>{info.hidden=!open;if(chat)chat.hidden=open;infoButton.setAttribute('aria-expanded',String(open));};
+    const setInfo=open=>{if(open)loadRelated();info.hidden=!open;if(chat)chat.hidden=open;infoButton.setAttribute('aria-expanded',String(open));};
     infoButton.onclick=()=>setInfo(info.hidden);
     modal.onkeydown=event=>{if(event.key==='Escape'&&!info.hidden){event.preventDefault();event.stopPropagation();setInfo(false);infoButton.focus();}};
     if(chat){const rows=chat.querySelector('#chatRows');if(rows){const viewport=document.createElement('div');viewport.className='deal-chat-history';rows.before(viewport);viewport.append(rows);const composer=document.createElement('div');composer.className='deal-chat-compose';for(const node of [...chat.children])if(node!==viewport)composer.append(node);chat.append(composer);}}
@@ -121,6 +121,9 @@
       render();
     }).catch(()=>{if(current())trigger.disabled=true;});
 
+    let relatedStarted=false;
+    function loadRelated(){
+    if(relatedStarted||!current())return;relatedStarted=true;
     const tasks=container.querySelector('[data-related-tasks]');
     if(!flow){tasks.textContent=c.error;}else void flow.read('kommo',{},scope).then(result=>{
       if(!current()||!flow.current(scope))return;
@@ -134,6 +137,7 @@
     }).catch(()=>{if(current())tasks.textContent=c.error;});
     const notes=container.querySelector('[data-related-notes]');
     void (flow?flow.api('/api/platform/crm/deal/notes?lead_id='+encodeURIComponent(deal.kommo_lead_id),{scope}):Promise.reject(Error('scope_unavailable'))).then(result=>{if(!current())return;if(!Array.isArray(result.notes))throw Error('invalid_notes');notes.innerHTML=result.notes.map(item=>`<article class="kommo-related-card kommo-note-card"><small>${esc(date(item.created_at))}</small>${esc(item.text)}</article>`).join('')||`<p class="sub">${esc(c.emptyNotes)}</p>`;if(result.has_more)notes.insertAdjacentHTML('beforeend',`<p class="sub">${esc(c.limited)}</p>`);}).catch(()=>{if(current())notes.textContent=c.error;});
+    }
   }
   window.tenantKommoDealCard={mount};
 })();
