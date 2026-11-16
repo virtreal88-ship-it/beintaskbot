@@ -2,16 +2,38 @@
 (() => {
   const $=id=>document.getElementById(id);let session,epoch=0,lead=0,pending=null,busy=false,operatorSurface=false;
   const storageKey='tenant-chat-ai-pending';
-  document.head.insertAdjacentHTML('beforeend','<style>#dealModal .modal-card{max-height:calc(100dvh - 40px);overflow:auto}#dealModal .modal-head{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:12px}.tc-ai-spinner{display:inline-block;width:13px;height:13px;border:2px solid #c5d8d1;border-top-color:#087d5e;border-radius:50%;animation:tc-ai-spin .8s linear infinite;margin-right:7px}@keyframes tc-ai-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.tc-ai-spinner{animation:none}}#dealModal .tc-legacy-composer{position:relative}#dealModal .tc-legacy-composer .operator-composer-ai{min-width:44px;min-height:44px;font-weight:700}#dealModal .tc-legacy-composer .tc-legacy-composer-primary{display:grid;place-items:center;margin-left:auto;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border-radius:50%;background:var(--brand,#087d5e);color:var(--on-brand,#fff);font-size:22px}#dealModal .tc-legacy-composer #sendChat[data-composer-delegate=true]{display:none!important}#dealModal .tc-legacy-composer .operator-composer-ai-menu{position:absolute;z-index:25;left:8px;bottom:calc(100% + 6px);max-width:calc(100% - 16px);padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}#dealModal .tc-legacy-composer .operator-composer-ai-menu[hidden]{display:none!important}</style>');
+  document.head.insertAdjacentHTML('beforeend','<style>#dealModal .modal-card{max-height:calc(100dvh - 40px);overflow:auto}#dealModal .modal-head{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:12px}.tc-ai-spinner{display:inline-block;width:13px;height:13px;border:2px solid #c5d8d1;border-top-color:#087d5e;border-radius:50%;animation:tc-ai-spin .8s linear infinite;margin-right:7px}@keyframes tc-ai-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.tc-ai-spinner{animation:none}}#dealModal .tc-legacy-composer{position:relative}#dealModal .tc-legacy-composer .operator-composer-ai{min-width:44px;min-height:44px;font-weight:700}#dealModal .tc-legacy-composer .tc-legacy-composer-primary{display:grid;place-items:center;margin-left:auto;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border-radius:50%;background:var(--brand,#087d5e);color:var(--on-brand,#fff);font-size:22px}#dealModal .tc-legacy-composer #sendChat[data-composer-delegate=true]{display:none!important}#dealModal .operator-composer-ai-menu{position:fixed;z-index:25;max-width:calc(100vw - 16px);box-sizing:border-box;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}#dealModal .operator-composer-ai-menu[hidden]{display:none!important}</style>');
   function identity(member){return member?.tenant_id+':'+member?.telegram_id;}
   function grow(input){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
   function clear(){pending=null;sessionStorage.removeItem(storageKey);}
   function remember(data){pending=data;sessionStorage.setItem(storageKey,JSON.stringify(data));}
   function install(data){if(identity(session?.member)!==identity(data.member)){epoch++;busy=false;pending=null;lead=0;$('tcAiResult')?.remove();$('tcAiActions')?.remove();}else if(session?.capabilities?.chat_ai&&!data.capabilities?.chat_ai){epoch++;busy=false;$('tcAiResult')?.remove();$('tcAiActions')?.remove();}session=data;
     try{const stored=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(stored&&stored.expected_tenant_id===data.member.tenant_id&&String(stored.expected_user_id)===String(data.member.telegram_id))pending=stored;else clear();}catch{clear();}if(lead)render();}
-  function closeAiMenu(focus=false){const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(!menu||!toggle)return;menu.hidden=true;toggle.setAttribute('aria-expanded','false');if(focus)toggle.focus();}
+  // Keep the menu outside the bounded composer scroller. Long drafts/results
+  // must not clip the menu or push the send controls outside the viewport.
+  function aiSurfaceVisible(){const toggle=$('tcAiMenuToggle');return !!toggle&&toggle.getClientRects().length>0&&getComputedStyle(toggle).visibility!=='hidden';}
+  const menuVisibilityObserver=new MutationObserver(()=>{if($('tcAiActions')&&!$('tcAiActions').hidden&&!aiSurfaceVisible())closeAiMenu();});
+  function positionAiMenu(){
+    const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(!menu||menu.hidden||!toggle)return;if(!aiSurfaceVisible()){closeAiMenu();return;}
+    const viewport=window.visualViewport,top=viewport?.offsetTop||0,left=viewport?.offsetLeft||0;
+    const width=viewport?.width||window.innerWidth,height=viewport?.height||window.innerHeight;
+    const rect=toggle.getBoundingClientRect(),margin=8,gap=6;
+    menu.style.width=Math.min(280,width-margin*2)+'px';
+    menu.style.maxHeight=Math.max(44,height-margin*2)+'px';
+    const above=Math.max(0,rect.top-top-gap-margin),below=Math.max(0,top+height-rect.bottom-gap-margin);
+    const up=above>=Math.min(menu.scrollHeight,240)||above>=below;
+    menu.style.maxHeight=Math.max(44,up?above:below)+'px';
+    const box=menu.getBoundingClientRect();
+    menu.style.left=Math.max(left+margin,Math.min(rect.left,left+width-box.width-margin))+'px';
+    menu.style.top=Math.max(top+margin,Math.min(up?rect.top-gap-box.height:rect.bottom+gap,top+height-box.height-margin))+'px';
+  }
+  window.addEventListener('resize',positionAiMenu);
+  document.addEventListener('scroll',positionAiMenu,true);
+  window.visualViewport?.addEventListener('resize',positionAiMenu);
+  window.visualViewport?.addEventListener('scroll',positionAiMenu);
+  function closeAiMenu(focus=false){const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(!menu)return;menu.hidden=true;toggle?.setAttribute('aria-expanded','false');if(focus&&aiSurfaceVisible())toggle.focus();}
   document.addEventListener('pointerdown',event=>{const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(menu&&!menu.hidden&&!menu.contains(event.target)&&!toggle?.contains(event.target))closeAiMenu(false);});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('tcAiActions')&&!$('tcAiActions').hidden){event.preventDefault();event.stopImmediatePropagation();closeAiMenu(true);}},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('tcAiActions')&&!$('tcAiActions').hidden){if(!aiSurfaceVisible()){closeAiMenu();return;}event.preventDefault();event.stopImmediatePropagation();closeAiMenu(true);}},true);
   function render(){
     const previous=$('tcAiActions'),wasOpen=!!previous&&!previous.hidden,hadFocus=!!previous?.contains(document.activeElement);previous?.remove();
     const toggle=$('tcAiMenuToggle');
@@ -23,8 +45,8 @@
     const actions=document.createElement('div');actions.id='tcAiActions';actions.className='operator-composer-ai-menu';actions.hidden=!wasOpen;actions.setAttribute('role','group');actions.setAttribute('aria-label',label);
     for(const [mode,text] of [['reply','✦ AI cavab'],['summary','✦ Xülasə']]){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=text;button.onclick=()=>request(mode);actions.append(button);}
     if(pending){const retry=document.createElement('button');retry.type='button';retry.className='outline';retry.textContent='Əvvəlki sorğunu yoxla';retry.onclick=()=>execute(pending);const discard=document.createElement('button');discard.type='button';discard.className='outline';discard.textContent='Əvvəlki sorğunu bağla';discard.onclick=()=>{if(busy)return;if(confirm('Əvvəlki sorğu hələ emal oluna və pullu ola bilər. Onu yenidən icra etmədən bağlamaq istəyirsiniz? Yeni sorğu ayrıca ödəniş yarada bilər.')){clear();render();}};actions.append(retry,discard);}
-    toggle.setAttribute('aria-expanded',String(!actions.hidden));toggle.onclick=()=>{const opening=actions.hidden;actions.hidden=!opening;toggle.setAttribute('aria-expanded',String(opening));if(opening)actions.querySelector('button:not(:disabled)')?.focus();};
-    toggle.parentElement.append(actions);input.oninput=()=>grow(input);
+    toggle.setAttribute('aria-expanded',String(!actions.hidden));toggle.onclick=()=>{const opening=actions.hidden;actions.hidden=!opening;toggle.setAttribute('aria-expanded',String(opening));if(opening){positionAiMenu();actions.querySelector('button:not(:disabled)')?.focus();}};
+    const menuHost=$('dealModal')||toggle.parentElement;menuHost.append(actions);menuVisibilityObserver.disconnect();menuVisibilityObserver.observe(menuHost,{subtree:true,attributes:true,attributeFilter:['hidden','class','style']});positionAiMenu();input.oninput=()=>grow(input);
     if(hadFocus&&wasOpen)actions.querySelector('button:not(:disabled)')?.focus();
     $('chatRows')?.querySelectorAll('[data-chat-audio]').forEach(node=>{if(node.querySelector('[data-transcribe]'))return;const button=document.createElement('button');button.type='button';button.className='outline';button.dataset.transcribe='1';button.textContent='Mətnə çevir';button.onclick=()=>request('transcribe',node.dataset.chatAudio);node.append(button);});
   }
@@ -33,13 +55,13 @@
     const insert=document.createElement('button');insert.className='outline';insert.textContent='Mesaj sahəsinə köçür';insert.onclick=()=>{const input=$('chatText');if(input){input.value=text.value;grow(input);input.dispatchEvent(new Event('input',{bubbles:true}));}};const close=document.createElement('button');close.className='outline';close.textContent='Bağla';close.onclick=()=>box.remove();box.append(title,text,warning,insert,close);$('chatText').parentElement.after(box);grow(text);
   }
   async function request(mode,message=''){if(busy)return;if(pending)return alert('Əvvəlki sorğunu əvvəlcə yoxlayın. Yeni pullu sorğu yaradılmır.');remember({request_id:crypto.randomUUID(),lead_id:Number(lead),mode,message_id:message,draft:$('chatText')?.value||'',expected_tenant_id:session.member.tenant_id,expected_user_id:session.member.telegram_id});await execute(pending);}
-  async function execute(data){if(busy)return;const current=epoch,selected=lead;busy=true;const buttons=[...($('modalContent')?.querySelectorAll('button')||[])];buttons.forEach(b=>b.disabled=true);if($('tcAiActions'))$('tcAiActions').setAttribute('aria-busy','true');
-    const notice=document.createElement('p');const spinner=document.createElement('span');spinner.className='tc-ai-spinner';spinner.setAttribute('aria-hidden','true');notice.append(spinner,document.createTextNode('AI işləyir… Səs yazıları olduqda daha uzun çəkə bilər.'));notice.setAttribute('role','status');$('tcAiActions')?.append(notice);
+  async function execute(data){if(busy)return;const current=epoch,selected=lead;busy=true;const buttons=[...($('modalContent')?.querySelectorAll('button')||[]),...($('tcAiActions')?.querySelectorAll('button')||[])];buttons.forEach(b=>b.disabled=true);if($('tcAiActions'))$('tcAiActions').setAttribute('aria-busy','true');
+    const notice=document.createElement('p');const spinner=document.createElement('span');spinner.className='tc-ai-spinner';spinner.setAttribute('aria-hidden','true');notice.append(spinner,document.createTextNode('AI işləyir… Səs yazıları olduqda daha uzun çəkə bilər.'));notice.setAttribute('role','status');$('tcAiActions')?.append(notice);positionAiMenu();
     try{const response=await fetch('/api/platform/chat/ai',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await response.json();if(current!==epoch)return;if(!response.ok||!result.success){if([400,403,404,409,429].includes(response.status)&&!result.keep_request)clear();throw new Error(result.error||'AI cavabı alınmadı.');}clear();if(selected===lead&&Number(data.lead_id)===Number(lead))show(result);}
     catch(error){if(current===epoch)alert(error.message+' Sorğu kodu: '+data.request_id);}finally{if(current===epoch){busy=false;buttons.forEach(b=>b.disabled=false);notice.remove();render();}}
   }
   document.addEventListener('tenant-profile',event=>install(event.detail));
-  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;operatorSurface=event.detail.surface==='operator';$('tcAiResult')?.remove();render();});
+  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;operatorSurface=event.detail.surface==='operator';$('tcAiResult')?.remove();closeAiMenu();render();});
   document.addEventListener('tenant-chat-loaded',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   document.addEventListener('tenant-chat-history-added',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   const initial=epoch;fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});

@@ -5,8 +5,12 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
  try {
   for(const kind of ['native','kommo']){
    const page=await browser.newPage({viewport:{width:390,height:850},hasTouch:true});
-   await page.route('**/*',route=>route.abort()); // Fixture only: never contact or mutate a tenant.
-   await page.setContent('<html lang="en"><body data-app-ui="kwid"><section id="view-deals"><div id="nativeDealsList"></div><div id="dealsList"></div></section><div id="outside" style="height:100px">Outside board</div></body></html>');
+   const errors=[];page.on('pageerror',error=>errors.push(error.message));
+   const shell='<html lang="en"><body data-app-ui="kwid"><section id="view-deals"><div id="nativeDealsList"></div><div id="dealsList"></div></section><div id="outside" style="height:100px">Outside board</div></body></html>';
+   // A real origin is required by the production bundle's browser storage APIs.
+   // Fulfill only this fixture document; every other network request is blocked.
+   await page.route('**/*',route=>route.request().url()==='https://fixture.test/app'?route.fulfill({contentType:'text/html',body:shell}):route.abort());
+   await page.goto('https://fixture.test/app');
    await page.evaluate(()=>{
     window.opened=[];window.edited=[];window.writes=[];window.drags=[];
     window.tenantViewDemand={watch(){}};
@@ -18,6 +22,8 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
     };
    });
    await page.addScriptTag({content:fs.readFileSync('docs/tenant-chakra-ui.js','utf8')});
+   await page.waitForFunction(()=>typeof window.tenantChakraCRM?.renderNativeDeals==='function'&&typeof window.tenantChakraCRM?.renderDeals==='function').catch(error=>{throw new Error('CRM fixture boot failed: '+errors.join('; ')+'; '+error.message);});
+   assert.deepEqual(errors,[],kind+' bundle initializes without browser errors');
    await page.evaluate(kind=>{
     const onOpen=id=>window.opened.push(id);
     if(kind==='native')window.tenantChakraCRM.renderNativeDeals([{id:'1',title:'Fixture deal',contact_name:'Fixture client',pipeline_id:10,stage_id:100,updated_at:'2026-11-14T00:00:00Z',actions:{update:true}}],{tenantId:'fixture',userId:7,canUpdate:true,onOpen,onEdit:id=>window.edited.push(id),onMove:()=>{window.writes.push('move');throw Error('Unexpected move');},workflows:[100,101,102].map(stage_id=>({pipeline_id:10,stage_id,stage_name:'Stage '+stage_id}))});
@@ -60,6 +66,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    await page.waitForFunction(()=>document.querySelector('.app-kanban-swipe').scrollLeft>50);
    assert.equal(await count(),before,kind+' horizontal touch swipe does not open');
    assert.deepEqual(await page.evaluate(()=>window.writes),[],kind+' no mutations');
+   assert.deepEqual(errors,[],kind+' interactions have no browser errors');
    await cdp.detach();await page.close();
   }
   console.log('PASS real Chromium deal surface/keyboard/nested controls, drag cancellation and mobile touch swipe without mutations');
