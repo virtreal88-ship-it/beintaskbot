@@ -20,7 +20,7 @@
     button.onclick=async()=>{
       if(button.disabled||!cursor||!valid())return;
       button.disabled=true;button.textContent='Yüklənir…';button.setAttribute('aria-busy','true');notice.textContent='';
-      const scroller=$('dealModal')?.querySelector('.modal-card');
+      const scroller=$('dealModal')?.querySelector('.deal-chat-history')||$('dealModal')?.querySelector('.modal-card');
       try{
         const query=new URLSearchParams({lead_id:selected,cursor,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
         const response=await fetch('/api/platform/crm/chat/history?'+query,{credentials:'same-origin',cache:'no-store'});

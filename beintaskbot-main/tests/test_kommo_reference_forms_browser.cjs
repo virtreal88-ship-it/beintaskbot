@@ -18,4 +18,30 @@ for(const width of [320,390,1440])for(const theme of ['light','dark']){
  const text=fields.at(-1),select=fields[0];assert.equal(text.border,'solid');assert.equal(text.radius,select.radius);assert.equal(text.font,select.font);assert.equal(text.color,select.color);assert.equal(text.background,select.background);
  await page.locator('#nativeTaskText').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(__dirname,`artifacts/kommo-native-task-${width}-${theme}.png`)});await page.close();
 }
+// Conversation-first deal uses one history scroller, with details available on demand.
+for(const width of [320,390,768,1440]){
+ const page=await browser.newPage({viewport:{width,height:900}});await page.route('https://fixture.test/deal',route=>route.fulfill({contentType:'text/html',body:nativeHtml}));await page.goto('https://fixture.test/deal');await page.addStyleTag({content:themeCSS});
+ await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'../docs/tenant-kommo-deal-card.js'),'utf8')});
+ await page.evaluate(()=>{window.tenantI18n={language:'ru'};window.tenantTaskFlow={capture:()=>({}),current:()=>true,read:async()=>({source:'kommo',tasks:[],sources:[{source:'kommo',view:true}]}),api:async()=>({notes:[]})};const modal=document.getElementById('dealModal');modal.classList.add('show');const host=document.getElementById('modalContent');const mount=()=>{host.innerHTML='<div class="meta"><div>Deal details</div></div><div class="chat-placeholder"><div id="chatRows">'+Array.from({length:40},(_,i)=>'<p>Message '+i+'</p>').join('')+'</div><div style="display:flex"><textarea id="chatText"></textarea><button>Send</button></div></div>';window.tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'+994000000000'},isCurrent:()=>true});};mount();mount();});
+ const card=await page.locator('#dealModal .modal-card').boundingBox();assert(Math.abs(card.x)<1&&Math.abs(card.width-width)<1,'full width deal '+width);assert(card.height<=901,'viewport bounded');
+ const input=await page.locator('#chatText').boundingBox();assert(input.y+input.height<=900,'composer visible without outer scroll');assert(await page.locator('.deal-chat-history').evaluate(n=>n.scrollHeight>n.clientHeight),'history independently scrollable');assert(await page.locator('#dealModal .modal-card').evaluate(n=>n.scrollHeight<=n.clientHeight+1),'no outer scroll');assert.equal(await page.locator('#dealInfoPanel').isVisible(),false);assert.equal(await page.locator('#modalTitle').count(),1,'reopening preserves title');
+ await page.locator('#chatText').fill('unsent');await page.locator('.deal-info-toggle').click();assert(await page.locator('#dealInfoPanel').isVisible());assert(await page.locator('[data-related-notes]').isVisible());await page.locator('.deal-info-toggle').click();assert.equal(await page.locator('#chatText').inputValue(),'unsent');
+ // Exercise real AI growth/insert handlers against a synthetic response, never a live API.
+ await page.evaluate(()=>{window.fetch=async()=>({ok:true,json:async()=>({success:true,text:'Long AI result\n'.repeat(500),mode:'summary'})});});
+ await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'../docs/tenant-chat-ai.js'),'utf8')});
+ await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-profile',{detail:{member:{tenant_id:1,telegram_id:1},capabilities:{chat_ai:true}}}));document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:7}}));});
+ await page.locator('#chatText').fill('Long draft\n'.repeat(500));
+ assert(await page.locator('#chatText').evaluate(n=>n.scrollHeight>n.clientHeight&&n.clientHeight<=180),'long draft scrolls inside bounded input');
+ await page.locator('#tcAiActions button').nth(1).click();await page.locator('#tcAiResult textarea').waitFor();
+ assert(await page.locator('#tcAiResult textarea').evaluate(n=>n.scrollHeight>n.clientHeight&&n.clientHeight<=180),'AI result scrolls internally');
+ for(const height of [900,500]){
+ await page.setViewportSize({width,height});
+ assert(await page.locator('#dealModal .modal-card').evaluate(n=>n.scrollHeight<=n.clientHeight+1),'long content does not overflow modal');
+ assert(await page.locator('.deal-chat-history').evaluate(n=>n.clientHeight>50),'history retains usable height');
+ await page.locator('#tcAiResult button').first().click();
+ await page.locator('.deal-chat-compose button').first().scrollIntoViewIfNeeded();
+ const send=await page.locator('.deal-chat-compose button').first().boundingBox();assert(send.y>=0&&send.y+send.height<=height,'send reachable at '+width+'x'+height);
+ }
+ await page.locator('#tcAiResult button').last().click();assert.equal(await page.locator('#tcAiResult').count(),0);await page.close();
+}
 console.log('PASS Kommo reference modal layout at 360/390/768/1440');}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1});
