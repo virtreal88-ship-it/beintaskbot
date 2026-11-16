@@ -11,7 +11,7 @@
     try{const stored=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(stored&&stored.expected_tenant_id===data.member.tenant_id&&String(stored.expected_user_id)===String(data.member.telegram_id))pending=stored;else clear();}catch{clear();}if(lead)render();}
   function closeAiMenu(focus=false){const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(!menu||!toggle)return;menu.hidden=true;toggle.setAttribute('aria-expanded','false');if(focus)toggle.focus();}
   document.addEventListener('pointerdown',event=>{const menu=$('tcAiActions'),toggle=$('tcAiMenuToggle');if(menu&&!menu.hidden&&!menu.contains(event.target)&&!toggle?.contains(event.target))closeAiMenu(false);});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('tcAiActions')&&!$('tcAiActions').hidden){event.preventDefault();closeAiMenu(true);}},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('tcAiActions')&&!$('tcAiActions').hidden){event.preventDefault();event.stopImmediatePropagation();closeAiMenu(true);}},true);
   function render(){
     const previous=$('tcAiActions'),wasOpen=!!previous&&!previous.hidden,hadFocus=!!previous?.contains(document.activeElement);previous?.remove();
     const toggle=$('tcAiMenuToggle');
