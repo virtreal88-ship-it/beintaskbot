@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import {useDealCardActivation} from './deal-card-activation.js';
 import {stageStyle} from './deal-stage-style.js';
 import {DealStageBadge, DealStageSelect} from './deal-stage-badge.jsx';
 
@@ -11,6 +12,7 @@ const copy = {
 };
 export function NativeDealBoard({rows=[], settings={}}) {
   const c=copy[document.documentElement.lang]||copy.az;
+  const cardActivation=useDealCardActivation(settings.onOpen);
   const [mode,setMode]=useState('board'), [items,setItems]=useState(rows), [pending,setPending]=useState(''), [error,setError]=useState('');
   const latestRows=useRef(rows); latestRows.current=rows;
   const alive=useRef(true), generation=useRef(0), busy=useRef(false), drag=useRef(null);
@@ -35,7 +37,7 @@ export function NativeDealBoard({rows=[], settings={}}) {
   for(const row of items){const group=groups.find(g=>String(g.pipeline_id)===String(row.pipeline_id)&&String(g.stage_id)===String(row.stage_id));if(!group)groups.push({pipeline_id:row.pipeline_id,stage_id:row.stage_id,pipeline_name:row.pipeline_id,stage_name:row.stage_id,rows:[row]});else if(!group.rows.some(r=>r.id===row.id))group.rows.push(row);}
   const appearance=g=>stageStyle(g.color || g.stage_color, Math.max(0,workflows.filter(w=>String(w.pipeline_id)===String(g.pipeline_id)).findIndex(w=>String(w.stage_id)===String(g.stage_id))));
   const stageFor=row=>groups.find(g=>String(g.pipeline_id)===String(row.pipeline_id)&&String(g.stage_id)===String(row.stage_id));
-  const card=row=><article key={row.id} data-native-deal-card={row.id} aria-busy={pending===String(row.id)} draggable={canMove(row)} onDragStart={e=>{if(!canMove(row)){e.preventDefault();return;}drag.current=row;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(row.id));}} onDragEnd={()=>{drag.current=null;}} style={{background:'var(--card,#fff)',border:'1px solid var(--line,#ddd)',borderRadius:12,padding:12,marginTop:8}}>
+  const card=row=><article key={row.id} data-native-deal-card={row.id} {...cardActivation(row.id)} aria-label={row.title} aria-busy={pending===String(row.id)} draggable={canMove(row)} onDragStart={e=>{if(!canMove(row)){e.preventDefault();return;}drag.current=row;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(row.id));}} onDragEnd={()=>{drag.current=null;}} style={{cursor:settings.onOpen?'pointer':undefined,background:'var(--card,#fff)',border:'1px solid var(--line,#ddd)',borderRadius:12,padding:12,marginTop:8}}>
     <strong>{row.title}</strong><p>{row.contact_name||''}</p>
     <div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button className="outline" onClick={()=>settings.onOpen?.(row.id)}>{c.open}</button>{canMove(row)&&<button className="outline" onClick={()=>settings.onEdit?.(row.id)}>{c.edit}</button>}</div>
     {!(settings.canUpdate===true&&row.actions?.update===true)&&<div><DealStageBadge name={String(stageFor(row)?.stage_name || row.stage_id)} appearance={appearance(stageFor(row) || row)}/></div>}
