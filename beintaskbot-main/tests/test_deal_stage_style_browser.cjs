@@ -8,6 +8,12 @@ await page.evaluate(()=>{window.tenantViewDemand={watch(){}};window.fetch=async(
 await page.addScriptTag({content:fs.readFileSync('docs/tenant-chakra-ui.js','utf8')});
 await page.evaluate(()=>tenantChakraCRM.renderDeals('dealsList',[{kommo_lead_id:1,pipeline_id:1,status_id:1,name:'One'},{kommo_lead_id:2,pipeline_id:1,status_id:2,name:'Two'},{kommo_lead_id:3,pipeline_id:1,status_id:3,name:'Three'}],false,()=>{}));
 await page.locator('[data-kommo-stage-key="1:3"] [data-deal-stage-badge]').waitFor();
+await page.evaluate(()=>{const host=document.createElement('div');host.id='tasksList';document.body.append(host);tenantChakraCRM.renderTasks([{id:'task',text:'Task',status:'pending',due_at:'2020-01-01T00:00:00Z'}],{source:'native'});});
+await page.locator('[data-task-stage-header]').first().waitFor();
+const taskHeight=(await page.locator('[data-task-stage-header]').first().boundingBox()).height;
+const dealHeight=(await page.locator('[data-deal-stage-header]').first().boundingBox()).height;
+assert(taskHeight<=dealHeight+2,`task header ${taskHeight} should be compact like deals ${dealHeight}`);
+assert(taskHeight<70,'task column header has no excess heading/paragraph margins');
 const colors=await page.locator('[data-deal-stage-header]').evaluateAll(nodes=>nodes.map(n=>getComputedStyle(n).borderBottomColor));
 assert.equal(colors[0],'rgb(34, 197, 94)');assert.equal(new Set(colors).size,3);
 for(const column of await page.locator('[data-kommo-stage-key]').all()){

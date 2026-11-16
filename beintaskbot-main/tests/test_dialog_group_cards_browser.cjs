@@ -18,23 +18,30 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    window.fetch=async target=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
     if(url.includes('/dialogs/history')){const channel=new URL(url,'https://example.test').searchParams.get('channel_id');window.historyReads.push(channel);result={dialog:sources.find(s=>s.channel_id===channel),messages:[],next_before:null};}
-    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources}],channels:[],agents:[],total_count:1,next_offset:null};
+    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},unread_count:7,last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
     else if(!url.includes('/dialogs/read'))throw Error('Unexpected request '+url);
     return{ok:true,status:200,json:async()=>({success:true,result})};};
   });
   await page.addScriptTag({path:path.join(docs,'tenant-operator-i18n.js')});
   await page.addScriptTag({path:path.join(docs,'tenant-operator-dialogs.js')});
   await page.evaluate(()=>window.tenantOperator.refresh());
-  await page.locator('[data-group-source="1"]').waitFor();
-  assert.equal(await page.locator('.operator-row').count(),1);
-  for(const index of [0,1]){
-   const button=page.locator(`[data-group-source="${index}"]`);
-   const geometry=await button.evaluate(el=>{const r=el.getBoundingClientRect(),p=el.closest('.operator-row').getBoundingClientRect();return{left:r.left,right:r.right,parentLeft:p.left,parentRight:p.right};});
-   assert(geometry.left>=geometry.parentLeft&&geometry.right<=geometry.parentRight+1,JSON.stringify({width,index,geometry}));
-   await button.click();
-   await page.waitForFunction(channel=>window.historyReads.at(-1)===channel,index===0?'a':'b');
-   if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}
+  await page.locator('.operator-row').first().waitFor();
+  assert.equal(await page.locator('.operator-row').count(),4);
+  for(const row of await page.locator('.operator-row').all()){
+   const g=await row.evaluate(el=>{const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}};return {row:rect(el),copy:rect(el.querySelector('.operator-row-copy')),meta:rect(el.querySelector('.operator-row-meta')),unread:rect(el.querySelector('.operator-unread-count')),badge:el.querySelector('.operator-row-indicators .operator-lifecycle-badge')?rect(el.querySelector('.operator-row-indicators .operator-lifecycle-badge')):null,children:el.children.length};});
+   assert.equal(g.children,3,'avatar, copy and right-side metadata occupy one grid row');
+   assert(g.meta.left>=g.copy.right-1&&g.meta.right<=g.row.right+1,'metadata stays right of the copy and within the row');
+   assert(g.unread.left>=g.copy.right-1&&g.unread.bottom<=g.row.bottom+1,'counter must not wrap below the avatar');
+   if(g.badge)assert(Math.abs(g.badge.top-g.unread.top)<12,'text status and unread counter share the indicator line');
   }
+  assert.equal(await page.locator('.operator-row').nth(1).locator('.operator-unread-count').textContent(),'7');
+  await page.locator('.operator-row').first().click();
+  await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
+  for(const index of [1,0]){
+   await page.locator('#operatorComposerSourceSelect').selectOption(String(index));
+   await page.waitForFunction(channel=>window.historyReads.at(-1)===channel,index===0?'a':'b');
+  }
+  if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}
   await page.close();
  }
  console.log('PASS Chromium group card, both source routes and visible controls at 360/1440px');

@@ -314,7 +314,8 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
  html body[data-app-ui="kwid"][data-mobile-page-header]:has(#view-dialogs.active) main{padding-top:var(--app-dialog-top)!important}
 }
 
-/* Mobile task cards keep their original content footer; drag uses a compact handle. */
+/* No repeated reschedule footer. Desktop drags cards; mobile keeps its compact handle. */
+body[data-app-ui="kwid"] [data-task-move-select],body[data-app-ui="kwid"] [data-task-move-caption],body[data-app-ui="kwid"] [data-task-move-handle]{display:none}
 [data-task-move-grip]{display:none}
 @media(max-width:700px){
  body[data-app-ui="kwid"] [data-task-card]{position:relative}
