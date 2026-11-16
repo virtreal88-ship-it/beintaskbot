@@ -23,6 +23,6 @@ Fresh membership and source authorization remain in the existing transactional p
 - Browser suite uses the shipped HTML/controllers and rebuilt production React bundle, 390/1440 widths, owner/limited fixtures. Slow/offline provider, 14/120 messages, empty history, repeated open, older pages, new arrivals, non-overlapping tail, draft/media preservation, A→B, closing before metadata, denial clearing and auth change.
 - Controlled 1200 ms provider latency: baseline messages 1446–1518 ms; changed 159–234 ms. This is a synthetic HTTP-boundary comparison, not production performance evidence.
 - Existing send/history, Info actions, reference forms, pipeline picker and mobile composer/AI layout checks also pass. Three older unit fixtures were updated for the existing rollout guards, receipt scope variable and intentional lazy Info loading.
-- Production bundle rebuild has no content diff. Browser traces/screenshots are retained locally and uploaded by the new focused CI workflow.
+- Production bundle rebuild has no content diff. Browser traces/screenshots are retained locally and uploaded by the existing Kommo reference CI workflow.
 
 Production after-deployment measurements are reported separately after release.
