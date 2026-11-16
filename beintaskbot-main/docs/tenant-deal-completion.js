@@ -46,7 +46,7 @@
     if(!profile)return;
     const host=document.getElementById('modalContent'),button=document.createElement('button'),snapshot=identity();
     const lead=Number(event.detail.lead_id);if(!Number.isSafeInteger(lead)||lead<=0)return;
-    button.type='button';button.className='outline';button.textContent='Sövdələşməni tamamla';button.style.margin='12px 0';host.prepend(button);
+    button.type='button';button.className='outline';button.textContent='Sövdələşməni tamamla';button.style.margin='12px 0';(host.querySelector('#dealInfoPanel')||host).prepend(button);
     button.onclick=async()=>{
       const key=`crm-deal-complete:${snapshot}:${lead}`;let pending;
       try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}

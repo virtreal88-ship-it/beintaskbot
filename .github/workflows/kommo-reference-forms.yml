@@ -4,9 +4,12 @@ on:
     paths:
       - 'beintaskbot-main/docs/tenant-task*.js'
       - 'beintaskbot-main/docs/tenant-kommo-deal-card.js'
+      - 'beintaskbot-main/docs/tenant-deal-completion.js'
+      - 'beintaskbot-main/docs/tenant-support-inbox.js'
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/tenant_kommo*.py'
       - 'beintaskbot-main/tests/test_kommo_reference_forms*'
+      - 'beintaskbot-main/tests/test_deal_info_actions.cjs'
       - '.github/workflows/kommo-reference-forms.yml'
   workflow_dispatch:
 permissions:
@@ -32,6 +35,7 @@ jobs:
       - run: |
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_kommo_reference_forms.cjs
+          node tests/test_deal_info_actions.cjs
           node tests/test_kommo_reference_forms_browser.cjs
       - uses: actions/upload-artifact@v4
         if: always()
