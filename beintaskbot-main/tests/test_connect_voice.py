@@ -224,6 +224,13 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceBoundaries(unittest.TestCase):
+    def setUp(self):
+        # These existing unit fixtures model an unactivated tenant; rollout
+        # locking/activation races have independent real-SQL tests.
+        from tenant_dialog_rollout import RolloutState
+        rollout=patch('tenant_dialog_rollout.guard',return_value=RolloutState())
+        rollout.start();self.addCleanup(rollout.stop)
+
     def connection(self, values):
         connection = MagicMock()
         cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
