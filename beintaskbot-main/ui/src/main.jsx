@@ -1,5 +1,6 @@
 import {useDealCardActivation} from './deal-card-activation.js';
 import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
+window.tenantKommoStageMove = { move: moveKommoDeal, canIdentify: canIdentifyKommoDeal };
 import { NativeDealBoard, dealProfileScope } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";

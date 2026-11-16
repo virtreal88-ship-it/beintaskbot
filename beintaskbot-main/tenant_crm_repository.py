@@ -95,8 +95,18 @@ class CRMRepository:
         return self.payload(row) if row else None
 
     def get_deal(self, *, tenant_id: str, kommo_lead_id: int) -> dict | None:
-        return self._one('SELECT * FROM saas_crm_deals WHERE tenant_id = %s::uuid AND kommo_lead_id = %s AND deleted_at IS NULL',
-                         (tenant_id, int(kommo_lead_id)))
+        with self.connect() as conn:
+            self.ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id = %s::uuid AND kommo_lead_id = %s AND deleted_at IS NULL',
+                            (tenant_id, int(kommo_lead_id)))
+                row = cur.fetchone()
+                if row:
+                    from tenant_kommo_board_provenance import revisions
+                    proof = revisions(cur, tenant_id, 'leads', [row['kommo_lead_id']],
+                                      expected_raw={str(row['kommo_lead_id']): row.get('raw') or {}})
+                    row = {**row, 'source_revision': proof.get(str(row['kommo_lead_id']))}
+        return self.payload(row) if row else None
 
     def get_task(self, *, tenant_id: str, kommo_task_id: int) -> dict | None:
         return self._one('SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id=%s '
