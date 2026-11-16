@@ -597,10 +597,19 @@
     const label=labels[state]?.[i18n.language]||labels[state]?.en;
     return label?`<span class="operator-lifecycle-badge" data-lifecycle-state="${esc(state)}">${esc(label)}</span>`:'';
   }
+  // Presentation only: retain all authorized history routes, but never offer a
+  // disabled channel as a reply source. Lifecycle actions stay route-scoped.
+  const activeGroupSources=row=>(row?.group_sources||[]).filter(source=>source.channel_active!==false);
+  function cardLifecycleBadge(row){
+    if(!row.group_sources?.length)return lifecycleBadge(row);
+    const sources=activeGroupSources(row);
+    const route=['waiting','accepted','closed'].map(state=>sources.find(source=>source.lifecycle_enabled&&source.lifecycle?.state===state)).find(Boolean);
+    return lifecycleBadge(route);
+  }
   function renderRows(){
-    $('operatorRows').innerHTML=rows.map((row,index)=>{const sources=row.group_sources?.length>1?row.group_sources:null,name=dialogTitle(row),preview=dialogPreview(row),selected=(sources||[row]).some(source=>sameDialog(currentDialog,source))||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row)),unread=Math.max(0,Number(row.unread_count)||0);return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}"><span class="operator-row-avatar" aria-hidden="true">${row.customer_kind==='group'?'◉':esc(name.slice(0,1).toLocaleUpperCase())}${avatarMarkup(row)}</span><span class="operator-row-copy"><span class="operator-row-title" data-user-content>${esc(name)}</span><span class="operator-row-sub" data-user-content>${esc(sources?sources.map(source=>source.channel_name).join(' · '):dialogIdentity(row))}</span>${sources?`<span class="operator-group-sources">${sources.map((source,sourceIndex)=>`<span data-group-source-status="${sourceIndex}">${esc(source.channel_name)} ${lifecycleBadge(source)}</span>`).join('')}</span>`:''}<span class="operator-row-preview" data-user-content>${esc(preview)}</span><span class="operator-state operator-row-status" data-state="${esc(row.agent_status||row.display_state)}">${esc(agentModeLabel(row))}</span>${row.handoff_active?`<span class="operator-handoff-badge">${esc(t('handoffActive'))}</span>`:''}</span><span class="operator-row-meta"><span class="operator-row-indicators">${sources?'':lifecycleBadge(row)}${unread?`<span class="operator-unread-count" aria-label="${unread} ${esc(({ru:'непрочитанных',az:'oxunmamış',en:'unread'})[i18n.language]||'unread')}" title="${unread}">${unread>99?'99+':unread}</span>`:''}</span><time class="operator-row-time">${esc(i18n.date(row.last_message_at))}</time></span></button>`;}).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
+    $('operatorRows').innerHTML=rows.map((row,index)=>{const sources=row.group_sources?.length?activeGroupSources(row):null,name=dialogTitle(row),preview=dialogPreview(row),selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row)),unread=Math.max(0,Number(row.unread_count)||0);return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}"><span class="operator-row-avatar" aria-hidden="true">${row.customer_kind==='group'?'◉':esc(name.slice(0,1).toLocaleUpperCase())}${avatarMarkup(row)}</span><span class="operator-row-copy"><span class="operator-row-title" data-user-content>${esc(name)}</span><span class="operator-row-sub" data-user-content>${esc(sources?(sources.map(source=>source.channel_name).join(' · ')||({ru:'Источник отключён',az:'Mənbə deaktivdir',en:'Source disabled'})[i18n.language]||'Source disabled'):dialogIdentity(row))}</span><span class="operator-row-preview" data-user-content>${esc(preview)}</span><span class="operator-state operator-row-status" data-state="${esc(row.agent_status||row.display_state)}">${esc(agentModeLabel(row))}</span>${row.handoff_active?`<span class="operator-handoff-badge">${esc(t('handoffActive'))}</span>`:''}</span><span class="operator-row-meta"><span class="operator-row-indicators">${cardLifecycleBadge(row)}${unread?`<span class="operator-unread-count" aria-label="${unread} ${esc(({ru:'непрочитанных',az:'oxunmamış',en:'unread'})[i18n.language]||'unread')}" title="${unread}">${unread>99?'99+':unread}</span>`:''}</span><time class="operator-row-time">${esc(i18n.date(row.last_message_at))}</time></span></button>`;}).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
     hydrateAvatars();
-    renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];openDialog(row.group_sources?.find(source=>sameDialog(source,currentDialog))||row);} );
+    renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||sources[0]||row);} );
   }
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...(route.source_message_id?{anchor:route.source_message_id}:{})});
   const pageCacheKey=route=>identity(member)+'|'+dialogKey(route);
@@ -610,19 +619,20 @@
   function renderComposerSourcePicker(){
     const slot=$('operatorComposerSource');if(!slot)return;
     const group=rows.find(row=>row.group_sources?.some(source=>sameDialog(source,currentDialog)));
-    const sources=group?.group_sources||[];
-    slot.replaceChildren();slot.hidden=sources.length<2;
-    if(sources.length<2)return;
+    const sources=activeGroupSources(group),currentAvailable=sources.some(source=>sameDialog(source,currentDialog));
+    slot.replaceChildren();slot.hidden=!sources.length||(sources.length<2&&currentAvailable);
+    if(slot.hidden)return;
     const label=document.createElement('label');
     label.textContent=({ru:'Ответить через',az:'Cavab mənbəyi',en:'Reply via'})[i18n.language]||'Reply via';
     const select=document.createElement('select');select.id='operatorComposerSourceSelect';
+    if(!currentAvailable){const option=document.createElement('option');option.value='';option.textContent=({ru:'Выберите источник',az:'Mənbə seçin',en:'Choose source'})[i18n.language]||'Choose source';option.disabled=true;option.selected=true;select.append(option);}
     sources.forEach((source,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=source.channel_name;option.selected=sameDialog(source,currentDialog);select.append(option);});
     const original=currentDialog;
     select.onchange=()=>{
       if(!sameDialog(original,currentDialog))return;
       const candidate=sources[Number(select.value)];
       const fresh=rows.flatMap(row=>row.group_sources||[row]).find(source=>candidate&&sameDialog(source,candidate));
-      if(!fresh){renderComposerSourcePicker();return;}
+      if(!fresh||fresh.channel_active===false){renderComposerSourcePicker();return;}
       if(sameDialog(fresh,currentDialog))return;
       select.disabled=true;
       void openDialog(fresh);
