@@ -258,11 +258,19 @@ def test_partial_live_receipt_is_blocked_not_rescheduled(monkeypatch):
     monkeypatch.setattr(live,'require_extraction_enabled',lambda *a:None)
     monkeypatch.setattr(live,'pilot_scope',lambda:None)
     monkeypatch.setattr(live,'claim',lambda:item)
+    # Receipt-status unit test: model the dedicated legacy-tenant fence locally.
+    from unittest.mock import MagicMock
+    fence = MagicMock()
+    configured = Mock(return_value=True)
+    monkeypatch.setattr(live, '_connect', lambda: fence)
+    monkeypatch.setattr(live, '_configured', configured)
     analyze=Mock(return_value={'request':{'id':'synthetic','status':'partial'}})
     finish=Mock();monkeypatch.setattr(live,'analyze',analyze);monkeypatch.setattr(live,'finish',finish)
     assert live.tick()
     finish.assert_called_once_with(item,live._request_id(item),'media_incomplete')
     analyze.assert_called_once()
+    configured.assert_called_once_with(fence.__enter__.return_value.cursor.return_value.__enter__.return_value,
+        A,CA,item['last_message_at'],'client')
 
 
 def test_png_to_vision_receipt_case_evidence_and_mcp_with_real_reserves(ready,monkeypatch):

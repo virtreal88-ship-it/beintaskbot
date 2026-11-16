@@ -79,6 +79,11 @@ def route(cur, tenant, channel, conversation, lead_id=None):
 
 def create_in_transaction(cur, tenant, channel, conversation, reason, event_key, *, actor=None, description='', source='ai_handoff', lead_id=None, message_ids=None, bounded_episode=False):
     """Caller initializes schema first; ticket and handoff commit together. No provider calls."""
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if lifecycle_enabled(cur, tenant):
+        if actor is None or source == 'ai_handoff':
+            return {'id': None, 'created': False, 'disabled': 'manual_episode_required'}
+        raise TenantLinearError('Отправьте завершённое обращение в кейсы из диалога.', 409)
     tenant = identifier(tenant)
     cur.execute('SELECT status FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
     company = cur.fetchone() or {}
@@ -227,6 +232,9 @@ def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key,
 
 
 def handoff_ticket(cur, job, reason):
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if lifecycle_enabled(cur, job['tenant_id']):
+        return None
     if job.get('provider') != 'connect':
         return None
     description=''
@@ -776,6 +784,7 @@ def update(profile, ticket_id, data):
 
 
 def complete(profile, data):
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
     """Close one Connect support request with an explicit staff outcome."""
     allowed={'request_id','lead_id','channel_id','conversation_id','outcome','note','propose_knowledge'}
     if not isinstance(data,dict) or set(data)-allowed:
@@ -798,6 +807,8 @@ def complete(profile, data):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            if lifecycle_enabled(cur, profile['tenant_id']):
+                raise TenantLinearError('Используйте кнопку «Завершить диалог».', 409)
             tenant,actor,policy=policy_access(cur,profile,'update')
             selected=route(cur,tenant,channel,conversation)
             if int(selected.get('lead_id') or 0)!=lead_id:

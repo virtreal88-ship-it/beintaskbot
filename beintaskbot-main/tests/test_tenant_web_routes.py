@@ -96,6 +96,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
+    ('dialogs_lifecycle', ('POST',)),
     ('dialogs/legacy-continuation', ('GET','POST')),
     ('dialogs/legacy-recovery', ('GET','POST')),
     ('dialogs/group-legacy-resolution', ('GET',)),
@@ -294,4 +295,3 @@ class Assets(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"/api/platform/register"', tenant_text)
         self.assertIn('"/api/action", handle_api_action', legacy_text)
         self.assertIn("handle_search_contacts", functions)
-

@@ -40,6 +40,8 @@ def claim(channel: str) -> dict | None:
             if not item:
                 conn.commit(); return None
             tenant = str(item['tenant_id'])
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             member = next((m for m in profiles(cur, tenant) if m['telegram_id'] == item['recipient_id']), None)
             row = resource(cur, tenant, item['kind'], item['source_key'])
             target_url=''
@@ -117,12 +119,19 @@ def dispatch_guarded(item, callback):
     This also covers first activation of scoped rights after the claim.
     """
     from tenant_scoped_access import scoped_access_enabled
-    if item.get('event') != 'incoming_message' or not scoped_access_enabled():
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+    if item.get('event') != 'incoming_message':
         return callback()
     from tenant_scoped_access_store import read_access_profile
     tenant, actor = str(item['tenant_id']), int(item['recipient_id'])
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
+            # Even legacy dispatch retains the barrier: activation cannot race
+            # a notification already admitted before the mode transition.
+            if not scoped_access_enabled() and not lifecycle_enabled(cur, tenant):
+                return callback()
             current = read_access_profile(cur, tenant, actor, lock=True)
             member = next((m for m in profiles(cur, tenant) if m['telegram_id'] == actor), None) if current else None
             row = resource(cur, tenant, item['kind'], item['source_key'])

@@ -1,0 +1,51 @@
+"""Local final-dispatch barrier checks; callbacks never contact a provider."""
+from contextlib import contextmanager
+from unittest.mock import Mock
+import pytest
+from tenant_dialog_rollout import RolloutState
+from tenant_linear_policy import TenantLinearError
+import tenant_chat_send_store as sends
+
+
+@pytest.mark.parametrize('mode',['legacy','shadow'])
+def test_legacy_unscoped_dispatch_retains_shared_barrier(monkeypatch,mode):
+    events=[]
+    class Connection:
+        @contextmanager
+        def cursor(self):
+            events.append('enter')
+            try:yield object()
+            finally:events.append('leave')
+    @contextmanager
+    def connect():yield Connection()
+    monkeypatch.setattr(sends,'_connect',connect)
+    monkeypatch.setattr('tenant_scoped_access.scoped_access_enabled',lambda:False)
+    def guard(cur,tenant):events.append('guard');return RolloutState(mode,False,False,7)
+    monkeypatch.setattr('tenant_dialog_rollout.guard',guard)
+    authority=Mock(side_effect=AssertionError('must preserve original legacy fastpath'))
+    monkeypatch.setattr(sends,'authority',authority)
+    def callback(credentials):
+        assert events==['enter','guard']
+        events.append('dispatch');return 'synthetic'
+    item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog']}
+    assert sends.dispatch_guarded(item,{},callback)=='synthetic'
+    assert events==['enter','guard','dispatch','leave']
+    authority.assert_not_called()
+
+
+@pytest.mark.parametrize('active,scoped',[(True,False),(False,True),(True,True)])
+def test_active_or_scoped_send_never_uses_legacy_fastpath(monkeypatch,active,scoped):
+    class Connection:
+        @contextmanager
+        def cursor(self):yield object()
+    @contextmanager
+    def connect():yield Connection()
+    monkeypatch.setattr(sends,'_connect',connect)
+    monkeypatch.setattr('tenant_scoped_access.scoped_access_enabled',lambda:scoped)
+    monkeypatch.setattr('tenant_dialog_rollout.guard',lambda *args:RolloutState('active' if active else 'legacy',active,active,1))
+    authority=Mock(side_effect=TenantLinearError('Denied',403))
+    monkeypatch.setattr(sends,'authority',authority)
+    callback=Mock()
+    item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog'],'command':{'lead_id':41}}
+    with pytest.raises(TenantLinearError):sends.dispatch_guarded(item,{},callback)
+    authority.assert_called_once();callback.assert_not_called()

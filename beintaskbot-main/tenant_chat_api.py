@@ -28,6 +28,30 @@ def _can_read(context: ChatApiContext, profile: dict | None) -> bool:
     return policy.can_read_legacy_crm()
 
 
+def _lifecycle_active(profile):
+    from tenant_platform import _connect
+    from tenant_dialog_rollout import guard
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            return guard(cur,profile['tenant_id']).enforced
+
+
+def _legacy_messages_guarded(context, profile, lead_id):
+    """Keep legacy output unchanged, but serialize its final read with activation.
+
+    The earlier mode check only selects presentation. If activation won in
+    between, reauthorize through the current transactional reader instead.
+    """
+    from tenant_platform import _connect
+    from tenant_dialog_rollout import guard
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            if guard(cur,profile['tenant_id']).enforced:
+                from tenant_chat_history_store import page
+                return page(profile,lead_id)
+            return {'messages':context.list_messages(tenant_id=profile['tenant_id'],kommo_lead_id=lead_id)}
+
+
 def handlers(context: ChatApiContext) -> dict[str, Callable]:
     async def chat(request: web.Request) -> web.Response:
         profile = context.member(request)
@@ -41,7 +65,12 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
         if lead_id <= 0:
             return web.json_response(
                 {"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
-        if context.policy(profile).kommo_access() or context.policy(profile).action_scope('dialogs','view') is not None:
+        from tenant_linear_policy import TenantLinearError
+        try:
+            lifecycle_active=await asyncio.to_thread(_lifecycle_active,profile)
+        except TenantLinearError as error:
+            return web.json_response({'success':False,'error':str(error)},status=error.status)
+        if lifecycle_active or context.policy(profile).kommo_access() or context.policy(profile).action_scope('dialogs','view') is not None:
             # The old lead-only reader cannot inherit a deal grant to bypass
             # source restrictions. Reuse the current transactional page reader.
             from tenant_chat_history_store import page
@@ -82,9 +111,12 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
                 context.logger.exception(
                     "Tenant chat sync failed: tenant=%s lead=%s", profile["tenant_id"], lead_id)
                 warning = "Çat tarixçəsi yenilənmədi. Son saxlanmış tarixçə göstərilir."
-        rows = await asyncio.to_thread(
-            context.list_messages, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
+        from tenant_linear_policy import TenantLinearError
+        try:
+            result = await asyncio.to_thread(_legacy_messages_guarded,context,profile,lead_id)
+        except TenantLinearError as error:
+            return web.json_response({'success':False,'error':str(error)},status=error.status)
         return web.json_response(
-            {"success": True, "messages": rows, "stale": bool(warning), "warning": warning})
+            {"success": True, **result, "stale": bool(warning), "warning": warning})
 
     return {"chat": chat}

@@ -170,6 +170,10 @@ def database():
 
 @pytest.fixture
 def db(database,monkeypatch):
+    # Explicit disposable-schema installation, never a request-time migration.
+    from tenant_dialog_rollout import migrate as migrate_rollout
+    with database.cursor() as cur:migrate_rollout(cur)
+    database.commit()
     # This additive monetary ledger intentionally has no destructive production
     # cleanup path; isolate each PGlite fixture explicitly.
     database.execute('TRUNCATE saas_ai_spend_reservations');database.commit()

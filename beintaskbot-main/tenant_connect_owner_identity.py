@@ -109,6 +109,8 @@ def execute(cur,cfg,args):
         raise TenantLinearError('Invalid owner identity precondition.',400)
     try:request_id=str(uuid.UUID(str(args['request_id'])))
     except (ValueError,TypeError):raise TenantLinearError('Invalid request id.',400) from None
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, str(uuid.UUID(str(cfg['AI_LEARNING_MCP_TENANT_ID']))))
     tenant,actor=_owner(cur,cfg);channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialogue-merge:'+tenant+':'+channel,))
     # Resolve only the two authorised IDs, then use the shared webhook lock order.

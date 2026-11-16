@@ -5,10 +5,14 @@ import test_tenant_hot_orders as loaders
 from test_tenant_chat_send import TENANT, SESSION, INPUT
 from tenant_chat_send_policy import fingerprint
 from tenant_linear_policy import TenantLinearError
+from tenant_dialog_rollout import RolloutState
 
 
 class Store(unittest.TestCase):
     def setUp(self):
+        # These receipt tests exercise legacy mode; rollout fencing has dedicated tests.
+        rollout_guard = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout_guard.start(); self.addCleanup(rollout_guard.stop)
         self.connect = MagicMock(); self.conn = self.connect.return_value.__enter__.return_value
         self.cur = self.conn.cursor.return_value.__enter__.return_value
         self.schema = Mock(); self.read_workflow = Mock(return_value={})
@@ -39,7 +43,7 @@ class Store(unittest.TestCase):
         self.assertNotIn('secrets', item)
         statements = self.cur.execute.call_args_list
         insertion = next(call for call in statements if call.args[0].startswith('INSERT INTO saas_chat_send_receipts'))
-        self.assertEqual(insertion.args[1], (TENANT, 20, INPUT['request_id'], 7, fingerprint(INPUT)))
+        self.assertEqual(insertion.args[1], (TENANT, 20, INPUT['request_id'], 7, fingerprint(INPUT), '{"lifecycle_generation": 0}'))
         self.assertTrue(any('pg_advisory_xact_lock' in call.args[0] for call in statements))
         self.conn.commit.assert_called_once()
 
@@ -72,13 +76,13 @@ class Store(unittest.TestCase):
 
     def test_connection_change_prevents_mark_sending(self):
         item = {'key': (TENANT, 20, INPUT['request_id']), 'command': INPUT, 'connection': ['other.kommo.com', 'version']}
-        self.cur.fetchone.side_effect = self.authority_rows
+        self.cur.fetchone.side_effect = [*self.authority_rows, {'route': {'lifecycle_generation': 0}}]
         with self.assertRaises(TenantLinearError): self.module.mark_sending(item, {'talk_id': 3})
         self.fernet.decrypt.assert_not_called()
 
     def test_mark_sending_uses_current_tenant_secret_and_cas(self):
         item = {'key': (TENANT, 20, INPUT['request_id']), 'command': INPUT, 'connection': ['client.kommo.com', 'version']}
-        self.cur.fetchone.side_effect = [*self.authority_rows, {'request_id': INPUT['request_id']}]
+        self.cur.fetchone.side_effect = [*self.authority_rows, {'route': {'lifecycle_generation': 0}}, {'request_id': INPUT['request_id']}]
         _, credentials = self.module.mark_sending(item, {'talk_id': 3})
         self.assertEqual(credentials['access_token'], 'tenant-key')
         self.assertIn("state='preparing'", self.cur.execute.call_args.args[0])
@@ -87,7 +91,8 @@ class Store(unittest.TestCase):
     def test_existing_group_send_retains_early_ai_handoff(self):
         item={'key':(TENANT,20,INPUT['request_id']),'command':INPUT,'connection':['connect','channel','123456789012345@g.us'],'quote':None}
         route={'conversation_id':'123456789012345@g.us'}
-        self.cur.fetchone.return_value={'request_id':INPUT['request_id']}
+        self.cur.fetchone.side_effect=[{'route': {'lifecycle_generation': 0}},
+                                       {'request_id': INPUT['request_id']}]
         with patch.dict(self.module.mark_sending.__globals__,{'authority':Mock(return_value=(self.person,item['connection'],{'provider':'connect','route':route})),
                                                            'quote_target':Mock(return_value=None)}), \
              patch('tenant_ai_agents_schema.ensure_schema'), patch('tenant_ai_group_coordination.stop') as stop:

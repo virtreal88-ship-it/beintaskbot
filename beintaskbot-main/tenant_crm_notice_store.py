@@ -67,6 +67,8 @@ def connect_dialog_route(row: dict) -> dict | None:
 
 
 def plan(cur, tenant: str, kind: str, key: str, row: dict, event: str, version: str, members: list[dict], connection: str, *, channels=('telegram','push')) -> None:
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     # Freeze permitted recipients now, then recheck at claim. No catch-up on opt-in.
     event_id = str(uuid.uuid4())
     payload={'connection': connection, 'route': task_route(row), 'due_at': row.get('due_at')}
@@ -134,6 +136,8 @@ def observe() -> int:
             if not scan:
                 conn.commit(); return 0
             tenant, positions = str(scan['tenant_id']), dict(scan['positions'])
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             connection = connection_id(cur, tenant)
             if connection != scan['connection_id']:
                 positions = {}
@@ -182,22 +186,38 @@ def observe() -> int:
     return count
 
 
+def _dialog_notice_visible(cur,member,event,row):
+    from tenant_dialog_lifecycle import enabled as lifecycle_enabled, require_access
+    from tenant_linear_policy import TenantLinearError
+    if event!='incoming_message' or not lifecycle_enabled(cur, str(member['tenant_id'])) or not str(row.get('channel') or '').startswith('connect:'):
+        return True
+    route=connect_dialog_route(row)
+    if not route:return False
+    try:
+        require_access(cur,str(member['tenant_id']),int(member['telegram_id']),'connect',route['channel_id'],route['conversation_id'])
+    except TenantLinearError:return False
+    return True
+
+
 def source_eligible(cur,member,event,row,channel):
     """Exact source check at both enqueue and current-recipient claim."""
     from tenant_policy import TenantPolicy
     from tenant_dialog_access import scope,require_source
     from tenant_linear_policy import TenantLinearError
     from tenant_scoped_access import scoped_access_enabled
+    if event=='incoming_message':
+        from tenant_dialog_rollout import guard as rollout_guard
+        rollout_guard(cur, str(member['tenant_id']))
     if event!='incoming_message' or not scoped_access_enabled():
-        return eligible(member,event,row,channel)
+        return eligible(member,event,row,channel) and _dialog_notice_visible(cur,member,event,row)
     from tenant_scoped_access_store import read_access_profile
     current=read_access_profile(cur,member['tenant_id'],member['telegram_id'],lock=True)
     if not current:return False
     member={**member,**current};policy=TenantPolicy(member)
-    if scope(policy) is None:return eligible(member,event,row,channel)
+    if scope(policy) is None:return eligible(member,event,row,channel) and _dialog_notice_visible(cur,member,event,row)
     source=str(row.get('channel') or '')
     try:
         require_source(cur,str(member['tenant_id']),policy,
           'connect' if source.startswith('connect:') else 'kommo',source.removeprefix('connect:'))
     except TenantLinearError:return False
-    return eligible(member,event,row,channel,source_allowed=True)
+    return eligible(member,event,row,channel,source_allowed=True) and _dialog_notice_visible(cur,member,event,row)

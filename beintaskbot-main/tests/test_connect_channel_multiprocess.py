@@ -17,6 +17,7 @@ import tenant_ai_agents_schema as schema
 import tenant_platform_schema as platform_schema
 import tenant_chat_ai_schema as chat_schema
 import tenant_dialog_consultations as consultations
+import tenant_dialog_rollout as rollout
 
 class RealDatabase:
     def __init__(self,dsn):self.dsn=dsn;self.conn=psycopg.connect(dsn,row_factory=dict_row)
@@ -44,6 +45,8 @@ def database():
     schema.ensure_schema(db);chat_schema.ensure_schema(db)
     # Match the mandatory production bootstrap before request/queue tests run.
     consultations.schema(db)
+    with db.cursor() as cur:
+        rollout.migrate(cur)
     db.execute('CREATE TABLE test_external_sends(channel TEXT,run_id TEXT)');db.commit()
     yield db
     db.conn.close()

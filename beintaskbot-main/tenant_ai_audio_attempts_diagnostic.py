@@ -56,7 +56,7 @@ def read(cur,cfg,args):
     chosen=assert_route(cur,tenant,policy,'connect',channel=channel,lead_id=lead)
     from tenant_operator_dialogs import projection
     from tenant_ai_agent_runtime_flags import enabled
-    sql,params=projection(policy)
+    sql,params=projection(cur, policy)
     cur.execute(sql+"SELECT 1 AS visible FROM visible WHERE provider='connect' AND channel_id=%s AND conversation_id=%s AND lead_id=%s AND channel_active=TRUE",
       (tenant,tenant,*params,enabled('AI_AGENTS_ENABLED'),channel,chosen['conversation_id'],lead))
     if not cur.fetchone():raise TenantLinearError('Dialog is unavailable.',404)

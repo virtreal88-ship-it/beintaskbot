@@ -25,6 +25,19 @@ def schema(conn):
 
 
 def authorize(cur,profile):
+    from tenant_dialog_episode_cases import episode_id, _closed
+    selected=episode_id(profile)
+    if selected:
+        from tenant_support_access import require_create
+        tenant,actor,policy=access(cur,profile,'dialogs','update')
+        require_create(cur,profile)
+        from tenant_dialog_access import require_independent_ai
+        require_independent_ai(policy)
+        cur.execute('SELECT channel_id::text,conversation_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,selected))
+        episode=cur.fetchone()
+        if not episode:raise TenantLinearError('Обращение недоступно.',404)
+        _closed(cur,profile,episode['channel_id'],episode['conversation_id'],selected)
+        return tenant,actor,policy
     # This unforgeable in-process capability is only created by the narrow
     # employee submission endpoint. It does not grant case listing, editing,
     # publication, or the general extraction API to support staff.
@@ -122,7 +135,7 @@ def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
         # merge's source contact name, which is not stored on the canonical row.
         from tenant_operator_dialogs import projection
         from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-        sql,scopes=projection(policy)
+        sql,scopes=projection(cur, policy)
         cur.execute(sql+'''SELECT customer_name FROM visible WHERE provider='connect' AND lead_id=%s
           AND channel_id=%s AND conversation_id=%s''',
           (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),int(chosen['lead_id']),
@@ -197,10 +210,16 @@ def snapshot(cur,profile,data):
     tenant,actor,policy,chosen,binding,ticket=route(cur,profile,data)
     from tenant_operator_case_submission import is_submission, MAX_SUBMISSION_MESSAGES
     employee_submission=is_submission(profile)
-    message_limit=MAX_SUBMISSION_MESSAGES if employee_submission else MAX_MESSAGES
+    from tenant_dialog_episode_cases import episode_id
+    internal_episode=episode_id(profile)
+    message_limit=MAX_MESSAGES if internal_episode else MAX_SUBMISSION_MESSAGES if employee_submission else MAX_MESSAGES
     before=identifier(data['before']) if data.get('before') else None
     start,end=period(binding)
-    if binding['history_mode']=='unified_group':
+    from tenant_dialog_episode_cases import snapshot_rows
+    pinned_rows=snapshot_rows(cur,profile,binding,chosen)
+    if pinned_rows is not None:
+        rows=pinned_rows
+    elif binding['history_mode']=='unified_group':
         from datetime import timedelta
         through=(moment(end)-timedelta(microseconds=1)).isoformat() if end else None
         rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=message_limit+1,through=through,
@@ -244,8 +263,10 @@ def snapshot(cur,profile,data):
     for row in rows:
         kind=row.get('message_type') or 'text'
         marker='\n[Attachment pending_processing: contents not read]' if kind!='text' else ''
-        body_limit=max(0,min(excerpt_limit,remaining)-(len(marker) if employee_submission else 0))
+        body_limit=max(0,(remaining if internal_episode else min(excerpt_limit,remaining))-(len(marker) if employee_submission else 0))
         body=redact(row.get('body'),names)
+        if pinned_rows is not None and len(body)>body_limit:
+            raise TenantLinearError(f'Полное обращение превышает лимит {MAX_CONTEXT} символов для анализа. Анализ не запускался; текст сохранён целиком и не обрезан.',413)
         if employee_submission and len(body)>body_limit:
             truncation=' [Truncated; do not infer omitted contents]'
             body=body[:max(0,body_limit-len(truncation))]+truncation
@@ -977,7 +998,7 @@ def _restore_owner_payment_link(cur,profile,tenant,actor,row,data,agents,request
 
 def mutate(profile,candidate_id,data,action='edit',*,connection=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
-        schema(conn)
+        if connection is None:schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(candidate_id)))

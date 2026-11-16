@@ -11,7 +11,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
-            sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+            sql,scopes=projection(cur,policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             cur.execute(sql+"SELECT count(DISTINCT CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END) FILTER(WHERE display_state IN ('human','paused','blocked','error')) AS attention_count FROM visible",params)
             count=int(cur.fetchone()['attention_count'])
             cur.execute(sql+"SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible ORDER BY name",params)

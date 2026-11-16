@@ -236,6 +236,9 @@ class Storage(unittest.TestCase):
         self.conn.commit.assert_not_called()
 
     def test_real_access_rechecks_membership_deal_and_configuration(self):
+        from tenant_dialog_rollout import RolloutState
+        rollout = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout.start(); self.addCleanup(rollout.stop)
         real=loaders.load('tenant_chat_ai_store',{'_connect':self.connect,'_fernet':lambda:self.fernet,'_read_tenant_workflow':Mock(return_value={'pipelines':[{'pipeline_id':1}]}),'ensure_schema':Mock()}, {'tenant_platform','tenant_chat_ai_schema'})
         person={**SESSION,'role':'owner','active':True,'tenant_status':'active'}
         deal={'tenant_id':TENANT,'pipeline_id':1,'status_id':10}

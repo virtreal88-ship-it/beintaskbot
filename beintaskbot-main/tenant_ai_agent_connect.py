@@ -176,6 +176,8 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
     Explicit operator assignments (including an explicit no-agent choice),
     Human/Pause, identity quarantine and inactive routes are immutable here.
     """
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     from tenant_ai_dialog_scope import lock_dialog
     from tenant_ai_agent_access import tenant_status_allows_ai
     from tenant_connect_identity import conflicted
@@ -373,6 +375,11 @@ def allowed(job: dict, connection=None, *, require_assignment=True) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
+            from tenant_dialog_lifecycle import ai_blocked
+            if ai_blocked(cur, tenant, 'connect', channel, conversation):
+                return False
             from tenant_connect_identity import conflicted
             if conflicted(cur, tenant, channel, conversation):
                 return False
@@ -439,7 +446,12 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
+            from tenant_dialog_lifecycle import ai_blocked
+            if ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
+                return 0
             cur.execute('SELECT enabled,operating_mode,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             settings = cur.fetchone() or {}
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
@@ -745,6 +757,8 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
     a separate idempotent client-dialog job anchored to the latest customer
     message in the same open case and captures the active conversation revision.
     """
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, tenant)
     if not quoted_message_id:return False
     # Every client continuation shares the dialog fence with customer admission,
     # final send and case edits. Read the route first, then revalidate it below.
@@ -926,6 +940,8 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, job['tenant_id'])
             lock_dialog(cur,job['tenant_id'],'connect',job['channel_id'],job['conversation_id'])
             recorded = handoff_recorded(cur, job)
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
@@ -963,6 +979,8 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             from tenant_connect_dialog_equivalence import lead_members
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
@@ -1012,6 +1030,8 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, tenant)
             channel_id = lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
             cur.execute("SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s", (tenant, channel_id, conversation_id, int(lead_id)))
             if not cur.fetchone():
@@ -1021,18 +1041,22 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             # involved in that path, so bind only a sole enabled primary that
             # explicitly covers this channel.  Never replace an operator's
             # explicit no-agent choice, and never change the human handoff.
-            candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, allow_human=True)
-            from tenant_ai_group_coordination import stop
-            stop(cur, tenant, conversation_id, actor=actor)
-            cur.execute('''INSERT INTO saas_ai_conversation_state
-              (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
-              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'human','manager_replied')
-              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
-                agent_id=COALESCE(saas_ai_conversation_state.agent_id,
-                  CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
-                state='human',reason='manager_replied',
-                revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
-              (tenant, conversation_id, channel_id, candidate_id))
+            from tenant_dialog_lifecycle import ai_blocked
+            # Episode ownership is a derived pause. Preserve the previous AI
+            # mode so a later enquiry does not resume a manually paused agent.
+            if not ai_blocked(cur, tenant, 'connect', channel_id, conversation_id):
+                candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, allow_human=True)
+                from tenant_ai_group_coordination import stop
+                stop(cur, tenant, conversation_id, actor=actor)
+                cur.execute('''INSERT INTO saas_ai_conversation_state
+                  (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
+                  VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'human','manager_replied')
+                  ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
+                    agent_id=COALESCE(saas_ai_conversation_state.agent_id,
+                      CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
+                    state='human',reason='manager_replied',
+                    revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
+                  (tenant, conversation_id, channel_id, candidate_id))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
                 AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id, channel_id))
@@ -1048,6 +1072,8 @@ def group_context(job, rows, through):
     from tenant_connect_group_history import page
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout_guard(cur, job['tenant_id'])
             cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
               AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s''',
               (job['tenant_id'],job['channel_id'],job['conversation_id'],job['lead_id']))

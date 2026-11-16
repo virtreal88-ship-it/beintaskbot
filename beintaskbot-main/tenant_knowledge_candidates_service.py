@@ -96,6 +96,8 @@ def _shrink_training_reference(agent_prompt):
 
 def _shrink_training_excerpt(item):
     """Preserve selected IDs/roles while staying inside the existing model budget."""
+    if item.get('training',{}).get('episode_id'):
+        raise TenantLinearError('Полное обращение не помещается в лимит контекста. Текст не обрезан.',413)
     index=max(range(len(item['messages'])),key=lambda i:len(item['messages'][i]['text']))
     message=item['messages'][index]
     if len(message['text'])<100:
@@ -533,8 +535,8 @@ def parse(raw,item):
         # an English/Russian suggestion as Azerbaijani.
         value['content_language']=(item.get('route') or {}).get('language') or 'az'
         validated=card(value,aliases.values())
-        if (not isinstance(item.get('ticket'),dict)
-                or item['ticket'].get('completion_outcome')!='resolved_confirmed'):
+        if (not item.get('training',{}).get('episode_id') and (not isinstance(item.get('ticket'),dict)
+                or item['ticket'].get('completion_outcome')!='resolved_confirmed')):
             if validated.get('outcome',{}).get('status')=='confirmed':
                 validated['outcome']['status']='unconfirmed'
             if validated.get('work_status')=='resolved':
@@ -553,12 +555,17 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant=item['tenant'];request_id=item['id']
+            episode_access_error=None
+            if item.get('training',{}).get('episode_id'):
+                try:store.authorize(cur,profile)  # Dialog/episode before extraction everywhere.
+                except TenantLinearError as exc:episode_access_error=exc
             cur.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,request_id))
             row=cur.fetchone()
             status='completed' if values is not None else ('failed' if usage is not None or not attempted else 'unknown')
             if item.get('generation_attempted') and not item.get('generation_usage_received'): status='unknown'
             source_valid=False
             try:
+                if episode_access_error is not None:raise episode_access_error
                 if item.get('media_results'): row={**row,'media_results':item['media_results']}
                 evidence=store.evidence(cur,profile,row)
                 cur.execute('SELECT emergency_stop,enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
@@ -604,7 +611,7 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=GREATEST(reserved_tokens,%s) WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(unknown_tokens,tenant,request_id))
             if not attempted: cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=0 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
             if values is not None:
-                if item.get('training') and not values:
+                if item.get('training') and not item['training'].get('episode_id') and not values:
                     ids=[ref['id'] for ref in item['refs']]
                     values=[card({'title':'Əməkdaşın göndərdiyi müraciət','symptoms':['Yoxlama tələb olunur'],
                         'cause':{'status':'unknown','text':''},'resolution_steps':[],
@@ -645,6 +652,9 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                         (retry_route.get('message_ids') or []) if retry_route.get('owner_retry_unknown') is True else [])
                     persist_media_evidence(cur,tenant,item['refs'],item['media_results'],
                         skip_unverified_source_ids=unverified_retry_ids)
+            if status=='completed' and values is not None and item.get('episode_suitability'):
+                cur.execute('UPDATE saas_knowledge_extractions SET route=route || %s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                    (_json({'episode_suitability':item['episode_suitability']}),tenant,request_id))
             cur.execute('UPDATE saas_knowledge_extractions SET status=%s,error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(status,error,tenant,request_id))
             cur.execute('UPDATE saas_ai_agent_runs SET state=%s,error_code=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
@@ -792,11 +802,25 @@ def analyze(profile,data,*,before_provider=None,training=None):
             # retains the media reserve as unknown after this boundary.
             item['inline_vision_attempted']=bool(images)
             provider_messages=_provider_messages(item)
-            raw,usage=generate(item['key'],item['model'],'knowledge_extraction',provider_messages,'',instructions=PROMPT+language_instructions(selection),
+            raw,usage=generate(item['key'],item['model'],'knowledge_extraction',provider_messages,'',instructions=PROMPT+language_instructions(selection)+("\nThis is one operator-defined completed episode. First evaluate whether it contains useful reusable support knowledge suitable for learning. Return JSON with exactly keys suitable (boolean), reason (nonempty concise explanation), cards (array). If suitable is false, cards MUST be empty. If suitable is true, return exactly one draft case covering every supplied message. Do not split into subcases or invent confirmations. Unknown facts and outcomes remain unknown." if item.get('training',{}).get('episode_id') else ''),
                 extra_context=_extraction_extra_context(item,selection,images),images=images,with_usage=True,max_output_tokens=1800,request_timeout=25)
             item['generation_usage_received']=bool(usage)
             stage='parse'
-            values=parse(raw,item);error=''
+            if item.get('training',{}).get('episode_id'):
+                assessment=json.loads(raw)
+                if (not isinstance(assessment,dict) or set(assessment)!={'suitable','reason','cards'}
+                    or type(assessment['suitable']) is not bool or not isinstance(assessment['reason'],str)
+                    or not assessment['reason'].strip() or len(assessment['reason'])>1200
+                    or not isinstance(assessment['cards'],list)
+                    or len(assessment['cards'])!=(1 if assessment['suitable'] else 0)):
+                    raise ValueError('invalid_episode_suitability')
+                parsed=parse(json.dumps({'cards':assessment['cards']}),item)
+                if parsed and set(parsed[0]['source_message_ids'])!={r['id'] for r in item['refs']}:
+                    raise ValueError('incomplete_episode_coverage')
+                item['episode_suitability']={'suitable':assessment['suitable'],'reason':store.redact(assessment['reason']).strip()}
+            else:
+                parsed=parse(raw,item)
+            values=parsed;error=''
     except LiveExtractionDisabled:
         error='live_extraction_disabled'
         raise

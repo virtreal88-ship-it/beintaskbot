@@ -3,6 +3,16 @@ from unittest.mock import Mock
 import pytest
 
 import tenant_knowledge_live_queue as live
+from tenant_dialog_rollout import RolloutState
+
+@pytest.fixture(autouse=True)
+def legacy_tenant(monkeypatch):
+    # Explicit legacy tenant, not process-wide lifecycle env flags. Queue SQL
+    # tests model an unambiguous route; identity validation has its own suite.
+    monkeypatch.setattr("tenant_dialog_rollout.guard", lambda cur, tenant, **kw: RolloutState())
+    monkeypatch.setattr("tenant_connect_identity.conflicted", lambda *args: False)
+    monkeypatch.setattr(live, "_connect", lambda: Connection())
+
 
 
 TENANT='10000000-0000-0000-0000-000000000001'
@@ -52,7 +62,7 @@ def test_webhook_enqueue_is_scoped_and_debounced(monkeypatch):
     assert 'text' not in sql.lower() and 'body' not in sql.lower()
 
 
-def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
+def test_worker_reuses_stable_receipt_and_tenant_language(monkeypatch):
     enable_pilot(monkeypatch,conversation='client@s.whatsapp.net')
     item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client@s.whatsapp.net',
           'lead_id':42,'actor_id':None,'reviewer_id':9,'last_message_id':MESSAGE,'generation':2,'last_message_at':AFTER}
@@ -63,7 +73,8 @@ def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
     assert live.tick()
     args=analyze.call_args.args
     assert args[0]=={'tenant_id':TENANT,'telegram_id':9}
-    assert args[1]['language']=='az'
+    # Language is resolved from tenant settings, never hard-coded to az.
+    assert 'language' not in args[1]
     assert args[1]['channel_id']==CHANNEL and args[1]['conversation_id']==item['conversation_id']
     assert args[1]['period_start']==AFTER
     assert args[1]['period_end']=='2026-10-20T12:00:00.000001+00:00'

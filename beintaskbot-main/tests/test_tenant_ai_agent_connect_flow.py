@@ -29,6 +29,7 @@ from tenant_ai_agent_schedule import is_open, next_open
 from tenant_ai_agents_policy import agent as validate_agent
 from tenant_chat_ai_policy import history
 from tenant_linear_policy import TenantLinearError
+from tenant_dialog_rollout import RolloutState
 from tenant_web_routes import TenantWebContext, ai_agent_routes
 
 
@@ -80,6 +81,12 @@ class Connection:
 
 
 class ConnectAiFlowTests(unittest.TestCase):
+    def setUp(self):
+        # Legacy provider-flow fixtures do not emulate the rollout SQL protocol.
+        rollout_guard = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout_guard.start()
+        self.addCleanup(rollout_guard.stop)
+
     def test_only_automatic_agents_enter_background_queue(self):
         rows = [{'enabled': True, 'mode': 'manual'}, {'enabled': True, 'mode': 'automatic'},
                 {'enabled': False, 'mode': 'automatic'}]

@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, MagicMock, patch
 
 from tenant_chat_api import ChatApiContext, handlers
 
@@ -38,6 +38,10 @@ class Request:
 
 class ChatApiTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        from tenant_dialog_rollout import RolloutState
+        self.guard=patch('tenant_dialog_rollout.guard',return_value=RolloutState()).start()
+        self.addCleanup(patch.stopall)
+        patch('tenant_platform._connect',return_value=MagicMock()).start()
         self.profile = {"tenant_id": "company-a", "telegram_id": 20,
                         "permissions": ["customers"]}
         self.member = Mock(return_value=self.profile)
@@ -54,6 +58,34 @@ class ChatApiTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def body(response):
         return json.loads(response.body)
+
+    async def test_lifecycle_blocks_legacy_cached_history_without_direct_reader(self):
+        from tenant_linear_policy import TenantLinearError
+        with patch('tenant_chat_api._lifecycle_active',return_value=True), \
+             patch('tenant_chat_history_store.page',side_effect=TenantLinearError('Taken by another operator',404)) as guarded:
+            response=await self.api['chat'](Request(lead_id='7'))
+        self.assertEqual(response.status,404)
+        guarded.assert_called_once_with(self.profile,7)
+        self.messages.assert_not_called()
+        self.deal.assert_not_called()
+        self.sync.assert_not_awaited()
+
+    async def test_activation_between_branch_and_final_read_reauthorizes(self):
+        from tenant_dialog_rollout import RolloutState
+        from tenant_linear_policy import TenantLinearError
+        self.guard.side_effect=[RolloutState(),RolloutState('active',True,True,1)]
+        with patch('tenant_chat_history_store.page',side_effect=TenantLinearError('Hidden',404)) as reader:
+            response=await self.api['chat'](Request(lead_id='7'))
+        self.assertEqual(response.status,404)
+        self.messages.assert_not_called()
+        reader.assert_called_once_with(self.profile,7)
+
+    async def test_busy_rollout_returns_conflict_without_read(self):
+        from tenant_linear_policy import TenantLinearError
+        self.guard.side_effect=TenantLinearError('Busy',409)
+        response=await self.api['chat'](Request(lead_id='7'))
+        self.assertEqual(response.status,409)
+        self.messages.assert_not_called()
 
     async def test_session_and_module_are_required(self):
         self.member.return_value = None

@@ -14,6 +14,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
     is_connect = message_id.startswith('connect:')
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_dialog_rollout import guard
+            guard(cur, tenant)
             from tenant_scoped_access import scoped_access_enabled
             if scoped_access_enabled():
                 from tenant_scoped_access_store import read_access_profile
@@ -59,6 +61,10 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
                 from tenant_dialog_access import require_source
                 require_source(cur,tenant,policy,'connect',route['channel_id'],'view')
+                from tenant_dialog_lifecycle import require_access
+                # Preserve raw route identity so the locked check can detect a
+                # concurrent merge/rollback instead of checking only its old target.
+                require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'])
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

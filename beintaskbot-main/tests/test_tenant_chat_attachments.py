@@ -81,6 +81,10 @@ class Provider(unittest.TestCase):
 
 class Storage(unittest.TestCase):
     def setUp(self):
+        from tenant_dialog_rollout import RolloutState
+        rollout_guard = patch('tenant_dialog_rollout.guard', return_value=RolloutState())
+        rollout_guard.start()
+        self.addCleanup(rollout_guard.stop)
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.policy=Mock();self.policy.profile=SESSION;self.policy.can_read_kommo_chat.return_value=True;self.policy.action_scope.return_value=None

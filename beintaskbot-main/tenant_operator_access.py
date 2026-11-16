@@ -10,6 +10,8 @@ def access(cur, profile, permission='dialogs',action='view'):
     tenant=identifier(profile.get('tenant_id'))
     try: actor=int(profile.get('telegram_id'))
     except (TypeError,ValueError): raise TenantLinearError('Нет доступа.',403) from None
+    from tenant_dialog_rollout import guard
+    guard(cur, tenant)
     from tenant_scoped_access_store import read_access_profile
     row=read_access_profile(cur,tenant,actor,lock=True)
     if not row or row.get('active') is not True or not tenant_status_allows_management(row.get('tenant_status')):
@@ -68,6 +70,15 @@ def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=N
         route=_resolve_connect_route(cur,tenant,conversation,channel,lead_id,allow_merged=allow_merged)
         from tenant_dialog_access import require_source
         require_source(cur,tenant,policy,'connect',str(route['connect_channel_id']),action)
+        from tenant_dialog_lifecycle import require_access
+        protected = require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',str(route['connect_channel_id']),route['conversation_id'],action)
+        if protected:
+            # Retain the caller's raw proof: rollback may detach it while the
+            # canonical route remains valid. Never authorize that stale proof.
+            fresh = _resolve_connect_route(cur,tenant,conversation,channel,lead_id,allow_merged=allow_merged)
+            keys = ('connect_channel_id','conversation_id','lead_id')
+            if tuple(str(fresh[k]) for k in keys) != tuple(str(route[k]) for k in keys):
+                raise TenantLinearError('Адрес диалога изменился. Обновите диалог.',409)
         return route
     if provider!='kommo': raise TenantLinearError('Некорректный источник.')
     cur.execute('''SELECT d.* FROM saas_crm_deals d WHERE d.tenant_id=%s::uuid AND d.deleted_at IS NULL

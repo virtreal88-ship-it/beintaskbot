@@ -494,7 +494,11 @@ def test_assignment_reconciler_retries_no_candidate_and_preserves_manual_no_agen
         with patch.object(db,'execute',wraps=db.execute) as statements:
             result=connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later',blocking=blocking)
         assert result==(None,'existing_agent_preserved')
-        assert statements.call_count==1
+        assert statements.call_count==3
+        barrier_sql=' '.join(statements.call_args_list[0].args[0].upper().split())
+        mode_sql=' '.join(statements.call_args_list[1].args[0].upper().split())
+        assert 'PG_TRY_ADVISORY_XACT_LOCK_SHARED' in barrier_sql
+        assert 'FROM SAAS_DIALOG_ROLLOUT' in mode_sql
         statement=' '.join(statements.call_args.args[0].upper().split())
         assert statement.startswith('SELECT AGENT_ID,AGENT_ASSIGNMENT_ID FROM SAAS_AI_CONVERSATION_STATE')
         assert 'FOR UPDATE' not in statement and 'PG_ADVISORY' not in statement

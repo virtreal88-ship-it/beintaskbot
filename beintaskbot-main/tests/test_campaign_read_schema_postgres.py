@@ -16,6 +16,7 @@ import tenant_ai_agents_schema as agents_schema
 import tenant_chat_ai_schema as chat_schema
 import tenant_platform_schema as platform_schema
 import tenant_knowledge_campaigns as campaigns
+import tenant_dialog_rollout as rollout
 from tenant_linear_policy import TenantLinearError
 
 
@@ -105,6 +106,9 @@ def test_cold_campaign_get_initializes_owned_tables_before_read(database,monkeyp
         monkeypatch.setattr(campaigns,'_connect',factory)
         with factory() as conn:
             platform_schema._ensure_schema(conn)
+            # Rollout is independently migrated before protected campaign reads.
+            with conn.cursor() as cur:
+                rollout.migrate(cur)
             conn.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Fixture','active',11)",(A,A))
             conn.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,11,'owner','Fixture')",(A,))
             assert conn.execute("SELECT to_regclass('saas_knowledge_campaigns') AS relation").fetchone()['relation'] is None
