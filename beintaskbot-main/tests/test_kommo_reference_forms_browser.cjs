@@ -22,7 +22,7 @@ for(const width of [320,390,1440])for(const theme of ['light','dark']){
 for(const width of [320,390,768,1440]){
  const page=await browser.newPage({viewport:{width,height:900}});await page.route('https://fixture.test/deal',route=>route.fulfill({contentType:'text/html',body:nativeHtml}));await page.goto('https://fixture.test/deal');await page.addStyleTag({content:themeCSS});
  await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'../docs/tenant-kommo-deal-card.js'),'utf8')});
- await page.evaluate(()=>{window.tenantI18n={language:'ru'};window.tenantTaskFlow={capture:()=>({}),current:()=>true,read:async()=>({source:'kommo',tasks:[],sources:[{source:'kommo',view:true}]}),api:async()=>({notes:[]})};const modal=document.getElementById('dealModal');modal.classList.add('show');const host=document.getElementById('modalContent');const mount=()=>{host.innerHTML='<div class="meta"><div>Deal details</div></div><div class="chat-placeholder"><div id="chatRows">'+Array.from({length:40},(_,i)=>'<p>Message '+i+'</p>').join('')+'</div><div style="display:flex"><textarea id="chatText"></textarea><button>Send</button></div></div>';window.tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'+994000000000'},isCurrent:()=>true});};mount();mount();});
+ await page.evaluate(()=>{window.tenantI18n={language:'ru'};window.tenantTaskFlow={capture:()=>({}),current:()=>true,read:async()=>({source:'kommo',tasks:[],sources:[{source:'kommo',view:true}]}),api:async()=>({notes:[]})};const modal=document.getElementById('dealModal');modal.classList.add('show');const host=document.getElementById('modalContent');const mount=()=>{host.innerHTML='<div class="meta"><div>Deal details</div></div><div class="chat-placeholder"><div id="chatRows">'+Array.from({length:40},(_,i)=>'<p>Message '+i+'</p>').join('')+'</div><div class="operator-composer tc-legacy-composer"><textarea id="chatText" rows="1"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-composer-ai" id="tcAiMenuToggle" aria-controls="tcAiActions" aria-expanded="false">AI</button><button type="button" id="sendChat" data-composer-delegate="true" aria-hidden="true" tabindex="-1">Send</button><button type="button" class="primary tc-legacy-composer-primary" id="tcComposerPrimary">↑</button></div></div></div>';window.tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'+994000000000'},isCurrent:()=>true});};mount();mount();});
  const card=await page.locator('#dealModal .modal-card').boundingBox();assert(Math.abs(card.x)<1&&Math.abs(card.width-width)<1,'full width deal '+width);assert(card.height<=901,'viewport bounded');
  const input=await page.locator('#chatText').boundingBox();assert(input.y+input.height<=900,'composer visible without outer scroll');assert(await page.locator('.deal-chat-history').evaluate(n=>n.scrollHeight>n.clientHeight),'history independently scrollable');assert(await page.locator('#dealModal .modal-card').evaluate(n=>n.scrollHeight<=n.clientHeight+1),'no outer scroll');assert.equal(await page.locator('#dealInfoPanel').isVisible(),false);assert.equal(await page.locator('#modalTitle').count(),1,'reopening preserves title');
  await page.locator('#chatText').fill('unsent');await page.locator('.deal-info-toggle').click();assert(await page.locator('#dealInfoPanel').isVisible());assert(await page.locator('[data-related-notes]').isVisible());await page.locator('.deal-info-toggle').click();assert.equal(await page.locator('#chatText').inputValue(),'unsent');
@@ -32,15 +32,37 @@ for(const width of [320,390,768,1440]){
  await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-profile',{detail:{member:{tenant_id:1,telegram_id:1},capabilities:{chat_ai:true}}}));document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:7}}));});
  await page.locator('#chatText').fill('Long draft\n'.repeat(500));
  assert(await page.locator('#chatText').evaluate(n=>n.scrollHeight>n.clientHeight&&n.clientHeight<=180),'long draft scrolls inside bounded input');
+ await page.locator('#tcAiMenuToggle').click();
+ assert(await page.locator('#tcAiActions').evaluate(n=>n.parentElement.id==='dealModal'),'menu escapes bounded composer scroller');
+ const assertMenu=async()=>{const m=await page.locator('#tcAiActions').boundingBox();const vp=page.viewportSize();assert(m.x>=0&&m.y>=0&&m.x+m.width<=vp.width+1&&m.y+m.height<=vp.height+1,'AI menu stays inside viewport');assert(await page.locator('#tcAiActions button').nth(1).evaluate(n=>{const b=n.getBoundingClientRect();return n.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2));}),'AI menu action not clipped or covered');};
+ await assertMenu();
+ // Keyboard and programmatic dismissal must not leave an invisible global Escape trap.
+ await page.evaluate(()=>{document.getElementById('closeModal').onclick=()=>document.getElementById('dealModal').classList.remove('show');});
+ await page.locator('#closeModal').focus();await page.keyboard.press('Enter');
+ assert(await page.locator('#tcAiActions').evaluate(n=>n.hidden),'keyboard close dismisses portal');
+ assert(await page.evaluate(()=>{const e=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.dispatchEvent(e);return !e.defaultPrevented;}),'closed modal does not intercept Escape');
+ await page.evaluate(()=>document.getElementById('dealModal').classList.add('show'));
+ assert.equal(await page.locator('#tcAiMenuToggle').getAttribute('aria-expanded'),'false');
+ await page.locator('#tcAiMenuToggle').click();await assertMenu();
+ await page.locator('.deal-info-toggle').focus();await page.keyboard.press('Enter');
+ assert(await page.locator('#dealInfoPanel').isVisible());assert(await page.locator('#tcAiActions').evaluate(n=>n.hidden),'keyboard Info hides portal');
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#dealInfoPanel').isVisible(),false,'Escape reaches Info handler');
+ await page.locator('#tcAiMenuToggle').click();
+ assert(await page.evaluate(()=>{const modal=document.getElementById('dealModal');modal.classList.remove('show');const e=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.dispatchEvent(e);modal.classList.add('show');return !e.defaultPrevented&&document.getElementById('tcAiActions').hidden;}),'programmatic hide guarded even before observer runs');
+ await page.locator('#tcAiMenuToggle').click();await assertMenu();await page.keyboard.press('Escape');assert.equal(await page.locator('#tcAiActions').isVisible(),false);assert.equal(await page.evaluate(()=>document.activeElement.id),'tcAiMenuToggle');
+ await page.locator('#tcAiMenuToggle').click();await assertMenu();
  await page.locator('#tcAiActions button').nth(1).click();await page.locator('#tcAiResult textarea').waitFor();
  assert(await page.locator('#tcAiResult textarea').evaluate(n=>n.scrollHeight>n.clientHeight&&n.clientHeight<=180),'AI result scrolls internally');
  for(const height of [900,500]){
  await page.setViewportSize({width,height});
+ if(!await page.locator('#tcAiActions').isVisible())await page.locator('#tcAiMenuToggle').click();
+ await page.locator('#tcAiMenuToggle').scrollIntoViewIfNeeded();await assertMenu();
+ await page.keyboard.press('Escape');
  assert(await page.locator('#dealModal .modal-card').evaluate(n=>n.scrollHeight<=n.clientHeight+1),'long content does not overflow modal');
  assert(await page.locator('.deal-chat-history').evaluate(n=>n.clientHeight>50),'history retains usable height');
  await page.locator('#tcAiResult button').first().click();
- await page.locator('.deal-chat-compose button').first().scrollIntoViewIfNeeded();
- const send=await page.locator('.deal-chat-compose button').first().boundingBox();assert(send.y>=0&&send.y+send.height<=height,'send reachable at '+width+'x'+height);
+ await page.locator('#tcComposerPrimary').scrollIntoViewIfNeeded();
+ const send=await page.locator('#tcComposerPrimary').boundingBox();assert(send.y>=0&&send.y+send.height<=height,'send reachable at '+width+'x'+height);
  }
  await page.locator('#tcAiResult button').last().click();assert.equal(await page.locator('#tcAiResult').count(),0);await page.close();
 }
