@@ -1,7 +1,7 @@
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const fs=require('node:fs'),assert=require('node:assert/strict');
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
-for(const width of [320,390,1440])for(const theme of ['light','dark']){
+for(const width of [320,390,768,1440])for(const theme of ['light','dark']){
 const page=await browser.newPage({viewport:{width,height:900},colorScheme:theme});
 await page.setContent('<html lang="en"><body><div id="dealsList"></div><div id="nativeDealsList"></div></body></html>');
 await page.evaluate(()=>{window.tenantViewDemand={watch(){}};window.fetch=async()=>({ok:true,json:async()=>({success:true,catalog:[{pipeline_id:1,name:'Sales',stages:[{stage_id:1,name:'New',color:'#22c55e'},{stage_id:2,name:'Working'},{stage_id:3,name:'Very long stage name '.repeat(12)}]}],hidden_stage_keys:[]})});});
@@ -12,8 +12,18 @@ await page.evaluate(()=>{const host=document.createElement('div');host.id='tasks
 await page.locator('[data-task-stage-header]').first().waitFor();
 const taskHeight=(await page.locator('[data-task-stage-header]').first().boundingBox()).height;
 const dealHeight=(await page.locator('[data-deal-stage-header]').first().boundingBox()).height;
-assert(taskHeight<=dealHeight+2,`task header ${taskHeight} should be compact like deals ${dealHeight}`);
-assert(taskHeight<70,'task column header has no excess heading/paragraph margins');
+assert(Math.abs(taskHeight-dealHeight)<=1,`task header ${taskHeight} should match deals ${dealHeight}`);
+const geometry=await page.evaluate(()=>{
+  const task=document.querySelector('[data-task-stage-header]'),deal=document.querySelector('[data-deal-stage-header]');
+  const values=node=>{const css=getComputedStyle(node),col=getComputedStyle(node.parentElement);return {display:css.display,align:css.alignItems,justify:css.justifyContent,gap:css.gap,paddingBottom:css.paddingBottom,marginBottom:css.marginBottom,borderBottom:css.borderBottomWidth,columnPadding:col.padding,columnWidth:col.width,columnBackground:col.backgroundColor,columnRadius:col.borderRadius};};
+  const heading=task.querySelector('h2,h3'),count=task.querySelector('[data-task-stage-count]');
+  const h=heading.getBoundingClientRect(),b=count.getBoundingClientRect();
+  return {task:values(task),deal:values(deal),countRight:b.left>=h.right,headingLeft:h.left===task.getBoundingClientRect().left,count:count.textContent};
+});
+assert.deepEqual(geometry.task,geometry.deal,'task columns share deal header spacing and surface');
+assert(geometry.countRight,'count sits to the right, not a second centred row');
+assert(geometry.headingLeft,'task title aligns with left edge like deal title');
+assert.equal(geometry.count,'1');
 const colors=await page.locator('[data-deal-stage-header]').evaluateAll(nodes=>nodes.map(n=>getComputedStyle(n).borderBottomColor));
 assert.equal(colors[0],'rgb(34, 197, 94)');assert.equal(new Set(colors).size,3);
 for(const column of await page.locator('[data-kommo-stage-key]').all()){
