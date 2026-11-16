@@ -64,11 +64,31 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
     if not policy.can_read_kommo_chat(deal):
         raise TenantLinearError('Сделка недоступна по назначенным воронкам Kommo.', 403)
     require_source(cur,tenant,policy,'kommo','','update')
-    cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
-    integration = cur.fetchone()
+    # Match the credential reader: OAuth wins when connected, otherwise the
+    # tenant's manual connection. Lock both rows so switching modes cannot race
+    # the final provider dispatch, and never fall back from broken OAuth secrets.
+    cur.execute("""SELECT provider,account_domain,connected_at,status,secrets
+      FROM saas_tenant_integrations WHERE tenant_id=%s::uuid
+        AND provider IN ('kommo','kommo_manual')
+      ORDER BY CASE WHEN provider='kommo' THEN 0 ELSE 1 END FOR SHARE""", (tenant,))
+    integration = next((row for row in cur.fetchall() if row['status'] == 'connected'), None)
     if not integration or integration['status'] != 'connected' or not integration['secrets']:
         raise TenantLinearError('Bu çat üçün Connect və ya Kommo bağlantısını yoxlayın.', 409)
-    return profile, [integration['account_domain'], str(integration['connected_at'])], integration
+    prefix = 'manual:' if integration.get('provider') == 'kommo_manual' else ''
+    return profile, [prefix + integration['account_domain'], str(integration['connected_at'])], integration
+
+
+def _kommo_send_tokens(integration, tenant):
+    try:
+        tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])))
+    except Exception as exc:
+        raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409) from exc
+    if (not isinstance(tokens, dict) or not isinstance(tokens.get('access_token'), str)
+            or not tokens['access_token'] or
+            (integration.get('provider') == 'kommo_manual' and
+             (tokens.get('tenant_id') != tenant or tokens.get('provider') != 'kommo_manual'))):
+        raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
+    return tokens
 
 
 def quote_target(cur,tenant,command,connection):
@@ -156,9 +176,7 @@ def mark_sending(item, route):
                 if is_group and not managed:
                     stop_group(cur,profile['tenant_id'],credentials['conversation_id'],reason='verified_employee_reply',actor=profile['telegram_id'])
             else:
-                tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
-                if not isinstance(tokens, dict) or not tokens.get('access_token'):
-                    raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
+                tokens = _kommo_send_tokens(integration, profile['tenant_id'])
                 credentials = {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
             from tenant_connect_transport import quoted_once_scope
             if item.get('quote') and connection[0]=='connect' and quoted_once_scope(profile['tenant_id'],connection[1]):
@@ -187,9 +205,7 @@ def upload_credentials(item, live_deal=None):
             if live_deal is not None and (int(live_deal.get('id') or 0) != item['command']['lead_id']
                     or not TenantPolicy(profile).can_read_kommo_chat({**live_deal, 'tenant_id': item['key'][0]})):
                 raise TenantLinearError('Sövdələşməyə giriş dəyişib.', 403)
-            tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])))
-            if not isinstance(tokens, dict) or not isinstance(tokens.get('access_token'), str) or not tokens['access_token']:
-                raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
+            tokens = _kommo_send_tokens(integration, profile['tenant_id'])
         conn.commit()
     return {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
 

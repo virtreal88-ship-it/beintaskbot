@@ -3,7 +3,7 @@ import asyncio
 import json
 import requests
 from tenant_platform import _connect, _fernet, _ensure_schema
-from tenant_chat_send_store import authority
+from tenant_chat_send_store import authority, _kommo_send_tokens
 from tenant_linear_policy import TenantLinearError
 
 
@@ -13,8 +13,7 @@ def credentials(session: dict, lead: int, connection: str) -> dict:
         with conn.cursor() as cur:
             _, identity, integration=authority(cur,session,lead)
             if ':'.join(identity)!=connection:raise TenantLinearError('Kommo hesabı dəyişib.',409)
-            tokens=json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode())
-            if not tokens.get('access_token'):raise TenantLinearError('Kommo bağlantısını yeniləyin.',409)
+            tokens=_kommo_send_tokens(integration,str(session['tenant_id']))
             return {'account_domain':integration['account_domain'],'access_token':tokens['access_token']}
 
 
