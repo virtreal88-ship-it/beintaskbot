@@ -27,7 +27,8 @@ if (document.body.dataset.appUi === 'kwid') {
   const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',instructions:'Instructions'}}
   const aiLabels={ru:{ai_administrator:'Обучение AI',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',ai_analytics:'AI-аналитика',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_administrator:'AI təlimi',ai_agents:'AI agentlər',ai_dashboard:'AI paneli',ai_analytics:'AI analitikası',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_administrator:'AI Learning',ai_agents:'AI agents',ai_dashboard:'AI Dashboard',ai_analytics:'AI Analytics',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
   const employeeLabels={ru:'Сотрудники и доступ',az:'Əməkdaşlar və giriş',en:'Employees and access'}
-  const pageLabel=page=>page==='employees'?employeeLabels[language()]||employeeLabels.en:crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
+  const reportLabel=()=>({ru:'Отчёты',az:'Hesabatlar',en:'Reports'}[language()]||'Reports');
+  const pageLabel=page=>page==='night_report'?({ru:'Отчёты агентов',az:'Agent hesabatları',en:'Agent reports'}[language()]||'Agent reports'):page==='employees'?employeeLabels[language()]||employeeLabels.en:crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
   const originalHeader=sidebar.firstElementChild, brand=originalHeader.querySelector('.brand')
   const header=document.createElement('div');header.className='app-sidebar-header'
   const collapse=document.createElement('button');collapse.type='button';collapse.className='app-icon-button';collapse.innerHTML=icon(icons.chevron)
@@ -65,14 +66,21 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','deals','customers','companies','hot_orders']},{id:'ai',label:'AI',pages:['ai_analytics','ai_agents','ai_dashboard','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['employees','integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support']},{id:'crm',label:'CRM',pages:['tasks','deals','customers','companies','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['employees','integrations','settings','profile']},{id:'reports',label:reportLabel(),pages:['night_report','ai_analytics','ai_dashboard']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
     section.innerHTML=`<button type="button" class="app-nav-group-title" aria-expanded="true"><span>${group.label}</span>${icon('m6 9 6 6 6-6')}</button><div class="app-nav-group-items"></div>`
-    section.querySelector('.app-nav-group-title').addEventListener('click',event=>{section.dataset.collapsed=section.dataset.collapsed==='true'?'false':'true';event.currentTarget.setAttribute('aria-expanded',String(section.dataset.collapsed!=='true'))})
+    section.querySelector('.app-nav-group-title').addEventListener('click',event=>{if(group.id==='reports'&&mobile.matches){section.querySelector('.app-nav-group-items').togglePopover();return;}section.dataset.collapsed=section.dataset.collapsed==='true'?'false':'true';event.currentTarget.setAttribute('aria-expanded',String(section.dataset.collapsed!=='true'))})
     nav.append(section);containers.set(group.id,section)
   }
+  const reports=containers.get('reports'),reportItems=reports.querySelector('.app-nav-group-items'),reportToggle=reports.querySelector('.app-nav-group-title');
+  reportItems.id='appReportsMenu';reportToggle.setAttribute('aria-controls',reportItems.id);
+  function reportMode(){if(reportItems.matches(':popover-open'))reportItems.hidePopover();if(mobile.matches){reportItems.setAttribute('popover','auto');reportItems.setAttribute('role','menu');reportItems.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('role','menuitem'));reportToggle.setAttribute('aria-haspopup','menu');reportToggle.setAttribute('aria-expanded','false');}else{reportItems.removeAttribute('popover');reportItems.removeAttribute('role');reportItems.querySelectorAll('[data-view]').forEach(b=>b.removeAttribute('role'));reportToggle.removeAttribute('aria-haspopup');reportToggle.setAttribute('aria-expanded',String(reports.dataset.collapsed!=='true'));}}
+  reportItems.addEventListener('toggle',event=>{if(mobile.matches){reportToggle.setAttribute('aria-expanded',String(event.newState==='open'));if(event.newState==='open')[...reportItems.querySelectorAll('[data-view]')].find(b=>!b.hidden&&b.style.display!=='none')?.focus();else if(reportItems.contains(document.activeElement))reportToggle.focus();}});
+  reportItems.addEventListener('keydown',event=>{if(!mobile.matches||!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;const items=[...reportItems.querySelectorAll('[data-view]')].filter(b=>!b.hidden&&b.style.display!=='none'&&!b.disabled);if(!items.length)return;event.preventDefault();event.stopPropagation();const i=items.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?items.length-1:(i+(event.key==='ArrowDown'?1:-1)+items.length)%items.length;items[next].focus();});
+  reportItems.addEventListener('click',event=>{if(mobile.matches&&event.target.closest('[data-view]')&&reportItems.matches(':popover-open'))reportItems.hidePopover();});
+  mobile.addEventListener('change',reportMode);reportMode();
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       const page=button.dataset.view||button.dataset.reportLink
@@ -101,7 +109,7 @@ if (document.body.dataset.appUi === 'kwid') {
     if(settingsFamily&&companyItems&&settingsFamily.parentElement!==companyItems)companyItems.append(settingsFamily);
     const legacyCrm=nav.querySelector('#nativeCrmNav')
     if(legacyCrm&&!legacyCrm.querySelector('[data-view]'))legacyCrm.remove()
-    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
+    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!['employees','integrations','settings','profile'].includes(button.dataset.view)&&!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden;if(hidden&&section===reports&&reportItems.matches(':popover-open'))reportItems.hidePopover()}
     const settingsAvailable=['integrations','employees'].some(page=>{const button=nav.querySelector(`[data-view="${page}"]`);return button&&!button.hidden&&button.style.display!=='none'})
     topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settingsAvailable)
   }
@@ -111,7 +119,7 @@ if (document.body.dataset.appUi === 'kwid') {
   updateInstructionLink()
   languageSelect.value=window.tenantI18n?.language||'az'
   languageSelect.addEventListener('change',()=>window.tenantI18n?.setLanguage(languageSelect.value))
-  function updateLanguage(){const company=document.getElementById('company');if(company&&['Şirkət','Компания','Company'].includes(company.textContent))company.textContent=t('company');syncSidebar();mobileButton.setAttribute('aria-label',t('openMenu'));avatar.setAttribute('aria-label',t('userMenu'));backdrop.setAttribute('aria-label',t('closeMenu'));for(const button of topbar.querySelectorAll('[data-app-open=settings]')){button.setAttribute('aria-label',t('settings'));button.title=t('settings');}for(const button of topbar.querySelectorAll('[data-app-theme-choice]')){const label=t(button.dataset.appThemeChoice+'Theme');button.title=label;button.setAttribute('aria-label',label);}languageSelect.value=language();languageSelect.setAttribute('aria-label',t('language'));for(const button of nav.querySelectorAll('[data-view],[data-report-link]')){const label=button.querySelector('.app-nav-label'),page=button.dataset.view||button.dataset.reportLink,value=pageLabel(page);if(label&&label.textContent!==value)label.textContent=value;button.title=value;}updateInstructionLink();for(const section of containers.values()){const key={operator:'operatorWorkspace',management:'management',company:'company'}[section.dataset.group];if(key){const label=section.querySelector('.app-nav-group-title span'),value=t(key);if(label.textContent!==value)label.textContent=value;}}updateContext()}
+  function updateLanguage(){reportToggle.querySelector('span').textContent=reportLabel();const company=document.getElementById('company');if(company&&['Şirkət','Компания','Company'].includes(company.textContent))company.textContent=t('company');syncSidebar();mobileButton.setAttribute('aria-label',t('openMenu'));avatar.setAttribute('aria-label',t('userMenu'));backdrop.setAttribute('aria-label',t('closeMenu'));for(const button of topbar.querySelectorAll('[data-app-open=settings]')){button.setAttribute('aria-label',t('settings'));button.title=t('settings');}for(const button of topbar.querySelectorAll('[data-app-theme-choice]')){const label=t(button.dataset.appThemeChoice+'Theme');button.title=label;button.setAttribute('aria-label',label);}languageSelect.value=language();languageSelect.setAttribute('aria-label',t('language'));for(const button of nav.querySelectorAll('[data-view],[data-report-link]')){const label=button.querySelector('.app-nav-label'),page=button.dataset.view||button.dataset.reportLink,value=pageLabel(page);if(label&&label.textContent!==value)label.textContent=value;button.title=value;}updateInstructionLink();for(const section of containers.values()){const key={operator:'operatorWorkspace',management:'management',company:'company'}[section.dataset.group];if(key){const label=section.querySelector('.app-nav-group-title span'),value=t(key);if(label.textContent!==value)label.textContent=value;}}updateContext()}
   document.addEventListener('tenant-language',updateLanguage)
   const navObserver=new MutationObserver(organizeNav)
   navObserver.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','style']})
@@ -122,6 +130,7 @@ if (document.body.dataset.appUi === 'kwid') {
     topbar.querySelector('.app-topbar-context').textContent=title
     nav.querySelectorAll('[data-view],[data-report-link]').forEach(button=>button.setAttribute('aria-current',button.classList.contains('active')?'page':'false'))
   }
+  document.addEventListener('tenant-view',()=>{if(reportItems.matches(':popover-open'))reportItems.hidePopover()});
   document.addEventListener('tenant-profile',event=>{
     const member=event.detail.member||{},name=member.display_name||'İstifadəçi'
     document.getElementById('appUserName').textContent=name
@@ -232,4 +241,5 @@ function installMobileBottomNav({sidebar,nav,mobile}) {
   })
   schedule()
 }
+
 

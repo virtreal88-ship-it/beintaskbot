@@ -31,6 +31,7 @@ ASSETS = (
     ('/assets/tenant-ai-testing.css', 'tenant-ai-testing.css', 'no-store'),
     ('/assets/tenant-ai-administrator-approvals.js', 'tenant-ai-administrator-approvals.js', 'no-store'),
     ('/app/night-report', 'tenant-night-report.html', 'no-store'),
+    ('/assets/tenant-agent-reports.js', 'tenant-agent-reports.js', 'no-store'),
     ('/assets/tenant-night-report.js', 'tenant-night-report.js', 'no-store'),
     ('/assets/tenant-night-report.css', 'tenant-night-report.css', 'no-store'),
     ('/app/push-sw.js', 'tenant-push-sw.js', 'no-store'),
@@ -129,3 +130,4 @@ def register_assets(app: web.Application) -> None:
     for url, filename, cache in ASSETS:
         worker_scope = '/app' if url == '/app/pwa-sw.js' else '/app/' if url == '/app/push-sw.js' else None
         app.router.add_get(url, asset_handler(directory / filename, cache, worker_scope=worker_scope))
+
