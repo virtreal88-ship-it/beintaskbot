@@ -50,6 +50,10 @@
     if(String(event.detail.lead_id)!==String(lead))return;
     epoch++;detail=event.detail;render();
   });
+  document.addEventListener('tenant-chat-pagination-available',event=>{
+    if(String(event.detail.lead_id)!==String(lead)||!detail||detail.next_cursor)return;
+    epoch++;detail={...detail,next_cursor:event.detail.next_cursor};render();
+  });
   const initial=epoch;
   fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{
     if((initial===epoch||!member)&&data?.member){member=data.member;render();}
