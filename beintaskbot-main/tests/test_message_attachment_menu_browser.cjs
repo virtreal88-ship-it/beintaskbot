@@ -51,9 +51,29 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await article.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();assert.equal(await menu.locator('[data-context-file]').count(),1,'fresh rendering restores the real per-row files');await page.keyboard.press('Escape');
     // Actual desktop right-click and touch hold share one entry point.
     await card.locator('.operator-audio-heading').click({button:'right'});await menu.waitFor();assert.equal(await menu.count(),1);await page.keyboard.press('Escape');
-    await page.evaluate(()=>{const node=document.querySelector('[data-native-audio] .operator-audio-heading'),rect=node.getBoundingClientRect();window.menuPress={x:rect.x+30,y:rect.y+8};node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:7,clientX:window.menuPress.x,clientY:window.menuPress.y}));});await page.waitForTimeout(600);await menu.waitFor();await page.evaluate(()=>document.querySelector('[data-native-audio] .operator-audio-heading').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:7})));await page.keyboard.press('Escape');assert.equal(mediaRequests,1);
+    const holdVoice=async(pointerId=9)=>{
+     const heading=card.locator('.operator-audio-heading');
+     await heading.scrollIntoViewIfNeeded();
+     // Focus restoration, media reflow, and scroll events from the preceding
+     // right-click must settle before a stationary hold begins. Raw dispatched
+     // events do not get Playwright's actionability/scroll stabilization.
+     await heading.evaluate(node=>new Promise((resolve,reject)=>{
+      const started=performance.now();let previous='',stableSince=performance.now();
+      const tick=()=>{if(performance.now()-started>3000)return reject(new Error('Attachment geometry did not settle'));const r=node.getBoundingClientRect(),chat=document.getElementById('chatRows');const sample=JSON.stringify([r.x,r.y,r.width,r.height,chat.scrollTop]);if(sample!==previous){previous=sample;stableSince=performance.now();}if(performance.now()-stableSince>=120)return resolve();requestAnimationFrame(tick);};tick();
+     }));
+     const start=await heading.evaluate((node,pointerId)=>{
+      const rect=node.getBoundingClientRect(),x=rect.x+Math.min(30,rect.width/2),y=rect.y+Math.min(8,rect.height/2);
+      const state={rect:rect.toJSON(),x,y,selection:window.getSelection()?.toString(),chatScroll:document.getElementById('chatRows').scrollTop};
+      window.attachmentHoldEvents=[];
+      const chat=document.getElementById('chatRows');
+      chat.addEventListener('scroll',()=>window.attachmentHoldEvents.push({type:'scroll',at:performance.now(),top:chat.scrollTop}),{once:true});
+      node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId,clientX:x,clientY:y}));return state;
+     },pointerId);
+     try{await menu.waitFor();}catch(error){throw new Error('Stationary attachment hold failed: '+JSON.stringify({start,after:await page.evaluate(()=>({events:window.attachmentHoldEvents,selection:window.getSelection()?.toString(),menuCount:document.querySelectorAll('.operator-reply-context-menu').length}))})+'; '+error.message);}
+     await heading.evaluate((node,pointerId)=>node.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId})),pointerId);
+    };
+    await holdVoice(7);await page.keyboard.press('Escape');assert.equal(mediaRequests,1);
     // The first selected action after a hold must reach the original file handler.
-    const holdVoice=async()=>{await page.evaluate(()=>{const node=document.querySelector('[data-native-audio] .operator-audio-heading'),rect=node.getBoundingClientRect();node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:9,clientX:rect.x+30,clientY:rect.y+8}));});await page.waitForTimeout(600);await menu.waitFor();await page.evaluate(()=>document.querySelector('[data-native-audio] .operator-audio-heading').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:9})));};
     await holdVoice();await menu.locator('[data-context-file-action=load]').click();await page.waitForFunction(()=>document.querySelector('[data-native-audio]')?.dataset.mediaPreviewState==='retryable');assert.equal(mediaRequests,2,'first post-hold Load is never eaten by trailing-click suppression');await page.keyboard.press('Escape');
     await holdVoice();await menu.locator('[data-context-file-action=download]').click();await page.waitForFunction(()=>document.querySelector('[data-native-audio] [data-media-download]')?.getAttribute('aria-busy')!=='true');assert.equal(mediaRequests,3,'first post-hold Download reaches the original actuator');await page.keyboard.press('Escape');
     await open();await page.keyboard.press('Tab');assert.equal(await menu.count(),0);await page.keyboard.press('ArrowDown');assert.equal(await menu.count(),0,'keyboard focus outside is not captured back by the retired menu');
