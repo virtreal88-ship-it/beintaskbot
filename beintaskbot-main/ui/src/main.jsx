@@ -486,7 +486,7 @@ function TasksTable({ rows = [], settings = {} }) {
             {!native && status === 'open' && settings.complete !== false && Number.isSafeInteger(Number(id)) && <Button minH="44px" colorPalette="brand" variant="outline" data-task-complete={id}>{labels.complete}</Button>}
             {!native && status === 'open' && !Number.isSafeInteger(Number(id)) && <Text fontSize="sm">{labels.unsafeComplete}</Text>}
           </Flex>
-          {!native && String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '').trim() && <Text data-task-description="" w="100%" fontSize="sm" color="app.muted" whiteSpace="pre-wrap" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
+          {!native && String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '').trim() && <Text data-task-description="" w="100%" fontSize="sm" fontWeight="400" color="app.ink" whiteSpace="pre-wrap" overflowWrap="anywhere">{String(task.text || '').replace(/\n?\[CRM:[a-f0-9]{32}\]/g, '')}</Text>}
         </Flex>;
       })}
     </Flex>
