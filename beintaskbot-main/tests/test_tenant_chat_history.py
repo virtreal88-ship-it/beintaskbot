@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, MagicMock, AsyncMock
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 import test_tenant_hot_orders as loaders
 from test_tenant_chat_send import SESSION, TENANT
 from tenant_chat_history_cursor import encode, decode
@@ -35,6 +35,10 @@ class Cursor(unittest.TestCase):
 
 class Store(unittest.TestCase):
     def setUp(self):
+        # This unit fixture isolates cursor SQL; real rollout/source authorization
+        # is exercised by test_deal_chat_pagination_pglite.
+        for target,value in [('tenant_dialog_rollout.guard',SimpleNamespace(enforced=False)),('tenant_dialog_access.lead_message_filter','TRUE')]:
+            guard=patch(target,return_value=value);guard.start();self.addCleanup(guard.stop)
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.policy=Mock();self.policy.can_read_kommo_chat.return_value=False;self.policy.can_access_deal.return_value=True;self.policy.action_scope.return_value=None

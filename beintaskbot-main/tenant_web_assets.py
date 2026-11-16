@@ -40,6 +40,7 @@ ASSETS = (
     ('/assets/tenant-finance.js', 'tenant-finance.js', 'no-cache'),
     ('/assets/tenant-chat-import.js', 'tenant-chat-import.js', 'no-cache'),
     ('/assets/tenant-chat-history.js', 'tenant-chat-history.js', 'no-cache'),
+    ('/assets/tenant-deal-chat.js', 'tenant-deal-chat.js', 'no-store'),
     ('/assets/tenant-chat-attachments.js', 'tenant-chat-attachments.js', 'no-cache'),
     ('/assets/tenant-chat-review.js', 'tenant-chat-review.js', 'no-cache'),
     ('/assets/tenant-chat-ai.js', 'tenant-chat-ai.js', 'no-cache'),

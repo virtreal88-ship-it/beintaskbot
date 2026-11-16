@@ -17468,13 +17468,13 @@ def _tenant_normalize_talk_message(message: dict, channel: str) -> dict:
     }
 
 
-async def _sync_tenant_chat(profile: dict, lead_id: int) -> list[dict]:
+async def _sync_tenant_chat(profile: dict, lead_id: int, *, recent=False) -> list[dict]:
     """Compatibility wrapper; bounded reader and cache service live separately."""
     from tenant_chat_sync import sync
     return await sync(profile, lead_id, _tenant_kommo_request, tenant_member,
                       get_tenant_crm_deal, list_tenant_crm_messages,
                       upsert_tenant_crm_messages, upsert_tenant_crm_deals,
-                      _tenant_normalize_talk_message, _tenant_talk_channel)
+                      _tenant_normalize_talk_message, _tenant_talk_channel, recent=recent)
 
 
 # Tenant chat HTTP handling is composed in start_webhook_server.

@@ -25,6 +25,10 @@ assert(settings.includes('preserve_models:true')&&settings.includes("tenantAppNa
 assert(settings.includes('expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id'));
 assert(!settings.includes('model-probe')&&!settings.includes('/api/platform/crm/chat/send'));
 assert(settings.includes('tenant-language'));
-assert(app.includes('revision!==chatRevision||identity!==chatIdentity()'));
-assert(app.includes('tenant-chat-open')&&app.includes('tenant-chat-loaded')&&app.includes('data-chat-audio'));
+const currentGuard=app.match(/const active=(.*);/)[1];
+const guardEnv={revision:1,chatRevision:1,identity:'tenant:11',chatIdentity:()=> 'tenant:11',profileKey:'permission-v1',dealProfileKey:'permission-v1',controller:{signal:{aborted:false}}};
+const valid=change=>vm.runInNewContext('('+currentGuard+')()', {...guardEnv,...change});
+assert(valid({}));
+for(const change of [{chatRevision:2},{chatIdentity:()=> 'tenant:22'},{chatIdentity:()=> 'another:11'},{dealProfileKey:'permission-v2'},{controller:{signal:{aborted:true}}}])assert(!valid(change),'late response guard rejects changed identity, permissions, generation or closed request');
+assert(app.includes('tenant-chat-open')&&fs.readFileSync(path.join(root,'docs/tenant-deal-chat.js'),'utf8').includes('tenant-chat-loaded')&&app.includes('data-chat-audio'));
 console.log('PASS: company chat AI consent, scoped late replies, employee rights, editable drafts, audio warnings and exact-request recovery.');

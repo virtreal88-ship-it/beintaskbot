@@ -668,44 +668,42 @@
   document.addEventListener('tenant-chakra-ready',()=>{if(state.tasks.length)window.tenantChakraCRM?.renderTasks(state.tasks);renderDealFeeds()});
   function filterDeals(value,target,customer){const q=value.trim().toLocaleLowerCase();const rows=!q?state.deals:state.deals.filter(d=>[d.name,d.contact_name,d.phone,d.stage_name].join(' ').toLocaleLowerCase().includes(q));renderDeals(target,rows,customer)}
   document.addEventListener('tenant-crm-sync-complete',e=>{if(e.detail.tenant_id!==state.me?.tenant_id)return;const modules=state.capabilities.modules||{};if(e.detail.resources.includes('leads')&&canLoadKommoDeals())loadDeals(false);if(e.detail.resources.includes('tasks')&&modules.tasks&&!window.tenantTaskFlow)loadTasks(false)});
-  let chatRevision=0;
+  let chatRevision=0,chatController,dealChat,chatProfileKey='';
   const chatIdentity=()=>state.me?.tenant_id+':'+state.me?.telegram_id;
   function chatLine(m){
     const outgoing=m.direction==='outgoing',audio=['voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
     const media=m.media_url||['picture','image','photo','video','file','document','voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
-    return `<div style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''} style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div>${esc(m.body||'Media mesajı')}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}"><button type="button" class="outline">Faylı aç</button><span role="status"></span></div>`:''}<small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`;
+    return `<div data-chat-id="${esc(m.external_id)}" style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''} style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div data-chat-body>${esc(m.body||'Media mesajı')}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}"><button type="button" class="outline">Faylı aç</button><span role="status"></span></div>`:''}<small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`;
   }
-  async function loadChat(id,refresh=true){
-    const box=$('chatRows'),revision=chatRevision,identity=chatIdentity();if(!box)return;
-    document.dispatchEvent(new CustomEvent('tenant-chat-history-reset',{detail:{lead_id:id}}));
-    box.innerHTML='<div class="sub">Tarixçə yüklənir…</div>';
-    try{
-      const d=await api('/api/platform/crm/chat?lead_id='+encodeURIComponent(id)+(refresh?'&refresh=1':''));
-      if(revision!==chatRevision||identity!==chatIdentity()||box!==$('chatRows'))return;
-      try{const history=await api('/api/platform/crm/chat/history?'+new URLSearchParams({lead_id:id,expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id}));Object.assign(d,history);}catch(error){if(error.status&&error.status<500)throw error;d.warning=[d.warning,error.message].filter(Boolean).join(' ');}
-      if(revision!==chatRevision||identity!==chatIdentity()||box!==$('chatRows'))return;
-      box.innerHTML=(d.messages||[]).map(chatLine).join('')||'<div class="sub">Bu sövdələşmə üçün çat tarixçəsi tapılmadı.</div>';
-      if(d.warning)box.insertAdjacentHTML('afterbegin',`<div class="notice show">${esc(d.warning)}</div>`);
-      document.dispatchEvent(new CustomEvent('tenant-chat-loaded',{detail:{lead_id:id,messages:d.messages||[],next_cursor:d.next_cursor,render_message:chatLine,reload_cache:()=>loadChat(id,false)}}));
-    }catch(e){if(revision===chatRevision&&identity===chatIdentity()&&box===$('chatRows'))box.innerHTML=`<div class="notice show">${esc(e.message)}</div>`;}
-  }
+  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;dealChat=null;$('dealModal').classList.remove('show');if(owned)document.dispatchEvent(new CustomEvent('tenant-chat-close'));}
+  for(const event of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(event,closeDeal);
+  document.addEventListener('tenant-profile',()=>{if(chatController&&chatProfileKey!==dealProfileKey)closeDeal();});
+  function loadChat(){return dealChat?.reload();}
   async function openDeal(id){
-    const revision=++chatRevision,identity=chatIdentity();
+    chatController?.abort();dealChat=null;
+    const revision=++chatRevision,identity=chatIdentity(),profileKey=dealProfileKey,controller=new AbortController();chatController=controller;chatProfileKey=profileKey;
+    const active=()=>revision===chatRevision&&identity===chatIdentity()&&profileKey===dealProfileKey&&!controller.signal.aborted;
+    const current=()=>active()&&$('dealModal').classList.contains('show');
+    document.dispatchEvent(new CustomEvent('tenant-chat-close'));
+    const head=$('dealModal').querySelector('.modal-head');head.prepend($('modalTitle'));head.querySelectorAll('[data-deal-header-extra]').forEach(n=>n.remove());
+    $('dealModal').querySelectorAll('.deal-stage-bar,.deal-stage-picker').forEach(n=>n.remove());
+    $('modalTitle').textContent='Sövdələşmə';$('modalContent').innerHTML='<div class="sub" role="status" style="padding:16px">Yüklənir…</div>';$('dealModal').classList.add('show');
+    const first=window.tenantDealChat.read({api,id,member:state.me,signal:controller.signal});
     try{
-      const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id));
-      if(revision!==chatRevision||identity!==chatIdentity())return;
+      const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id),{signal:controller.signal});
+      if(!current())return;
       const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';
       const idLabel=x.raw?.source==='connect'?'Beintaskbot ID':'Kommo ID';
       $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>${idLabel}</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div class="operator-composer tc-legacy-composer"><textarea id="chatText" rows="1" placeholder="Mesaj yazın" aria-label="Mesaj yazın"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-composer-ai" id="tcAiMenuToggle" aria-label="AI əməliyyatları" title="AI əməliyyatları" aria-controls="tcAiActions" aria-expanded="false">AI</button><button type="button" class="primary" id="sendChat" data-composer-delegate="true" aria-hidden="true" tabindex="-1">Göndər</button><button type="button" class="primary tc-legacy-composer-primary" id="tcComposerPrimary" aria-label="Göndər" title="Göndər" disabled>↑</button></div></div></div>`;
       $('modalContent').querySelector('.meta')?.insertAdjacentHTML('afterend',`<button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}" style="margin-top:12px">Dublikatları tap</button>`);
       $('dealModal').classList.add('show');
-      window.tenantKommoDealCard?.mount({host:$('modalContent'),deal:x,api,isCurrent:()=>revision===chatRevision&&identity===chatIdentity()});
+      window.tenantKommoDealCard?.mount({host:$('modalContent'),deal:x,api,isCurrent:active});
       document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
       if(window.tenantChatSend)window.tenantChatSend.bind({api,identity,leadId:x.kommo_lead_id,me:state.me,
-        isCurrent:()=>revision===chatRevision&&identity===chatIdentity(),reload:()=>loadChat(x.kommo_lead_id)});
+        isCurrent:current,reload:()=>loadChat(x.kommo_lead_id)});
       else{$('sendChat').disabled=true;alert('Mesaj modulu yüklənmədi. Səhifəni yeniləyin.');}
-      loadChat(x.kommo_lead_id);
-    }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}
+      dealChat=window.tenantDealChat.mount({api,id:x.kommo_lead_id,member:state.me,signal:controller.signal,isCurrent:current,line:chatLine,first});
+    }catch(e){if(current()){controller.abort();$('modalContent').textContent=e.message;}}
   }
   const profileCopy={az:{eyebrow:'ŞƏXSİ HESAB',title:'Profil',intro:'Girişiniz və şirkətdəki rolunuz.',company:'Şirkət',role:'Rol',telegram:'Telegram hesabı',connected:'Qoşulub',status:'Giriş vəziyyəti',active:'Aktiv',logoutTitle:'Sistemdən çıxış',logoutDescription:'Bu cihazda CRM Smart Assistant kabinetindən çıxacaqsınız. Yenidən daxil olmaq üçün Telegram təsdiqi lazımdır.',logout:'Çıxış et',user:'İstifadəçi',roles:{owner:'Administrator',admin:'Administrator',manager:'Menecer',worker:'İcraçı'}},ru:{eyebrow:'ЛИЧНЫЙ КАБИНЕТ',title:'Профиль',intro:'Ваш вход и роль в компании.',company:'Компания',role:'Роль',telegram:'Учётная запись Telegram',connected:'Подключена',status:'Состояние входа',active:'Активен',logoutTitle:'Выход из системы',logoutDescription:'Вы выйдете из CRM Smart Assistant на этом устройстве. Для повторного входа потребуется подтверждение Telegram.',logout:'Выйти',user:'Пользователь',roles:{owner:'Владелец',admin:'Администратор',manager:'Менеджер',worker:'Сотрудник'}},en:{eyebrow:'PERSONAL ACCOUNT',title:'Profile',intro:'Your sign-in and role in the company.',company:'Company',role:'Role',telegram:'Telegram account',connected:'Connected',status:'Sign-in status',active:'Active',logoutTitle:'Sign out',logoutDescription:'You will sign out of CRM Smart Assistant on this device. Telegram confirmation is required to sign in again.',logout:'Sign out',user:'User',roles:{owner:'Owner',admin:'Administrator',manager:'Manager',worker:'Employee'}}};const profileLanguage=()=>profileCopy[window.tenantI18n?.language]||profileCopy.az;function translateProfile(){const c=profileLanguage();$('profileEyebrow').textContent=c.eyebrow;$('profilePageTitle').textContent=c.title;$('profilePageIntro').textContent=c.intro;const labels=$('view-profile').querySelectorAll('.meta b');[c.company,c.role,c.telegram,c.status].forEach((label,index)=>{if(labels[index])labels[index].textContent=label});$('profileTelegramLabel').textContent=c.connected;$('profileStatusLabel').textContent=c.active;$('profileLogoutTitle').textContent=c.logoutTitle;$('profileLogoutDescription').textContent=c.logoutDescription;$('profileLogoutLabel').textContent=c.logout}document.addEventListener('tenant-language',translateProfile);function renderProfile(member){if(!member)return;const c=profileLanguage();$('profileName').textContent=member.display_name||c.user;$('profileCompany').textContent=member.tenant_name||'—';$('profileRole').textContent=c.roles[member.role]||member.role||'—';$('company').textContent=member.tenant_name||'Şirkət';translateProfile()}
   document.addEventListener('tenant-support-open',event=>{if(window.tenantOperator)window.tenantOperator.openDialog(event.detail);else openDeal(Number(event.detail.lead_id))});
@@ -749,7 +747,7 @@
   window.tenantAppNavigate=(view,push=false)=>activateView(view,push);
   const restoreHistoryView=()=>{const requested=new URLSearchParams(location.search).get('view');if(requested&&activateView(requested))return;for(const candidate of ['support','dialogs','tasks','customers','deals','hot_orders','settings','finance','profile'])if(activateView(candidate))return;};
   document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>activateView(button.dataset.view,true));window.addEventListener('popstate',restoreHistoryView);
-  $('dealsRefresh').onclick=()=>{if(canLoadKommoDeals())loadDeals(true);if(nativeAction('deals','view'))loadNativeDeals();if(nativeCompanyAction('view'))loadNativeCompanies()};$('tasksRefresh').onclick=()=>window.tenantTaskFlow?window.tenantTaskFlow.refresh():Promise.all([loadTasks(false),loadNativeTasks()]);$('dealSearch').oninput=()=>{clearTimeout(dealSearchTimer);dealsFlights.clear();dealsReadSerial++;dealsBusy=false;renderDealFeeds();dealSearchTimer=setTimeout(()=>{if(dealActive==='kommo'&&dealFeedAllowed('kommo'))void loadDeals(false)},300)};$('closeModal').onclick=()=>$('dealModal').classList.remove('show');$('dealModal').onclick=e=>{if(e.target===$('dealModal'))$('dealModal').classList.remove('show')};
+  $('dealsRefresh').onclick=()=>{if(canLoadKommoDeals())loadDeals(true);if(nativeAction('deals','view'))loadNativeDeals();if(nativeCompanyAction('view'))loadNativeCompanies()};$('tasksRefresh').onclick=()=>window.tenantTaskFlow?window.tenantTaskFlow.refresh():Promise.all([loadTasks(false),loadNativeTasks()]);$('dealSearch').oninput=()=>{clearTimeout(dealSearchTimer);dealsFlights.clear();dealsReadSerial++;dealsBusy=false;renderDealFeeds();dealSearchTimer=setTimeout(()=>{if(dealActive==='kommo'&&dealFeedAllowed('kommo'))void loadDeals(false)},300)};$('closeModal').onclick=closeDeal;$('dealModal').onclick=e=>{if(e.target===$('dealModal'))closeDeal()};
   $('createInvite').onclick=async()=>{const b=$('createInvite');const name=$('inviteName').value.trim();if(!name)return alert('Əməkdaşın adını yazın.');b.disabled=true;try{const role=$('inviteRole').value;const d=await api('/api/platform/invites',{method:'POST',body:JSON.stringify({display_name:name,role,permissions:state.rolePermissions[role]||[]})});$('inviteLink').innerHTML=`Link hazırdır (7 gün):<br><b>${esc(d.invite.url)}</b><br><button class="outline" style="margin-top:8px" id="copyInvite">Kopyala</button>`;$('inviteLink').classList.add('show');$('copyInvite').onclick=async()=>{await navigator.clipboard.writeText(d.invite.url);$('copyInvite').textContent='Kopyalandı'};loadSettings(true)}catch(e){alert(e.message)}finally{b.disabled=false}};
   $('saveConnectEntitlement').onclick=async()=>{try{await api('/api/platform/connect/access',{method:'POST',body:JSON.stringify({action:'entitlement',status:$('connectEntitlement').value,admin_access:$('connectAdminAccess').checked})});loadConnectAccess()}catch(e){alert(e.message)}};
   async function loadConnectChannels(){try{const d=await api('/api/platform/integrations/connect',{method:'POST',body:JSON.stringify({action:'channels',api_key:$('connectApiKey').value})});$('connectChannelList').innerHTML=(d.channels||[]).map(c=>`<div class="member"><label style="display:block;flex:1"><input type="checkbox" value="${esc(c.id)}" ${c.active||c.phoneConflict?'disabled':''} ${c.active?'checked':''}> ${esc(c.name||c.id)} · ${esc(c.status)} · ${esc(c.id)}${c.phone?' · +'+esc(c.phone):''}${c.phoneConflict?' · Nömrə konflikti'+(c.duplicateChannelId?' · mövcud kanal '+esc(c.duplicateChannelId):' · təhlükəsiz uyğunlaşdırma mümkün deyil'):''}${c.active?' · qoşulub':''}</label>${c.active||c.linked?`<div><button class="outline" data-connect-status="${esc(c.id)}">Status</button> ${!c.phoneConflict?`<button class="outline" data-connect-reconnect="${esc(c.id)}">Yenidən qoş</button>`:''} ${c.active?`<button class="outline danger" data-connect-disconnect="${esc(c.id)}">Ayır</button>`:''}</div>`:''}</div>`).join('')||'Kanal tapılmadı.';$('connectChannelList').querySelectorAll('[data-connect-status],[data-connect-reconnect],[data-connect-disconnect]').forEach(b=>b.onclick=()=>runConnectChannelAction(b.dataset.connectStatus?'channel_status':b.dataset.connectReconnect?'reconnect_channel':'disconnect_channel',b.dataset.connectStatus||b.dataset.connectReconnect||b.dataset.connectDisconnect))}catch(e){$('connectChannelList').textContent=e.message}}
@@ -796,6 +794,7 @@
 <script src="/assets/tenant-chat-ai-settings.js"></script>
 <script src="/assets/tenant-chat-ai.js"></script>
 <script src="/assets/tenant-chat-history.js"></script>
+<script src="/assets/tenant-deal-chat.js"></script>
 <script src="/assets/deal-phone-duplicates.js"></script>
 <script src="/assets/tenant-chat-attachments.js"></script>
 <script src="/assets/tenant-chat-send.js"></script>
