@@ -323,3 +323,17 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
  body[data-app-ui="kwid"] [data-task-move-grip]{display:block;flex:none}
  body[data-app-ui="kwid"] [data-task-move-handle]{position:absolute;right:8px;top:8px;z-index:1;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:0;background:transparent;color:var(--app-muted);display:grid;place-items:center}
 }
+
+/* The final Reports group uses one mobile destination, not three crowded tabs. */
+#agentReports .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+#agentReports label{display:grid;gap:4px}
+#agentReports table{width:100%;border-collapse:collapse}
+#agentReports th,#agentReports td{text-align:left;padding:10px}
+@media(max-width:1023px){
+ body[data-app-ui="kwid"] .shell>aside .app-nav-group[data-group="reports"]{display:block;flex:0 0 auto}
+ body[data-app-ui="kwid"] .shell>aside .app-nav-group[data-group="reports"]>.app-nav-group-title{display:flex;align-items:center;gap:4px;height:100%;padding:5px 8px}
+ body[data-app-ui="kwid"] .shell>aside #appReportsMenu{display:none}
+ body[data-app-ui="kwid"] .shell>aside #appReportsMenu:popover-open{display:grid;position:fixed;inset:auto 8px calc(var(--app-bottom-nav-height,64px) + env(safe-area-inset-bottom) + 8px) auto;margin:0;padding:8px;max-width:calc(100vw - 16px);border:1px solid var(--border,#444);border-radius:12px;background:var(--surface,#1e293b);box-shadow:0 6px 24px #0004}
+ body[data-app-ui="kwid"] #appReportsMenu:popover-open button{width:100%;min-width:180px;justify-content:flex-start}
+}
+

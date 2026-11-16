@@ -145,6 +145,7 @@ def test_group_fold_selection_assignee_and_channel_state_match(fixture):
     result, old, new = assert_equal(fixture)
     group_rows = [row for row in result['dialogs'] if row['customer_kind'] == 'group']
     assert len(group_rows) == 3, 'one logical group across two physical channels'
+    assert sum('FROM saas_dialog_rollout' in sql for sql in new)==3, 'legacy groups must not recheck rollout per row'
     assert all(row['assignee_name'] == 'Operator' for row in group_rows)
     assert_equal(fixture, state='manual')
     assert_equal(fixture, channel='connect:' + channel2)
@@ -191,3 +192,22 @@ def test_optional_get_identity_is_backward_compatible_but_never_grants_access(fi
     assert request().status == 200
     fixture.execute("UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11", (A,));fixture.commit()
     assert request().status == 403, 'matching headers are not authorization'
+
+
+def test_active_lifecycle_uses_one_batch_workflow_snapshot(fixture):
+    from tenant_dialog_lifecycle import migrate
+    from tenant_dialog_rollout import transition
+    with fixture.cursor() as cur:
+        migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    fixture.commit()
+    before,before_sql=measured(fixture,dialogs.listing)
+    add_rows(fixture,80)
+    after,after_sql=measured(fixture,dialogs.listing)
+    assert len(after['dialogs'])>len(before['dialogs'])
+    assert all(row['lifecycle']['state']=='waiting' for row in after['dialogs'])
+    assert all(row['can_send'] is False for row in after['dialogs'])
+    def workflow_reads(statements):
+        return [sql for sql in statements if sql.startswith('SELECT * FROM saas_dialog_workflows WHERE tenant_id=')]
+    assert len(workflow_reads(before_sql))==len(workflow_reads(after_sql))==1
+    assert len(before_sql)==len(after_sql), 'workflow projection must not add per-route SQL'

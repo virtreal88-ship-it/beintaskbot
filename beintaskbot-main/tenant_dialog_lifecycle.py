@@ -154,13 +154,23 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     # retains this transaction until its protected read or network dispatch ends.
     from tenant_ai_dialog_scope import lock_dialog
     from tenant_connect_dialog_equivalence import canonical
+    original_conversation = conversation
     conversation=canonical(cur,tenant,channel,conversation)
     lock_dialog(cur, tenant, provider, channel, conversation)
+    # A merge may have won while we waited for this lock. Never follow the
+    # new route while retaining a lock on the old one: restart authorization.
+    if canonical(cur,tenant,channel,original_conversation) != conversation:
+        raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
+    cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant,channel,conversation))
+    if not cur.fetchone():
+        raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
     row = _row(cur, tenant, channel, conversation)
     if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
     if action != 'view' and (not row or row['state'] != 'accepted'):
         raise TenantLinearError('Сначала примите диалог.', 409)
+    return True  # Active protection; callers may revalidate their original route proof.
 
 
 def ai_blocked(cur, tenant, provider, channel, conversation):
@@ -213,9 +223,16 @@ def _targets(cur, tenant, policy, channel, actor):
     return result
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True):
-    if not enabled(cur, tenant) or dialog.get('provider')!='connect': return dialog
-    row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id'])
+_UNSET_WORKFLOW=object()
+
+
+def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW):
+    # Internal projection snapshot only, never authorization for a mutation.
+    # Listing passes state read under its retained shared transaction barrier.
+    from tenant_dialog_rollout import guard
+    rollout=_rollout if _rollout is not None else guard(cur,tenant)
+    if not rollout.enforced or dialog.get('provider')!='connect': return dialog
+    row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id']) if _workflow is _UNSET_WORKFLOW else _workflow
     state=(row or {}).get('state','waiting')
     own=bool(row and row.get('operator_id')==actor)
     last={}
@@ -227,8 +244,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True):
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
-        'can_accept':state=='waiting' and acceptance_enabled(cur, tenant) and bool(dialog.get('can_send')),
-        'can_dismiss':state=='waiting' and acceptance_enabled(cur, tenant) and bool(dialog.get('can_send')) and bool(last),
+        'can_accept':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')),
+        'can_dismiss':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')) and bool(last),
         'last_inbound_id':last.get('id'),
         'can_close':state=='accepted' and own,'can_transfer':state=='accepted' and own,
         'can_submit_case':state=='closed' and own}
@@ -280,6 +297,9 @@ def mutate(profile, payload):
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)
+            fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
+            if (str(fresh_route['connect_channel_id']),fresh_route['conversation_id'],int(fresh_route['lead_id'])) != (channel,conversation,int(route['lead_id'])):
+                raise TenantLinearError('Адрес диалога изменился. Обновите диалог.',409)
             cur.execute('SELECT * FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request_id))
             receipt=cur.fetchone()
             if receipt:

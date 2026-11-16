@@ -41,6 +41,7 @@ from tenant_operator_voice_api import handler as operator_voice_handler
 from tenant_dialog_consultations_api import handler as dialog_consultations_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
+from tenant_agent_reports_api import handler as agent_reports_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
 from tenant_ai_administrator_api import handler as administrator_handler
 from tenant_ai_learning_mcp import routes as learning_mcp_routes
@@ -177,6 +178,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/group-coordination', operator_handler(member, origin, logger, 'group_coordination'), ('POST',)),
         ('dialogs/group-staff', operator_handler(member, origin, logger, 'group_staff'), ('POST',)),
         ('night-report', night_report_handler(member, logger), ('GET',)),
+        ('agent-reports', agent_reports_handler(member, logger), ('GET',)),
         ('night-report/dialog', night_report_handler(member, logger, 'dialog'), ('GET',)),
         ('night-report/tickets/{ticket_id}', night_report_handler(member, logger, 'ticket'), ('GET',)),
         ('support-tickets', support_handler(member, origin, logger, 'tickets'), ('GET', 'POST')),

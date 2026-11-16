@@ -19,8 +19,10 @@ import tenant_connect_reconcile_dependencies as dependencies
 
 def _owner(cur, profile):
     tenant=str(profile.get('tenant_id') or ''); actor=int(profile.get('telegram_id') or 0)
+    from tenant_dialog_rollout import guard
+    guard(cur,tenant)  # Tenant barrier precedes membership and every route/table lock.
     cur.execute('''SELECT m.role,m.active,t.status FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
-      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR UPDATE OF m,t''',(tenant,actor))
+      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''',(tenant,actor))
     row=cur.fetchone() or {}
     if row.get('role')!='owner' or row.get('active') is not True or row.get('status')!='active':
         raise TenantLinearError('Company owner access required.',403)
@@ -79,6 +81,41 @@ def preview(profile, channel_id=''):
             tenant,_=_owner(cur,profile); items=_candidates(cur,tenant,str(channel_id or ''))
         conn.commit();return {'items':items,'total':len(items),'eligible':sum(x['eligible'] for x in items)}
 
+def _lock_pair(cur, tenant, pair_id, channel_id=None):
+    """Resolve without row locks; acquire aliases/routes BEFORE dependency tables.
+
+    The caller rechecks the signed preview under these locks before changing any
+    rows. A stale or absent discovery never authorizes an operation.
+    """
+    from tenant_connect_identity import inventory
+    from tenant_connect_dialog_equivalence import lock as lock_equivalence
+    cur.execute('SELECT channel_id::text AS channel,snapshot,state FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s', (tenant,pair_id))
+    backup=cur.fetchone()
+    if backup and backup['state']=='merged':
+        channel=backup['channel']; ids=backup['snapshot'].get('ids')
+        if not isinstance(ids,list) or len(ids)!=2:
+            raise TenantLinearError('direct_merge_legacy_backup_requires_review',409)
+    else:
+        cur.execute("SELECT connect_channel_id::text AS channel FROM saas_connect_channels WHERE tenant_id=%s::uuid AND (%s='' OR connect_channel_id::text=%s) ORDER BY connect_channel_id",(tenant,str(channel_id or ''),str(channel_id or '')))
+        found=[]
+        for row in cur.fetchall():
+            ch=row['channel']
+            for proof in inventory(cur,tenant,ch)['pairs']:
+                ids=[proof['canonical_id'],proof['split_id']]
+                if _id(tenant,ch,*ids)==pair_id:
+                    found.append((ch,ids))
+        if len(found)!=1:
+            raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
+        channel,ids=found[0]
+    if channel_id and channel!=channel_id:
+        raise TenantLinearError('direct_merge_channel_forbidden',403)
+    cur.execute("SET LOCAL lock_timeout='5s'")
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialogue-merge:'+tenant+':'+channel,))
+    lock_equivalence(cur,tenant,channel,ids)
+    dependencies.lock(cur)
+    return channel,ids
+
+
 def apply(profile, payload, *, connection=None, channel_id=None):
     if not isinstance(payload,dict) or set(payload)!={'operation','pair_id','precondition','request_id','confirm'} or payload['confirm'] is not True:
         raise TenantLinearError('direct_merge_confirmation_required',400)
@@ -90,7 +127,7 @@ def apply(profile, payload, *, connection=None, channel_id=None):
         if connection is None: ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_owner(cur,profile)
-            dependencies.lock(cur)
+            locked_channel,locked_ids=_lock_pair(cur,tenant,pair_id,channel_id)
             cur.execute('SELECT result FROM saas_connect_direct_merge_requests WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,request_id)); old=cur.fetchone()
             request_digest=_precondition(payload)
             if old:
@@ -116,6 +153,10 @@ def apply(profile, payload, *, connection=None, channel_id=None):
                 routes=scan['routes']
                 canonical,split=routes[jid],routes[lid]
                 ids=[jid,lid];leads=[canonical['lead_id'],split['lead_id']];channel=item['channel_id']
+                if channel!=locked_channel or ids!=locked_ids:
+                    raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
+                from tenant_connect_dialog_equivalence import assert_lifecycle_unaffected
+                assert_lifecycle_unaffected(cur,tenant,channel,ids)
                 before=dependencies.capture(cur,tenant,channel,ids,leads)
                 dependencies.migrate(cur,tenant,channel,ids,leads,before)
                 after=dependencies.capture(cur,tenant,channel,ids,leads)
@@ -131,6 +172,10 @@ def apply(profile, payload, *, connection=None, channel_id=None):
                 if item and item['precondition']!=precondition: raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
                 if not item: raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
                 ids=snapshot['ids'];leads=snapshot['leads'];channel=str(backup['channel_id'])
+                if channel!=locked_channel or ids!=locked_ids:
+                    raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
+                from tenant_connect_dialog_equivalence import assert_lifecycle_unaffected
+                assert_lifecycle_unaffected(cur,tenant,channel,ids)
                 reasons=dependencies.conflicts(cur,tenant,channel,ids,leads,snapshot['after'])
                 if reasons: raise TenantLinearError('direct_merge_rollback_dependency_conflict',409)
                 touches=dependencies.restore(cur,tenant,channel,ids,leads,snapshot['before'],snapshot['after'])
@@ -148,7 +193,8 @@ def rollback_preflight(profile,pair_id, *, connection=None, channel_id=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         if connection is None: ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,_=_owner(cur,profile);dependencies.lock(cur)
+            tenant,_=_owner(cur,profile)
+            _lock_pair(cur,tenant,pair_id,channel_id)
             cur.execute("SELECT * FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s AND state='merged' FOR UPDATE",(tenant,pair_id))
             backup=cur.fetchone()
             if not backup or backup['snapshot'].get('version')!=2: raise TenantLinearError('direct_merge_rollback_unavailable',409)

@@ -415,6 +415,12 @@ def upgrade_db(old_template):
         admin.execute(sql.SQL('CREATE DATABASE {} TEMPLATE {}').format(
             sql.Identifier(name), sql.Identifier(old_template['name'])))
     try:
+        # Independent predeployment rollout migration, not runtime consultation DDL.
+        # No tenant is activated; the archived binary compatibility tests stay legacy.
+        from tenant_dialog_rollout import migrate
+        with psycopg.connect(make_conninfo(base, dbname=name)) as conn:
+            with conn.cursor() as cur:
+                migrate(cur)
         yield {**old_template, 'dsn': make_conninfo(base, dbname=name)}
     finally:
         with psycopg.connect(base, autocommit=True) as admin:

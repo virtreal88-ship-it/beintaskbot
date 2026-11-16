@@ -803,9 +803,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             sql,scopes=projection(cur, policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
-            from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-            group_fold='FALSE' if lifecycle_enabled(cur, tenant) else "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
-            if lifecycle_enabled(cur, tenant):
+            from tenant_dialog_rollout import guard as rollout_guard
+            rollout=rollout_guard(cur,tenant)
+            group_fold='FALSE' if rollout.enforced else "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
+            if rollout.enforced:
                 sql=sql.replace('visible AS MATERIALIZED (','eligible AS MATERIALIZED (')
                 sql+=" , visible AS (SELECT eligible.* FROM eligible WHERE provider<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))) "
             cur.execute(sql+""", folded AS (
@@ -849,9 +850,20 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
             from tenant_dialog_access import apply_capabilities
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate
+            workflows={}
+            if rollout.enforced:
+                # One tenant-scoped snapshot, not one lookup per visible row.
+                # Only entries matching already-authorized rows are projected.
+                cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
+                workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
             for r in rows:
-                apply_capabilities(cur,tenant,policy,r)
-                lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False)
+                # The legacy, unscoped capability path is a no-op; avoid its
+                # per-group mode recheck under our already-retained barrier.
+                if rollout.enforced or policy.has_scoped_access('dialogs'):
+                    apply_capabilities(cur,tenant,policy,r)
+                if rollout.enforced:
+                    lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
+                        _rollout=rollout,_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])))
             rows=[r for r in rows if (r.get('lifecycle') or {}).get('state') not in {'closed','dismissed'}]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,rows)

@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
 from test_tenant_support_inbox import A, CA, AGENT, PROFILE
 import tenant_dialog_consultations as consultations
+import tenant_dialog_rollout as rollout
 
 
 def child(dsn, data, behavior, barrier, results, dispatched=None, release=None):
@@ -96,6 +97,8 @@ def run_processes(db, operations, during_dispatch=None):
 @pytest.fixture
 def prepared(database, monkeypatch):
     db = database
+    with db.cursor() as cur:
+        rollout.migrate(cur)
     db.execute('TRUNCATE saas_tenants CASCADE')
     db.execute('TRUNCATE test_external_sends')
     db.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Company','active',11)", (A, A))

@@ -9,6 +9,14 @@ from test_tenant_member_access import profile
 TENANT='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
 
 
+@pytest.fixture(autouse=True)
+def unactivated_rollout(monkeypatch):
+    # These source-policy unit tests model a tenant before lifecycle activation.
+    from tenant_dialog_rollout import RolloutState
+    monkeypatch.setattr('tenant_dialog_rollout.guard', lambda *a, **kw: RolloutState())
+
+
+
 def person(scope='none'):
     p=profile(tenant_id=TENANT,permissions=[],modules={})
     p['workflow']['pipelines']=[{'pipeline_id':'10','active':True},{'pipeline_id':'11','active':True}]
@@ -82,6 +90,7 @@ async def test_chat_api_pipeline_only_rechecks_after_refresh(monkeypatch):
     import sys
     import json
     from tenant_chat_api import ChatApiContext,handlers
+    monkeypatch.setattr('tenant_chat_api._lifecycle_active', lambda _: False)
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     p=person(); page=Mock(return_value={'messages':[]})
     monkeypatch.setitem(sys.modules,'tenant_chat_history_store',SimpleNamespace(page=page))

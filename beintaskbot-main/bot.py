@@ -18817,6 +18817,14 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         bound_request=_tenant_kommo_service.request_bound, origin=CANONICAL_WEB_ORIGIN, logger=logger)
     app_web.router.add_post('/api/platform/crm/tasks/reschedule', kommo_reschedule)
     app_web.router.add_get('/api/platform/crm/tasks/reschedule', kommo_reschedule)
+    from tenant_kommo_task_update import handlers as kommo_update_handlers
+    kommo_update = kommo_update_handlers(member=_tenant_member_from_request,
+        bound_request=_tenant_kommo_service.request_bound, origin=CANONICAL_WEB_ORIGIN, logger=logger)
+    app_web.router.add_post('/api/platform/crm/tasks/update', kommo_update)
+    app_web.router.add_get('/api/platform/crm/tasks/update', kommo_update)
+    from tenant_kommo_deal_notes import handler as kommo_notes_handler
+    app_web.router.add_get('/api/platform/crm/deal/notes', kommo_notes_handler(
+        member=_tenant_member_from_request, bound_request=_tenant_kommo_service.request_bound, logger=logger))
     app_web.router.add_get("/api/platform/workflow", workflow_api["config"])
     app_web.router.add_post("/api/platform/workflow", workflow_api["config"])
     app_web.router.add_get("/api/platform/workflow/catalog", workflow_api["catalog"])

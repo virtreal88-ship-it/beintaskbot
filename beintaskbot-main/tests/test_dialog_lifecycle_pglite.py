@@ -291,3 +291,50 @@ def test_admission_gate_does_not_disable_existing_ownership(episodes,monkeypatch
         command('accept',2,actor=33)
     assert denied.value.status==409
     assert state(episodes)['state']=='closed'
+
+
+def test_claim_rejects_identity_change_while_waiting_for_route_lock(episodes, monkeypatch):
+    import tenant_operator_access
+    original = tenant_operator_access._resolve_connect_route
+    reads = []
+    def changed(*args, **kwargs):
+        route = original(*args, **kwargs)
+        reads.append(route)
+        return {**route, 'conversation_id': 'different-canonical'} if len(reads) == 2 else route
+    monkeypatch.setattr(tenant_operator_access, '_resolve_connect_route', changed)
+    with pytest.raises(TenantLinearError) as error:
+        command()
+    assert error.value.status == 409
+    assert len(reads) == 2
+    assert state(episodes) is None
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n'] == 0
+
+
+def test_read_rejects_canonical_changed_during_lock_without_workflow_lookup(episodes, monkeypatch):
+    import tenant_connect_dialog_equivalence as equivalence
+    values = iter(['client', 'different-canonical'])
+    monkeypatch.setattr(equivalence, 'canonical', lambda *a: next(values))
+    def forbidden(*args):
+        raise AssertionError('A stale route must not reach the workflow/read permission check')
+    monkeypatch.setattr(lifecycle, '_row', forbidden)
+    with episodes.cursor() as cur:
+        with pytest.raises(TenantLinearError) as error:
+            lifecycle.require_access(cur,A,11,'connect',CA,'client')
+    assert error.value.status == 409
+
+
+def test_authorized_reader_rechecks_raw_proof_after_canonical_lock(episodes, monkeypatch):
+    import tenant_operator_access as access_module
+    original = access_module._resolve_connect_route
+    reads = []
+    def detached(*args, **kwargs):
+        route = original(*args, **kwargs)
+        reads.append(route)
+        return {**route, 'lead_id': 999} if len(reads) == 2 else route
+    monkeypatch.setattr(access_module, '_resolve_connect_route', detached)
+    with episodes.cursor() as cur:
+        tenant, actor, policy = access_module.access(cur, PROFILE)
+        with pytest.raises(TenantLinearError) as error:
+            access_module.assert_route(cur, tenant, policy, 'connect', 'client', CA, 41, allow_merged=True)
+    assert error.value.status == 409
+    assert len(reads) == 2

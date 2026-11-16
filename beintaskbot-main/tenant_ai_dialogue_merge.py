@@ -215,6 +215,8 @@ def execute(cur,cfg,args):
         raise TenantLinearError('Invalid dialogue merge request.',400)
     try: request_id=str(uuid.UUID(str(args.get('request_id'))))
     except (ValueError,TypeError): raise TenantLinearError('Invalid dialogue merge request.',400) from None
+    from tenant_dialog_rollout import guard as rollout_guard
+    rollout_guard(cur, str(uuid.UUID(str(cfg['AI_LEARNING_MCP_TENANT_ID']))))
     tenant,actor=_owner(cur,cfg);channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
     from tenant_connect_identity import inventory
     from tenant_connect_dialog_equivalence import lock as lock_equivalence

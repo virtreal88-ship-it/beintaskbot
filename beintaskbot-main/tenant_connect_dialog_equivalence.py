@@ -68,11 +68,50 @@ def lead_members(cur, tenant, channel, lead):
     return list(members(cur, tenant, channel, route['conversation_id']).values()) if route else [int(lead)]
 
 
+def lifecycle_routes(cur, tenant, channel, ids):
+    """Exact connected component, including retained raw aliases, never names/phones."""
+    routes = {str(identity) for identity in ids}
+    if available(cur):
+        cur.execute('''WITH RECURSIVE touched(id) AS (
+          SELECT unnest(%s::text[])
+          UNION
+          SELECT CASE WHEN l.source_id=t.id THEN l.canonical_id ELSE l.source_id END
+          FROM touched t JOIN saas_connect_dialog_links l
+            ON (l.source_id=t.id OR l.canonical_id=t.id)
+          WHERE l.tenant_id=%s::uuid AND l.channel_id=%s::uuid AND l.active
+        ) SELECT id FROM touched''', (sorted(routes), tenant, channel))
+        routes.update(str(row['id']) for row in cur.fetchall())
+    return sorted(routes)
+
+
+def assert_lifecycle_unaffected(cur, tenant, channel, ids):
+    """Caller retains route locks and the early tenant rollout barrier.
+
+    Closed episodes remain protected. This is not a tenant-wide merge ban:
+    unrelated routes and already established identity mappings are unchanged.
+    """
+    routes = lifecycle_routes(cur, tenant, channel, ids)
+    for table in ('saas_dialog_workflows', 'saas_dialog_episodes'):
+        cur.execute('SELECT to_regclass(%s) AS present', (table,))
+        if not (cur.fetchone() or {}).get('present'):
+            from tenant_dialog_rollout import guard
+            if guard(cur, tenant).enforced:
+                raise TenantLinearError('Схема обращений недоступна. Изменение связей остановлено.',409)
+            continue
+        cur.execute('SELECT 1 FROM '+table+''' WHERE tenant_id=%s::uuid
+          AND channel_id=%s::uuid AND conversation_id=ANY(%s::text[]) LIMIT 1''',
+          (tenant, channel, routes))
+        if cur.fetchone():
+            raise TenantLinearError('Диалог уже используется в обращениях. Объединение и отмена объединения недоступны.',409)
+    return routes
+
+
 def lock(cur, tenant, channel, ids):
     # Same order as webhook: provider aliases, then dialogue locks. The owner
     # check must use FOR SHARE, not a tenant-row UPDATE lock (FK deadlock).
     from tenant_connect_direct_identity import _aliases
     from tenant_ai_dialog_scope import lock_dialog
+    ids = lifecycle_routes(cur, tenant, channel, ids)
     aliases = set().union(*(_aliases(identity) for identity in ids))
     cur.execute('''SELECT identity_key FROM saas_connect_direct_identities WHERE tenant_id=%s::uuid
       AND connect_channel_id=%s::uuid AND canonical_conversation_id=ANY(%s::text[])''',(tenant,channel,ids))
@@ -82,6 +121,10 @@ def lock(cur, tenant, channel, ids):
                     ('connect-direct:' + json.dumps([str(tenant), str(channel), identity]),))
     for identity in sorted(ids):
         lock_dialog(cur, tenant, 'connect', channel, identity)
+    if lifecycle_routes(cur, tenant, channel, ids) != ids:
+        raise TenantLinearError('Связи диалога изменились. Повторите проверку.',409)
+    assert_lifecycle_unaffected(cur, tenant, channel, ids)
+    return ids
 
 
 def snapshot(cur, tenant, channel, ids, leads):
@@ -192,6 +235,7 @@ def conflicts(cur, tenant, channel, ids, before, *, owner_phone=None):
 
 def activate(cur, tenant, channel, pair_id, ids, leads, before, *, owner_assertion_id=None):
     """Called after fresh proof and locks. No message/CRM/source row is rewritten."""
+    assert_lifecycle_unaffected(cur, tenant, channel, ids)
     from tenant_connect_direct_identity import _aliases
     jid, source = ids
     aliases = set()
@@ -286,11 +330,22 @@ def verification(cur, tenant, channel, pair_id):
 
 
 def rollback(cur, tenant, channel, pair_id):
+    # A rollback preview may no longer have a provider proof. Resolve its stored
+    # exact pair and fence it before taking the link row lock nevertheless.
+    cur.execute('''SELECT source_id,canonical_id FROM saas_connect_dialog_links
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND pair_id=%s AND active''',
+      (tenant,channel,pair_id))
+    pair = cur.fetchone()
+    if not pair: raise TenantLinearError('Retained dialogue merge is unavailable.',409)
+    lock(cur, tenant, channel, [pair['canonical_id'], pair['source_id']])
     cur.execute('''SELECT * FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
       AND channel_id=%s::uuid AND pair_id=%s AND active FOR UPDATE''', (tenant,channel,pair_id))
     row = cur.fetchone()
     if not row: raise TenantLinearError('Retained dialogue merge is unavailable.',409)
+    if any(row[key] != pair[key] for key in ('source_id', 'canonical_id')):
+        raise TenantLinearError('Связи диалога изменились. Повторите проверку.',409)
     s = row['snapshot']; jid = row['canonical_id']; source = row['source_id']
+    assert_lifecycle_unaffected(cur, tenant, channel, [jid, source])
     if s.get('owner_assertion_id'):
         lock_owner_controls(cur, tenant, channel, [jid, source])
     cur.execute('''SELECT row_to_json(s) AS row FROM saas_ai_conversation_state s

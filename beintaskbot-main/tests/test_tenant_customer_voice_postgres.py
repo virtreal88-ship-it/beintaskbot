@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from tenant_customer_voice_service import record_acceptance, visible_receipt, save_visible_status
 from tenant_connect_transport import _pause_unverified_outbound_audio
 from tenant_linear_policy import TenantLinearError
+import tenant_dialog_rollout as rollout
 
 BASE = os.environ.get('VOICE_TEST_POSTGRES_URL')
 TENANT = 'a9c11a16-01d5-469a-a6c1-9a726975ae42'
@@ -37,6 +38,9 @@ class VoiceHistoryPostgres(unittest.TestCase):
             admin.execute('CREATE DATABASE "' + cls.name + '"')
         cls.dsn = urlunsplit((parsed.scheme,parsed.netloc,'/'+cls.name,parsed.query,parsed.fragment))
         with psycopg.connect(cls.dsn) as conn:
+            conn.execute("CREATE TABLE saas_tenants(id uuid PRIMARY KEY)")
+            with conn.cursor() as cur:
+                rollout.migrate(cur)
             conn.execute('''CREATE TABLE saas_chat_send_receipts(tenant_id uuid,actor_id bigint,request_id uuid,lead_id bigint,
                 state text,route jsonb,message_id text,updated_at timestamptz DEFAULT now(),PRIMARY KEY(tenant_id,actor_id,request_id))''')
             conn.execute('''CREATE TABLE saas_crm_messages(id uuid PRIMARY KEY,tenant_id uuid,kommo_lead_id bigint,external_id text,
