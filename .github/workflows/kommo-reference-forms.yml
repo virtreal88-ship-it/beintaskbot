@@ -9,6 +9,8 @@ on:
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/tenant_kommo*.py'
       - 'beintaskbot-main/tests/test_kommo_reference_forms*'
+      - 'beintaskbot-main/tests/test_kommo_pipeline_picker_browser.cjs'
+      - 'beintaskbot-main/ui/src/kommo-deal-move.js'
       - 'beintaskbot-main/tests/test_deal_info_actions.cjs'
       - '.github/workflows/kommo-reference-forms.yml'
   workflow_dispatch:
@@ -27,6 +29,7 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_kommo_task_update.py' && python -m unittest discover -s tests -p 'test_kommo_deal_notes.py' && python -m unittest discover -s tests -p 'test_kommo_reference_assets.py'
+      - run: python -m unittest tests.test_kommo_deal_move tests.test_kommo_board_provenance
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -36,7 +39,9 @@ jobs:
           node tests/test_task_read_save_flow_ui.cjs
           node tests/test_kommo_reference_forms.cjs
           node tests/test_deal_info_actions.cjs
+          node tests/test_tenant_deal_completion_ui.cjs
           node tests/test_kommo_reference_forms_browser.cjs
+          node tests/test_kommo_pipeline_picker_browser.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,4 +1,4 @@
-/* Explicit button only. Task completion does not dispatch deal completion. */
+/* Explicit stage selection only. Task completion never dispatches deal completion. */
 (() => {
   let profile=null, generation=0;
   const identity=()=>profile?`${profile.tenant_id}:${profile.telegram_id}`:'';
@@ -7,7 +7,7 @@
     const response=await fetch('/api/platform/crm/'+path,{credentials:'same-origin',...(data?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id})}: {})});
     const result=await response.json();
-    if(!response.ok||!result.success){const e=Error(result.error||'Sorğu alınmadı.');e.keep=result.keep_request||response.status>=500;throw e;}
+    if(!response.ok||!result.success){const e=Error(result.error||'Sorğu alınmadı.');e.keep=result.keep_request!==false||response.status>=500;throw e;}
     return result;
   }
   const panel=document.createElement('section');panel.className='panel';panel.hidden=true;panel.style.marginTop='20px';
@@ -42,31 +42,33 @@
     finally{if(revision===generation){refresh.disabled=false;more.disabled=false;}}
   }
   refresh.onclick=()=>load();more.onclick=()=>load(true);
-  document.addEventListener('tenant-chat-open',event=>{
-    if(!profile)return;
-    const host=document.getElementById('modalContent'),button=document.createElement('button'),snapshot=identity();
-    const lead=Number(event.detail.lead_id);if(!Number.isSafeInteger(lead)||lead<=0)return;
-    button.type='button';button.className='outline';button.textContent='Sövdələşməni tamamla';button.style.margin='12px 0';(host.querySelector('#dealInfoPanel')||host).prepend(button);
-    button.onclick=async()=>{
-      const key=`crm-deal-complete:${snapshot}:${lead}`;let pending;
-      try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}
-      catch{alert('Sorğu yaddaşı əlçatan deyil.');return;}
-      if(!pending&&!confirm('Sövdələşməni uğurla tamamlamaq istəyirsiniz?'))return;
-      pending||={lead_id:lead,request_id:crypto.randomUUID(),result_text:''};
-      try{sessionStorage.setItem(key,JSON.stringify(pending));}catch{alert('Sorğu saxlanmadı.');return;}
-      button.disabled=true;button.innerHTML='<i class="spinner" style="display:inline-block"></i>Gözləyin…';
-      try{
-        const result=await api('deals/complete',pending);sessionStorage.removeItem(key);
-        if(snapshot!==identity())return;
-        button.textContent=result.approval_pending?'Təsdiq gözləyir':'Tamamlandı';
-        if(result.completed)document.getElementById('dealsRefresh').click();
-        if(!panel.hidden)load();
-      }catch(e){
-        if(!e.keep)sessionStorage.removeItem(key);if(snapshot!==identity())return;
-        alert(e.message);button.textContent=e.keep?'Eyni sorğunu yoxla':'Sövdələşməni tamamla';button.disabled=false;
-      }
-    };
-  });
+  // The stage selector is the sole completion entry point. Keep the existing
+  // confirmed, identity-bound, idempotent approval command and review panel.
+  const pendingLeads=new Set();
+  window.tenantDealCompletion={request:async(lead,context)=>{
+    lead=Number(lead);const snapshot=identity();
+    if(!profile||!Number.isSafeInteger(lead)||lead<=0||
+      String(context?.tenant_id)!==String(profile.tenant_id)||String(context?.user_id)!==String(profile.telegram_id))throw Error('İcazə yoxdur.');
+    const key=`crm-deal-complete:${snapshot}:${lead}`;
+    if(pendingLeads.has(key))throw Error('Gözləyin…');
+    let pending;
+    try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error('Sorğu yaddaşı əlçatan deyil.');}
+    if(!pending&&!confirm('Sövdələşməni uğurla tamamlamaq istəyirsiniz?'))return {cancelled:true};
+    pending||={lead_id:lead,request_id:crypto.randomUUID(),result_text:''};
+    try{sessionStorage.setItem(key,JSON.stringify(pending));}catch{throw Error('Sorğu saxlanmadı.');}
+    pendingLeads.add(key);
+    try{
+      const result=await api('deals/complete',pending);
+      // Keep the same request while approval is pending, including reopen/retry.
+      if(result.completed===true)sessionStorage.removeItem(key);
+      else if(result.approval_pending!==true)throw Error('Nəticəni yoxlayın. Yeni sorğu yaratmayın.');
+      if(snapshot!==identity())return {cancelled:true};
+      if(result.completed)document.getElementById('dealsRefresh').click();
+      if(!panel.hidden)load();
+      return result;
+    }catch(e){if(e.keep===false)sessionStorage.removeItem(key);throw e;}
+    finally{pendingLeads.delete(key);}
+  }};
   function apply(data){
     generation++;profile=data.capabilities?.modules?.deals?data.member:null;
     panel.hidden=!profile||!['owner','admin'].includes(profile.role);list.replaceChildren();notice.textContent='';

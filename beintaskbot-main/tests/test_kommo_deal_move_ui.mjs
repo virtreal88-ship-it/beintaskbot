@@ -9,3 +9,15 @@ globalThis.fetch=async(url,options={})=>{requests.push({url,options});return {ok
 const result=await moveKommoDeal(row,101,context);assert.equal(requests[1].options.method,undefined);assert(requests[1].url.includes('request_id='));assert.equal(result.status_id,101);assert.equal(storage.size,0);
 globalThis.fetch=async()=>({ok:true,json:async()=>({source_revision:'b'.repeat(64),success:true,state:'confirmed',lead_id:'8',pipeline_id:10,status_id:101,updated_at:1794614401})});await assert.rejects(moveKommoDeal(row,101,context),/receipt/);assert.equal(storage.size,1);
 console.log('PASS stage command immutable retry, GET-only verification, destination fence and receipt validation');
+storage.clear();requests=[];
+globalThis.fetch=async(url,options={})=>{requests.push({url,options});throw Error('lost cross-pipeline response')};
+await assert.rejects(moveKommoDeal(row,201,context,20),/Result unknown/);
+assert.equal(JSON.parse(requests[0].options.body).target_pipeline_id,'20');
+await assert.rejects(moveKommoDeal(row,201,context,30),/previous stage/);assert.equal(requests.length,1);
+globalThis.fetch=async(url,options={})=>{requests.push({url,options});return {ok:true,json:async()=>({source_revision:'b'.repeat(64),success:true,state:'confirmed',lead_id:'7',pipeline_id:20,status_id:201,updated_at:1794614401})}};
+const moved=await moveKommoDeal(row,201,context,20);assert.equal(requests[1].options.method,undefined);assert.equal(moved.pipeline_id,20);assert.equal(moved.raw.pipeline_id,20);assert.equal(storage.size,0);
+// A legacy saved request with no target_pipeline_id keeps its identity and GET route.
+const legacyKey='kommo-stage:a:7:7';storage.set(legacyKey,JSON.stringify({expected_pipeline_id:'10',stage_id:'101',request_id:'legacy'}));
+globalThis.fetch=async(url,options={})=>{assert(url.includes('request_id=legacy'));assert.equal(options.method,undefined);return {ok:true,json:async()=>({source_revision:'b'.repeat(64),success:true,state:'confirmed',lead_id:'7',pipeline_id:10,status_id:101,updated_at:1794614401})}};
+await moveKommoDeal(row,101,context);assert.equal(storage.size,0);
+console.log('PASS cross-pipeline tuple fence, GET-only replay, pipeline/raw receipt and legacy command');
