@@ -1,0 +1,66 @@
+import copy
+from test_dialog_lifecycle_group_projection import (projection,database,db,flow,channels,group,history_db,A,CA,CB,PROFILE,G,change)
+import tenant_operator_dialogs as dialogs
+from tenant_dialog_rollout import transition
+
+
+def activate(d):
+    with d.cursor() as cur: transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    d.commit()
+
+
+def cards(actor=11,**kw):
+    return [r for r in dialogs.listing({'tenant_id':A,'telegram_id':actor},**kw)['dialogs'] if r['conversation_id']==G]
+
+
+def test_active_group_card_retains_exact_authorized_sources_and_filters(projection):
+    activate(projection)
+    result=cards()
+    assert len(result)==1
+    assert {r['channel_id'] for r in result[0]['group_sources']}=={CA,CB}
+    assert {r['lead_id'] for r in result[0]['group_sources']}=={1001,1002}
+    assert {r['channel_id'] for r in cards(33)[0]['group_sources']}=={CB}
+    assert {r['channel_id'] for r in cards(channel='connect:'+CA)[0]['group_sources']}=={CA}
+    assert {r['channel_id'] for r in cards(channel='connect:'+CB)[0]['group_sources']}=={CB}
+    assert cards()==cards()  # repeated list read is stable and read only
+    assert dialogs.listing({'tenant_id':A,'telegram_id':11},offset=50)['dialogs']==[]
+
+
+def test_claim_close_do_not_leak_or_hide_other_source(projection):
+    activate(projection)
+    change(44)
+    assert {r['channel_id'] for r in cards()[0]['group_sources']}=={CB}
+    assert {r['channel_id'] for r in cards(44)[0]['group_sources']}=={CA,CB}
+    change(44,'close',1)
+    assert {r['channel_id'] for r in cards(44)[0]['group_sources']}=={CB}
+    assert projection.execute('SELECT count(*) AS n FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND conversation_id=%s',(A,G))[0]['n']==2
+
+
+def test_fold_uses_only_group_jid_and_retains_each_source():
+    def row(channel,jid=G,name='Same name'):
+        return dict(provider='connect',channel_id=channel,channel_name=channel,conversation_id=jid,lead_id=1,customer_name=name,unread_count=1)
+    source=[row('a'),row('b'),row('a','994501111111@s.whatsapp.net'),row('b','994501111111@s.whatsapp.net'),row('a','120363431037910652@g.us')]
+    before=copy.deepcopy(source)
+    result=dialogs._fold_group_routes(source)
+    assert len(result)==4
+    assert len(result[0]['group_sources'])==2
+    assert source==before
+    assert result[0]['unread_count']==1
+    assert len(dialogs._fold_group_routes([row('a',f'{100000+i}@g.us') for i in range(55)]+[row('b',f'{100000+i}@g.us') for i in range(55)]))==55
+
+
+def test_closed_source_reopens_once_without_duplicate_card(projection):
+    import tenant_dialog_lifecycle as lifecycle
+    activate(projection)
+    change(44)
+    change(44,'close',1)
+    assert len(cards(44)[0]['group_sources'])==1
+    for _ in range(2):
+        with projection.cursor() as cur:
+            lifecycle.note_inbound(cur,A,CA,G,'synthetic-fresh','2099-01-01T00:00:00Z')
+        projection.commit()
+    result=cards(44)
+    assert len(result)==1 and len(result[0]['group_sources'])==2
+    reopened=next(r for r in result[0]['group_sources'] if r['channel_id']==CA)
+    assert reopened['lifecycle']['state']=='waiting'
+    assert reopened['lifecycle']['revision']==3
