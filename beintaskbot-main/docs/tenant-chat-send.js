@@ -15,10 +15,18 @@
     if(sent.delivery_state==='failed'&&sent.provider_message_id)return {ru:'Провайдер сообщил об ошибке доставки. Повторная отправка отключена.',az:'Provayder çatdırılma xətası bildirdi. Təkrar göndərmə söndürülüb.',en:'The provider reported a delivery failure. Resend is disabled.'}[lang];
     return quoteCopy(sent.delivery_state||'unknown');
   };
-  let activeReceiptDiagnostics=()=>{};
+  let activeReceiptDiagnostics=()=>{},activePrimaryObserver=null;
   function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
     activeReceiptDiagnostics=()=>{};
-    const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
+    activePrimaryObserver?.disconnect();activePrimaryObserver=null;
+    const button=document.getElementById('sendChat'),input=document.getElementById('chatText'),primary=document.getElementById('tcComposerPrimary');
+    if(primary){
+      button.dataset.composerDelegate='true';button.setAttribute('aria-hidden','true');button.tabIndex=-1;
+      const refreshPrimary=()=>{const pending=button.textContent.trim()===(window.tenantI18n?.t?.('checkSend')||'Vəziyyəti yoxla'),hasText=!!input.value.trim(),label=pending?copy('checkSend','Vəziyyəti yoxla'):copy('send','Göndər');primary.textContent='↑';primary.title=label;primary.setAttribute('aria-label',label);primary.disabled=button.disabled||input.disabled||(!hasText&&!pending);primary.classList.toggle('loading',button.classList.contains('loading'));return !primary.disabled;};
+      primary.onclick=()=>{if(refreshPrimary())button.click();};input.addEventListener('input',refreshPrimary);
+      if(window.MutationObserver){const observer=new MutationObserver(()=>{if(!button.isConnected||!primary.isConnected){observer.disconnect();if(activePrimaryObserver===observer)activePrimaryObserver=null;return;}refreshPrimary();});activePrimaryObserver=observer;observer.observe(button,{attributes:true,childList:true,characterData:true,subtree:true});observer.observe(input,{attributes:true,attributeFilter:['disabled']});}
+      refreshPrimary();
+    }
     const key='tenant-chat-send:'+identity+':'+leadId;
     const scoped=provider==='connect'&&String(me.tenant_id)==='e09a5c24-093f-4141-992d-532052e00c90'&&String(channelId)==='96863d75-d272-4c93-a25e-ffb2b16ecae3';
     const readReceipt=requestId=>api('/api/platform/crm/chat/quote-receipt?'+new URLSearchParams({lead_id:String(leadId),expected_tenant_id:String(me.tenant_id),expected_user_id:String(me.telegram_id),...(requestId?{request_id:requestId}:{})}),{method:'GET'});
@@ -63,9 +71,9 @@
   }
   function bindFile({identity,leadId,me,isCurrent,reload,input,button}){
     const key='tenant-chat-file:'+identity+':'+leadId;
-    const host=document.createElement('div');host.style.cssText='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px';
+    const host=document.createElement('div');host.className='tc-legacy-composer-attachments';host.style.cssText='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0;min-width:0';
     host.innerHTML='<input type="file" hidden accept="image/jpeg,image/png,image/webp,application/pdf,audio/mpeg,audio/ogg,video/mp4"><button class="outline" type="button">Fayl seç</button><span role="status" style="overflow-wrap:anywhere;min-width:0"></span><button class="outline" type="button" hidden>Faylı göndər</button>';
-    input.parentElement.after(host);
+    const actions=input.closest('.tc-legacy-composer')?.querySelector('.operator-composer-actions'),primary=actions?.querySelector('#tcComposerPrimary');if(actions)actions.insertBefore(host,primary||null);else input.parentElement.after(host);
     const [picker,choose,status,send]=host.children;let file=null,busy=false;
     try{if(sessionStorage.getItem(key))status.textContent='Əvvəlki faylın nəticəsi yoxlanmalıdır. Eyni faylı seçin.';}catch(e){choose.disabled=true;}
     choose.onclick=()=>picker.click();picker.onchange=()=>{
