@@ -90,7 +90,7 @@
       #supportDetail .support-card-header{top:-20px;padding-top:4px}
       #supportDetail .support-card-header h2{font-size:19px;font-weight:650}
       #supportDetail #supportClose{width:44px;min-height:44px!important;padding:0;font-size:26px;font-weight:400;border-radius:50%;border:0;background:var(--paper);color:var(--muted)}
-      #supportDetail .support-case-tabs button{min-height:40px}
+      #supportDetail .support-case-tabs button{min-height:44px}
       #supportDetail .support-primary-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
       #supportDetail .support-primary-actions button{min-height:38px;padding:8px 12px;white-space:normal;font:inherit;font-size:13px}
       #supportDetail #supportResolve{width:38px;font-size:18px;padding:0}
