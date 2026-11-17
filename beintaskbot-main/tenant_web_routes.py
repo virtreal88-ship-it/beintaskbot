@@ -23,6 +23,7 @@ from tenant_customer_media_api import handler as customer_media_handler, read_ha
 from tenant_customer_voice_api import handler as customer_voice_handler, receipt_handler as customer_voice_receipt_handler, capability_handler as customer_voice_capability_handler, status_handler as customer_voice_status_handler, manual_confirmation_handler as customer_voice_manual_confirmation_handler
 from tenant_chat_history_api import handler as chat_history_handler
 from tenant_chat_attachment_api import handler as chat_attachment_handler
+from tenant_call_recordings_api import handler as call_recordings_handler
 from tenant_chat_review_api import handler as chat_review_handler
 from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_owner_asr_comparison_api import handler as owner_asr_comparison_handler
@@ -69,6 +70,8 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
+        ('/api/platform/test-call-recordings', call_recordings_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/test-call-recordings/{record_id:[0-9a-fA-F-]{36}}', call_recordings_handler(member,origin,logger,'audio'), ('GET',)),
         ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}/assets/{asset_id}', instruction_handler(member,origin,logger), ('GET',)),

@@ -310,6 +310,14 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     value['participant_jid'] = participant_jid
     value['participant_alt'] = participant_alt
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
+    if value.get('message_type')=='call_recording' and direction=='system' and isinstance(raw,dict):
+        try:
+            value['call_recording']={'id':str(uuid.UUID(str(raw['recording_id']))),
+                'duration_ms':max(0,min(120000,int(raw.get('duration_ms',0)))),
+                'complete':raw.get('complete') is True,'expires_at':str(raw.get('expires_at','')),
+                'archived_owner_binding':raw.get('archived_owner_binding') is True}
+        except (KeyError,ValueError,TypeError):
+            pass
     value.pop('delivery_state', None)
     if value.get('message_type') in {'call_missed', 'call_rejected', 'call_invalidated', 'call_observed'}:
         value['call_is_video'] = isinstance(raw, dict) and raw.get('isVideo') is True
@@ -1186,6 +1194,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     eligible.extend(captured_group)
     read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible else None
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
+    from tenant_call_recordings import offer_import
+    dialog['test_recording_import_allowed']=offer_import({**profile,'role':policy.profile.get('role')},dialog)
     return {'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],

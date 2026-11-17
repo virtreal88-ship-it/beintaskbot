@@ -780,6 +780,10 @@
   function observedCallLabel(video){return ({ru:video?'Входящий видеозвонок · результат неизвестен':'Входящий звонок · результат неизвестен',az:video?'Daxil olan videozəng · nəticə məlum deyil':'Daxil olan zəng · nəticə məlum deyil',en:video?'Incoming video call · outcome unknown':'Incoming call · outcome unknown'}[i18n.language]||'Incoming call · outcome unknown');}
   function invalidatedCallLabel(video){return ({ru:video?'Статус видеозвонка уточнён':'Статус звонка уточнён',az:video?'Videozəngin statusu dəqiqləşdirildi':'Zəngin statusu dəqiqləşdirildi',en:video?'Video call status corrected':'Call status corrected'}[i18n.language]||'Call status corrected');}
   function messageMarkup(items,route=currentDialog,{readOnly=false}={}){return items.map((m,index)=>{
+    if(m.message_type==='call_recording'&&m.call_recording){
+      const recording=m.call_recording,query=new URLSearchParams({expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')}),expired=Date.parse(recording.expires_at)<=Date.now();
+      return `<article class="operator-message operator-message-system" data-message-id="${esc(m.id)}"><strong>Тестовая запись звонка</strong><p>${Math.ceil(recording.duration_ms/1000)} сек. · ${recording.complete?'Запись завершена':'Возможны пропуски аудио'}</p>${expired?'<p>Срок хранения записи истёк</p>':`<audio data-test-call-audio controls preload="none" src="/api/platform/test-call-recordings/${encodeURIComponent(recording.id)}?${esc(query)}"></audio><p>Удаление аудио: ${esc(i18n.date(recording.expires_at))}</p>`}<small>${recording.archived_owner_binding?"Привязано владельцем к архивному диалогу · ":""}Внутренняя запись · клиенту не отправляется</small></article>`;
+    }
     const rejected=m.message_type==='call_rejected',invalidated=m.message_type==='call_invalidated',observed=m.message_type==='call_observed';
     const missed=m.message_type==='call_missed'||rejected||invalidated||observed;
     const media=m.source==='connect'&&!missed&&m.message_type!=='text'&&m.external_id;
@@ -1194,6 +1198,15 @@
     if(route.provider==='connect'){const configure=document.createElement('button');configure.type='button';configure.className='outline';configure.textContent=t('groupSettingsTitle');configure.dataset.operatorGroupSettings='true';configure.onclick=()=>openGroupSettings(route);primaryHost.append(configure);}
     const menu=$('operatorMoreActions'),menuList=moreHost;
     const appendMenu=button=>{button.setAttribute('role','menuitem');menuList.append(button);};
+    if(route.test_recording_import_allowed){
+      const upload=document.createElement('button');upload.type='button';upload.textContent='Добавить тестовую запись звонка';
+      upload.onclick=()=>{const file=document.createElement('input');file.type='file';file.accept='.beincall.zip,application/zip';
+        file.onchange=async()=>{if(!same()||!file.files?.[0])return;const selected=file.files[0];if(selected.size>7696400){$('operatorChatError').textContent='Запись слишком большая';return;}upload.disabled=true;
+          const query=new URLSearchParams({channel_id:String(route.channel_id),conversation_id:String(route.conversation_id),lead_id:String(route.lead_id),expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)});
+          try{const response=await fetch('/api/platform/test-call-recordings?'+query,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/zip'},body:selected});const result=await response.json();if(!response.ok)throw new Error(result.error||'Не удалось сохранить запись');if(same())await openDialog(route,true);}
+          catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(upload.isConnected)upload.disabled=false;}
+        };file.click();};appendMenu(upload);
+    }
     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
@@ -1441,6 +1454,7 @@ if(changed){completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner=''
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
+  for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
   document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}else{refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}});

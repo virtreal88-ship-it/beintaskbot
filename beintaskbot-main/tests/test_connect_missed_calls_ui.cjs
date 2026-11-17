@@ -43,3 +43,17 @@ for(const [language,audio,video] of [['ru','Входящий звонок · р�
  }
 }
 console.log('unknown incoming call presentation RU/AZ/EN passed');
+context.member={tenant_id:'tenant-one',telegram_id:11};context.URLSearchParams=URLSearchParams;
+context.i18n.language='ru';
+const recorded={id:'recording-message',source:'connect',direction:'system',message_type:'call_recording',
+ call_recording:{id:'a'.repeat(32),duration_ms:27183,complete:false,expires_at:new Date(Date.now()+60000).toISOString(),archived_owner_binding:true}};
+const recordingMarkup=context.messageMarkup([recorded]);
+assert(recordingMarkup.includes('Возможны пропуски аудио'));
+assert(recordingMarkup.includes('Привязано владельцем к архивному диалогу'));
+assert(recordingMarkup.includes('expected_tenant_id=tenant-one'));
+assert(recordingMarkup.includes('expected_user_id=11'));
+assert(recordingMarkup.includes('preload="none"'));
+for(const forbidden of ['data-media-open','data-reply-message','data-media-download'])assert(!recordingMarkup.includes(forbidden));
+recorded.call_recording.expires_at='2000-01-01T00:00:00Z';
+const expired=context.messageMarkup([recorded]);assert(expired.includes('Срок хранения записи истёк'));assert(!expired.includes('<audio'));
+console.log('private recording identity, incomplete status and expiry presentation passed');
