@@ -71,6 +71,8 @@ ASSETS = (
     ('/assets/tenant-customer-voice-store.js', 'tenant-customer-voice-store.js', 'no-store'),
     ('/assets/tenant-customer-media-ui.js', 'tenant-customer-media-ui.js', 'no-store'),
     ('/assets/tenant-customer-voice-ui.js', 'tenant-customer-voice-ui.js', 'no-store'),
+    ('/assets/tenant-browser-calls.js', 'tenant-browser-calls.js', 'no-store'),
+    ('/assets/browser-call-audio.js', 'browser-call-audio.js', 'no-store'),
     ('/assets/tenant-dialog-composer.js', 'tenant-dialog-composer.js', 'no-store'),
     ('/assets/tenant-copilot-voice-audio.js', 'tenant-copilot-voice-audio.js', 'no-store'),
     ('/assets/tenant-copilot-voice-controller.js', 'tenant-copilot-voice-controller.js', 'no-store'),

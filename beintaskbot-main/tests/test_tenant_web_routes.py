@@ -157,7 +157,9 @@ FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_hand
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'business_analytics_handler', 'agent_reports_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 FACTORIES += ('business_analyst_handler','business_analyst_preferences_handler','business_analytics_voice_handler')
-FACTORIES += ('call_recordings_handler',)
+FACTORIES += ('call_recordings_handler','browser_calls_handler')
+EXPECTED_ASSETS += ['/assets/tenant-browser-calls.js','/assets/browser-call-audio.js']
+EXPECTED_API += (('GET','/api/platform/browser-calls'),('POST','/api/platform/browser-calls'),('POST','/api/platform/call-gateway/sync'),('POST','/api/platform/call-gateway/recording'))
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):
