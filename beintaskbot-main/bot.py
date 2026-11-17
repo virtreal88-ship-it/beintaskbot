@@ -16851,6 +16851,7 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
     from functools import partial
     from tenant_job_runner import run_jobs, deliver_from
     await run_jobs([
+        ('test_call_recordings_retention', partial(deliver_from, 'tenant_call_recordings', logger)),
         ('crm_notices', partial(deliver_from, 'tenant_crm_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('proactive_risk_alerts', partial(deliver_from, 'tenant_proactive_risk_delivery', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('connect_health', partial(deliver_from, 'tenant_connect_health', context.bot, logger)),

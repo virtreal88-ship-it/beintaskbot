@@ -21,6 +21,8 @@ def _ensure_schema(conn) -> None:
             migrate_identity_schema(cur)
             migrate_operations_schema(cur)
             migrate_crm_schema(cur)
+            from tenant_call_recordings import migrate as migrate_test_call_recordings
+            migrate_test_call_recordings(cur)
             # Durable per-user fencing for the owner-scoped Realtime pilot.
             # Additive only; no provider traffic or account setting is enabled
             # by creating this table.

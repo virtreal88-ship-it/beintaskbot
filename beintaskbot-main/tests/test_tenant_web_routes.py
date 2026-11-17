@@ -157,6 +157,7 @@ FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_hand
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'business_analytics_handler', 'agent_reports_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 FACTORIES += ('business_analyst_handler','business_analyst_preferences_handler','business_analytics_voice_handler')
+FACTORIES += ('call_recordings_handler',)
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):
@@ -181,6 +182,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
     async def test_exact_previous_api_methods_and_automatic_head(self):
         actual = {(route.method, route.resource.canonical) for route in self.app.router.routes()}
         expected = set(EXPECTED_API)
+        expected |= {('GET','/api/platform/test-call-recordings'),('HEAD','/api/platform/test-call-recordings'),('POST','/api/platform/test-call-recordings'),('GET','/api/platform/test-call-recordings/{record_id}'),('HEAD','/api/platform/test-call-recordings/{record_id}')}
         base='/api/platform/ai/knowledge-candidates/campaigns'
         expected |= {(method,base+suffix) for suffix in ('','/preview','/{campaign_id}') for method in ('GET','HEAD')}
         expected |= {('POST',base+suffix) for suffix in ('','/{campaign_id}/start','/{campaign_id}/control')}
