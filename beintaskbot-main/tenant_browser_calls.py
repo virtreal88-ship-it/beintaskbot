@@ -96,7 +96,16 @@ def authorize(cur,profile,route,c,*,write=False):
     # route. It never changes that source or claims it is live in Connect.
     if not source or (not source['active'] and c.get('archived_test_route') is not True):
         raise TenantLinearError('Источник звонка недоступен.',403)
-    selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead,action='update' if write else 'view')
+    archived_test=c.get('archived_test_route') is True
+    if archived_test:
+        # Explicit owner-bound lab source, not a Connect send or a reopened
+        # support episode. Archived Connect cannot supply can_send/admission.
+        # Still enforce current source update grants and lifecycle visibility;
+        # never access a conversation assigned to another employee.
+        if policy.profile.get('role')!='owner':raise TenantLinearError('Архивный тест доступен только владельцу.',403)
+        from tenant_dialog_access import require_source
+        require_source(cur,tenant,policy,'connect',channel,'update' if write else 'view')
+    selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead,action='update' if write and not archived_test else 'view')
     cur.execute('''SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid
       AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s FOR SHARE''',(tenant,channel,conversation,lead))
     if not cur.fetchone() or selected.get('conversation_kind')=='group':raise TenantLinearError('Адрес диалога изменился.',409)

@@ -138,3 +138,27 @@ def test_api_origin_identity_and_gateway_credential_separation(gateway):
             response=await client.post('/browser'+q,json=command(),headers={'Origin':'https://test.local'});assert response.status==200
             assert response.headers['Cache-Control']=='no-store';logger.warning.assert_not_called()
     asyncio.run(run())
+
+
+def test_explicit_archived_owner_pilot_never_reopens_support_or_grants_employee_access(gateway,monkeypatch):
+    from tenant_dialog_rollout import transition
+    from tenant_dialog_lifecycle import migrate
+    from test_tenant_operator_workspace import employee
+    db,key,cfg=gateway
+    with db.cursor() as cur:
+        migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.commit()
+    with pytest.raises(TenantLinearError,match='Сначала примите'):calls.action(PROFILE,command())
+    cfg={**cfg,'archived_test_route':True,'actors':[11,33]}
+    monkeypatch.setenv('BEINTASKBOT_BROWSER_CALL_PILOT',json.dumps(cfg))
+    person=employee(db,['dialogs'])
+    with pytest.raises(TenantLinearError):calls.action(person,command())
+    one=calls.action(PROFILE,command());assert one['state']=='starting'
+    assert not db.execute('SELECT 1 FROM saas_dialog_workflows');db.commit()
+    # Even the explicit archive binding cannot override another operator.
+    db.execute("INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision) VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',33,1)",(A,CA,CONVERSATION,str(uuid.uuid4())));db.commit()
+    with pytest.raises(TenantLinearError):calls.action(PROFILE,command('end',call_id=one['id']))
+    assert calls.status(PROFILE)['calls']==[]
+    # Gateway independently stops media after the operator loses authorization.
+    assert calls.sync(cfg,snapshot(2))['commands'][0]['cancelled']
