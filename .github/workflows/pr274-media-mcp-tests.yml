@@ -65,6 +65,9 @@ jobs:
           PYTHONPATH: tests/isolated_database_guard:.:tests
         run: >-
           python -m pytest -q -rs
+          tests/test_tenant_push.py
+          tests/test_tenant_push_delivery.py
+          tests/test_tenant_auth_api.py
           tests/test_ai_administrator_read.py
           tests/test_audio_attempts_diagnostic.py
           tests/test_company_model_listing.py
