@@ -7,7 +7,13 @@ const message=key=>(stageCopy[globalThis.document?.documentElement?.lang]||stage
 // Persist the immutable command before send. An uncertain request is only
 // verified under its original ID; never manufacture a retry PATCH.
 export function canIdentifyKommoDeal(row){return /^[a-f0-9]{64}$/.test(row.source_revision||'')&&['kommo_lead_id','pipeline_id','status_id'].every(key=>typeof row[key]==='number'?Number.isSafeInteger(row[key])&&row[key]>0:/^[1-9][0-9]{0,18}$/.test(String(row[key])));}
-export async function moveKommoDeal(row, target, context, targetPipeline=row.pipeline_id) {
+export function hasPendingKommoDealMove(row,target,context,targetPipeline=row.pipeline_id){
+  try{const saved=JSON.parse(sessionStorage.getItem(`kommo-stage:${context.tenant_id}:${context.user_id}:${row.kommo_lead_id}`)||'null');return !!saved&&String(saved.stage_id)===String(target)&&String(saved.target_pipeline_id||saved.expected_pipeline_id)===String(targetPipeline);}catch{return false;}
+}
+export async function verifyKommoDealMove(row,target,context,targetPipeline=row.pipeline_id){
+  return moveKommoDeal(row,target,context,targetPipeline,true);
+}
+export async function moveKommoDeal(row, target, context, targetPipeline=row.pipeline_id, verifyOnly=false) {
   if(!canIdentifyKommoDeal(row))throw Error(message('refresh'));
   const key=`kommo-stage:${context.tenant_id}:${context.user_id}:${row.kommo_lead_id}`;
   const expected=Number(row.raw?.updated_at)||Math.floor(Date.parse(row.source_updated_at)/1000);
@@ -15,6 +21,7 @@ export async function moveKommoDeal(row, target, context, targetPipeline=row.pip
   if(String(targetPipeline)!==String(row.pipeline_id))payload.target_pipeline_id=String(targetPipeline);
   if(!Number.isSafeInteger(expected)||expected<=0)throw Error(message('refresh'));
   let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{throw Error(message('storage'));}
+  if(verifyOnly&&!saved)return null;
   if(saved&&(String(saved.stage_id)!==String(target)||String(saved.target_pipeline_id||saved.expected_pipeline_id)!==String(targetPipeline)))throw Error(message('previous'));
   const command=saved||{...payload,request_id:crypto.randomUUID()};
   try{sessionStorage.setItem(key,JSON.stringify(command));}catch{throw Error(message('saved'));}
