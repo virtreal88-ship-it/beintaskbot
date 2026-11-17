@@ -1,0 +1,38 @@
+{
+  "testOnly": true,
+  "secret": "test-only-call-contract-secret",
+  "frames": [
+    {
+      "rawBody": "{\"id\":\"af15a25a-7385-5ffa-a515-55fa1ba65c3e\",\"type\":\"call.observed\",\"occurred_at\":\"2026-11-16T10:00:56Z\",\"data\":{\"externalCallId\":\"synthetic-observed-call-contract\",\"conversationId\":\"15551234567@s.whatsapp.net\",\"originalConversationId\":\"15551234567@s.whatsapp.net\",\"occurredAt\":\"2026-11-16T10:00:56Z\",\"offerOccurredAt\":\"2026-11-16T10:00:00Z\",\"terminatedAt\":\"2026-11-16T10:00:56Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"observed\",\"callRevision\":0,\"outcome\":\"unknown\",\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"id\":\"call:synthetic-observed-call-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\"}}",
+      "signature": "sha256=ba87c830989d01e2f56afd83c33931228a8a40d94e4f06713564d4e4eb43c4e8"
+    },
+    {
+      "rawBody": "{\"id\":\"53b1069c-19eb-53f5-838d-f88de331d3ad\",\"type\":\"call.rejected\",\"occurred_at\":\"2026-11-16T10:00:08Z\",\"data\":{\"externalCallId\":\"synthetic-observed-call-contract\",\"conversationId\":\"15551234567@s.whatsapp.net\",\"originalConversationId\":\"15551234567@s.whatsapp.net\",\"occurredAt\":\"2026-11-16T10:00:08Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"rejected\",\"callRevision\":1,\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"id\":\"call:synthetic-observed-call-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\"}}",
+      "signature": "sha256=93d5e129447bc53afb37afb048222b7d67d3967ed732839c94ccb1ed92d3ca2b"
+    },
+    {
+      "rawBody": "{\"id\":\"d4d2336c-b058-50c6-ab38-04c09c592a80\",\"type\":\"call.invalidated\",\"occurred_at\":\"2026-11-16T10:00:08Z\",\"data\":{\"externalCallId\":\"synthetic-observed-call-contract\",\"conversationId\":\"15551234567@s.whatsapp.net\",\"originalConversationId\":\"15551234567@s.whatsapp.net\",\"occurredAt\":\"2026-11-16T10:00:08Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"invalidated\",\"callRevision\":2,\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"correctionOf\":\"call.rejected\",\"correctionReason\":\"provider_contradiction\",\"id\":\"call:synthetic-observed-call-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\"}}",
+      "signature": "sha256=ffb866e231f7c22cc4cd048bb51f5bdde1fe04853fb82002193ef3cd9f6f8480"
+    },
+    {
+      "rawBody": "{\"id\":\"066a40d9-a180-52b2-b9f8-a421daea5c05\",\"type\":\"call.observed\",\"occurred_at\":\"2026-11-16T10:00:56Z\",\"data\":{\"externalCallId\":\"synthetic-observed-retraction-contract\",\"conversationId\":\"15551234567@s.whatsapp.net\",\"originalConversationId\":\"15551234567@s.whatsapp.net\",\"occurredAt\":\"2026-11-16T10:00:56Z\",\"offerOccurredAt\":\"2026-11-16T10:00:00Z\",\"terminatedAt\":\"2026-11-16T10:00:56Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"observed\",\"callRevision\":0,\"outcome\":\"unknown\",\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"id\":\"call:synthetic-observed-retraction-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\"}}",
+      "signature": "sha256=58a8cb8593387d295e1d544cf9134109c6b6eace821ca99f9992fe3e32f0af87"
+    },
+    {
+      "rawBody": "{\"id\":\"74e93aa5-c4fd-51b8-9490-3384e555c6e4\",\"type\":\"call.invalidated\",\"occurred_at\":\"2026-11-16T10:00:56Z\",\"data\":{\"externalCallId\":\"synthetic-observed-retraction-contract\",\"conversationId\":\"15551234567@s.whatsapp.net\",\"originalConversationId\":\"15551234567@s.whatsapp.net\",\"occurredAt\":\"2026-11-16T10:00:56Z\",\"offerOccurredAt\":\"2026-11-16T10:00:00Z\",\"terminatedAt\":\"2026-11-16T10:00:56Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"invalidated\",\"callRevision\":2,\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"correctionOf\":\"call.observed\",\"correctionReason\":\"provider_contradiction\",\"id\":\"call:synthetic-observed-retraction-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\"}}",
+      "signature": "sha256=a5224afdfe95f81cbe3d3b287738704c753b68d48ac3b3a4911f479ef0b87f3a"
+    },
+    {
+      "rawBody": "{\"id\":\"916dca0d-c8db-56d0-84fb-eafa600fe2a5\",\"type\":\"call.observed\",\"occurred_at\":\"2026-11-16T10:00:56Z\",\"data\":{\"externalCallId\":\"synthetic-enriched-lid-contract\",\"conversationId\":\"15551234568@s.whatsapp.net\",\"originalConversationId\":\"199988877766@lid\",\"occurredAt\":\"2026-11-16T10:00:56Z\",\"offerOccurredAt\":\"2026-11-16T10:00:00Z\",\"terminatedAt\":\"2026-11-16T10:00:56Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"observed\",\"callRevision\":0,\"outcome\":\"unknown\",\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"directIdentity\":{\"lid\":\"199988877766@lid\",\"jid\":\"15551234568@s.whatsapp.net\"},\"id\":\"call:synthetic-enriched-lid-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\",\"directIdentitySource\":\"provider_event\"}}",
+      "signature": "sha256=48b27ca18de4cb31b80d0bc5bc0891407bbaef72dde6d982831eabbe4002c19c"
+    },
+    {
+      "rawBody": "{\"id\":\"2779697c-f01e-58d3-be45-dbf0a3d8c18a\",\"type\":\"call.rejected\",\"occurred_at\":\"2026-11-16T10:00:08Z\",\"data\":{\"externalCallId\":\"synthetic-enriched-lid-contract\",\"conversationId\":\"15551234568@s.whatsapp.net\",\"originalConversationId\":\"199988877766@lid\",\"occurredAt\":\"2026-11-16T10:00:08Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"rejected\",\"callRevision\":1,\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"id\":\"call:synthetic-enriched-lid-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\",\"directIdentity\":{\"lid\":\"199988877766@lid\",\"jid\":\"15551234568@s.whatsapp.net\"},\"directIdentitySource\":\"provider_event\"}}",
+      "signature": "sha256=2fd6627f0c4335ae96ca48cf49cb3c9e3c63e8733334fcaefb191db269983844"
+    },
+    {
+      "rawBody": "{\"id\":\"b279288f-786d-5f9c-afa9-03d3d71feaec\",\"type\":\"call.invalidated\",\"occurred_at\":\"2026-11-16T10:00:08Z\",\"data\":{\"externalCallId\":\"synthetic-enriched-lid-contract\",\"conversationId\":\"15551234568@s.whatsapp.net\",\"originalConversationId\":\"199988877766@lid\",\"occurredAt\":\"2026-11-16T10:00:08Z\",\"direction\":\"incoming\",\"type\":\"call\",\"callStatus\":\"invalidated\",\"callRevision\":2,\"isGroup\":false,\"conversationType\":\"direct\",\"isVideo\":false,\"source\":\"evolution\",\"correctionOf\":\"call.rejected\",\"correctionReason\":\"provider_contradiction\",\"id\":\"call:synthetic-enriched-lid-contract\",\"tenantId\":\"00000000-0000-0000-0000-000000000065\",\"channelId\":\"00000000-0000-0000-0000-0000000000c9\",\"directIdentity\":{\"lid\":\"199988877766@lid\",\"jid\":\"15551234568@s.whatsapp.net\"},\"directIdentitySource\":\"provider_event\"}}",
+      "signature": "sha256=1ec33068613346da2100e2dd87a353e96b73231b7420d37600fe950b56351737"
+    }
+  ]
+}

@@ -67,7 +67,7 @@ def reserve(session, command):
                 rows = [row]
             else:
                 cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND COALESCE(message_type,'text') NOT IN ('call_missed','call_rejected','call_invalidated') AND '''+source_guard+'''
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND COALESCE(message_type,'text') NOT IN ('call_missed','call_rejected','call_invalidated','call_observed') AND '''+source_guard+'''
                   ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 30''', (tenant, command['lead_id']))
                 rows = list(reversed(cur.fetchall()))
                 if not rows:

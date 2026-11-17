@@ -72,3 +72,46 @@ closed. Existing equivalent-lead and media/call-ID checks remain mandatory. This
 runs inside ingestion's canonical dialogue lock; mapping/reconciliation writers
 fence old and new canonical routes before changes. No new alias lock is acquired
 after the message row lock, and corrections never create identity proof themselves.
+
+
+## Neutral incoming observation
+
+`call.observed` carries `callStatus: observed`, `callRevision: 0` and
+`outcome: unknown`. Only authenticated Evolution evidence joining an incoming
+direct offer with its exact termination is admitted. Required `offerOccurredAt`
+and `terminatedAt` are timezone-qualified, ordered within 30 minutes;
+`occurred_at` equals `terminatedAt`. These are evidence, not talk duration.
+No answered/missed/rejected outcome is inferred from generic termination.
+
+The `call_observed` system row has a neutral RU/AZ/EN label. Later proven
+missed/rejected revision 1 or invalidated revision 2 updates the same tenant +
+source + call ID row, retaining original occurrence and observation evidence.
+Reverse/repeated neutral deliveries never downgrade a known result. Conflicting
+peer, media or provider facts fail closed. These rows are outside AI context and
+inbound automation. If a late known outcome has an earlier provider time, the
+original neutral row time remains unchanged; the new evidence retains its time.
+
+Activation is explicit and single-tenant through
+`enable_observed_call_subscription(profile, expected_webhook_id=...,
+expected_url=...)`, after matching Worker and Connect releases. Startup still
+adds only legacy `call.missed`. Historical restoration is a separate task and
+requires complete authenticated facts, not screenshot/timestamp guesses.
+
+Observation retraction uses `call.invalidated`, revision 2,
+`correctionOf: call.observed`, `correctionReason: provider_contradiction`,
+original offer/terminate timestamps and identity, with no outcome. It retracts
+only a neutral observation, never a proven missed/rejected classification.
+Priority is provenance-specific: observed0 < observed-invalidated2 < known1
+< rejected-invalidated2. Thus reordering cannot erase proven evidence or restore
+an invalidated observation. Activation adds observed + invalidated atomically.
+
+Retractions are durably fenced in `saas_connect_call_retractions`, keyed by
+validated tenant/channel/call and original signed peer/media/timing. Every call
+ingestion takes the call-key transaction lock before alias/dialogue/row locks.
+After signature, rollout and active-channel authorization, observed corrections
+bypass mutable identity resolution. They update only an existing exact-provenance
+row. Before-original corrections create only the ledger entry and receipt, never
+a CRM message/lead/route; a later matching observation is suppressed. Known
+outcomes remain admissible. Conflicting ledger/projection evidence rejects the
+whole transaction. Reconciled rows match preserved original provider identity,
+not a fresh alias guess. No external action or AI work occurs in this path.

@@ -34,3 +34,12 @@ for(const [language,audio,video] of [['ru','Статус звонка уточн
  }
 }
 console.log('neutral corrected call presentation RU/AZ/EN passed');
+for(const [language,audio,video] of [['ru','Входящий звонок · результат неизвестен','Входящий видеозвонок · результат неизвестен'],['az','Daxil olan zəng · nəticə məlum deyil','Daxil olan videozəng · nəticə məlum deyil'],['en','Incoming call · outcome unknown','Incoming video call · outcome unknown']]){
+ context.i18n.language=language;
+ for(const [isVideo,label] of [[false,audio],[true,video]]){
+  const markup=context.messageMarkup([{id:'call',external_id:'connect:call:3',source:'connect',direction:'system',message_type:'call_observed',call_is_video:isVideo,happened_at:'2026-11-15T09:00:00Z'}]);
+  assert(markup.includes(label));assert(markup.includes('data-observed-call'));
+  for(const prohibited of ['data-missed-call','data-rejected-call','data-invalidated-call','data-media-open','data-reply-message','data-quote-jump','operator-audio-duration'])assert(!markup.includes(prohibited));
+ }
+}
+console.log('unknown incoming call presentation RU/AZ/EN passed');
