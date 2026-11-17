@@ -9,7 +9,7 @@ def validate(event):
     data = event.get('data')
     if not isinstance(data, dict):
         raise ValueError('invalid call data')
-    expected_status = {'call.missed': 'missed', 'call.rejected': 'rejected', 'call.invalidated': 'invalidated'}.get(event.get('type'))
+    expected_status = {'call.missed': 'missed', 'call.rejected': 'rejected', 'call.invalidated': 'invalidated', 'call.observed': 'observed'}.get(event.get('type'))
     if expected_status is None:
         raise ValueError('unsupported call event')
     call_id = data.get('externalCallId')
@@ -30,17 +30,41 @@ def validate(event):
             raise ValueError('missing timezone')
     except (AttributeError, TypeError, ValueError):
         raise ValueError('invalid call timestamp') from None
+    if expected_status == 'observed' or is_observation_correction(data):
+        if data.get('source') != 'evolution' or (expected_status == 'observed' and data.get('outcome') != 'unknown'):
+            raise ValueError('invalid call observation')
+        try:
+            offer = datetime.fromisoformat(data['offerOccurredAt'].replace('Z', '+00:00'))
+            terminated = datetime.fromisoformat(data['terminatedAt'].replace('Z', '+00:00'))
+            data_stamp = datetime.fromisoformat(data['occurredAt'].replace('Z', '+00:00'))
+            if (offer.tzinfo is None or terminated.tzinfo is None
+                    or not 0 <= (terminated - offer).total_seconds() <= 1800
+                    or stamp != terminated or data_stamp.tzinfo is None or data_stamp != terminated):
+                raise ValueError('invalid call evidence time')
+        except (KeyError, AttributeError, TypeError, ValueError):
+            raise ValueError('invalid call evidence time') from None
+        if any(key in data for key in ('duration', 'durationSeconds', 'duration_seconds', 'durationMs')):
+            raise ValueError('unsupported call duration')
     return stamp.astimezone(timezone.utc).isoformat()
+
+
+def is_observation_correction(data):
+    return data.get('callStatus') == 'invalidated' and data.get('correctionOf') == 'call.observed'
 
 
 def revision(data):
     status = data.get('callStatus')
     value = data.get('callRevision', 1)
-    if type(value) is not int or status not in {'missed', 'rejected', 'invalidated'}:
+    if type(value) is not int or status not in {'missed', 'rejected', 'invalidated', 'observed'}:
         raise ValueError('invalid call revision')
-    if status == 'invalidated':
-        if value != 2 or data.get('correctionOf') != 'call.rejected':
+    if status == 'observed':
+        if value != 0 or 'correctionOf' in data or data.get('outcome') != 'unknown':
+            raise ValueError('invalid call observation revision')
+    elif status == 'invalidated':
+        if value != 2 or data.get('correctionOf') not in {'call.rejected', 'call.observed'}:
             raise ValueError('invalid call correction')
+        if is_observation_correction(data) and ('outcome' in data or data.get('correctionReason') != 'provider_contradiction'):
+            raise ValueError('invalid observation correction')
     elif value != 1 or 'correctionOf' in data:
         raise ValueError('invalid call revision')
     return value
@@ -90,13 +114,58 @@ def record(cur, tenant, channel, conversation, lead_id, data, occurred):
             or previous['kommo_lead_id'] not in lead_members(cur,tenant,channel,lead_id)
             or prior.get('isVideo') is not data['isVideo']
             or prior.get('externalCallId') != data['externalCallId']
+            or prior.get('source') != data.get('source')
             or not _same_stored_route(cur, tenant, channel, prior.get('conversationId'), conversation)):
         raise ValueError('call scope conflict')
     prior_revision = revision(prior)
     statuses = {prior.get('callStatus'), data['callStatus']}
+    if is_observation_correction(prior) or is_observation_correction(data):
+        # Revision numbers belong to their correction provenance. Rev2 retracting
+        # observation cannot erase independently proven rev1 (in either order).
+        prior_neutral = prior.get('callStatus') == 'observed' or is_observation_correction(prior)
+        incoming_neutral = data.get('callStatus') == 'observed' or is_observation_correction(data)
+        if prior_neutral and incoming_neutral:
+            if any(prior.get(key) != data.get(key) for key in ('offerOccurredAt', 'terminatedAt', 'occurredAt')):
+                raise ValueError('call scope conflict')
+            if is_observation_correction(prior):
+                return False
+        elif not prior_neutral:
+            return False  # Known outcome or its own correction wins.
+        corrected = {**prior, **data, 'callRevision': incoming_revision, 'occurredAt': data.get('occurredAt'), 'conversationId': prior['conversationId'],
+                     '_crm_call_observation': prior.get('_crm_call_observation') or prior}
+        corrected.pop('outcome', None)
+        if data['callStatus'] in {'missed', 'rejected'}:
+            corrected.pop('correctionOf', None)
+            corrected.pop('correctionReason', None)
+        cur.execute("""UPDATE saas_crm_messages SET message_type=%s,raw=%s::jsonb
+          WHERE tenant_id=%s::uuid AND external_id=%s""",
+          ('call_' + data['callStatus'], _json(corrected), tenant, external))
+        return False
+    if 'observed' in statuses:
+        if (prior.get('direction') != 'incoming' or data.get('direction') != 'incoming'
+                or prior.get('source') != 'evolution' or data.get('source') != 'evolution'):
+            raise ValueError('call scope conflict')
+        if statuses == {'observed'}:
+            if any(prior.get(key) != data.get(key) for key in ('offerOccurredAt', 'terminatedAt', 'outcome')):
+                raise ValueError('call scope conflict')
+            return False
+        if incoming_revision < prior_revision:
+            return False  # A late neutral observation never downgrades proven status.
+        # Keep original source identity/time and retain neutral evidence even
+        # when a late proven outcome replaces the displayed classification.
+        corrected = {**prior, **data, 'callRevision': incoming_revision, 'occurredAt': data.get('occurredAt'), 'conversationId': prior['conversationId'],
+                     '_crm_call_observation': prior}
+        corrected.pop('outcome', None)
+        cur.execute("""UPDATE saas_crm_messages SET message_type=%s,raw=%s::jsonb
+          WHERE tenant_id=%s::uuid AND external_id=%s""",
+          ('call_' + data['callStatus'], _json(corrected), tenant, external))
+        return False
     if len(statuses) > 1 and statuses != {'rejected', 'invalidated'}:
         raise ValueError('call scope conflict')
     if incoming_revision <= prior_revision:
+        evidence = (prior.get('_crm_call_correction') or {}).get('event') or prior
+        if incoming_revision == prior_revision and evidence.get('occurredAt') != data.get('occurredAt'):
+            raise ValueError('call scope conflict')
         return False
     # Only rejected(1) -> invalidated(2) is admitted. Keep original occurrence
     # time, identity and provenance; do not invent a completed/answered call.

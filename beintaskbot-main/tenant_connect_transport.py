@@ -29,7 +29,7 @@ from tenant_connect_direct_identity import (
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
-CONNECT_CALL_EVENTS = ('call.missed', 'call.rejected', 'call.invalidated')
+CONNECT_CALL_EVENTS = ('call.missed', 'call.rejected', 'call.invalidated', 'call.observed')
 CONNECT_AUTO_CALL_EVENTS = ('call.missed',)
 CONNECT_REJECTED_CALL_EVENTS = ('call.rejected', 'call.invalidated')
 CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, *CONNECT_CALL_EVENTS)
@@ -248,6 +248,7 @@ def _pause_unverified_outbound_audio(cur, tenant, channel_id, conversation):
 
 # Keep this preflight aligned with the additive DDL below (including nested schemas).
 _SCHEMA_COLUMNS = {
+    'saas_connect_call_retractions': 'tenant_id connect_channel_id external_call_id evidence created_at'.split(),
     'saas_connect_channels': (
         'active connect_channel_id created_at name status tenant_id updated_at '
     ).split(),
@@ -354,6 +355,11 @@ def _schema(conn) -> None:
         equivalence_schema(cur)
         from tenant_connect_owner_identity import schema as owner_identity_schema
         owner_identity_schema(cur)
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_call_retractions (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          connect_channel_id UUID NOT NULL, external_call_id TEXT NOT NULL,
+          evidence JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,connect_channel_id,external_call_id))''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
@@ -827,7 +833,7 @@ def _upgrade_missed_call_subscription(api_key, current):
     return _upgrade_call_subscription(api_key, current, CONNECT_AUTO_CALL_EVENTS)
 
 
-def enable_rejected_call_subscription(profile, *, expected_webhook_id, expected_url):
+def _enable_call_subscription(profile, *, expected_webhook_id, expected_url, additions):
     """Explicit single-tenant rollout only after all worker/Connect instances upgraded.
 
     Internal deployment helper, not a public route or startup hook. The caller must
@@ -844,7 +850,18 @@ def enable_rejected_call_subscription(profile, *, expected_webhook_id, expected_
     matches = [h for h in hooks if isinstance(h, dict) and str(h.get('id') or '') == webhook_id]
     if len(matches) != 1 or matches[0].get('url') != expected_url:
         raise ValueError('Subscription destination mismatch')
-    return _upgrade_call_subscription(key, matches[0], CONNECT_REJECTED_CALL_EVENTS)
+    return _upgrade_call_subscription(key, matches[0], additions)
+
+
+def enable_rejected_call_subscription(profile, *, expected_webhook_id, expected_url):
+    return _enable_call_subscription(profile, expected_webhook_id=expected_webhook_id,
+        expected_url=expected_url, additions=CONNECT_REJECTED_CALL_EVENTS)
+
+
+def enable_observed_call_subscription(profile, *, expected_webhook_id, expected_url):
+    """Explicit same-tenant rollout after both services support neutral calls."""
+    return _enable_call_subscription(profile, expected_webhook_id=expected_webhook_id,
+        expected_url=expected_url, additions=('call.observed', 'call.invalidated'))
 
 
 def sync_webhook_subscriptions() -> int:
@@ -981,6 +998,23 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 return False
             data={k:v for k,v in data.items() if k not in {
                 '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override','_case_followup_intent'}}
+            if call_occurred is not None:
+                from tenant_connect_calls import is_observation_correction
+                from tenant_connect_call_retractions import lock as lock_call, retract, check_retraction
+                lock_call(cur, tenant, channel_id, data['externalCallId'])
+                try:
+                    handled = False
+                    if is_observation_correction(data):
+                        retract(cur, tenant, channel_id, data)
+                        handled = True
+                    else:
+                        handled = check_retraction(cur, tenant, channel_id, data)
+                except ValueError as exc:
+                    raise ConnectWebhookError('call_scope_conflict', 'Call scope mismatch.', 409) from exc
+                if handled:
+                    cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING', (tenant,event_id))
+                    conn.commit()
+                    return True  # No mutable identity resolution or route/lead creation.
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)

@@ -116,7 +116,7 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
     video_statuses=video_statuses if isinstance(video_statuses,dict) else {}
     video_transcripts=video_transcripts if isinstance(video_transcripts,dict) else {}
     # Service events are not customer messages or unavailable attachments.
-    rows = [row for row in rows if row.get('message_type') not in {'call_missed', 'call_rejected', 'call_invalidated'}]
+    rows = [row for row in rows if row.get('message_type') not in {'call_missed', 'call_rejected', 'call_invalidated', 'call_observed'}]
     for row in rows[-30:]:
         role = {'incoming': 'CLIENT', 'outgoing': 'SALES MANAGER'}.get(row.get('direction'), 'UNKNOWN SPEAKER')
         raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

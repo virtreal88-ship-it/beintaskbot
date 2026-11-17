@@ -10,8 +10,9 @@ import tenant_ai_agent_connect as ai
 
 
 @pytest.mark.parametrize('reverse',[False,True])
-def test_signed_producer_replay(channels,monkeypatch,reverse):
-    fixture=json.loads((Path(__file__).parent/'fixtures/connect-call-signed.json').read_text())
+@pytest.mark.parametrize('fixture_name',['connect-call-signed.json','connect-call-observed-signed.json'])
+def test_signed_producer_replay(channels,monkeypatch,reverse,fixture_name):
+    fixture=json.loads((Path(__file__).parent/'fixtures'/fixture_name).read_text())
     assert fixture['testOnly'] is True
     local=channels['db']
     secrets=transport._fernet().encrypt(json.dumps({'api_key':'synthetic','webhook_secret':fixture['secret']}).encode())
@@ -32,5 +33,11 @@ def test_signed_producer_replay(channels,monkeypatch,reverse):
         assert event['data']['channelId']==CA
         assert transport.ingest(raw,frame['signature'],event)
     rows=local.execute("SELECT message_type,raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id LIKE 'connect:call:%%'",(A,))
-    assert len(rows)==1 and rows[0]['message_type']=='call_invalidated'
-    assert rows[0]['raw']['callRevision']==2
+    expected=(2 if reverse else 3) if fixture_name=='connect-call-observed-signed.json' else 1
+    assert len(rows)==expected and all(row['message_type']=='call_invalidated' and row['raw']['callRevision']==2 for row in rows)
+    if fixture_name=='connect-call-observed-signed.json':
+        assert len(local.execute('SELECT 1 FROM saas_connect_call_retractions WHERE tenant_id=%s::uuid',(A,)))==1
+        enriched=[r for r in rows if r['raw'].get('directIdentity')]
+        assert len(enriched)==1
+        assert enriched[0]['raw']['directIdentity']=={'lid':'199988877766@lid','jid':'15551234568@s.whatsapp.net'}
+        assert enriched[0]['raw']['originalConversationId']=='199988877766@lid'

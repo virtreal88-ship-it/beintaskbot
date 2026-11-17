@@ -995,7 +995,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
               FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
                 ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel AND v.external_id=m.external_id
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=ANY(%s::bigint[])
-                AND m.channel=%s AND COALESCE(m.message_type,'text') NOT IN ('call_missed','call_rejected','call_invalidated')
+                AND m.channel=%s AND COALESCE(m.message_type,'text') NOT IN ('call_missed','call_rejected','call_invalidated','call_observed')
                 ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 80
               ) recent ORDER BY COALESCE(happened_at,created_at),id''', (tenant, history_leads, 'connect:' + channel_id))
             rows = cur.fetchall()
