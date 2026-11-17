@@ -1,6 +1,7 @@
 /* RU/AZ/EN for the operator and AI settings; honours the existing site language preference. */
 (()=>{
   const copy={
+    dialog_accept_required:['Чтобы ответить, сначала примите диалог в работу.','Cavab vermək üçün əvvəlcə dialoqu işə qəbul edin.','Accept the conversation before replying.'],
     searchShort:['Поиск','Axtarış','Search'],
     receivedVia:['Получено','Qəbul edilib','Received'],
     markAllRead:['Отметить все диалоги прочитанными','Bütün dialoqları oxunmuş kimi işarələ','Mark all dialogues as read'],

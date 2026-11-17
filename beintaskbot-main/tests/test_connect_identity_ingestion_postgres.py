@@ -694,3 +694,95 @@ def test_actual_connect_dispatcher_signed_fixtures_reach_one_worker_dialogue(cha
     assert all(not r['raw'].get('conversationIdentityConflict') for r in rows)
     assert not channels['send'].called and not channels['generate'].called
     db.commit()
+
+
+@pytest.mark.parametrize('state', ['dismissed', 'closed', 'accepted'])
+@pytest.mark.parametrize('kind', ['fresh', 'outbound', 'old', 'missing_time', 'replay'])
+def test_direct_employee_inbound_lifecycle_is_human_only(ingest, channels, state, kind):
+    """Actual webhook ingestion on native PG; no production/provider calls."""
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    db = channels['db']
+    db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+      (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+      VALUES(%s::uuid,11,%s,TRUE,11)''', (A,JID.split('@')[0]))
+    db.commit()
+    initial = event(JID)
+    initial['occurred_at'] = '2026-10-28T11:00:00Z'
+    assert ingest(initial)
+    with db.cursor() as cur:
+        lifecycle.migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    from tenant_chat_send_schema import ensure_schema as send_schema
+    db.commit()
+    send_schema(db)
+    workflow_id, assignment_id = str(uuid.uuid4()), str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_dialog_workflows
+      (tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,11,7,%s::timestamptz)''',
+      (A,CA,JID,workflow_id,state,None if state=='accepted' else '2026-10-28T12:00:00Z'))
+    if state in {'accepted','closed'}:
+        lead=direct_routes(db)[0]['lead_id']
+        db.execute('''INSERT INTO saas_dialog_episodes
+          (tenant_id,id,channel_id,conversation_id,lead_id,accepted_by,operator_id,closed_at)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,11,11,%s::timestamptz)''',
+          (A,workflow_id,CA,JID,lead,None if state=='accepted' else '2026-10-28T12:00:00Z'))
+    # Explicit no-agent selection must survive human queue reopening.
+    db.execute('''UPDATE saas_ai_conversation_state SET agent_id=NULL,
+      agent_assignment_id=%s::uuid,state='human',reason='manager_replied'
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s''',
+      (assignment_id,A,CA,JID))
+    db.commit()
+    incoming = event(JID,outbound=kind=='outbound')
+    if kind=='old': incoming['occurred_at']='2026-10-28T11:30:00Z'
+    if kind=='missing_time': incoming.pop('occurred_at')
+    if kind=='replay': incoming={**initial,'id':str(uuid.uuid4())}
+    assert ingest(incoming)
+    def workflow():
+        result=db.execute('''SELECT id::text,state,operator_id,revision,last_inbound_id
+          FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',(A,CA,JID))[0]
+        db.commit()
+        return result
+    current=workflow()
+    advances = kind=='fresh' or (state=='accepted' and kind=='old')
+    assert current['revision']==7+int(advances)
+    assert current['state']==('waiting' if kind=='fresh' and state!='accepted' else state)
+    assert current['operator_id']==(None if kind=='fresh' and state!='accepted' else 11)
+    assert (current['id']!=workflow_id)==(kind=='fresh' and state!='accepted')
+    assert ingest(incoming)
+    assert ingest({**incoming,'id':str(uuid.uuid4())})
+    assert workflow()==current, 'same durable message must never reopen/increment twice'
+    stored=db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
+      (A,'connect:'+incoming['data']['id']))[0]['raw']
+    if kind!='outbound': assert stored['verified_employee_id']==11
+    ai=db.execute('''SELECT agent_id,agent_assignment_id::text,state FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s''',(A,CA,JID))[0]
+    assert ai=={'agent_id':None,'agent_assignment_id':assignment_id,'state':'human'}
+    assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s',(A,JID))
+    assert len(db.execute('SELECT 1 FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND conversation_id=%s',(A,JID)))==int(state in {'accepted','closed'}), 'inbound never creates an episode'
+    db.commit()
+
+
+def test_verified_group_employee_does_not_reopen_completed_queue(ingest, channels):
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    db=channels['db']; group='120363000000099@g.us'
+    db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+      (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+      VALUES(%s::uuid,11,%s,TRUE,11)''',(A,JID.split('@')[0]))
+    db.commit()
+    assert ingest(event(group,participantJid=JID))
+    with db.cursor() as cur:
+        lifecycle.migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute('''INSERT INTO saas_dialog_workflows
+      (tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'dismissed',11,7,'2026-10-28T12:00:00Z')''',(A,CA,group,str(uuid.uuid4())))
+    db.commit()
+    inbound=event(group,participantJid=JID)
+    assert ingest(inbound)
+    assert db.execute('''SELECT state,operator_id,revision FROM saas_dialog_workflows
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',(A,CA,group))==[{'state':'dismissed','operator_id':11,'revision':7}]
+    assert db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,'connect:'+inbound['data']['id']))[0]['raw']['verified_employee_id']==11
+    assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s',(A,group))
+    db.commit()
