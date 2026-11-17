@@ -1,7 +1,10 @@
 # Hosted WhatsApp calls engine
 
 The vendored `engine/` contains only source code, module pins and license from
-the reviewed local WaCalls experiment, commit `642106d` (2026-11-17).
+the reviewed local WaCalls experiment, commit
+`642106d72341e67518e970eeedcc683f2e2d021e` (2026-11-17), based on
+https://github.com/JotaDev66/WaCalls. Codec test vectors are upstream fixtures;
+no customer or owner call recordings are included.
 No linked-device database, token, signing seed, recordings or browser password
 was copied. The MIT license is retained in `engine/LICENSE`.
 
@@ -23,9 +26,12 @@ Original pilot recordings keep their original 24-hour expiry.
 Source enablement does not grant access to a company or dialog. Worker checks
 fresh membership, source grants, route and dialog ownership on actions and while
 relaying media. Browser audio is not broadcast, forwarded to arbitrary URLs or
-logged. Unknown provider/command outcomes remain blocked; no deployment resets
-call rows. Existing two-minute/20-call pilot bounds currently remain enforced
-pending completion of the production operating policy and acceptance tests.
+logged. Unknown provider/command outcomes remain blocked. Managed restarts use
+an exclusive OS process-lifetime lock plus a persisted boot journal; only a
+confirmed former process exit retires its calls, and retired boot IDs can never
+reclaim control. This does not rely on a timeout or manual lease reset.
+Existing two-minute/20-call daily safety bounds remain enforced and are separate
+from the permanent feature lifetime and the 30-day recording retention.
 
 This directory is under development and is not evidence of deployment or live
 validation. The hosted network path must pass a consented test with both sides
