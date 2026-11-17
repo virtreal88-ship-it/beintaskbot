@@ -1,5 +1,5 @@
 import {useDealCardActivation} from './deal-card-activation.js';
-import { moveKommoDeal, canIdentifyKommoDeal } from "./kommo-deal-move.js";
+import { moveKommoDeal, verifyKommoDealMove, hasPendingKommoDealMove, canIdentifyKommoDeal } from "./kommo-deal-move.js";
 window.tenantKommoStageMove = { move: moveKommoDeal, canIdentify: canIdentifyKommoDeal };
 import { NativeDealBoard, dealProfileScope } from "./native-deal-board.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -645,23 +645,53 @@ function dealCardPreview(deal) {
 function DealKanban({ rows = [], catalog = [], hidden = [], onOpen, moveTargets = [], moveSources = [], completionApproval = false, moveContext }) {
   const cardActivation=useDealCardActivation(onOpen);
   const [displayRows,setDisplayRows]=useState(rows),[pending,setPending]=useState(''),[moveError,setMoveError]=useState('');
+  const moveFailure=useRef(null);
   const drag=useRef(null),busy=useRef(false),moveSnapshots=useRef(new Map()),revision=useRef(0),alive=useRef(true);
+  const checkFailure=async failure=>{
+    if(!failure||moveFailure.current!==failure||busy.current)return;
+    const serial=revision.current;busy.current=true;setPending(String(failure.row.kommo_lead_id));
+    try{
+      const result=await verifyKommoDealMove(failure.row,failure.stage,failure.context);
+      if(!result&&alive.current&&serial===revision.current&&moveFailure.current===failure){
+        moveFailure.current=null;
+        setMoveError(document.documentElement.lang==='ru'?'Не удалось проверить перенос: сохранённый запрос отсутствует.':document.documentElement.lang==='en'?'Cannot verify the move: its saved request is missing.':'Yerdəyişməni yoxlamaq mümkün deyil: saxlanmış sorğu yoxdur.');
+      }
+      if(result&&alive.current&&serial===revision.current&&moveFailure.current===failure){
+        moveFailure.current=null;setMoveError('');
+        moveSnapshots.current.set(String(result.kommo_lead_id),{row:result,confirmed:true,baseRevision:failure.row.source_revision,sourceRevision:result.source_revision});
+        setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===String(result.kommo_lead_id)?result:item));
+      }
+    }catch(error){
+      if(alive.current&&serial===revision.current&&moveFailure.current===failure){
+        setMoveError(error.message);
+        if(!hasPendingKommoDealMove(failure.row,failure.stage,failure.context))moveFailure.current=null;
+      }
+    }
+    finally{if(alive.current&&serial===revision.current){busy.current=false;setPending('');}}
+  };
+  useEffect(()=>{
+    const failure=moveFailure.current;if(!failure||busy.current)return;
+    const observed=rows.find(row=>String(row.kommo_lead_id)===String(failure.row.kommo_lead_id));
+    if(!observed||!canIdentifyKommoDeal(observed)||String(observed.pipeline_id)!==String(failure.row.pipeline_id)||String(observed.status_id)!==String(failure.stage)||observed.source_revision===failure.row.source_revision||observed.source_revision===failure.checkedRevision)return;
+    failure.checkedRevision=observed.source_revision;void checkFailure(failure);
+  },[rows,moveError,pending]);
   useEffect(()=>{setDisplayRows(previous=>rows.map(row=>{const key=String(row.kommo_lead_id),snapshot=moveSnapshots.current.get(key);if(!snapshot)return row;if(snapshot.confirmed&&snapshot.sourceRevision&&row.source_revision===snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}if(snapshot.confirmed&&snapshot.baseRevision&&row.source_revision&&row.source_revision!==snapshot.baseRevision&&row.source_revision!==snapshot.sourceRevision){moveSnapshots.current.delete(key);return row;}return snapshot.row||previous.find(item=>String(item.kommo_lead_id)===key)||row;}));},[rows]);
-  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;moveSnapshots.current.clear();busy.current=false;setPending('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};const invalid=()=>clear();document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',invalid);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',invalid);};},[]);
+  useEffect(()=>{alive.current=true;setDisplayRows(rows);const clear=()=>{revision.current++;drag.current=null;moveSnapshots.current.clear();moveFailure.current=null;busy.current=false;setPending('');setMoveError('');setDisplayRows([]);};let scope=dealProfileScope();const changed=event=>{const next=dealProfileScope(event.detail||{});if(!event.detail?.member||next!==scope){scope=next;clear();}};const invalid=()=>clear();document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-auth-invalid',invalid);return()=>{alive.current=false;clear();document.removeEventListener('tenant-profile',changed);document.removeEventListener('tenant-auth-invalid',invalid);};},[]);
   const targets=row=>moveSources.some(s=>String(s.pipeline_id)===String(row.pipeline_id)&&String(s.stage_id)===String(row.status_id))?moveTargets.filter(t=>String(t.pipeline_id)===String(row.pipeline_id)):[];
   const movable=row=>!!moveContext&&canIdentifyKommoDeal(row)&&!busy.current&&targets(row).length>0&&!!(row.raw?.updated_at||row.source_updated_at);
   const move=async(row,stage)=>{
+    if(moveFailure.current){void checkFailure(moveFailure.current);return;}
     if(!movable(row)||String(row.status_id)===String(stage)||!targets(row).some(t=>String(t.stage_id)===String(stage)))return;
     const serial=revision.current,key=String(row.kommo_lead_id),optimistic={...row,status_id:stage};busy.current=true;moveSnapshots.current.set(key,{row:optimistic,confirmed:false,sourceRevision:''});setPending(key);setMoveError('');
     setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?optimistic:item));
     try{const result=await moveKommoDeal(row,stage,moveContext);if(alive.current&&serial===revision.current){moveSnapshots.current.set(key,{row:result,confirmed:true,baseRevision:row.source_revision,sourceRevision:result.source_revision});setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?result:item));}}
-    catch(e){if(alive.current&&serial===revision.current){moveSnapshots.current.delete(key);setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?row:item));setMoveError(e.message);}}
+    catch(e){if(alive.current&&serial===revision.current){moveSnapshots.current.delete(key);if(hasPendingKommoDealMove(row,stage,moveContext))moveFailure.current={row,stage,context:moveContext,checkedRevision:null};setDisplayRows(values=>values.map(item=>String(item.kommo_lead_id)===key?row:item));setMoveError(e.message);}}
     finally{if(alive.current&&serial===revision.current){busy.current=false;setPending('');}}
   };
   const groups = useMemo(() => dealColumns(displayRows, catalog, hidden), [displayRows, catalog, hidden]);
   if (!groups.length) return <Empty>Kanbanda sövdələşmə yoxdur.</Empty>;
   return (
-    <Box>{completionApproval&&<Text fontSize="sm" color="app.muted">{document.documentElement.lang==='ru'?'Для успешного завершения используйте «Завершить сделку»: требуется подтверждение.':document.documentElement.lang==='en'?'Use Complete deal for successful completion: approval is required.':'Uğurlu tamamlamaq üçün «Sövdələşməni tamamla» istifadə edin: təsdiq tələb olunur.'}</Text>}{moveError&&<Text role="alert">{moveError}</Text>}<Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
+    <Box>{completionApproval&&<Text fontSize="sm" color="app.muted">{document.documentElement.lang==='ru'?'Для успешного завершения используйте «Завершить сделку»: требуется подтверждение.':document.documentElement.lang==='en'?'Use Complete deal for successful completion: approval is required.':'Uğurlu tamamlamaq üçün «Sövdələşməni tamamla» istifadə edin: təsdiq tələb olunur.'}</Text>}{moveError&&<Box><Text role="alert">{moveError}</Text>{moveFailure.current&&<Button size="sm" disabled={!!pending} onClick={()=>void checkFailure(moveFailure.current)}>{document.documentElement.lang==='ru'?'Проверить':document.documentElement.lang==='en'?'Check':'Yoxla'}</Button>}</Box>}<Flex data-horizontal-scroll="" gap="4" align="flex-start" overflowX="auto" pb="3">
       {groups.map(({key, pipeline, name: stage, appearance, rows: items}) => (
         <Box
           key={key}
