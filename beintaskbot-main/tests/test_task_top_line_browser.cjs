@@ -10,7 +10,7 @@ for(const width of [390,1440])for(const theme of ['light','dark'])for(const sour
  await page.addStyleTag({content:fs.readFileSync('ui/src/app-theme.css','utf8')});
  await page.evaluate(({source})=>{document.body.dataset.appUi='kwid';window.tenantChakraCRM.renderTasks([{id:'one',text:'Example task',status:'open',due_at:'2020-01-01'}],{source,target:source==='native'?'nativeTasksList':'tasksList'});},{source});
  await page.locator('[data-task-kanban]').waitFor();
- for(const selector of ['.task-source-panel','.task-source-panel>.table'])assert.equal(await page.locator(selector).evaluate(n=>getComputedStyle(n).borderTopWidth),'0px','no redundant upper line '+source);
+ for(const selector of ['.task-source-panel',source==='native'?'#nativeTasksList':'#tasksList'])assert.equal(await page.locator(selector).evaluate(n=>getComputedStyle(n).borderTopWidth),'0px','no redundant upper line '+source);
  assert.equal(await page.locator('[data-task-stage-header]').first().evaluate(n=>getComputedStyle(n).borderBottomWidth),'2px','stage underline retained');
  assert.equal(await page.locator('#other').evaluate(n=>getComputedStyle(n).borderTopWidth),'1px','unrelated panel unchanged');
  await page.getByRole('button',{name:'Таблица',exact:true}).click();
