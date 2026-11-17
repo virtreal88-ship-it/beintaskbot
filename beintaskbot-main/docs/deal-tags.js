@@ -22,7 +22,7 @@ async function openDealTagsEditor(draftId, leadId) {
         <header><b>Kommo teqləri</b><button type="button" data-close aria-label="Bağla">✕</button></header>
         <p class="tag-help">Teqi dəyişmək yalnız bu sövdələşməyə təsir edir.</p>
         <div data-current class="deal-tags-row"></div>
-        <label>Teq axtarın və ya yeni ad yazın<input data-query maxlength="100" placeholder="Teq adı" autocomplete="off"></label>
+        <label>Teq axtarın və ya yeni ad yazın<input type="search" data-query maxlength="100" placeholder="Teq adı" autocomplete="off"></label>
         <button type="button" data-add class="tag-action">+ Əlavə et</button>
         <div data-error role="status"></div><div data-catalog class="tag-catalog"></div>
         <button type="button" data-more class="tag-action" hidden>Daha çox</button>

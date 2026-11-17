@@ -29,7 +29,7 @@
     modal.innerHTML=`<section class="phone-duplicates-dialog" role="dialog" aria-modal="true" aria-label="Dublikatları tap">
       <header><b>Dublikatları tap</b><button type="button" data-close aria-label="Bağla">✕</button></header>
       <p style="font-size:13px;color:#61776d">Yalnız telefon nömrəsinə görə axtarılır. +994, 0 və yerli format eyni sayılır. Sövdələşmələr dəyişdirilmir.</p>
-      <form><input type="tel" inputmode="tel" maxlength="80" required aria-label="Telefon nömrəsi" placeholder="+99455…"><button type="submit">Axtar</button></form>
+      <form><input data-search-input type="tel" inputmode="tel" maxlength="80" required aria-label="Telefon nömrəsi" placeholder="+99455…"><button type="submit">Axtar</button></form>
       <div role="status"></div><div data-results></div></section>`;
     if(automatic){modal.innerHTML=`<section class="phone-duplicates-dialog" role="dialog" aria-modal="true" aria-label="${esc(c.title)}"><header><b>${esc(c.title)}</b><button type="button" data-close aria-label="${esc(c.close)}">✕</button></header><p>${esc(c.hint)}</p><div role="status" aria-live="polite"></div><div data-results></div></section>`;}
     document.body.append(modal);

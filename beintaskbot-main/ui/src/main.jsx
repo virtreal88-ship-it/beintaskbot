@@ -999,6 +999,8 @@ function LegacyIntegrationMarketplace() {
             <Input
               maxW={{ md: "360px" }}
               bg="app.surface"
+              type="search"
+              autoComplete="off"
               placeholder="İnteqrasiya axtarın"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -1663,6 +1665,8 @@ function IntegrationMarketplace() {
               h="10"
               bg="app.surface"
               borderRadius="xl"
+              type="search"
+              autoComplete="off"
               placeholder={tx("search")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}

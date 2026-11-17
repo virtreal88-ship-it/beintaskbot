@@ -1,0 +1,31 @@
+name: Search autofill safeguards
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/docs/**'
+      - 'beintaskbot-main/ui/src/main.jsx'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/tests/test_search_autofill*'
+      - '.github/workflows/search-autofill.yml'
+  workflow_dispatch:
+jobs:
+  search-inputs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix beintaskbot-main/.support-test-deps --no-save jsdom@26 playwright@1.56.1
+      - name: Search-only DOM and validation regression
+        working-directory: beintaskbot-main
+        env:
+          NODE_PATH: .support-test-deps/node_modules
+        run: node tests/test_search_autofill.cjs
+      - name: Chromium desktop and mobile input regression
+        working-directory: beintaskbot-main
+        env:
+          CHROMIUM_EXECUTABLE_PATH: /usr/bin/google-chrome
+        run: node tests/test_search_autofill_browser.cjs
