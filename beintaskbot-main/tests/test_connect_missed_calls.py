@@ -66,7 +66,7 @@ def test_additive_subscription_upgrade_readback_preserves_everything(monkeypatch
         return {'data':[{**before,'events':['custom.event','concurrent.event','call.missed','call.rejected','call.invalidated']}]}
     monkeypatch.setattr(transport,'_request',request)
     assert transport._upgrade_missed_call_subscription('test-key',before)
-    assert calls[0] == ('POST','/v1/webhooks/hook/events',{'add':['call.missed','call.rejected','call.invalidated'],'expectedUrl':before['url']})
+    assert calls[0] == ('POST','/v1/webhooks/hook/events',{'add':['call.missed'],'expectedUrl':before['url']})
     assert len(calls)==2 and all(c[0]!='PATCH' for c in calls)
 
 
@@ -130,8 +130,10 @@ def test_existing_missed_subscription_gains_rejected(monkeypatch):
         calls.append((method,path,data))
         return {'data':[{**hook,'events':[*hook['events'],'call.rejected','call.invalidated']}]}
     monkeypatch.setattr(transport,'_request',request)
-    assert transport._upgrade_missed_call_subscription('key',hook)
-    assert calls[0][2]['add']==['call.missed','call.rejected','call.invalidated']
+    assert not transport._upgrade_missed_call_subscription('key',hook)
+    assert calls == []
+    assert transport._upgrade_call_subscription('key',hook,transport.CONNECT_REJECTED_CALL_EVENTS)
+    assert calls[0][2]['add']==['call.rejected','call.invalidated']
     assert not transport._upgrade_missed_call_subscription('key',{**hook,'events':[*hook['events'],'call.rejected','call.invalidated']})
     assert len(calls)==2
 
@@ -155,3 +157,22 @@ def test_rejected_replay_and_source_hashed_identity(monkeypatch):
     assert record(cur,str(uuid.uuid4()),'channel','994700000091@s.whatsapp.net',42,rejected()['data'],'2026-11-15T09:00:00Z') is False
     params=cur.execute.call_args_list[0].args[1]
     assert params[5]=='call_rejected' and params[3].startswith('connect:call:')
+
+
+def test_explicit_rejected_activation_is_owner_and_destination_scoped(monkeypatch):
+    hook={'id':'hook','url':'https://crm.example/api/platform/connect/webhook','active':True,'events':['custom.event','call.missed']}
+    profile={'tenant_id':'authorized-tenant','telegram_id':123}
+    calls=[]
+    monkeypatch.setattr(transport,'_owner',lambda p: calls.append(('owner',p)))
+    monkeypatch.setattr(transport,'_stored_connect_credentials',lambda p: {'api_key':'synthetic','webhook_id':'hook'})
+    def request(key,method,path,data=None):
+        calls.append((method,path,data))
+        return {'data':[{**hook,'events':hook['events']+(['call.rejected','call.invalidated'] if any(c[0]=='POST' for c in calls) else [])}]}
+    monkeypatch.setattr(transport,'_request',request)
+    for wid,url in [('other',hook['url']),('hook','https://other.example/api/platform/connect/webhook')]:
+        with pytest.raises(ValueError):transport.enable_rejected_call_subscription(profile,expected_webhook_id=wid,expected_url=url)
+    assert not any(c[0]=='POST' for c in calls)
+    assert transport.enable_rejected_call_subscription(profile,expected_webhook_id='hook',expected_url=hook['url'])
+    posts=[c for c in calls if c[0]=='POST']
+    assert posts == [('POST','/v1/webhooks/hook/events',{'add':['call.rejected','call.invalidated'],'expectedUrl':hook['url']})]
+    assert calls[0]==('owner',profile)

@@ -30,6 +30,8 @@ from tenant_connect_direct_identity import (
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
 CONNECT_CALL_EVENTS = ('call.missed', 'call.rejected', 'call.invalidated')
+CONNECT_AUTO_CALL_EVENTS = ('call.missed',)
+CONNECT_REJECTED_CALL_EVENTS = ('call.rejected', 'call.invalidated')
 CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, *CONNECT_CALL_EVENTS)
 
 
@@ -796,8 +798,8 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
     return result
 
 
-def _upgrade_missed_call_subscription(api_key, current):
-    """Atomic additive endpoint; old Connect safely fails without any PATCH."""
+def _upgrade_call_subscription(api_key, current, additions):
+    """Atomic additive endpoint; never replace existing settings."""
     webhook_id = str(current.get('id') or '')
     url = str(current.get('url') or '')
     events = current.get('events')
@@ -806,18 +808,43 @@ def _upgrade_missed_call_subscription(api_key, current):
             or current.get('active') is not True
             or not isinstance(events, list) or any(not isinstance(x, str) for x in events)):
         raise ValueError('Invalid existing managed subscription')
-    if set(CONNECT_CALL_EVENTS).issubset(events):
+    if set(additions).issubset(events):
         return False
     _request(api_key, 'POST', '/v1/webhooks/' + webhook_id + '/events',
-             {'add': list(CONNECT_CALL_EVENTS), 'expectedUrl': url})
+             {'add': list(additions), 'expectedUrl': url})
     hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
     matches = [hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id]
     if (len(matches) != 1 or matches[0].get('url') != url
             or matches[0].get('active') is not current.get('active')
             or not isinstance(matches[0].get('events'), list)
-            or not set([*events, *CONNECT_CALL_EVENTS]).issubset(matches[0]['events'])):
+            or not set([*events, *additions]).issubset(matches[0]['events'])):
         raise ValueError('Subscription addition readback mismatch')
     return True
+
+
+def _upgrade_missed_call_subscription(api_key, current):
+    # Startup remains compatible with old Connect and never activates new types.
+    return _upgrade_call_subscription(api_key, current, CONNECT_AUTO_CALL_EVENTS)
+
+
+def enable_rejected_call_subscription(profile, *, expected_webhook_id, expected_url):
+    """Explicit single-tenant rollout only after all worker/Connect instances upgraded.
+
+    Internal deployment helper, not a public route or startup hook. The caller must
+    supply the authorized owner's profile and the previously verified destination.
+    Existing credentials, other events and active state are never replaced.
+    """
+    _owner(profile)
+    credentials = _stored_connect_credentials(profile)
+    webhook_id = str(credentials.get('webhook_id') or '')
+    if not expected_webhook_id or webhook_id != str(expected_webhook_id):
+        raise ValueError('Subscription scope mismatch')
+    key = str(credentials['api_key'])
+    hooks = _request(key, 'GET', '/v1/webhooks').get('data', [])
+    matches = [h for h in hooks if isinstance(h, dict) and str(h.get('id') or '') == webhook_id]
+    if len(matches) != 1 or matches[0].get('url') != expected_url:
+        raise ValueError('Subscription destination mismatch')
+    return _upgrade_call_subscription(key, matches[0], CONNECT_REJECTED_CALL_EVENTS)
 
 
 def sync_webhook_subscriptions() -> int:

@@ -36,8 +36,11 @@ The worker validates the exact event/status pairing. Both final statuses share
 one source+call-ID deduplication key; a contradictory final status fails closed
 rather than producing two timeline rows. These system events are excluded from
 AI context and return before conversation control or automatic replies. Existing
-managed webhook subscriptions add `call.rejected` alongside `call.missed`
-atomically, preserving all previous events and webhook settings. This release
+managed webhook startup synchronization adds only legacy `call.missed`. Rejected
+and invalidated require an explicit single-tenant activation after every Worker
+and Connect instance is upgraded; `enable_rejected_call_subscription` verifies
+the owner, stored webhook ID and expected URL, then adds both events atomically,
+preserving previous events and settings. There is no all-tenant activation. This release
 does not backfill historical calls or send test calls/messages.
 
 ## Correction protocol (local candidate; requires matching Connect release)
