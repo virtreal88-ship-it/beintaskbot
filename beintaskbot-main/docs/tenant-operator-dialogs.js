@@ -290,8 +290,14 @@
       return route.lifecycle_enabled&&state&&state.revision>Number(route.lifecycle?.revision??-1)?{...route,lifecycle:{...route.lifecycle,...state}}:route;
     };
     rows=rows.map(row=>row.group_sources?.length?{...reconcile(row),group_sources:row.group_sources.map(reconcile)}:reconcile(row));
-    const mode=queueMode(),matches=route=>mode==='all'||(['closed','dismissed'].includes(route.lifecycle?.state)===(mode==='completed'));
-    rows=rows.filter(row=>(row.group_sources||[row]).some(matches));
+    const mode=queueMode(),matches=route=>mode==='all'||(mode==='completed'?['closed','dismissed'].includes(route.lifecycle?.state):!['closed','dismissed'].includes(route.lifecycle?.state)&&!(route.lifecycle_enabled&&route.lifecycle?.state==='waiting'&&route.lifecycle.has_inbound===false));
+    rows=rows.flatMap(row=>{
+      if(!row.group_sources?.length)return matches(row)?[row]:[];
+      const sources=row.group_sources.filter(matches);if(!sources.length)return [];if(sources.length===row.group_sources.length)return [row];
+      // A matching sibling must not keep a completed/outgoing-only route as the card representative.
+      const representative=sources.find(source=>sameDialog(source,row))||sources.reduce((latest,source)=>(Date.parse(source.last_message_at)||0)>(Date.parse(latest.last_message_at)||0)?source:latest);
+      return [{...row,...representative,group_sources:sources,unread_count:Math.max(...sources.map(source=>Number(source.unread_count)||0))}];
+    });
   }
   function updateLifecycleList(route,state){
     rememberLifecycleListState(route,state);reconcileLifecycleRows();renderRows();

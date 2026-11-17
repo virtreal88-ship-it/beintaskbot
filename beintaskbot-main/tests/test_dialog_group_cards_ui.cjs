@@ -107,5 +107,20 @@ d.querySelector('[data-open-operator]').click();await tick();await tick();assert
 d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,telegram_id:44}}}));await tick();await tick();assert.equal(queue.value,'all','new identity resets view selection');
 queue.value='all';
 visible=[{...a,lifecycle_enabled:false}];await w.tenantOperator.refresh();await tick();assert(!d.querySelector('.operator-lifecycle-badge'),'legacy route gets no invented lifecycle');
+single=false;
+// Active is the actionable queue, not every route without a completion marker.
+const activeOutgoing={...outgoingOnly,lifecycle:{...outgoingOnly.lifecycle,revision:20}};
+const lifecyclePicker=d.querySelector('#operatorLifecycle');lifecyclePicker.value='active';
+visible=[activeOutgoing,{...b,unread_count:3,lifecycle:{...b.lifecycle,state:'accepted',revision:20,has_inbound:true}}];
+await w.tenantOperator.refresh();await tick();
+assert.equal(d.querySelectorAll('.operator-row').length,1);
+assert.equal(d.querySelector('.operator-lifecycle-badge').dataset.lifecycleState,'accepted');
+d.querySelector('.operator-row').click();await tick();await tick();assert.equal(new URL(calls.filter(c=>c.url.includes('/dialogs/history')).at(-1).url,'https://example.test').searchParams.get('channel_id'),b.channel_id,'active card representative must match surviving source');
+visible=[activeOutgoing];single=true;await w.tenantOperator.refresh();await tick();assert.equal(d.querySelectorAll('.operator-row').length,0,'no-inbound waiting route is not active work');
+lifecyclePicker.value='all';await w.tenantOperator.refresh();await tick();assert.equal(d.querySelectorAll('.operator-row').length,1,'all retains outgoing-only history');
+visible=[{...activeOutgoing,lifecycle:{...activeOutgoing.lifecycle,revision:21,has_inbound:true}}];lifecyclePicker.value='active';await w.tenantOperator.refresh();await tick();assert.equal(d.querySelectorAll('.operator-row').length,1,'fresh incoming returns route to active');assert.equal(d.querySelector('.operator-lifecycle-badge').dataset.lifecycleState,'waiting');
+lifecyclePicker.value='active';single=false;visible=[{...a,lifecycle:{...a.lifecycle,state:'closed',revision:22,has_inbound:true}},{...b,unread_count:3,lifecycle:{...b.lifecycle,state:'accepted',revision:22,has_inbound:true}}];await w.tenantOperator.refresh();await tick();assert.equal(d.querySelector('.operator-lifecycle-badge').dataset.lifecycleState,'accepted','completed sibling is not represented as active');
+lifecyclePicker.value='completed';await w.tenantOperator.refresh();await tick();assert.equal(d.querySelector('.operator-lifecycle-badge').dataset.lifecycleState,'closed','completed keeps only completed group sibling');
+lifecyclePicker.value='all';
 assert(!calls.some(c=>/send|dialogs_lifecycle/.test(c.url)));dom.window.close();console.log('PASS grouped card explicit source selection, refresh, no send or lifecycle mutation');
 })().catch(e=>{console.error(e);process.exitCode=1;});

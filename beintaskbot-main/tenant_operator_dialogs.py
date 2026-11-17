@@ -935,6 +935,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
             if lifecycle != 'all':
                 rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
+            if lifecycle == 'active' and rollout.enforced and not completion_preview:
+                # A source with only outgoing history has no active request.
+                # Keep it in All and in completion previews (for skip auditing),
+                # but filter physical routes before group folding and pagination.
+                rows=[r for r in rows if not (r.get('provider') == 'connect'
+                      and (r.get('lifecycle') or {}).get('state') == 'waiting'
+                      and (r.get('lifecycle') or {}).get('has_inbound') is False)]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,rows)
                 rows=[_hide_shared_ai(r) for r in rows]

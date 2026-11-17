@@ -137,7 +137,8 @@ def test_regular_list_distinguishes_no_incoming_without_read_side_effect(active)
     active.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s",(A,'connect:'+CA))
     active.commit()
     message(active,32,direction='outgoing')
-    listed=next(r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id']==41)
+    assert not any(r['lead_id']==41 for r in dialogs.listing(PROFILE,lifecycle='active')['dialogs'])
+    listed=next(r for r in dialogs.listing(PROFILE,lifecycle='all')['dialogs'] if r['lead_id']==41)
     detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
     assert listed['lifecycle']['has_inbound'] is False
     assert detail['lifecycle']['has_inbound'] is False
@@ -210,3 +211,50 @@ def test_lifecycle_mode_api_is_explicit_and_validated(active,monkeypatch):
     response=asyncio.run(handler(make_mocked_request('GET','/api/platform/ai/dialogs?lifecycle=all')))
     assert response.status==200 and read.call_args.kwargs=={'lifecycle':'all'}
     with pytest.raises(TenantLinearError): dialogs.listing(PROFILE,lifecycle='unrestricted')
+
+
+def test_active_filter_keeps_accepted_without_inbound_and_does_not_write(active):
+    from tenant_dialog_lifecycle import mutate
+    message(active,91)
+    mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,
+        action='accept',expected_revision=0,request_id=str(uuid.uuid4())))
+    active.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=41",(A,'connect:'+CA))
+    active.commit()
+    # Ordinary listing retains its existing read-cursor initialization; the filter
+    # must not create/update lifecycle or mark any new message read.
+    dialogs.listing(PROFILE,lifecycle='all')
+    tables=['saas_dialog_workflows','saas_dialog_episodes','saas_dialog_lifecycle_receipts','saas_tenant_audit_events','saas_operator_dialog_reads']
+    before={table:active.execute('SELECT count(*) AS n FROM '+table)[0]['n'] for table in tables}
+    result=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    row=next(r for r in result['dialogs'] if r['lead_id']==41)
+    assert row['lifecycle']['state']=='accepted' and row['lifecycle']['has_inbound'] is False
+    assert result['total_count']==len(result['dialogs'])
+    assert before=={table:active.execute('SELECT count(*) AS n FROM '+table)[0]['n'] for table in tables}
+
+
+def test_active_excludes_empty_routes_before_count_and_pagination(active):
+    message(active,92)
+    add_rows(active,61)
+    result=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    assert [r['lead_id'] for r in result['dialogs']]==[41]
+    assert result['total_count']==1 and result['next_offset'] is None
+    assert dialogs.listing(PROFILE,lifecycle='active',offset=50)['dialogs']==[]
+    all_result=dialogs.listing(PROFILE,lifecycle='all',all_rows=True,channel='connect:'+CA)
+    assert all_result['total_count']==62
+    assert {r['lead_id'] for r in all_result['dialogs']}=={41,*range(1001,1062)}
+    preview=dialogs.listing(PROFILE,lifecycle='active',completion_preview=True,all_rows=True,channel='connect:'+CA)
+    assert preview['total_count']==62  # Keep nonactionable sources for audit/skip summaries.
+
+
+@pytest.mark.parametrize('missing',[False,True])
+def test_active_keeps_unknown_inbound_metadata(active,monkeypatch,missing):
+    original=lifecycle.decorate
+    def unknown(*args,**kwargs):
+        row=original(*args,**kwargs)
+        if row.get('lifecycle'):
+            if missing:row['lifecycle'].pop('has_inbound',None)
+            else:row['lifecycle']['has_inbound']=None
+        return row
+    monkeypatch.setattr(lifecycle,'decorate',unknown)
+    result=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    assert any(row['lead_id']==41 for row in result['dialogs']), 'unknown is not confirmed outgoing-only'
