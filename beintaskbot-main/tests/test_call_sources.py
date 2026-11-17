@@ -134,6 +134,81 @@ def test_reject_unclaimed_call_without_accepting_dialog_and_accept_uses_episode(
     assert row=={'state':'accepted','operator_id':11}
 
 
+@pytest.mark.parametrize('previous',['closed','dismissed'])
+def test_new_incoming_reopens_queue_and_accept_assigns_exact_operator(managed,monkeypatch,previous):
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    from test_tenant_operator_workspace import employee
+    from test_dialog_source_scopes import grants
+    db,key,cfg=managed
+    person=employee(db,['dialogs'])
+    denied=employee(db,['dialogs'],actor=34)
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
+    grants(db,33,'self','self');grants(db,34,'self','self')
+    db.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s,%s,33,11)',(A,CA))
+    with db.cursor() as cur:
+        lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute('''INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at)
+      VALUES(%s,%s,%s,%s,%s,11,1,now()-interval '1 minute')''',(A,CA,CONVERSATION,str(uuid.uuid4()),previous))
+    db.commit()
+    calls.sync(cfg,snapshot(2,active=[provider(peer=CONVERSATION)]))
+    row=db.execute('SELECT state,operator_id,revision,last_inbound_id FROM saas_dialog_workflows')[0];db.commit()
+    assert row=={'state':'waiting','operator_id':None,'revision':2,'last_inbound_id':None}
+    incoming=calls.status(PROFILE)['calls'][0]
+    assert calls.status(person)['calls'][0]['id']==incoming['id']
+    assert calls.status(denied)['calls']==[]
+    with pytest.raises(TenantLinearError):calls.action(denied,command('accept',call_id=incoming['id'],media='websocket'))
+    accepted=calls.action(person,command('accept',call_id=incoming['id'],media='websocket'))
+    assert accepted['state']=='starting'
+    assert calls.status(PROFILE)['calls']==[]  # Owner cannot take another operator's accepted dialog.
+    row=db.execute('SELECT state,operator_id FROM saas_dialog_workflows')[0];db.commit()
+    assert row=={'state':'accepted','operator_id':33}
+    assert len(db.execute('SELECT id FROM saas_dialog_episodes'))==1;db.commit()
+
+
+def test_incoming_keeps_existing_assignee_and_replays_cannot_reopen(managed):
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    from test_tenant_operator_workspace import employee
+    db,key,cfg=managed;person=employee(db,['dialogs'])
+    with db.cursor() as cur:
+        lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute("INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision) VALUES(%s,%s,%s,%s,'accepted',33,1)",(A,CA,CONVERSATION,str(uuid.uuid4())));db.commit()
+    calls.sync(cfg,snapshot(2,active=[provider(peer=CONVERSATION)]))
+    assert calls.status(PROFILE)['calls']==[]
+    incoming=calls.status(person)['calls'][0]
+    assert db.execute('SELECT state,operator_id,revision FROM saas_dialog_workflows')==[{'state':'accepted','operator_id':33,'revision':1}];db.commit()
+    db.execute("UPDATE saas_dialog_workflows SET state='dismissed',closed_at=clock_timestamp(),revision=2");db.commit()
+    for seq in (2,3):calls.sync(cfg,snapshot(seq,active=[provider(peer=CONVERSATION)]))
+    with db.cursor() as cur:lifecycle.note_inbound_call(cur,A,CA,CONVERSATION,incoming['id'])
+    db.commit()
+    assert db.execute('SELECT state,revision FROM saas_dialog_workflows')==[{'state':'dismissed','revision':2}];db.commit()
+    calls.sync(cfg,snapshot(4,ended=[provider('ended',CONVERSATION)]))
+    calls.sync(cfg,snapshot(5,active=[provider(peer=CONVERSATION)]))
+    assert db.execute('SELECT state,revision FROM saas_dialog_workflows')==[{'state':'dismissed','revision':2}];db.commit()
+
+
+def test_cancel_failed_incoming_accept_without_admission_still_fences_retry(managed):
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    db,key,cfg=managed
+    with db.cursor() as cur:
+        lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+        transition(cur,A,mode='active',admission_enabled=False,expected_generation=1)
+    db.commit()
+    calls.sync(cfg,snapshot(2,active=[provider(peer=CONVERSATION)]))
+    incoming=calls.status(PROFILE)['calls'][0]
+    cmd=command('accept',call_id=incoming['id'],media='websocket')
+    with pytest.raises(TenantLinearError):calls.action(PROFILE,cmd)
+    cancelled=calls.action(PROFILE,{**cmd,'op':'end'})
+    assert cancelled['state']=='ending'
+    assert calls.sync(cfg,snapshot(3,active=[provider(peer=CONVERSATION)]))['commands'][0]['op']=='end'
+    assert not db.execute('SELECT id FROM saas_dialog_episodes');db.commit()
+    calls.sync(cfg,snapshot(4,ended=[provider('ended',CONVERSATION)]))
+    assert calls.status(PROFILE)['calls'][0]['state']=='ended'
+    with pytest.raises(TenantLinearError):calls.action(PROFILE,cmd)
+
+
 def test_gateway_database_auth_is_off_loop_and_bounded(monkeypatch):
     import asyncio,threading
     from aiohttp import web

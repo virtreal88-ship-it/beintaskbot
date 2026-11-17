@@ -4,6 +4,7 @@ on:
     paths:
       - 'beintaskbot-main/tenant_call_recording*.py'
       - 'beintaskbot-main/tenant_browser_calls*.py'
+      - 'beintaskbot-main/tenant_dialog_lifecycle.py'
       - 'beintaskbot-main/tenant_call_sources*.py'
       - 'beintaskbot-main/tenant_call_audio_storage.py'
       - 'beintaskbot-main/docs/tenant-call-sources.js'
