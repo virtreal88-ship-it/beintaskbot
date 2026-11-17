@@ -19,6 +19,7 @@ on:
       - 'beintaskbot-main/tests/test_kommo_pipeline_picker_browser.cjs'
       - 'beintaskbot-main/ui/src/kommo-deal-move.js'
       - 'beintaskbot-main/tests/test_deal_info_actions.cjs'
+      - 'beintaskbot-main/tests/test_deal_desktop_sidebar.cjs'
       - 'beintaskbot-main/tests/test_deal_stage_receipt_integration.cjs'
       - 'beintaskbot-main/tests/test_deal_stage_stale_notice.cjs'
       - '.github/workflows/kommo-reference-forms.yml'
@@ -78,6 +79,7 @@ jobs:
           node tests/test_kommo_note_create_ui.cjs
           node tests/test_task_date_note_browser.cjs
           node tests/test_deal_info_actions.cjs
+          node tests/test_deal_desktop_sidebar.cjs
           node tests/test_deal_stage_receipt_integration.cjs
           node tests/test_deal_stage_stale_notice.cjs
           node tests/test_tenant_deal_completion_ui.cjs
