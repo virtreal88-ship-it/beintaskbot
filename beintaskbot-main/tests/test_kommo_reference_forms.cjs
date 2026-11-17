@@ -29,7 +29,7 @@ const pause=()=>new Promise(resolve=>setTimeout(resolve,70));
  const stageOptions=()=>[...d.querySelectorAll('[data-stage-id]')].map(x=>x.dataset.stageId);
  const choose=value=>d.querySelector(`[data-stage-id="${value}"]`).click();
  let stage=await mountStage();assert.equal(stage.disabled,false);assert.deepEqual(stageOptions(),['10','11']);assert.equal(d.querySelectorAll('.deal-stage-bar').length,1);
- stage.click();assert.equal(d.querySelector('.deal-stage-picker').hidden,false);choose('11');assert.equal(moveCalls,1);assert.equal(stage.disabled,true);choose('11');assert.equal(moveCalls,1);resolveMove();await pause();assert.match(stage.textContent,/Working/);assert.equal(stageDeal.status_id,11);assert.equal(host.querySelector('.meta>div:nth-child(3)').textContent,'StageWorking');
+ stage.click();assert.equal(d.querySelector('.deal-stage-picker').hidden,false);choose('11');assert.equal(moveCalls,1);assert.equal(stage.disabled,true);choose('11');assert.equal(moveCalls,1);resolveMove();await pause();assert.match(stage.textContent,/Working/);assert.equal(stageDeal.status_id,11);
  stage.click();choose('10');rejectMove();await pause();assert.match(stage.textContent,/Working/);assert.match(d.querySelector('.deal-stage-bar [role=status]').textContent,/Denied/);assert.equal(stage.disabled,false);
  stage.click();choose('10');cardCurrent=false;resolveMove();await pause();assert.equal(stageDeal.status_id,11,'stale card cannot update current deal');cardCurrent=true;
  stage=await mountStage({...policy,move_stage_sources:[]});assert.equal(stage.disabled,true,'read-only role cannot change stage');assert.equal(d.querySelectorAll('.deal-stage-picker').length,1,'reopening replaces picker');

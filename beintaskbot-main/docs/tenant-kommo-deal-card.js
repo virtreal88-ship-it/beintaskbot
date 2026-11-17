@@ -106,7 +106,6 @@
       };
       pipelineSelect.onchange=renderChoices;
       trigger.onclick=()=>{if(trigger.disabled||!current())return;render();picker.hidden=false;trigger.setAttribute('aria-expanded','true');(pipelineSelect.disabled?dismiss:pipelineSelect).focus();};
-      const updateMeta=()=>{const stageMeta=info.querySelector('.meta>div:nth-child(3)');if(stageMeta?.querySelector('b')){const label=stageMeta.querySelector('b');stageMeta.replaceChildren(label,document.createTextNode(stageRow.stage_name));}};
       const choose=async(targetPipeline,target)=>{
         if(busy||!current()||!permitted()||!targetsFor(targetPipeline).some(t=>String(t.stage_id)===target))return;
         if(target===String(stageRow.status_id)&&targetPipeline===String(stageRow.pipeline_id))return;
@@ -118,13 +117,13 @@
             const result=await window.tenantDealCompletion.request(stageRow.kommo_lead_id,policy.move_context);
             if(!current()||result.cancelled)return;
             if(result.approval_pending){feedback.textContent='Təsdiq gözləyir';return;}
-            if(result.completed){stageRow={...stageRow,source_revision:null,status_id:142,stage_name:catalog?.stages?.find(t=>Number(t.stage_id)===142)?.name||'Uğurla tamamlandı'};Object.assign(deal,stageRow);updateMeta();return;}
+            if(result.completed){stageRow={...stageRow,source_revision:null,status_id:142,stage_name:catalog?.stages?.find(t=>Number(t.stage_id)===142)?.name||'Uğurla tamamlandı'};Object.assign(deal,stageRow);return;}
             throw Error('Completion unavailable');
           }
           const updated=await window.tenantKommoStageMove.move(stageRow,target,policy.move_context,targetPipeline);
           if(!current())return;
           stageRow={...updated,pipeline_name:catalog?.name||stageRow.pipeline_name,stage_name:catalog?.stages?.find(t=>String(t.stage_id)===target)?.name||stageRow.stage_name};
-          Object.assign(deal,stageRow);updateMeta();
+          Object.assign(deal,stageRow);
           document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete',{detail:{tenant_id:policy.move_context.tenant_id,resources:['leads']}}));
         }catch(error){if(current())feedback.textContent=error.message||'Stage update failed';}
         finally{busy=false;if(current()){render();if(!trigger.disabled&&(picker.contains(document.activeElement)||document.activeElement===document.body))trigger.focus();}}

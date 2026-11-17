@@ -3,6 +3,9 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const read=name=>fs.readFileSync(path.join(__dirname,'../docs',name),'utf8');
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
+ const dealTemplate=read('tenant-app.html').split('async function openDeal(id)')[1].split('const profileCopy=')[0];
+ assert(!dealTemplate.includes('<div class="meta">'),'Info does not repeat client, phone, stage or internal ID');
+ assert(dealTemplate.includes('data-duplicate-search'),'duplicate search remains available');
  const dom=new JSDOM(read('tenant-app.html'),{url:'https://fixture.test/app?view=deals&lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[],errors=[],manual=[];
  try{
  w.addEventListener('error',e=>errors.push(e.error));w.alert=()=>{};w.confirm=()=>false;

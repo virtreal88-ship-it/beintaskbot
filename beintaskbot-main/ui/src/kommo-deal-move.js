@@ -18,9 +18,17 @@ export async function moveKommoDeal(row, target, context, targetPipeline=row.pip
   if(saved&&(String(saved.stage_id)!==String(target)||String(saved.target_pipeline_id||saved.expected_pipeline_id)!==String(targetPipeline)))throw Error(message('previous'));
   const command=saved||{...payload,request_id:crypto.randomUUID()};
   try{sessionStorage.setItem(key,JSON.stringify(command));}catch{throw Error(message('saved'));}
+  const verifyUrl='/api/platform/crm/deals/move-stage?'+new URLSearchParams({request_id:command.request_id,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id});
   let response,result;
-  try{response=saved?await fetch('/api/platform/crm/deals/move-stage?'+new URLSearchParams({request_id:command.request_id,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id}),{credentials:'same-origin'}):await fetch('/api/platform/crm/deals/move-stage',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({...command,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id})});result=await response.json();}
+  try{response=saved?await fetch(verifyUrl,{credentials:'same-origin'}):await fetch('/api/platform/crm/deals/move-stage',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({...command,expected_tenant_id:context.tenant_id,expected_user_id:context.user_id})});result=await response.json();}
   catch{throw Error(message('unknown'));}
+  // Kommo can acknowledge a PATCH before a following read reflects it. Resolve
+  // that explicit uncertain receipt once using the saved command's GET route.
+  // Never repeat a write, replace its request ID, or retry rejected preflight.
+  if(!saved&&!response.ok&&result.error==='board_outcome_unknown'&&result.keep_request!==false){
+    try{response=await fetch(verifyUrl,{credentials:'same-origin'});result=await response.json();}
+    catch{throw Error(message('unknown'));}
+  }
   if(!response.ok||!result.success){if(result.keep_request===false)sessionStorage.removeItem(key);throw Error(message(result.error==='kommo_stage_forbidden'?'denied':result.error==='kommo_deal_changed'?'changed':result.error==='board_source_sync_required'?'refresh':'unknown'));}
   if(result.state!=='confirmed'||String(result.lead_id)!==String(row.kommo_lead_id)||String(result.pipeline_id)!==String(targetPipeline)||String(result.status_id)!==String(target)||!Number.isSafeInteger(result.updated_at)||!/^[a-f0-9]{64}$/.test(result.source_revision||''))throw Error(message('receipt'));
   sessionStorage.removeItem(key);
