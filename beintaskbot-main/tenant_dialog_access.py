@@ -101,13 +101,17 @@ def allowed_channels(cur,tenant,policy,action='view',*,conversation=None):
     return channels
 
 
-def apply_capabilities(cur,tenant,policy,dialog):
+def apply_capabilities(cur,tenant,policy,dialog,*,_list_access=None):
     """UI is a projection of the same independent server action scopes."""
     if not policy.has_scoped_access('dialogs'):
-        if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'])
+        if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'],_list_access=_list_access)
         return dialog
     can_update=True
-    try:require_source(cur,tenant,policy,dialog['provider'],dialog['channel_id'],'update')
+    try:
+        if _list_access is None:
+            require_source(cur,tenant,policy,dialog['provider'],dialog['channel_id'],'update')
+        else:
+            can_update=_list_access.update[(dialog['provider'],str(dialog['channel_id']))]
     except TenantLinearError:can_update=False
     dialog['can_send']=bool(dialog.get('can_send') and can_update)
     if not can_update:dialog['send_block_reason']='permission_denied'
@@ -121,7 +125,7 @@ def apply_capabilities(cur,tenant,policy,dialog):
         dialog['resume_allowed']=False
         dialog.pop('agent_assignment',None)
         dialog.pop('group_assignment_preview',None)
-    if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'])
+    if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'],_list_access=_list_access)
     return dialog
 
 
@@ -241,10 +245,14 @@ def require_independent_ai(policy,*,management=False):
         raise TenantLinearError('Для этого действия требуется отдельное право AI.',403)
 
 
-def filter_group(cur,tenant,policy,group):
+def filter_group(cur,tenant,policy,group,*,_list_access=None):
     from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-    if scope(policy) is None and not lifecycle_enabled(cur, tenant):return group
-    allowed=set(allowed_channels(cur,tenant,policy,conversation=group.get('group_jid')) or [])
+    if _list_access is not None:
+        allowed=_list_access.groups.get(group.get('group_jid'))
+        if allowed is None:return group
+    else:
+        if scope(policy) is None and not lifecycle_enabled(cur, tenant):return group
+        allowed=set(allowed_channels(cur,tenant,policy,conversation=group.get('group_jid')) or [])
     group['channels']=[c for c in group.get('channels',[]) if str(c['channel_id']) in allowed]
     group['assignments']=[a for a in group.get('assignments',[]) if str(a.get('channel_id')) in allowed]
     if str(group.get('sending_channel_id')) not in allowed:
