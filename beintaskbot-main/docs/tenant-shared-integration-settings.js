@@ -23,7 +23,7 @@
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   for (const provider of ['beinsystems','connect']) {
-    let profile, epoch=0;
+    let profile, epoch=0,stopCallIndicators;
     const id='sharedIntegration-'+provider;
     async function request(path, payload) {
       const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...(payload?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{})});
@@ -71,13 +71,14 @@
             const tr=document.createElement('tr');body.append(tr);
             const cell=value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);return td;};
             const name=cell(channel.name||channel.id);cell(channel.phone?String(channel.phone).replace(/^\+?/, '+'):'—');cell(channel.pipeline_name||'—');
-            const status=cell(''),badge=document.createElement('span');badge.className='connect-number-status';badge.dataset.state=channel.phoneConflict?'warning':['connected','authenticated'].includes(String(channel.status).toLowerCase())?'connected':'other';badge.textContent=channel.phoneConflict?t.conflict:(channel.status||t.unknown);status.append(badge);
+            const status=cell(''),badge=document.createElement('span');badge.className='connect-number-status';badge.dataset.state=channel.phoneConflict?'warning':['connected','authenticated'].includes(String(channel.status).toLowerCase())?'connected':'other';badge.textContent=channel.phoneConflict?t.conflict:(channel.status||t.unknown);status.append(badge);const callIcon=document.createElement('span');callIcon.dataset.callStatusChannel=channel.id;status.append(callIcon);
             const controls=cell('');controls.className='connect-number-actions';
             const actionButton=(label,action,scope)=>{if(!actions[scope])return;const b=document.createElement('button');b.type='button';b.className='outline';b.textContent=label;b.onclick=async()=>{b.disabled=true;try{if(current!==epoch)return;const result=await post({action,channel_id:channel.id},scope);if(!result)return;if(action==='channel_status'){channel.status=result.status||channel.status;channel.phone=result.phone||channel.phone;render();}else if(actions.view){const feedback=[...message.childNodes];await loadChannels(false);if(current===epoch&&!message.textContent)message.replaceChildren(...feedback);}}catch(e){if(current===epoch)message.textContent=e.message;}finally{if(current===epoch)b.disabled=false;}};controls.append(b);};
             if(channel.active||channel.linked){actionButton('Status','channel_status','view');if(!channel.phoneConflict)actionButton('Yenidən qoş','reconnect_channel','update');if(channel.active)actionButton('Ayır','disconnect_channel','delete');}
             else if(adding&&write&&!channel.phoneConflict){const choice=document.createElement('input');choice.type='checkbox';choice.value=channel.id;choice.setAttribute('aria-label',channel.name||channel.id);name.prepend(choice);}
             if(profile.member?.role==='owner'&&channel.active&&!channel.phoneConflict){const calls=document.createElement('button');calls.type='button';calls.className='outline';calls.textContent='Zənglər';calls.dataset.connectCalls=channel.id;controls.append(calls);}
           }
+          stopCallIndicators?.();stopCallIndicators=window.tenantCallSourceIndicators?.mount(list,channels,data.member,{isCurrent:()=>current===epoch});
           if(!body.children.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.textContent=t.empty;tr.append(td);body.append(tr);}
         };
         const retry=button(t.retry,()=>loadChannels(false));retry.hidden=true;
@@ -99,6 +100,6 @@
         render();if(actions.view)void loadChannels(false);
       }
     }
-    window.tenantViewDemand.watch({provider,editable:'#'+id,resetOnHide:true,activate:install,reset:()=>{epoch++;profile=null;$(id)?.remove();}});
+    window.tenantViewDemand.watch({provider,editable:'#'+id,resetOnHide:true,activate:install,reset:()=>{epoch++;stopCallIndicators?.();profile=null;$(id)?.remove();}});
   }
 })();

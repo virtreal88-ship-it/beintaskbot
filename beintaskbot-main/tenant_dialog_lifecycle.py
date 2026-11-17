@@ -203,6 +203,32 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     # Do not resume a manually paused AI or the group coordinator as a side effect.
 
 
+def note_inbound_call(cur, tenant, channel, conversation, call_id):
+    """A newly persisted live inbound call is a new queue item, not a message.
+
+    The authenticated gateway calls this only on first insertion. A duplicate,
+    ended call or call predating the latest close cannot reopen the dialog.
+    Accepted dialogs retain their operator; acceptance still uses mutate().
+    """
+    if not enabled(cur, tenant): return
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_connect_dialog_equivalence import canonical
+    physical = conversation
+    conversation = canonical(cur, tenant, channel, physical)
+    lock_dialog(cur, tenant, 'connect', channel, conversation)
+    if canonical(cur, tenant, channel, physical) != conversation: return
+    cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',
+      operator_id=NULL,id=%s::uuid,revision=w.revision+1,updated_at=clock_timestamp()
+      FROM saas_browser_calls c
+      WHERE w.tenant_id=%s::uuid AND w.channel_id=%s::uuid AND w.conversation_id=%s
+        AND w.state IN ('closed','dismissed')
+        AND c.id=%s::uuid AND c.tenant_id=w.tenant_id AND c.channel_id=w.channel_id
+        AND c.conversation_id=%s AND c.direction='inbound' AND c.state='incoming'
+        AND c.actor_id IS NULL AND c.created_at>w.closed_at""",
+      (str(uuid.uuid4()),tenant,channel,conversation,str(call_id),physical))
+    # Keep message history, completed episodes and manually paused AI untouched.
+
+
 def _targets(cur, tenant, policy, channel, actor):
     from tenant_scoped_access_store import read_access_profile
     from tenant_policy import TenantPolicy

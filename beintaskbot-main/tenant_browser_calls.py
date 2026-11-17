@@ -168,6 +168,7 @@ def offer(profile,route):
 def _public(row,actor):
     return {'id':str(row['id']),'state':row['state'],'direction':row['direction'],
         'channel_id':str(row['channel_id']),'conversation_id':row['conversation_id'],'lead_id':row['lead_id'],
+        'display_name':str(row.get('display_name') or '')[:120],
         'owned':row['actor_id']==actor,'claimed':row['actor_id'] is not None,
         'created_at':row['created_at'].isoformat(),'recording_state':row['recording_state'],
         'recording_id':str(row['recording_id']) if row.get('recording_id') else None}
@@ -193,8 +194,12 @@ def status(profile,request_id=None,heartbeat=True):
 def _source_status(cur,profile,c,tenant,actor,request_id,heartbeat):
         cur.execute('SELECT *,last_seen>now()-interval \'10 seconds\' AS fresh FROM saas_browser_call_gateways WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid',(tenant,c['gateway_id']))
         gateway=cur.fetchone()
-        cur.execute('''SELECT * FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid
-          AND (state NOT IN ('ended','failed') OR updated_at>now()-interval '10 minutes') ORDER BY created_at DESC LIMIT 20''',(tenant,c['gateway_id']))
+        cur.execute('''SELECT bc.*,COALESCE(NULLIF(cv.manual_display_name,''),NULLIF(cv.display_name,''),cv.contact_name,'') AS display_name
+          FROM saas_browser_calls bc LEFT JOIN saas_connect_conversations cv
+          ON cv.tenant_id=bc.tenant_id AND cv.connect_channel_id=bc.channel_id
+            AND cv.conversation_id=bc.conversation_id AND cv.lead_id=bc.lead_id
+          WHERE bc.tenant_id=%s::uuid AND bc.gateway_id=%s::uuid
+          AND (bc.state NOT IN ('ended','failed') OR bc.updated_at>now()-interval '10 minutes') ORDER BY bc.created_at DESC LIMIT 20''',(tenant,c['gateway_id']))
         calls=[]
         for row in cur.fetchall():
             try:authorize(cur,profile,row,c)
@@ -265,7 +270,10 @@ def action(profile,data):
             tenant,actor,_=access(cur,profile,'dialogs',action='update')
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('browser-call-actor:'+tenant+':'+str(actor),))
         _lock(cur,c)
-        actor,target=authorize(cur,profile,data,c,write=True,require_accepted=op!='reject')
+        # Cancelling a failed/pending accept must not first require a successful
+        # dialog admission. Fresh source grants and exact call ownership below
+        # remain mandatory, as for rejecting an unclaimed incoming call.
+        actor,target=authorize(cur,profile,data,c,write=True,require_accepted=op not in {'reject','end'})
         cur.execute('SELECT *,last_seen>now()-interval \'10 seconds\' AS fresh FROM saas_browser_call_gateways WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid FOR UPDATE',(c['tenant_id'],c['gateway_id']))
         gateway=cur.fetchone()
         if op in {'start','accept'}:
@@ -410,9 +418,13 @@ def sync(c,data):
                         if not data['connected']:continue
                         target=exact_route(cur,c,peer=item['peer_jid'],create_incoming=True)
                     else:target=c['routes'][item['peer_jid']]
+                    incoming_id=uuid.uuid4()
                     cur.execute('''INSERT INTO saas_browser_calls(id,tenant_id,gateway_id,boot_id,channel_id,conversation_id,lead_id,peer_jid,
                       provider_id,direction,state) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'inbound','incoming')''',
-                      (uuid.uuid4(),c['tenant_id'],c['gateway_id'],boot,c['channel_id'],target['conversation_id'],target['lead_id'],item['peer_jid'],item['provider_id']))
+                      (incoming_id,c['tenant_id'],c['gateway_id'],boot,c['channel_id'],target['conversation_id'],target['lead_id'],item['peer_jid'],item['provider_id']))
+                    if c.get('managed'):
+                        from tenant_dialog_lifecycle import note_inbound_call
+                        note_inbound_call(cur,c['tenant_id'],c['channel_id'],target['conversation_id'],incoming_id)
             cur.execute('''UPDATE saas_browser_call_commands q SET payload='{}'::jsonb,result=result-'sdp_answer'
               FROM saas_browser_calls c WHERE c.id=q.call_id AND c.tenant_id=%s::uuid AND c.state IN ('ended','failed')''',(c['tenant_id'],))
             cur.execute('''INSERT INTO saas_browser_call_gateways(tenant_id,gateway_id,boot_id,seq,connected)
