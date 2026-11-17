@@ -11,7 +11,7 @@
 #dealModal>.modal-card>.modal-head{flex:none;padding:12px 16px;margin:0}
 #dealModal>.modal-card>#modalContent{flex:1;min-height:0;overflow:auto}
 #dealModal.show>.modal-card{animation:deal-slide-in 180ms ease-out both}
-@keyframes deal-slide-in{from{transform:translateX(100%)}to{transform:translateX(0)}}
+@keyframes deal-slide-in{from{transform:translateX(100%)}to{transform:none}}
 @media(prefers-reduced-motion:reduce){#dealModal.show>.modal-card{animation:none}}
 
 /* Reference: 1080px capture at 3x, 812x76px pill across a 10px stage line. */

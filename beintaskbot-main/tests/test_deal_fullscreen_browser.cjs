@@ -11,7 +11,7 @@ for(const width of [320,390,768,1024,1440])for(const theme of ['light','dark']){
  const assertViewport=async()=>{await card.evaluate(async n=>{await Promise.all(n.getAnimations().map(a=>a.finished));});const b=await card.boundingBox();assert(Math.abs(b.x)<1&&Math.abs(b.y)<1&&Math.abs(b.width-width)<1&&Math.abs(b.height-900)<1,'edge-to-edge '+width+' '+theme+' '+JSON.stringify(b));assert.equal(await card.evaluate(n=>getComputedStyle(n).borderRadius),'0px');assert.equal(await card.evaluate(n=>getComputedStyle(n).borderTopWidth),'0px');assert(await card.evaluate(n=>n.scrollWidth<=n.clientWidth+1),'no card horizontal overflow');};
  await page.evaluate(()=>{document.getElementById('modalContent').textContent='Loading…';document.getElementById('dealModal').classList.add('show');});
  assert.equal(await card.evaluate(n=>getComputedStyle(n).animationName),'deal-slide-in');
- const frames=await card.evaluate(n=>n.getAnimations()[0]?.effect.getKeyframes().map(f=>f.transform));assert.deepEqual(frames,['translateX(100%)','translateX(0px)'],'opens from right to left');
+ const frames=await card.evaluate(n=>n.getAnimations()[0]?.effect.getKeyframes().map(f=>f.transform));assert.deepEqual(frames,['translateX(100%)','none'],'opens from right to left');
  await assertViewport();
  await page.evaluate(()=>{const host=document.getElementById('modalContent');host.innerHTML='<div class="chat-placeholder"><div id="chatRows">History</div><div><textarea id="chatText"></textarea></div></div>';tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'0551234567'},isCurrent:()=>true});});
  await assertViewport();
