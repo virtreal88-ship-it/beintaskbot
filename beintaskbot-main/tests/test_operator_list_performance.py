@@ -215,3 +215,34 @@ def test_active_lifecycle_uses_one_batch_workflow_snapshot(fixture):
         return [sql for sql in statements if sql.startswith('SELECT * FROM saas_dialog_workflows WHERE tenant_id=')]
     assert len(workflow_reads(before_sql))==len(workflow_reads(after_sql))==1
     assert len(before_sql)==len(after_sql), 'workflow projection must not add per-route SQL'
+
+
+def test_active_group_list_batches_guards_and_retains_capabilities(fixture, monkeypatch):
+    from tenant_dialog_lifecycle import migrate
+    from tenant_dialog_rollout import transition
+    import tenant_dialog_access as access
+    with fixture.cursor() as cur:
+        migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    fixture.commit()
+    def add_groups(start, end):
+        for n in range(start, end):
+            fixture.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,
+              conversation_id,lead_id,conversation_kind,contact_name,last_message_at)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'group','Synthetic group',now())''',
+              (A, CA, str(120363001000+n)+'@g.us', 9000+n))
+        fixture.commit()
+    add_groups(0, 1)
+    small, small_sql = measured(fixture, dialogs.listing)
+    add_groups(1, 61)
+    optimized, optimized_sql = measured(fixture, dialogs.listing)
+    assert optimized['total_count'] == 62
+    assert len(optimized_sql) == len(small_sql), 'guard round trips must not grow per group'
+    old_apply = access.apply_capabilities
+    def legacy_apply(cur, tenant, policy, dialog, **_kwargs):
+        return old_apply(cur, tenant, policy, dialog)
+    monkeypatch.setattr(access, 'apply_capabilities', legacy_apply)
+    legacy, legacy_sql = measured(fixture, dialogs.listing)
+    assert optimized == legacy
+    assert len(legacy_sql) > len(optimized_sql) + 600
+    print(f'ACTIVE GROUP GUARDS 1→61: statements {len(small_sql)}→{len(optimized_sql)}, legacy {len(legacy_sql)}')
