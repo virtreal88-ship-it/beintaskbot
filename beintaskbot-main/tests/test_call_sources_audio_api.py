@@ -45,3 +45,34 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch):
                     assert ended.type in {WSMsgType.CLOSE,WSMsgType.CLOSED}
                 assert connections==[f'/v1/sources/{gateway}/audio/provider-synthetic/{call}']
     asyncio.run(run())
+
+
+def test_prebrowser_provider_backlog_hits_existing_rate_guard_safely(monkeypatch):
+    """Reproduce the old ordering: 3 seconds PCM queued before browser readiness.
+
+    Keep this guard. Engine now starts the provider only after browser PCM, so
+    this initial burst cannot accumulate during command/poll/auth round trips.
+    """
+    async def run():
+        tenant='00000000-0000-0000-0000-000000000001';call='00000000-0000-0000-0000-000000000002'
+        profile={'tenant_id':tenant,'telegram_id':11};logger=Mock()
+        async def engine(request):
+            socket=web.WebSocketResponse();await socket.prepare(request)
+            for _ in range(50):await socket.send_bytes(bytes(1920))
+            async for _ in socket:pass
+            return socket
+        private=web.Application();private.router.add_get('/v1/sources/g/audio/p/{call}',engine)
+        async with TestServer(private) as upstream:
+            monkeypatch.setattr(sources,'service',lambda:(str(upstream.make_url('')).rstrip('/'),'x'*48))
+            monkeypatch.setattr(sources,'audio_authority',lambda *a:('g','p',call))
+            app=web.Application();app.router.add_get('/calls/{call_id}/audio',handler(lambda _:profile,'https://app.invalid',logger,'audio'))
+            async with TestClient(TestServer(app)) as client:
+                url=f'/calls/{call}/audio?expected_tenant_id={tenant}&expected_user_id=11&request_id=synthetic'
+                async with client.ws_connect(url,headers={'Origin':'https://app.invalid'}) as socket:
+                    while True:
+                        message=await asyncio.wait_for(socket.receive(),3)
+                        if message.type!=WSMsgType.BINARY:break
+                logger.info.assert_called_once_with(
+                    'call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
+                    'provider_rate_limit',False,True)
+    asyncio.run(run())

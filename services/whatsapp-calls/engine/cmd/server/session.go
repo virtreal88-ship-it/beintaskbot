@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"wacalls/internal/recording"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
@@ -49,11 +50,15 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 func (s *Session) createCall(callID string) *call.CallManager {
 	cm := call.NewCallManager(wa.NewSocket(s.client), s.log)
 	s.wireCall(cm, callID)
-	ac := &activeCall{cm: cm}
+	ac := &activeCall{cm: cm, id: callID}
 	if !s.reg.addBounded(callID, ac, s.mgr.maxCalls) {
 		return nil
 	}
-	ac.timer.Store(time.AfterFunc(2*time.Minute, func() {
+	seconds := recording.MaxSeconds
+	if s.mgr.recordings != nil && s.mgr.recordings.cfg.Managed {
+		seconds = recording.ManagedMaxSeconds
+	}
+	ac.timer.Store(time.AfterFunc(time.Duration(seconds)*time.Second, func() {
 		if current, ok := s.reg.get(callID); ok && current == ac {
 			ac.interrupted.Store(true)
 			s.terminateCall(callID, core.EndCallReasonUserEnded)
@@ -309,19 +314,31 @@ func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
 	if !ok {
 		return
 	}
+	ac.launchMu.Lock()
+	defer ac.launchMu.Unlock()
+	if ac.prepared.Load() && ac.cm.CurrentCall() == nil {
+		s.removeCall(callID)
+		s.mgr.broker.endCall(callID, "cancelled_before_provider")
+		return
+	}
 	_ = ac.cm.EndCall(context.Background(), reason)
 }
 
 func (s *Session) teardownAllCalls() {
 	for _, ac := range s.reg.drain() {
+		ac.launchMu.Lock()
 		ac.interrupted.Store(true)
 		_ = ac.cm.EndCall(context.Background(), core.EndCallReasonUserEnded)
+		if ac.prepared.Load() && ac.cm.CurrentCall() == nil {
+			s.mgr.broker.endCall(ac.id, "cancelled_before_provider")
+		}
 		if bridge := ac.bridge.Swap(nil); bridge != nil {
 			bridge.Close()
 		}
 		if h := ac.recording.Load(); h != nil {
 			h.finish(false)
 		}
+		ac.launchMu.Unlock()
 	}
 }
 

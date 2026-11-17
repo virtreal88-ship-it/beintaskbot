@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/types"
+	"sync/atomic"
+	"wacalls/internal/recording"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
 	"wacalls/internal/wa"
@@ -54,13 +56,14 @@ type appResult struct {
 	NotStarted bool   `json:"not_started,omitempty"`
 }
 type appGateway struct {
-	server  *server
-	cfg     appGatewayConfig
-	boot    string
-	seq     int64
-	client  *http.Client
-	mu      sync.Mutex
-	retired []string
+	server    *server
+	cfg       appGatewayConfig
+	boot      string
+	seq       int64
+	client    *http.Client
+	mu        sync.Mutex
+	retired   []string
+	uploading atomic.Bool
 }
 
 func newAppGateway(s *server, path string) (*appGateway, error) {
@@ -147,7 +150,13 @@ func (g *appGateway) request(ctx context.Context, path, mime string, data []byte
 	}
 	req.Header.Set("Authorization", "Bearer "+g.cfg.Token)
 	req.Header.Set("Content-Type", mime)
-	response, err := g.client.Do(req)
+	client := g.client
+	if mime == "application/zip" {
+		copyClient := *g.client
+		copyClient.Timeout = 90 * time.Second
+		client = &copyClient
+	}
+	response, err := client.Do(req)
 	if err != nil {
 		return nil, errors.New("gateway_unreachable")
 	}
@@ -181,6 +190,7 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	g.seq++
 	result := map[string]any{"boot_id": g.boot, "seq": g.seq, "connected": info.State == "open" && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account, "active": active, "ended": ended}
 	if g.cfg.Managed {
+		result["max_seconds"] = recording.ManagedMaxSeconds
 		result["closed_process_boots"] = append([]string{}, g.retired...)
 	}
 	return result
@@ -242,14 +252,16 @@ func (g *appGateway) run(ctx context.Context) {
 		}
 		for _, item := range envelope.Result.Recordings {
 			if item.Saved {
+				g.acknowledgeRecording(item.ProviderID)
 				continue
 			}
-			data, e := g.bundle(item.ProviderID)
-			if e != nil {
+			if !g.canUpload(item.ProviderID) {
 				continue
 			}
-			_, _ = g.request(ctx, "/recording?call_id="+url.QueryEscape(item.CallID), "application/zip", data)
-			break // bounded upload work; sync/termination remains responsive
+			if g.uploading.CompareAndSwap(false, true) {
+				go g.uploadRecording(ctx, item.ProviderID, item.CallID)
+			}
+			break // upload cannot block control polling or termination
 		}
 	}
 }
@@ -385,9 +397,17 @@ func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand)
 			out.Error = "microphone_setup_failed"
 			return out
 		}
-		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		err = cm.StartCall(callCtx, id, resolved, false)
+		start := func() error {
+			callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return cm.StartCall(callCtx, id, resolved, false)
+		}
+		if g.cfg.Managed {
+			g.armManaged(sess, id, start)
+			out.OK = true
+			return out
+		}
+		err = start()
 		if err != nil {
 			ac.interrupted.Store(true)
 			sess.terminateCall(id, core.EndCallReasonUserEnded)
@@ -413,16 +433,12 @@ func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand)
 		out.Error = "microphone_setup_failed"
 		return out
 	}
-	payload := []byte(`{"record":true,"consent_confirmed":true}`)
-	req := httptest.NewRequest("POST", "/", bytes.NewReader(payload))
-	acceptCtx, acceptCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer acceptCancel()
-	req = req.WithContext(acceptCtx)
-	req.SetPathValue("id", cmd.ProviderID)
-	req.Header.Set("X-Client-Id", owner)
-	response := httptest.NewRecorder()
-	g.server.doAccept(sess, response, req)
-	if response.Code != 200 {
+	if g.cfg.Managed {
+		g.armManaged(sess, cmd.ProviderID, func() error { return g.acceptManagedProvider(sess, cmd.ProviderID, owner) })
+		out.OK = true
+		return out
+	}
+	if err = g.acceptProvider(sess, cmd.ProviderID, owner); err != nil {
 		out.Error = "recording_unavailable"
 		return out
 	}
@@ -430,12 +446,83 @@ func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand)
 	out.SDP = answer
 	return out
 }
+
+func (g *appGateway) acceptProvider(sess *Session, id, owner string) error {
+	payload := []byte(`{"record":true,"consent_confirmed":true}`)
+	req := httptest.NewRequest("POST", "/", bytes.NewReader(payload))
+	acceptCtx, acceptCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer acceptCancel()
+	req = req.WithContext(acceptCtx)
+	req.SetPathValue("id", id)
+	req.Header.Set("X-Client-Id", owner)
+	response := httptest.NewRecorder()
+	g.server.doAccept(sess, response, req)
+	if response.Code != 200 {
+		return errors.New("provider_accept_failed")
+	}
+	return nil
+}
+
+// Command acknowledgement prepares the exact call. Starting the provider waits
+// for browser PCM so initial audio never accumulates before the browser opens.
+func (g *appGateway) armManaged(sess *Session, id string, start func() error) {
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		return
+	}
+	bridge := ac.bridge.Load()
+	if bridge == nil || bridge.stream == nil {
+		return
+	}
+	bridge.stream.setStart(func() error {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		ac.launchMu.Lock()
+		defer ac.launchMu.Unlock()
+		select {
+		case <-bridge.stream.done:
+			return errors.New("call_closed")
+		default:
+		}
+		current, exists := sess.reg.get(id)
+		if !exists || current != ac || ac.bridge.Load() != bridge {
+			return errors.New("call_closed")
+		}
+		return start()
+	})
+}
+
+func (g *appGateway) acceptManagedProvider(sess *Session, id, owner string) error {
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		return errors.New("call_closed")
+	}
+	rec, ok := g.server.broker.getCall(id)
+	if !ok || rec.SessionID != sess.id || rec.Owner == nil || *rec.Owner != owner {
+		return errors.New("call_scope_changed")
+	}
+	h, err := g.server.recordings.begin(sess.id, id, g.cfg.Account, rec.Peer)
+	if err != nil {
+		return err
+	}
+	if !sess.reg.attachRecording(id, ac, h) {
+		h.finish(false)
+		return errors.New("call_closed")
+	}
+	rec.Recording = true
+	g.server.broker.upsertCall(*rec)
+	g.server.broker.emitIncomingClaimed(sess.id, id, owner)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return ac.cm.AcceptCall(ctx, id)
+}
 func (g *appGateway) makeBridge(sess *Session, id, owner, sdp string) (string, error) {
 	if g.cfg.Managed {
 		ac, ok := sess.reg.get(id)
 		if !ok {
 			return "", errors.New("call_ended")
 		}
+		ac.prepared.Store(true)
 		ac.setupMu.Lock()
 		defer ac.setupMu.Unlock()
 		if ac.bridge.Load() != nil {
@@ -450,6 +537,8 @@ func (g *appGateway) makeBridge(sess *Session, id, owner, sdp string) (string, e
 			}
 		}, func() {
 			go func() {
+				g.mu.Lock()
+				defer g.mu.Unlock()
 				if current, ok := sess.reg.get(id); ok && current == ac {
 					ac.interrupted.Store(true)
 					sess.terminateCall(id, core.EndCallReasonUserEnded)

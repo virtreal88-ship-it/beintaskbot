@@ -90,7 +90,7 @@ class Supervisor:
         data=self.sources[source]['data'];folder=self.root/source;b=data['binding']
         atomic_json(folder/'gateway.json',{'managed':True,'endpoint':self.endpoint,'token':b['gateway_token'],
                     'account_jid':b['account_jid'],'allowed_peers':[]})
-        atomic_json(folder/'recordings.json',{'managed':True,'account_jid':b['account_jid'],'allowed_peers':[],
+        atomic_json(folder/'recordings.json',{'capacity_dir':str(self.root),'managed':True,'account_jid':b['account_jid'],'allowed_peers':[],
                     'signing_seed':data['signing_seed'],'encryption_key':data['encryption_key']})
         fd=os.open(folder/'http-token',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
         with os.fdopen(fd,'w') as target:target.write(data['http_token'])

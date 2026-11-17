@@ -4,11 +4,12 @@ import json
 from aiohttp import web
 from tenant_ai_agents_api import _origin, _expected
 from tenant_linear_policy import TenantLinearError
-from tenant_call_recording_bundle import MAX_BUNDLE
+from tenant_call_recording_bundle import MAX_BUNDLE, MAX_MANAGED_BUNDLE
 import tenant_browser_calls as store
 
 HEADERS={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}
 SLOTS=asyncio.Semaphore(4)
+RECORDING_SLOTS=asyncio.Semaphore(1)
 
 
 async def body(request,limit):
@@ -25,12 +26,14 @@ async def body(request,limit):
 def handler(member,origin,logger,resource='browser'):
     async def handle(request):
         try:
-            if SLOTS.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
+            slots=RECORDING_SLOTS if resource=='recording' else SLOTS
+            if slots.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
             if resource in {'sync','recording'}:
                 if request.headers.get('Origin') or request.headers.get('Cookie'):raise TenantLinearError('gateway_access_denied',403)
-                async with SLOTS:
+                async with slots:
                     cfg=await asyncio.to_thread(store.gateway_auth,request.headers.get('Authorization',''))
-                    raw=await body(request,MAX_BUNDLE if resource=='recording' else 128*1024)
+                    limit=(MAX_MANAGED_BUNDLE if cfg.get('managed') else MAX_BUNDLE) if resource=='recording' else 128*1024
+                    raw=await asyncio.wait_for(body(request,limit),90)
                     if resource=='recording':
                         if request.content_type!='application/zip':raise TenantLinearError('recording_type_invalid',400)
                         result=await asyncio.to_thread(store.save_recording,cfg,request.query.get('call_id'),raw)
@@ -40,7 +43,7 @@ def handler(member,origin,logger,resource='browser'):
                 profile=member(request)
                 if not profile:raise TenantLinearError('Войдите в программу.',403)
                 _expected(request.query,profile)
-                async with SLOTS:
+                async with slots:
                     if request.method=='GET':result=await asyncio.to_thread(store.status,profile,request.query.get('request_id'),request.query.get('heartbeat')!='0')
                     else:
                         _origin(request,origin)

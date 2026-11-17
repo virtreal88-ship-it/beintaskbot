@@ -18,6 +18,7 @@ import (
 
 const Rate = 16000
 const MaxSeconds = 120
+const ManagedMaxSeconds = 900
 const MaxSamples = Rate * MaxSeconds
 
 type Manifest struct {
@@ -42,28 +43,29 @@ type Manifest struct {
 }
 
 type Capture struct {
-	mu        sync.Mutex
-	start     time.Time
-	tracks    [2][]int16
-	cursor    [2]int
-	manifest  Manifest
-	closed    bool
-	truncated bool
+	mu         sync.Mutex
+	start      time.Time
+	tracks     [2][]int16
+	cursor     [2]int
+	manifest   Manifest
+	closed     bool
+	truncated  bool
+	maxSamples int
 }
 
 func New(session, call, account, peer string, start time.Time) *Capture {
-	return newCapture(session, call, account, peer, start, 24*time.Hour)
+	return newCapture(session, call, account, peer, start, 24*time.Hour, MaxSeconds)
 }
 
 // NewManaged keeps the signed business recording for the owner-approved 30 days.
 // The engine's local delivery spool still expires after 24 hours; Worker owns
 // the durable recording and its retention, independently of pairing/lab expiry.
 func NewManaged(session, call, account, peer string, start time.Time) *Capture {
-	return newCapture(session, call, account, peer, start, 30*24*time.Hour)
+	return newCapture(session, call, account, peer, start, 30*24*time.Hour, ManagedMaxSeconds)
 }
 
-func newCapture(session, call, account, peer string, start time.Time, retention time.Duration) *Capture {
-	return &Capture{start: start, manifest: Manifest{Version: 1, SessionID: session, CallID: call,
+func newCapture(session, call, account, peer string, start time.Time, retention time.Duration, seconds int) *Capture {
+	return &Capture{start: start, maxSamples: Rate * seconds, manifest: Manifest{Version: 1, SessionID: session, CallID: call,
 		AccountJID: account, PeerJID: peer, StartedAt: start.UTC().Format(time.RFC3339Nano),
 		ExpiresAt:  start.Add(retention).UTC().Format(time.RFC3339Nano),
 		SampleRate: Rate, Channels: []string{"employee", "caller"}, Consent: true}}
@@ -90,11 +92,11 @@ func (c *Capture) Add(side int, pcm []float32, now time.Time) {
 	if position > c.cursor[side]+Rate/5 && c.cursor[side] > 0 {
 		c.manifest.Gaps[side]++
 	}
-	if position >= MaxSamples {
+	if position >= c.maxSamples {
 		c.truncated = true
 		return
 	}
-	count := min(len(pcm), MaxSamples-position)
+	count := min(len(pcm), c.maxSamples-position)
 	if count < len(pcm) {
 		c.truncated = true
 	}
@@ -127,7 +129,7 @@ func (c *Capture) Finish(now time.Time, graceful bool, seed []byte) ([]byte, Man
 	if len(seed) != ed25519.SeedSize {
 		return nil, Manifest{}, errors.New("recording_key_invalid")
 	}
-	frames := min(MaxSamples, max(len(c.tracks[0]), len(c.tracks[1]), int(now.Sub(c.start).Seconds()*Rate)))
+	frames := min(c.maxSamples, max(len(c.tracks[0]), len(c.tracks[1]), int(now.Sub(c.start).Seconds()*Rate)))
 	if frames < 1 {
 		return nil, Manifest{}, errors.New("recording_empty")
 	}
@@ -173,6 +175,7 @@ func (c *Capture) Finish(now time.Time, graceful bool, seed []byte) ([]byte, Man
 	}
 	sig := ed25519.Sign(ed25519.NewKeyFromSeed(seed), manifest)
 	var out bytes.Buffer
+	out.Grow(len(wav) + 16384)
 	z := zip.NewWriter(&out)
 	for _, part := range []struct {
 		name string

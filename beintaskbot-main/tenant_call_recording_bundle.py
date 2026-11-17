@@ -9,7 +9,10 @@ from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from tenant_linear_policy import TenantLinearError
 
-MAX_AUDIO = 44 + 16000 * 4 * 120
+MAX_SECONDS = 120
+MANAGED_MAX_SECONDS = 900
+MAX_AUDIO = 44 + 16000 * 4 * MAX_SECONDS
+MAX_MANAGED_BUNDLE = 44 + 16000 * 4 * MANAGED_MAX_SECONDS + 16384
 MAX_BUNDLE = MAX_AUDIO + 16384
 
 
@@ -33,7 +36,7 @@ def _unique_object(pairs):
     return result
 
 
-def decode(data, public_key, *, now=None, retention_hours=24):
+def decode(data, public_key, *, now=None, retention_hours=24, max_seconds=MAX_SECONDS):
     """Signature authenticates the exact manifest; its hash authenticates WAV.
 
     Caller pins the public key to one configured source and checks the route.
@@ -44,11 +47,14 @@ def decode(data, public_key, *, now=None, retention_hours=24):
         # Selected by the trusted source binding, never by uploaded metadata.
         if type(retention_hours) is not int or retention_hours not in (24, 30*24):
             raise ValueError('retention policy')
-        if not isinstance(data, bytes) or not 100 < len(data) <= MAX_BUNDLE:
+        if type(max_seconds) is not int or max_seconds not in (MAX_SECONDS, MANAGED_MAX_SECONDS):
+            raise ValueError('duration policy')
+        max_audio = 44 + 16000 * 4 * max_seconds
+        if not isinstance(data, bytes) or not 100 < len(data) <= max_audio + 16384:
             raise ValueError('size')
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             files = archive.infolist()
-            limits = {'manifest.json': 8192, 'signature.ed25519': 64, 'recording.wav': MAX_AUDIO}
+            limits = {'manifest.json': 8192, 'signature.ed25519': 64, 'recording.wav': max_audio}
             if len(files) != 3 or {f.filename for f in files} != set(limits):
                 raise ValueError('entries')
             for f in files:
@@ -73,10 +79,10 @@ def decode(data, public_key, *, now=None, retention_hours=24):
             raise ValueError('peer')
         start, end, expiry = [timestamp(manifest.get(k)) for k in ('started_at', 'ended_at', 'expires_at')]
         if not (now - timedelta(hours=24) < start <= end <= now + timedelta(seconds=30)
-                and end-start <= timedelta(seconds=125) and now < expiry <= start + timedelta(hours=retention_hours)):
+                and end-start <= timedelta(seconds=max_seconds+5) and now < expiry <= start + timedelta(hours=retention_hours)):
             raise ValueError('time bounds')
         duration = manifest.get('duration_ms')
-        if type(duration) is not int or not 1 <= duration <= 120000:
+        if type(duration) is not int or not 1 <= duration <= max_seconds*1000:
             raise ValueError('duration')
         if manifest.get('sample_rate') != 16000 or manifest.get('channels') != ['employee', 'caller']:
             raise ValueError('format')

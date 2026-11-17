@@ -11,7 +11,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from tenant_call_recording_bundle import timestamp
+from tenant_call_recording_bundle import timestamp, MANAGED_MAX_SECONDS, MAX_SECONDS
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 from tenant_platform import _connect, _json
@@ -26,6 +26,7 @@ def migrate(cur):
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, gateway_id UUID NOT NULL, boot_id UUID NOT NULL,
       last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), seq BIGINT NOT NULL DEFAULT 0,
       connected BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY(tenant_id,gateway_id))''')
+    cur.execute('ALTER TABLE saas_browser_call_gateways ADD COLUMN IF NOT EXISTS max_seconds INTEGER NOT NULL DEFAULT 120')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_browser_calls (
       id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, gateway_id UUID NOT NULL,
       boot_id UUID NOT NULL, channel_id UUID NOT NULL, conversation_id TEXT NOT NULL,
@@ -188,7 +189,7 @@ def status(profile,request_id=None,heartbeat=True):
             sources.append(source);calls.extend(items)
     return {'enabled':bool(sources),'online':any(s['online'] for s in sources),'sources':sources,
             'test_number':sources[0]['number'] if len(sources)==1 else '',
-            'calls':calls,'max_seconds':120,'retention_hours':sources[0]['retention_hours'] if len(sources)==1 else 720}
+            'calls':calls,'max_seconds':max((s['max_seconds'] for s in sources),default=MAX_SECONDS),'retention_hours':sources[0]['retention_hours'] if len(sources)==1 else 720}
 
 
 def _source_status(cur,profile,c,tenant,actor,request_id,heartbeat):
@@ -217,7 +218,7 @@ def _source_status(cur,profile,c,tenant,actor,request_id,heartbeat):
                     item['audio_ready']=bool(c.get('managed') and result['result'].get('ok') and row.get('provider_id'))
             calls.append(item)
         return {'channel_id':c['channel_id'],'online':bool(gateway and gateway['fresh'] and gateway['connected'] and (not c.get('managed') or c['ready'])),
-            'max_seconds':120,'number':c['account_jid'].split('@')[0],
+            'max_seconds':gateway.get('max_seconds',MAX_SECONDS) if gateway else MAX_SECONDS,'number':c['account_jid'].split('@')[0],
             'media':c.get('media','webrtc'),'retention_hours':c.get('retention_hours',24),'permanent':bool(c.get('managed'))},calls
 
 
@@ -427,10 +428,11 @@ def sync(c,data):
                         note_inbound_call(cur,c['tenant_id'],c['channel_id'],target['conversation_id'],incoming_id)
             cur.execute('''UPDATE saas_browser_call_commands q SET payload='{}'::jsonb,result=result-'sdp_answer'
               FROM saas_browser_calls c WHERE c.id=q.call_id AND c.tenant_id=%s::uuid AND c.state IN ('ended','failed')''',(c['tenant_id'],))
-            cur.execute('''INSERT INTO saas_browser_call_gateways(tenant_id,gateway_id,boot_id,seq,connected)
-              VALUES(%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET
-              boot_id=EXCLUDED.boot_id,seq=EXCLUDED.seq,connected=EXCLUDED.connected,last_seen=now()''',
-              (c['tenant_id'],c['gateway_id'],boot,seq,data['connected']))
+            cur.execute('''INSERT INTO saas_browser_call_gateways(tenant_id,gateway_id,boot_id,seq,connected,max_seconds)
+              VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET
+              boot_id=EXCLUDED.boot_id,seq=EXCLUDED.seq,connected=EXCLUDED.connected,max_seconds=EXCLUDED.max_seconds,last_seen=now()''',
+              (c['tenant_id'],c['gateway_id'],boot,seq,data['connected'],
+               MANAGED_MAX_SECONDS if c.get('managed') and data.get('max_seconds')==MANAGED_MAX_SECONDS else MAX_SECONDS))
         cur.execute("SELECT *,browser_seen<now()-interval '15 seconds' AS browser_gone FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND state NOT IN ('ended','failed') AND actor_id IS NOT NULL",(c['tenant_id'],c['gateway_id'],boot))
         for row in cur.fetchall():
             try:
@@ -461,7 +463,8 @@ def save_recording(c,call_id,bundle):
     from tenant_call_recordings import persist
     try:call_id=str(uuid.UUID(str(call_id)))
     except (ValueError,TypeError):raise TenantLinearError('recording_call_invalid',400) from None
-    manifest,wav=decode(bundle,bytes.fromhex(c['public_key']),retention_hours=720 if c.get('managed') else 24)
+    manifest,wav=decode(bundle,bytes.fromhex(c['public_key']),retention_hours=720 if c.get('managed') else 24,
+                        max_seconds=MANAGED_MAX_SECONDS if c.get('managed') else MAX_SECONDS)
     encoded=None
     if c.get('managed'):
         from tenant_call_audio_storage import compress

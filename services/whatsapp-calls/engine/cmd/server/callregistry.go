@@ -9,6 +9,9 @@ import (
 )
 
 type activeCall struct {
+	id          string
+	launchMu    sync.Mutex
+	prepared    atomic.Bool
 	recording   atomic.Pointer[recordingHandle]
 	interrupted atomic.Bool
 	cm          *call.CallManager

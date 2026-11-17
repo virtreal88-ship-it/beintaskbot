@@ -258,3 +258,15 @@ def test_managed_restart_requires_closed_process_proof_and_fences_late_boot(mana
     with pytest.raises(TenantLinearError,match='retired_process'):
         calls.sync(cfg,snapshot(101,ended=[provider('ended',CONVERSATION,'outbound','provider-managed')]))
     assert db.execute('SELECT state FROM saas_browser_calls WHERE id=%s',(new['id'],))[0]['state']=='starting';db.commit()
+
+
+def test_duration_advertises_only_fresh_actual_engine_capability(managed):
+    db,key,cfg=managed
+    assert calls.status(PROFILE)['sources'][0]['max_seconds']==120
+    calls.sync(cfg,{**snapshot(2),'max_seconds':900})
+    assert calls.status(PROFILE)['sources'][0]['max_seconds']==900
+    calls.sync(cfg,snapshot(2))
+    assert calls.status(PROFILE)['sources'][0]['max_seconds']==900
+    with pytest.raises(TenantLinearError):calls.sync(cfg,snapshot(1))
+    calls.sync(cfg,snapshot(3))
+    assert calls.status(PROFILE)['sources'][0]['max_seconds']==120

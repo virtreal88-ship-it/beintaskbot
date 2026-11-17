@@ -19,11 +19,22 @@ def migrate(cur):
       id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, lead_id BIGINT NOT NULL,
       actor_id BIGINT NOT NULL, call_digest TEXT NOT NULL, bundle_digest TEXT NOT NULL,
-      duration_ms INTEGER NOT NULL CHECK(duration_ms BETWEEN 1 AND 120000),
+      duration_ms INTEGER NOT NULL CHECK(duration_ms BETWEEN 1 AND 900000),
       complete BOOLEAN NOT NULL, end_code TEXT NOT NULL, encrypted BYTEA,
       happened_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(tenant_id,channel_id,call_digest))''')
+    # Compatible widening, once per existing table. Keep a named CHECK; no data
+    # changes and no admission of longer legacy imports (decoder stays at 120s).
+    cur.execute("""DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='saas_test_call_recordings'::regclass
+        AND conname='saas_test_call_recordings_duration_ms_check'
+        AND pg_get_constraintdef(oid) LIKE '%120000%') THEN
+        ALTER TABLE saas_test_call_recordings DROP CONSTRAINT saas_test_call_recordings_duration_ms_check;
+        ALTER TABLE saas_test_call_recordings ADD CONSTRAINT saas_test_call_recordings_duration_ms_check
+          CHECK(duration_ms BETWEEN 1 AND 900000);
+      END IF;
+    END $$""")
     cur.execute('ALTER TABLE saas_test_call_recordings ADD COLUMN IF NOT EXISTS browser_call_id UUID')
     cur.execute("ALTER TABLE saas_test_call_recordings ADD COLUMN IF NOT EXISTS audio_type TEXT NOT NULL DEFAULT 'audio/wav'")
     cur.execute('CREATE INDEX IF NOT EXISTS saas_test_call_recordings_expiry ON saas_test_call_recordings(expires_at) WHERE encrypted IS NOT NULL')
