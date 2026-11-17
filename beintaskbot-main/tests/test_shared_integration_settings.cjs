@@ -34,6 +34,7 @@ function harness(provider, actions, role='worker', linearSettings={}){
  }
  // Existing connection: linking selected numbers with an empty key must confirm.
  const link=harness('connect',{view:true,create:false,update:true,delete:false});
+ await tick();assert.equal(JSON.parse(link.calls[0].body).action,'channels');link.calls.length=0;
  const list=link.w.document.createElement('input');list.type='checkbox';list.checked=true;list.value='new-channel';
  link.w.document.querySelector('#sharedIntegration-connect > div').append(list);
  const linkButton=[...link.w.document.querySelectorAll('button')].find(b=>b.textContent==='Seçilmiş nömrələri qoş');
@@ -42,7 +43,7 @@ function harness(provider, actions, role='worker', linearSettings={}){
  assert.equal(list.checked,true,'declined link retains selection');
  link.w.confirm=message=>{link.confirmations.push(message);return true;};
  linkButton.click();await tick();
- assert.equal(link.calls.length,1);
+ assert.equal(link.calls.filter(c=>JSON.parse(c.body||'{}').action!=='channels').length,1);
  const linkBody=JSON.parse(link.calls[0].body);
  assert.equal(linkBody.api_key,'');assert.deepEqual(linkBody.channel_ids,['new-channel']);
  assert.equal(linkBody.confirm_company_impact,true);

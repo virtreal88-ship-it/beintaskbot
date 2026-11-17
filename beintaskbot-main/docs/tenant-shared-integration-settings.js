@@ -57,18 +57,45 @@
           });
           disconnect.dataset.disconnectById='true';
         }
-        if(actions.view || write)button('Kanalları göstər',async()=>{
-          const key=panel.querySelector('[data-key]')?.value||'';
-          const result=await post({action:'channels',api_key:key},key?(connected(profile,provider)?'update':'create'):'view');if(!result)return;
+        const labels={az:{name:'Ad',number:'Nömrə',pipeline:'Satış xətti',status:'Status',add:'+ Nömrə əlavə et',empty:'Qoşulmuş nömrə yoxdur.',loading:'Nömrələr yüklənir…',retry:'Yenidən yoxla',available:'Mövcud nömrələri yüklə',save:'Seçilmiş nömrələri qoş',conflict:'Nömrə konflikti',unknown:'Məlum deyil'},ru:{name:'Имя',number:'Номер',pipeline:'Воронка',status:'Статус',add:'+ Добавить номер',empty:'Нет подключённых номеров.',loading:'Загрузка номеров…',retry:'Повторить',available:'Загрузить доступные номера',save:'Подключить выбранные номера',conflict:'Конфликт номера',unknown:'Неизвестно'},en:{name:'Name',number:'Number',pipeline:'Pipeline',status:'Status',add:'+ Add number',empty:'No connected numbers.',loading:'Loading numbers…',retry:'Retry',available:'Load available numbers',save:'Connect selected numbers',conflict:'Phone conflict',unknown:'Unknown'}};
+        const t=labels[window.tenantI18n?.language]||labels.az;
+        let channels=[],adding=false,loading=false,readSerial=0;
+        list.className='connect-numbers-wrap';
+        const keyLabel=panel.querySelector('[data-key]')?.closest('label');if(keyLabel)keyLabel.hidden=true;
+        const render=()=>{
           list.replaceChildren();
-          for(const channel of result.channels||[]){
-            const entry=document.createElement('div');entry.textContent=`${channel.name||channel.id} · ${channel.status||''}`;list.append(entry);
-            const actionButton=(label,action,scope)=>{if(!actions[scope])return;const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=async()=>{b.disabled=true;try{if(current!==epoch)return;await post({action,channel_id:channel.id},scope);}catch(e){if(current===epoch)message.textContent=e.message;}finally{if(current===epoch)b.disabled=false;}};entry.append(b);};
-            if(channel.active || channel.linked){actionButton('Status','channel_status','view');if(!channel.phoneConflict)actionButton('Yenidən qoş','reconnect_channel','update');if(channel.active)actionButton('Ayır','disconnect_channel','delete');}
-            else if(write&&!channel.phoneConflict){const choice=document.createElement('input');choice.type='checkbox';choice.value=channel.id;entry.prepend(choice);}
+          const table=document.createElement('table');table.className='connect-numbers-table';
+          table.innerHTML=`<thead><tr>${[t.name,t.number,t.pipeline,t.status,''].map(text=>`<th scope="col">${esc(text)}</th>`).join('')}</tr></thead><tbody></tbody>`;list.append(table);
+          const body=table.querySelector('tbody');
+          for(const channel of channels.filter(c=>adding||c.active||c.linked)){
+            const tr=document.createElement('tr');body.append(tr);
+            const cell=value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);return td;};
+            const name=cell(channel.name||channel.id);cell(channel.phone?String(channel.phone).replace(/^\+?/, '+'):'—');cell(channel.pipeline_name||'—');
+            const status=cell(''),badge=document.createElement('span');badge.className='connect-number-status';badge.dataset.state=channel.phoneConflict?'warning':['connected','authenticated'].includes(String(channel.status).toLowerCase())?'connected':'other';badge.textContent=channel.phoneConflict?t.conflict:(channel.status||t.unknown);status.append(badge);
+            const controls=cell('');controls.className='connect-number-actions';
+            const actionButton=(label,action,scope)=>{if(!actions[scope])return;const b=document.createElement('button');b.type='button';b.className='outline';b.textContent=label;b.onclick=async()=>{b.disabled=true;try{if(current!==epoch)return;const result=await post({action,channel_id:channel.id},scope);if(!result)return;if(action==='channel_status'){channel.status=result.status||channel.status;channel.phone=result.phone||channel.phone;render();}else if(actions.view){const feedback=[...message.childNodes];await loadChannels(false);if(current===epoch&&!message.textContent)message.replaceChildren(...feedback);}}catch(e){if(current===epoch)message.textContent=e.message;}finally{if(current===epoch)b.disabled=false;}};controls.append(b);};
+            if(channel.active||channel.linked){actionButton('Status','channel_status','view');if(!channel.phoneConflict)actionButton('Yenidən qoş','reconnect_channel','update');if(channel.active)actionButton('Ayır','disconnect_channel','delete');}
+            else if(adding&&write&&!channel.phoneConflict){const choice=document.createElement('input');choice.type='checkbox';choice.value=channel.id;choice.setAttribute('aria-label',channel.name||channel.id);name.prepend(choice);}
           }
-        });
-        if(write)button('Seçilmiş nömrələri qoş',async()=>{const key=panel.querySelector('[data-key]');const channel_ids=[...list.querySelectorAll('input:checked')].map(input=>input.value);if(!channel_ids.length)throw new Error('Kanal seçin.');await post({api_key:key.value,channel_ids},connected(profile,provider)?'update':'create');key.value='';});
+          if(!body.children.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.textContent=t.empty;tr.append(td);body.append(tr);}
+        };
+        const retry=button(t.retry,()=>loadChannels(false));retry.hidden=true;
+        const loadChannels=async(useKey=false)=>{
+          if(loading||current!==epoch)return;loading=true;const serial=++readSerial;retry.hidden=true;message.textContent=t.loading;list.setAttribute('aria-busy','true');
+          try{
+            const key=useKey?(panel.querySelector('[data-key]')?.value||''):'';
+            const payload=command(profile,provider,{action:'channels',api_key:key},key?(connected(profile,provider)?'update':'create'):'view');
+            const result=await request('/api/platform/integrations/connect',payload);
+            if(current!==epoch||serial!==readSerial)return;channels=result.channels||[];message.textContent='';render();
+          }catch(e){if(current===epoch&&serial===readSerial){message.textContent=e.message;retry.hidden=!actions.view;}}
+          finally{if(current===epoch&&serial===readSerial){loading=false;list.removeAttribute('aria-busy');}}
+        };
+        if(write){
+          const add=button(t.add,()=>{adding=!adding;add.setAttribute('aria-expanded',String(adding));if(keyLabel)keyLabel.hidden=!adding;available.hidden=!adding;save.hidden=!adding;render();});add.className='connect-number-add';add.setAttribute('aria-expanded','false');
+          const available=button(t.available,()=>loadChannels(true));available.hidden=true;
+          const save=button(t.save,async()=>{const key=panel.querySelector('[data-key]');const channel_ids=[...list.querySelectorAll('input:checked')].map(input=>input.value);if(!channel_ids.length)throw new Error('Kanal seçin.');const result=await post({api_key:key.value,channel_ids},connected(profile,provider)?'update':'create');if(!result)return;key.value='';if(actions.view)await loadChannels(false);});save.hidden=true;
+        }
+        render();if(actions.view)void loadChannels(false);
       }
     }
     window.tenantViewDemand.watch({provider,editable:'#'+id,resetOnHide:true,activate:install,reset:()=>{epoch++;profile=null;$(id)?.remove();}});

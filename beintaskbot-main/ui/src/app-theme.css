@@ -348,3 +348,18 @@ body[data-app-ui="kwid"] [data-task-move-select],body[data-app-ui="kwid"] [data-
  body[data-app-ui="kwid"] #appReportsMenu:popover-open button{width:100%;min-width:180px;justify-content:flex-start}
 }
 
+/* Compact WhatsApp number inventory; shared by scoped and legacy panels. */
+.connect-numbers-wrap{max-width:100%;overflow-x:auto;margin:12px 0;border:1px solid var(--app-line,var(--line));border-radius:10px}
+.connect-numbers-table{width:100%;border-collapse:collapse;font-size:14px;text-align:left}
+.connect-numbers-table th{padding:12px 14px;background:var(--app-surface-soft,var(--app-bg));color:var(--app-muted,var(--ink));font-weight:600;white-space:nowrap}
+.connect-numbers-table td{padding:12px 14px;border-top:1px solid var(--app-line,var(--line));vertical-align:middle;overflow-wrap:anywhere}
+.connect-numbers-table td:nth-child(2){white-space:nowrap}
+.connect-numbers-table input[type=checkbox]{width:auto;margin-right:8px}
+.connect-number-actions{min-width:140px}
+.connect-number-actions button{font-size:12px!important;padding:5px 8px!important;min-height:32px;margin:2px}
+.connect-number-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
+.connect-number-status:before{content:'';width:8px;height:8px;border-radius:50%;background:#86939f;flex:none}
+.connect-number-status[data-state=connected]:before{background:#20b889}
+.connect-number-status[data-state=warning]:before{background:#d49217}
+body[data-app-ui=kwid] button.connect-number-add,.connect-number-add{background:#12a980!important;color:#fff!important;border:0!important;border-radius:5px;padding:8px 12px;margin:4px 8px 4px 0;font-weight:600}
+@media(max-width:600px){.connect-numbers-table{min-width:590px}.connect-numbers-table th,.connect-numbers-table td{padding:10px}.connect-numbers-wrap{border-radius:6px}}

@@ -202,6 +202,9 @@ jobs:
           node tests/test_support_inbox_scopes_ui.cjs
           node tests/test_support_consultation_flow_ui.cjs
           node tests/test_shared_integration_settings.cjs
+          node tests/test_connect_number_inventory.cjs
+          node tests/test_connect_legacy_numbers_ui.cjs
+          node tests/test_connect_number_inventory_browser.cjs
           node tests/test_tenant_kommo_settings.cjs
           node tests/test_tenant_linear_settings.cjs
           node tests/test_tenant_linear_employee_settings.cjs
