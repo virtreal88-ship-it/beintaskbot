@@ -111,7 +111,7 @@ async function dialogReloadTests(){
   const b=browser(view),{w}=b;
   w.sessionStorage.setItem(`tenant.operator.route.${profile.member.tenant_id}.${profile.member.telegram_id}.`,JSON.stringify(row(3)));
   if(historyRoute)w.history.replaceState({view:'dialogs',operatorDialog:historyRoute,operatorDialogOwner:owner},'');
-  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-search-inputs.js'));w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
   b.histories=()=>b.requests.filter(r=>r.url.includes('/history?'));return b;
  };
  const tick=async()=>{await new Promise(resolve=>setTimeout(resolve,10));await settle();};
