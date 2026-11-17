@@ -192,3 +192,16 @@ def test_storage_limit_and_internal_history_projection(pilot,monkeypatch):
     with pytest.raises(TenantLinearError) as error:store.save(PROFILE,ROUTE,bundle(key,call_id='over-limit')[0])
     assert error.value.status==429
     assert db.execute('SELECT count(*) AS n FROM saas_test_call_recordings')[0]['n']==20;db.commit()
+
+
+def test_route_changed_after_authorization_is_not_silently_rebound(pilot,monkeypatch):
+    db,key,public,cfg,send=pilot
+    original=store.assert_route
+    def changed(cur,*args,**kwargs):
+        route=original(cur,*args,**kwargs)
+        cur.execute('UPDATE saas_connect_conversations SET lead_id=999 WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+        return route
+    monkeypatch.setattr(store,'assert_route',changed)
+    with pytest.raises(TenantLinearError) as error:store.save(PROFILE,ROUTE,bundle(key)[0])
+    assert error.value.status==409
+    assert not db.execute('SELECT id FROM saas_test_call_recordings');db.commit()

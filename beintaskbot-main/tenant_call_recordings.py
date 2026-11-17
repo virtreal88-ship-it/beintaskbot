@@ -66,6 +66,14 @@ def _authorize(cur, profile, route, *, write=False):
     if not source or (source['active'] is not True and not archived):
         raise TenantLinearError('Тестовый источник отключён.',403)
     selected = assert_route(cur,tenant,policy,'connect',conversation,channel,lead,action='update' if write else 'view')
+    # Lifecycle/alias writers must not move this exact physical route after
+    # authorization but before the file is inserted/read. A changed route is
+    # rejected, never silently redirected to another conversation or lead.
+    cur.execute('''SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s FOR SHARE''',
+      (tenant,channel,conversation,lead))
+    if not cur.fetchone():
+        raise TenantLinearError('Адрес тестового диалога изменился.',409)
     if selected.get('conversation_kind')=='group' or conversation.endswith('@g.us'):
         raise TenantLinearError('Тест допускает только подтверждённый личный диалог.',403)
     return tenant,actor,b,selected
