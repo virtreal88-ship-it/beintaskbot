@@ -13,6 +13,7 @@ on:
       - 'beintaskbot-main/tenant_operator_access.py'
       - 'beintaskbot-main/tenant_ai_dialog*.py'
       - 'beintaskbot-main/tests/test_connect_*.py'
+      - 'beintaskbot-main/tests/fixtures/connect-call-signed.json'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
   push:
     branches: [fix/connect-direct-identity-replay, fix/verified-phone-dialog-reconcile, fix/owner-asserted-dialog-merge]
@@ -56,6 +57,10 @@ jobs:
           PYTHONPATH: tests/isolated_database_guard:.:tests
         run: >-
           python -m pytest -q --tb=short
+          tests/test_connect_call_corrections.py
+          tests/test_connect_call_corrections_sql.py
+          tests/test_connect_call_corrections_postgres.py
+          tests/test_connect_call_contract.py
           tests/test_connect_missed_calls.py
           tests/test_connect_missed_calls_postgres.py
           tests/test_connect_conflict_diagnostics.py

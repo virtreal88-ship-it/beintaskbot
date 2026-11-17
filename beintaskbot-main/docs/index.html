@@ -6228,6 +6228,12 @@ function dealChatItemHtml(item, token, readonly) {
         const who = String(item.author || '').trim();
         return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${escapeHtml(when)}</div><div>${linkifyText(item.text || '')}</div></div>`;
     }
+    if(item && item.message_type === 'call_invalidated') {
+        return dealPlainSystemHtml(item.call_is_video ? 'Videozəngin statusu dəqiqləşdirildi' : 'Zəngin statusu dəqiqləşdirildi', when);
+    }
+    if(item && item.message_type === 'call_rejected') {
+        return dealPlainSystemHtml(item.call_is_video ? 'Rədd edilmiş daxil olan videozəng' : 'Rədd edilmiş daxil olan zəng', when);
+    }
     if(isDealMissedCall(item)) {
         return dealPlainSystemHtml('Buraxılmış zəng', when);
     }
