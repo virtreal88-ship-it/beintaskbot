@@ -109,3 +109,104 @@ def test_preview_respects_disabled_admission(active):
     row=next(r for r in dialogs.listing(PROFILE,completion_preview=True)['dialogs'] if r['lead_id']==41)
     assert row['lifecycle']['last_inbound_id']
     assert row['lifecycle']['can_dismiss'] is False
+
+
+@pytest.mark.parametrize('offline',['disconnected','inactive'])
+def test_dismiss_permission_is_independent_of_transport(active,offline):
+    incoming=message(active,31)
+    if offline=='disconnected':
+        active.execute("UPDATE saas_tenant_integrations SET status='disconnected' WHERE tenant_id=%s::uuid AND provider='connect'",(A,))
+    else:
+        active.execute('UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+    active.commit()
+    preview=next(r for r in dialogs.listing(PROFILE,completion_preview=True)['dialogs'] if r['lead_id']==41)
+    detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
+    for row in (preview,detail):
+        assert row['lifecycle']['can_dismiss'] is True
+        assert row['lifecycle']['has_inbound'] is True
+        assert row['lifecycle']['can_accept'] is False
+        assert row['can_send'] is False
+        assert 'update' not in row and '_action_capabilities' not in row
+    result=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,
+        action='dismiss',expected_revision=0,request_id=str(uuid.uuid4()),message_id=incoming))
+    assert result['lifecycle']['state']=='dismissed'
+    assert not any(r['lead_id']==41 for r in dialogs.listing(PROFILE)['dialogs'])
+
+
+def test_regular_list_distinguishes_no_incoming_without_read_side_effect(active):
+    active.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s",(A,'connect:'+CA))
+    active.commit()
+    message(active,32,direction='outgoing')
+    listed=next(r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id']==41)
+    detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
+    assert listed['lifecycle']['has_inbound'] is False
+    assert detail['lifecycle']['has_inbound'] is False
+    assert listed['lifecycle']['state']=='waiting'  # Projection only, no fabricated workflow.
+    assert detail['lifecycle']['can_dismiss'] is False
+    assert not active.execute('SELECT 1 FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(A,CA))
+    active.commit()
+    message(active,33)
+    listed=next(r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id']==41)
+    assert listed['lifecycle']['has_inbound'] is True
+    assert listed['lifecycle']['last_inbound_id'] is None  # Tokens remain preview/details only.
+    assert listed['unread_count']>0
+
+
+def test_unknown_inbound_and_permission_fail_closed():
+    from types import SimpleNamespace
+    class NoSQL:
+        def execute(self,*_):raise AssertionError('No SQL for supplied list snapshot')
+    row=dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,can_send=True)
+    result=lifecycle.decorate(NoSQL(),A,11,row,details=False,_rollout=SimpleNamespace(enforced=True,admission_enabled=True),_workflow=None,_last_inbound='incoming')
+    assert result['lifecycle']['has_inbound'] is None
+    assert result['lifecycle']['can_dismiss'] is False
+
+
+def test_regular_inbound_presence_uses_one_unsorted_query(active):
+    message(active,34)
+    small,small_sql=measured(active,dialogs.listing)
+    add_rows(active,61)
+    large,large_sql=measured(active,dialogs.listing)
+    assert len(small_sql)==len(large_sql)
+    presence=[q for q in large_sql if 'WITH routes(channel_id,conversation_id,lead_id)' in q]
+    assert len(presence)==1 and 'ORDER BY' not in presence[0]
+    _,preview_sql=measured(active,dialogs.listing,completion_preview=True)
+    tokens=[q for q in preview_sql if 'WITH routes(channel_id,conversation_id,lead_id)' in q]
+    assert len(tokens)==1 and 'ORDER BY m.created_at DESC,m.id DESC' in tokens[0]
+
+
+@pytest.mark.parametrize('direction,raw',[('incoming',{'verified_employee_id':11,'fromMe':False}),('outgoing',{'fromMe':True,'source':'linked_phone'})])
+def test_completed_view_keeps_history_order_and_does_not_reopen(active,direction,raw):
+    prior=message(active,80)
+    lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',
+        lead_id=41,action='dismiss',expected_revision=0,message_id=prior,request_id=str(uuid.uuid4())))
+    latest=message(active,81,direction=direction)
+    active.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(raw),latest))
+    add_rows(active,3)
+    active.execute("UPDATE saas_connect_conversations SET last_message_at='2099-01-01T00:00:00Z' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA))
+    active.commit()
+    tables=['saas_dialog_workflows','saas_dialog_episodes','saas_dialog_lifecycle_receipts','saas_tenant_audit_events']
+    before={t:active.execute('SELECT count(*) AS n FROM '+t)[0]['n'] for t in tables}
+    all_rows=dialogs.listing(PROFILE,lifecycle='all')['dialogs']
+    assert all_rows[0]['lead_id']==41
+    assert [r['lead_id'] for r in all_rows if r['lead_id']>=1001]==[1003,1002,1001]
+    completed=dialogs.listing(PROFILE,lifecycle='completed')['dialogs']
+    assert [r['lead_id'] for r in completed]==[41]
+    assert completed[0]['lifecycle']['state']=='dismissed'
+    assert not completed[0]['can_send'] and not completed[0]['lifecycle']['can_dismiss']
+    assert all(r['lead_id']!=41 for r in dialogs.listing(PROFILE,lifecycle='active')['dialogs'])
+    assert dialogs.listing(PROFILE,lifecycle='completed',search='client')['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='completed',search='absent-synthetic')['dialogs']
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']['state']=='dismissed'
+    assert before=={t:active.execute('SELECT count(*) AS n FROM '+t)[0]['n'] for t in tables}
+    assert active.execute('SELECT state,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(A,CA,'client'))[0]=={'state':'dismissed','revision':1}
+
+
+def test_lifecycle_mode_api_is_explicit_and_validated(active,monkeypatch):
+    import tenant_operator_api as api
+    read=Mock(return_value={'dialogs':[]})
+    monkeypatch.setattr(api,'listing',read)
+    handler=api.handler(lambda request:PROFILE,'https://fixture.test',Mock(),'dialogs')
+    response=asyncio.run(handler(make_mocked_request('GET','/api/platform/ai/dialogs?lifecycle=all')))
+    assert response.status==200 and read.call_args.kwargs=={'lifecycle':'all'}
+    with pytest.raises(TenantLinearError): dialogs.listing(PROFILE,lifecycle='unrestricted')
