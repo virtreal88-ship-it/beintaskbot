@@ -226,7 +226,7 @@ def _targets(cur, tenant, policy, channel, actor):
 _UNSET_WORKFLOW=object()
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW):
+def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -235,7 +235,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id']) if _workflow is _UNSET_WORKFLOW else _workflow
     state=(row or {}).get('state','waiting')
     own=bool(row and row.get('operator_id')==actor)
-    last={}
+    # Internal list-preview token only; mutation always revalidates the message.
+    last={'id':_last_inbound} if _last_inbound else {}
     if details:
         cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
           AND channel=%s AND kommo_lead_id=%s AND direction='incoming'

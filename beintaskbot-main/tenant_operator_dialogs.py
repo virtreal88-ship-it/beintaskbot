@@ -817,7 +817,27 @@ def _fold_group_routes(rows):
     return result
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False):
+def _completion_inbound_snapshot(cur, tenant, rows):
+    """Read-only optimistic tokens for already-authorized physical Connect routes.
+
+    One SQL round trip, same insertion ordering as lifecycle details/mutation.
+    No message content, read markers, episode creation or action is performed.
+    """
+    routes=sorted({(str(r['channel_id']),str(r['conversation_id']),int(r['lead_id']))
+                   for r in rows if r.get('provider')=='connect'})
+    if not routes:return {}
+    cur.execute("""WITH routes(channel_id,conversation_id,lead_id) AS (
+      SELECT * FROM unnest(%s::text[],%s::text[],%s::bigint[]))
+      SELECT r.channel_id,r.conversation_id,r.lead_id,m.id::text AS message_id
+      FROM routes r LEFT JOIN LATERAL (
+        SELECT id FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid
+          AND m.channel='connect:'||r.channel_id AND m.kommo_lead_id=r.lead_id
+          AND m.direction='incoming' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
+      ) m ON TRUE""",([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],tenant))
+    return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
+
+
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False):
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
@@ -877,6 +897,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate
             from tenant_operator_list_access import ListAccess
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
+            inbound=_completion_inbound_snapshot(cur,tenant,rows) if completion_preview and rollout.enforced else {}
             workflows={}
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
@@ -890,14 +911,16 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access)
                 if rollout.enforced:
                     lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
-                        _rollout=rollout,_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])))
+                        _rollout=rollout,_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
+                        _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))))
             rows=[r for r in rows if (r.get('lifecycle') or {}).get('state') not in {'closed','dismissed'}]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,rows)
                 rows=[_hide_shared_ai(r) for r in rows]
                 agents=[]
                 count=None
-            unread_total=_unread_counts(cur,tenant,int(profile['telegram_id']),rows)
+            # Preparation must not initialize read cursors or mark anything read.
+            unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),rows)
             if search:
                 query_text='%'+str(search)[:200]+'%'
                 rows=[r for r in rows if any(query_text[1:-1].casefold() in str(r.get(key) or '').casefold() for key in ('customer_name','phone','conversation_id'))]
@@ -914,7 +937,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             rows=_fold_group_routes(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
-    return {'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
+    return {**({'completion_preview':True} if completion_preview else {}),
+            'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,
             'next_offset':None if all_rows else offset+50 if len(rows)>50 else None}

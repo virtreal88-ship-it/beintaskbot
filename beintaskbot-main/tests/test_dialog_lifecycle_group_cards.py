@@ -64,3 +64,20 @@ def test_closed_source_reopens_once_without_duplicate_card(projection):
     reopened=next(r for r in result[0]['group_sources'] if r['channel_id']==CA)
     assert reopened['lifecycle']['state']=='waiting'
     assert reopened['lifecycle']['revision']==3
+
+
+def test_completion_preview_retains_physical_source_tokens_and_visibility(projection):
+    activate(projection)
+    row=cards(completion_preview=True)[0]
+    sources={r['channel_id']:r for r in row['group_sources']}
+    assert set(sources)=={CA,CB}
+    assert sources[CA]['lifecycle']['last_inbound_id'] is None
+    assert sources[CA]['lifecycle']['can_dismiss'] is False
+    assert sources[CB]['lifecycle']['last_inbound_id']
+    assert sources[CB]['lifecycle']['can_dismiss'] is True
+    assert {r['channel_id'] for r in cards(33,completion_preview=True)[0]['group_sources']}=={CB}
+    change(44)
+    assert {r['channel_id'] for r in cards(completion_preview=True)[0]['group_sources']}=={CB}
+    owned={r['channel_id']:r for r in cards(44,completion_preview=True)[0]['group_sources']}
+    assert owned[CA]['lifecycle']['can_close'] is True
+    assert owned[CA]['lifecycle']['operator_id']==44

@@ -1,7 +1,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
 const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0));
-async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false}={}){
+async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,oldServer=false,large=false}={}){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  const route=(id,state='waiting',owner=33)=>({provider:'connect',lead_id:id,channel_id:'channel-'+id,conversation_id:'client-'+id,state:'human',agent_name:'Agent',can_send:false,lifecycle_enabled:true,lifecycle:{id:'episode-'+id,state,operator_id:owner,revision:4,can_dismiss:state==='waiting',can_close:state==='accepted'&&owner===33,last_inbound_id:'inbound-'+id}});
@@ -16,10 +16,11 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false}={
    result={lifecycle:{state:body.action==='dismiss'?'dismissed':'closed',revision:5}};
   }else if(url.includes('/dialogs/history')){
    const q=new URL(url,'https://example.test').searchParams;result={dialog:routes.get(q.get('lead_id')),messages:[],next_before:null};
-   if(scopeChange){w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,telegram_id:99}}}));}
   }else if(url.includes('/dialogs?')){
    const offset=new URL(url,'https://example.test').searchParams.get('offset');
-   result={dialogs:offset==='10'?[a,closed]:[group],channels:[],agents:[],unread_count:17,next_offset:bulk?(cycle?0:offset==='10'?null:10):null};
+   const preview=new URL(url,'https://example.test').searchParams.get('completion_preview')==='1';
+   result={completion_preview:preview&&!oldServer,dialogs:large&&preview?Array.from({length:50},(_,i)=>route(Number(offset)+i+10)):offset==='10'?[a,closed]:[group],channels:[],agents:[],unread_count:17,next_offset:large&&preview?(Number(offset)<450?Number(offset)+50:null):bulk?(cycle?0:offset==='10'?null:10):null};
+   if(scopeChange&&preview){w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,telegram_id:99}}}));}
   }else throw Error('Unexpected request '+url);
   return{ok:true,status:200,json:async()=>({success:true,result})};
  };
@@ -31,11 +32,12 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false}={
  const mutations=calls.filter(c=>c.body),notice=d.querySelector('#operatorNotice').textContent;
  assert(!calls.some(c=>c.url.includes('/dialogs/read')),'bulk completion never marks read');
  assert(!calls.some(c=>/send|copilot|support-tickets/.test(c.url)),'bulk never sends messages or creates cases');
- if(cycle||scopeChange){assert.equal(mutations.length,0);assert.equal(prompts.length,0);}
+ assert(!calls.some(c=>c.url.includes('/dialogs/history')),'preparation must not make one history request per dialogue');
+ if(cycle||scopeChange||oldServer){assert.equal(mutations.length,0);assert.equal(prompts.length,0);}
  else{
-  assert.equal(prompts.length,1,'double clicks get one confirmation');assert.match(prompts[0],/2/,'deduplicated source count excludes others and closed');
+  assert.equal(prompts.length,1,'double clicks get one confirmation');assert.match(prompts[0],large?/500/:/2/,'exact eligible source count');
   assert(calls.filter(c=>c.url.includes('/dialogs?')).every(c=>!c.url.includes('filter')));
-  if(!confirm)assert.equal(mutations.length,0,'cancel is read-only');
+  if(!confirm){assert.equal(mutations.length,0,'cancel is read-only');if(large)assert.equal(calls.length,10,'500 routes require 10 paged previews, not 500 histories');}
   else{
    assert.equal(mutations.length,fail==='network'||fail===403?1:2,notice);
    assert.equal(mutations[0].body.action,'dismiss');assert.equal(mutations[0].body.message_id,'inbound-1');assert.equal(mutations[0].body.expected_revision,4);
@@ -48,4 +50,4 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false}={
  }
  assert(!button.disabled);dom.window.close();
 }
-(async()=>{for(const opts of [{},{confirm:false},{fail:409},{fail:403},{fail:'network'},{cycle:true},{scopeChange:true}])await scenario(opts);console.log('bulk dialogue lifecycle UI: 7 scenarios passed');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{for(const opts of [{},{confirm:false},{fail:409},{fail:403},{fail:'network'},{cycle:true},{scopeChange:true},{oldServer:true},{large:true,confirm:false}])await scenario(opts);console.log('bulk dialogue lifecycle UI: 9 scenarios passed');})().catch(e=>{console.error(e);process.exitCode=1;});

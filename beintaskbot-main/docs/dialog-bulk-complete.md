@@ -2,8 +2,10 @@
 
 The three-dot list menu offers **Mark all dialogues completed**. It gathers all
 pages of the current user's accessible queue, independently of search and list
-filters, and deduplicates group source routes. Read-only history supplies each
-eligible route's current lifecycle revision and latest inbound ID. No chat is
+filters, and deduplicates group source routes. An explicit read-only list preview supplies each eligible route's current
+lifecycle revision and latest inbound ID in a tenant-scoped batch query.
+Preparation never fetches conversation histories one by one, and a server that
+does not acknowledge preview mode fails closed before confirmation. No chat is
 opened or marked read while preparing the operation.
 
 Confirmation states the exact number of eligible **dialogue sources**. Waiting

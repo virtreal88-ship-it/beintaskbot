@@ -1,6 +1,7 @@
 """Tenant-isolated operator dialog projection and local display-name overrides."""
 import asyncio
 import json
+from functools import partial
 from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
@@ -45,7 +46,8 @@ def handler(member_from_request,origin,logger,resource):
                         'Cache-Control':'private, max-age=3600',
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
                 elif resource=='dialogs':
-                    result=await timing.run(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
+                    read=partial(listing,completion_preview=True) if query.get('completion_preview')=='1' else listing
+                    result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     result=await timing.run(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
                     from tenant_message_delivery import enrich_history

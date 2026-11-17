@@ -259,6 +259,8 @@
   const completeAllCopy=key=>({
     title:{ru:'Отметить все диалоги завершёнными',az:'Bütün dialoqları tamamlanmış işarələ',en:'Mark all dialogues completed'},
     loading:{ru:'Проверяю доступные диалоги…',az:'Əlçatan dialoqlar yoxlanılır…',en:'Checking accessible dialogues…'},
+    checking:{ru:'Проверено источников: {count}. Пока ничего не изменено.',az:'Yoxlanılmış mənbələr: {count}. Hələ heç nə dəyişməyib.',en:'Sources checked: {count}. Nothing changed yet.'},
+    applying:{ru:'Завершено: {done}. Осталось проверить: {remaining}.',az:'Tamamlandı: {done}. Qalan: {remaining}.',en:'Completed: {done}. Remaining: {remaining}.'},
     confirm:{ru:'Завершить {count} источников диалогов во всей доступной очереди (фильтры не учитываются)? Новые будут отмечены «Не требует ответа», принятые вами завершены. Чужие принятые диалоги не изменятся. Непрочитанные сообщения останутся непрочитанными.',az:'Bütün əlçatan növbədə {count} dialoq mənbəyi tamamlansın (filtrlər nəzərə alınmır)? Yenilər «Cavab tələb etmir» kimi işarələnəcək, qəbul etdikləriniz tamamlanacaq. Başqalarının qəbul etdiyi dialoqlar və oxunmamış sayğaclar dəyişməyəcək.',en:'Complete {count} dialogue sources across your accessible queue (filters ignored)? New items will be marked No reply needed and items accepted by you completed. Items accepted by others and unread counters will not change.'},
     done:{ru:'Завершено: {done}. Пропущено из-за изменений или доступа: {skipped}. Не подтверждено: {unknown}. Не обработано: {remaining}.',az:'Tamamlandı: {done}. Dəyişiklik və ya giriş səbəbindən buraxıldı: {skipped}. Təsdiqlənmədi: {unknown}. İşlənmədi: {remaining}.',en:'Completed: {done}. Skipped after changes or access restrictions: {skipped}. Unconfirmed: {unknown}. Not processed: {remaining}.'},
     empty:{ru:'Нет доступных диалогов для завершения.',az:'Tamamlamaq üçün əlçatan dialoq yoxdur.',en:'No eligible dialogues to complete.'},
@@ -280,24 +282,22 @@
         if(!current())return;
         if(offsets.has(offset)||offsets.size>=1000)throw Error(completeAllCopy('limit'));
         offsets.add(offset);
-        const page=await api('dialogs?'+new URLSearchParams({offset}));
+        const page=await api('dialogs?'+new URLSearchParams({offset,completion_preview:1}));
         if(!current())return;
+        if(page.completion_preview!==true)throw Error(completeAllCopy('limit'));
         for(const row of page.dialogs||[])for(const route of row.group_sources?.length?row.group_sources:[row]){
           if(route.provider==='connect'&&route.lifecycle_enabled&&['waiting','accepted'].includes(route.lifecycle?.state))routes.set(dialogKey(route),route);
         }
+        notice(completeAllCopy('checking').replace('{count}',String(routes.size)));
         offset=page.next_offset??null;
       }
       const candidates=[];
       for(const route of routes.values()){
         if(!current())return;
-        // History is read-only and supplies the exact latest inbound token;
-        // this does not open the chat or invoke any mark-read endpoint.
-        let page;
-        try{page=await api('dialogs/history?'+historyQuery(route));}
-        catch(error){if([403,404,409].includes(error.status)){skipped++;continue;}throw error;}
-        if(!current())return;
-        const fresh=page.dialog,state=fresh?.lifecycle;
-        if(!sameDialog(route,fresh)||!fresh.lifecycle_enabled||!Number.isInteger(state?.revision)){skipped++;continue;}
+        // Preparation uses the server's read-only, authorized batch snapshot.
+        // Existing mutations still recheck ownership, source grants and tokens.
+        const fresh=route,state=fresh?.lifecycle;
+        if(!fresh.lifecycle_enabled||!Number.isInteger(state?.revision)){skipped++;continue;}
         const action=state.state==='waiting'&&state.can_dismiss&&state.last_inbound_id?'dismiss':state.state==='accepted'&&state.can_close&&String(state.operator_id)===String(member.telegram_id)?'close':null;
         if(!action)continue;
         candidates.push({route:fresh,payload:{provider:fresh.provider,channel_id:fresh.channel_id,conversation_id:fresh.conversation_id,lead_id:fresh.lead_id,action,expected_revision:state.revision,request_id:crypto.randomUUID(),...(action==='dismiss'?{message_id:state.last_inbound_id}:{})}});
@@ -309,6 +309,7 @@
       for(const {route,payload} of candidates){
         if(!current())return;
         remaining--;
+        notice(completeAllCopy('applying').replace('{done}',String(done)).replace('{remaining}',String(remaining+1)));
         try{
           // The existing mutation locks and rechecks permissions, revision and
           // inbound ID and writes its own idempotent receipt and audit record.
