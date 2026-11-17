@@ -34,10 +34,10 @@ const server = http.createServer((req, res) => {
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, ignoreDefaultArgs: ['--hide-scrollbars'], args: ['--no-sandbox'] });
   try {
-    for (const width of [320, 360, 390, 430]) {
-      const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true });
+    for (const width of [320, 360, 390, 430, 1440]) {
+      const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: width <= 430, hasTouch: width <= 430 });
       const page = await context.newPage();
       await page.route('**/*', request => new URL(request.request().url()).origin === origin ? request.continue() : request.abort());
       await page.goto(`${origin}/app?view=dialogs`, { waitUntil: 'domcontentloaded' });
@@ -77,12 +77,51 @@ const server = http.createServer((req, res) => {
           safeAreaRules: [...document.head.querySelectorAll('style')].map(style => style.textContent).join(' ').includes('env(safe-area-inset-left)') && [...document.head.querySelectorAll('style')].map(style => style.textContent).join(' ').includes('env(safe-area-inset-right)')
         };
       });
+      if (width <= 430) {
       assert.ok(Math.abs(listGeometry.pane.left) <= 1, `dialog list should align to viewport edge at ${width}px: ${JSON.stringify(listGeometry)}`);
       assert.ok(listGeometry.pane.width >= width - 1, `dialog list should fill viewport at ${width}px: ${JSON.stringify(listGeometry)}`);
       assert.ok(listGeometry.documentWidth <= width + 1, `dialog list should not create horizontal overflow at ${width}px: ${JSON.stringify(listGeometry)}`);
       assert.ok(listGeometry.row.left > listGeometry.pane.left, 'row controls retain useful internal inset');
       assert.ok(parseFloat(listGeometry.pane.paddingLeft) >= 6 && parseFloat(listGeometry.pane.paddingRight) >= 6, 'dialog list keeps its normal internal padding');
       assert.equal(listGeometry.safeAreaRules, true, 'list content padding accounts for left and right safe areas');
+      }
+      // Both native scrollbar and overlay-scrollbar platforms must reclaim the
+      // short-list width. Never alter pane padding or the chat-history gutter.
+      for (const theme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.evaluate(theme => { document.documentElement.dataset.appTheme = theme; }, theme);
+        const geometry = () => page.evaluate(() => {
+          const list = document.querySelector('#operatorRows'), pane = list.closest('.operator-list-pane');
+          const style = getComputedStyle(list), rect = list.getBoundingClientRect();
+          const row = list.querySelector('.operator-row').getBoundingClientRect();
+          return { gutter: list.offsetWidth - list.clientWidth - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth),
+            policy: style.scrollbarGutter, overflow: list.scrollHeight > list.clientHeight,
+            rowWidth: row.width, contentWidth: list.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+            width: rect.width, padding: [getComputedStyle(pane).paddingLeft, getComputedStyle(pane).paddingRight],
+            historyGutter: [...document.querySelectorAll('style')].some(node => node.textContent.includes('.operator-chat-history{overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}')) };
+        });
+        const short = await geometry();
+        assert.equal(short.historyGutter, true, 'chat history keeps its stable gutter rule');
+        if (width === 1440) assert.deepEqual(short.padding, ['10px', '10px'], 'desktop retains original 10px pane insets');
+        assert.equal(short.policy, 'auto', `list must not reserve a stable gutter: ${width}/${theme}`);
+        assert.equal(short.overflow, false, 'one-row fixture does not overflow');
+        assert.ok(Math.abs(short.gutter) <= 1, `short list has no empty scrollbar strip: ${JSON.stringify(short)}`);
+        assert.ok(Math.abs(short.rowWidth - short.contentWidth) <= 1, 'short row fills available list content width');
+        await page.evaluate(() => { const list = document.querySelector('#operatorRows'), row = list.firstElementChild; for (let i = 0; i < 60; i++) list.append(row.cloneNode(true)); });
+        const long = await geometry();
+        assert.equal(long.overflow, true, 'long list still scrolls');
+        assert.deepEqual(long.padding, short.padding, 'overflow cannot change pane padding');
+        assert.equal(long.historyGutter, short.historyGutter, 'chat history policy is unchanged');
+        assert.ok(await page.evaluate(() => { const list = document.querySelector('#operatorRows'); list.scrollTop = 150; return list.scrollTop > 0; }), 'long list scroll position advances');
+        await page.evaluate(() => { const list = document.querySelector('#operatorRows'); while (list.children.length > 1) list.lastElementChild.remove(); });
+        const restored = await geometry();
+        assert.equal(restored.overflow, false, 'filtering back to one row removes overflow');
+        assert.ok(Math.abs(restored.gutter) <= 1, 'filtering releases the scrollbar strip');
+        assert.ok(Math.abs(restored.rowWidth - short.rowWidth) <= 1, 'short-list row width restores');
+        assert.deepEqual(restored.padding, short.padding, 'filtering preserves internal padding');
+        assert.equal(restored.historyGutter, short.historyGutter, 'filtering never changes chat history');
+        console.log(`PASS dialog list scrollbar ${width}px ${theme}: short/overflow/short`);
+      }
       if (process.env.SCREENSHOT_DIR) {
         fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
         await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `dialog-list-${width}.png`), fullPage: false });
