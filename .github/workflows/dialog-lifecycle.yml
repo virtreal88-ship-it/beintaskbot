@@ -51,4 +51,5 @@ jobs:
       - name: UI lifecycle and repeated actions
         run: |
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_ui.cjs
+          NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_bulk_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_group_cards_ui.cjs
