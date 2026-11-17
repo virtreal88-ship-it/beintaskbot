@@ -5,6 +5,7 @@ from datetime import date, datetime
 import json
 import re
 from uuid import UUID
+from moderation_demo import reviewer_actor_matches, reviewer_profile_allowed
 
 from psycopg.errors import SerializationFailure
 
@@ -49,6 +50,11 @@ def _positive(value):
     return str(value)
 
 
+def _actor(value, profile):
+    # Resource IDs remain positive; only the verified reviewer actor is signed.
+    return str(value) if reviewer_actor_matches(value, profile) else _positive(value)
+
+
 def query(request, profile, *, required=False):
     """Browser intent is a deny-only check; the cookie remains authority."""
     result = {}
@@ -66,7 +72,7 @@ def query(request, profile, *, required=False):
             raise TaskFlowError('task_forbidden', 403)
         if not all(key in result for key in expected):
             raise TaskFlowError('task_invalid_query')
-        tenant, actor = _uuid(result[expected[0]]), _positive(result[expected[1]])
+        tenant, actor = _uuid(result[expected[0]]), _actor(result[expected[1]], profile)
         if tenant != _uuid(profile.get('tenant_id')) or int(actor) != int(profile.get('telegram_id') or 0):
             raise TaskFlowError('task_context_changed', 409)
     if result.get('flow') not in (None, '1') or result.get('source') not in (None, 'native', 'kommo'):
@@ -117,7 +123,7 @@ def _profiles(cur, tenant, actor, *, everyone=False):
 
 
 def _attempt(profile, operation, *, everyone=False):
-    tenant, actor = _uuid(profile.get('tenant_id')), int(_positive(profile.get('telegram_id')))
+    tenant, actor = _uuid(profile.get('tenant_id')), int(_actor(profile.get('telegram_id'), profile))
     for attempt in range(2):
         try:
             with _connect() as conn:
@@ -125,6 +131,8 @@ def _attempt(profile, operation, *, everyone=False):
                 _require_schema(conn)
                 with conn.cursor() as cur:
                     current, profiles = _profiles(cur, tenant, actor, everyone=everyone)
+                    if actor < 0 and not reviewer_profile_allowed(current):
+                        raise TaskFlowError('task_forbidden', 403)
                     return operation(cur, current, profiles)
         except SerializationFailure:
             if attempt:
@@ -141,7 +149,7 @@ def execution_profiles(profile, executor_id=None):
         policy = TenantPolicy(current)
         if not policy.allows('tasks'):
             raise TaskFlowError('task_forbidden', 403)
-        executor = int(_positive(executor_id or current['telegram_id']))
+        executor = int(_actor(executor_id or current['telegram_id'], current))
         selected = profiles.get(executor)
         if (not selected or not TenantPolicy(selected).allows('tasks') or
                 (not policy.privileged and executor != int(current['telegram_id']))):

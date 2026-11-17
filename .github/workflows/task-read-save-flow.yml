@@ -73,6 +73,7 @@ jobs:
       - name: PostgreSQL, current cookie HTTP and actual app task journeys
         run: >-
           python -m pytest -q -rs
+          tests/test_moderation_demo.py
           tests/test_tenant_task_view_preferences.py
           tests/test_tenant_deal_view_preferences.py
           tests/test_task_read_save_flow_postgres.py

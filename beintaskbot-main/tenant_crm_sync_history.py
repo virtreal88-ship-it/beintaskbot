@@ -61,8 +61,11 @@ def read_history(tenant,entity,ident,*,actor_id,limit=20,before=None,before_id=N
         with conn.cursor() as cur:
             # Require an authenticated actor even for internal callers. No
             # actorless integration bypass exists on this read surface.
-            if type(actor_id) is not int or actor_id<=0:raise CRMAccessError()
+            if type(actor_id) is not int or actor_id==0:raise CRMAccessError()
             profile=current_access(cur,tenant,actor_id,module,'view')
+            if actor_id < 0:
+                from moderation_demo import reviewer_profile_allowed
+                if not reviewer_profile_allowed(profile):raise CRMAccessError()
             if not locked_resource(cur,profile,module,'view',table,tenant,ident):return None
             # Relation events belong to the SOURCE card, which can differ from
             # changed_id. Never authorize a reverse-card event through target R.

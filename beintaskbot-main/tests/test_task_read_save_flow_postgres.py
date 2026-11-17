@@ -1021,3 +1021,42 @@ def test_task_source_preferences_use_current_cookie_and_isolated_storage(task_fl
     after = _state(f)
     _assert_preference_delta(before, after, f['preference_posts'])
     assert before == after
+
+
+def test_verified_marketplace_reviewer_reads_only_own_native_and_kommo_tasks(task_flow, monkeypatch):
+    """Real PG reads use the configured signed reviewer without changing grants."""
+    import moderation_demo as demo
+    import tenant_task_flow as flow
+    import tenant_member_store as members
+    settings = {'MODERATION_DEMO_ENABLED':'true', 'MODERATION_DEMO_TENANT_ID':A,
+                'MODERATION_DEMO_USERNAME':'synthetic-reviewer',
+                'MODERATION_DEMO_PASSWORD_HASH':'synthetic-not-used-for-login',
+                'MODERATION_DEMO_EXPIRES_AT':'2099-01-01T00:00:00Z'}
+    for key, value in settings.items(): monkeypatch.setenv(key, value)
+    actor = demo.config().user_id
+    with task_flow['factory']() as conn:
+        conn.execute("UPDATE saas_tenants SET owner_telegram_id=%s,onboarding=onboarding||'{\"moderation_demo\":true}'::jsonb WHERE id=%s::uuid", (actor,A))
+        conn.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,permissions,active) VALUES(%s::uuid,%s,'Synthetic reviewer','owner','[\"tasks\",\"deals\",\"customers\"]',true)", (A,actor))
+    profile = members.member(A,actor)
+    assert demo.reviewer_profile_allowed(profile)
+    before = _snapshot(task_flow)
+    for source in ('native','kommo'):
+        result = flow.read(profile, source=source)
+        assert result['tasks'] and result['source']==source
+        assert 'B PRIVATE' not in json.dumps(result)
+        if source == 'native': assert all(str(row['tenant_id'])==A for row in result['tasks'])
+        row = result['tasks'][0]
+        detail = flow.read(profile,source=source,task_id=str(row['id']))
+        assert detail['task']['id']==row['id']
+    with pytest.raises(flow.TaskFlowError):
+        flow.read(profile,source='kommo',task_id=str(actor))  # resource IDs remain positive
+    with pytest.raises(flow.TaskFlowError):
+        flow.read({**profile,'tenant_id':B},source='kommo')
+    assert _snapshot(task_flow)==before
+    assert task_flow['provider'].calls==[]
+    # A stale caller snapshot cannot survive revocation read inside the transaction.
+    with task_flow['factory']() as conn:
+        conn.execute("UPDATE saas_tenants SET onboarding=onboarding-'moderation_demo' WHERE id=%s::uuid", (A,))
+    with pytest.raises(flow.TaskFlowError): flow.read(profile,source='native')
+    monkeypatch.setenv('MODERATION_DEMO_ENABLED','false')
+    with pytest.raises(flow.TaskFlowError): flow.read(profile,source='kommo')

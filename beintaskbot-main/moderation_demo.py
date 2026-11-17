@@ -68,6 +68,40 @@ def identity_allowed(tenant_id: str, user_id: int) -> bool:
     return bool(current and current.tenant_id == tenant_id and current.user_id == user_id)
 
 
+def reviewer_profile_allowed(profile: dict) -> bool:
+    """Recognize the configured isolated reviewer, never grant role authority.
+
+    The profile must come from the authenticated, current membership read, not
+    from browser data. This only permits its synthetic actor representation;
+    ordinary tenant, action and row authorization still runs at every caller.
+    """
+    if not isinstance(profile, dict):
+        return False
+    marker = profile.get('onboarding')
+    if (profile.get('active') is not True or profile.get('role') != 'owner'
+            or not isinstance(marker, dict) or marker.get('moderation_demo') is not True
+            or profile.get('tenant_status', 'active') not in
+               {'active', 'onboarding', 'ready_for_integration'}):
+        return False
+    current = config()
+    if current is None:
+        return False
+    try:
+        actor = int(profile.get('telegram_id'))
+        return (actor == current.user_id
+                and str(profile.get('tenant_id')) == current.tenant_id
+                and ('company_owner_id' not in profile
+                     or int(profile['company_owner_id']) == actor))
+    except (TypeError, ValueError):
+        return False
+
+
+def reviewer_actor_matches(value, profile: dict) -> bool:
+    """Deny-only intent check for the one verified negative actor."""
+    return (reviewer_profile_allowed(profile)
+            and str(value) == str(profile.get('telegram_id')))
+
+
 def provision(current: DemoConfig) -> None:
     """Create only the configured NEW company; refuse existing non-demo data."""
     from tenant_platform import _connect, _ensure_schema, _ROLE_PERMISSIONS

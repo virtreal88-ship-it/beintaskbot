@@ -332,7 +332,9 @@ class TenantPolicy:
         from tenant_employee_policy import employee_action_allowed
         from tenant_scoped_access import scoped_access_enabled
         pages = page_capabilities(self.profile)
-        capabilities = {'can_create_employees': employee_action_allowed(self.profile, 'create'),
+        from moderation_demo import reviewer_profile_allowed
+        capabilities = {'moderation_reviewer': reviewer_profile_allowed(self.profile),
+                'can_create_employees': employee_action_allowed(self.profile, 'create'),
                 'employee_creation_scoped': scoped_access_enabled(),
                 'can_view_employees': employee_action_allowed(self.profile, 'view'),
                 'can_update_employees': employee_action_allowed(self.profile, 'update'),

@@ -17,7 +17,7 @@
   const visible = () => $('view-tasks').classList.contains('active');
   const identity = () => ({expected_tenant_id:profile?.member?.tenant_id,expected_user_id:String(profile?.member?.telegram_id || '')});
   const fingerprint = data => JSON.stringify([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.active,data?.member?.role,Array.isArray(data?.member?.permissions)?data.member.permissions:[],data?.member?.workflow,data?.capabilities,data?.role_permissions,data?.integrations]);
-  const allowed = () => !paused && profile?.member?.active===true && uuid(profile?.member?.tenant_id)&&/^[1-9]\d*$/.test(String(profile?.member?.telegram_id));
+  const allowed = () => !paused && profile?.member?.active===true && uuid(profile?.member?.tenant_id)&&(/^[1-9]\d*$/.test(String(profile?.member?.telegram_id))||(profile?.member?.role==='owner'&&profile?.capabilities?.moderation_reviewer===true&&/^-[1-9]\d*$/.test(String(profile?.member?.telegram_id))));
   const capture = () => ({epoch,key,...identity()});
   const current = scope => scope.epoch===epoch && scope.key===key && allowed();
   const sourceActions = source => Object.values(rows).map(value=>value.page?.sources?.find(item=>item.source===source)).find(Boolean) || {};
