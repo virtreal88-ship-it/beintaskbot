@@ -98,6 +98,10 @@ body[data-app-ui="kwid"] .panel {padding:24px}
 body[data-app-ui="kwid"] .panel h2,body[data-app-ui="kwid"] .panel h3 {font-size:16px;font-weight:600;line-height:24px}
 body[data-app-ui="kwid"] .panel p {font-size:14px;line-height:1.5;color:var(--app-muted)}
 body[data-app-ui="kwid"] #view-tasks .panel [data-task-description] {color:var(--app-ink);font-weight:400}
+/* Kanban headings must not inherit legacy .panel paragraph/heading rules. */
+body[data-app-ui="kwid"] :is([data-task-stage-header],[data-deal-stage-header]) p {margin:0;font-size:12px;line-height:18px;font-weight:400;color:var(--app-muted)}
+body[data-app-ui="kwid"] :is([data-task-stage-header],[data-deal-stage-header]) :is(h2,h3) {margin:0;font-size:14px;line-height:20px;font-weight:600;color:var(--app-ink)}
+body[data-app-ui="kwid"] #view-tasks [data-task-title] {margin:0;color:var(--app-ink);font-weight:400}
 body[data-app-ui="kwid"] #view-tasks [data-task-deal-open] {min-height:44px}
 body[data-app-ui="kwid"] :is([data-scope="card"][data-part="header"],[data-scope="card"][data-part="footer"]) {border-color:var(--app-line);background:transparent}
 body[data-app-ui="kwid"] [data-scope="table"] {color:var(--app-ink)!important}
