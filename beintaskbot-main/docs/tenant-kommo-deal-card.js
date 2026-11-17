@@ -10,7 +10,7 @@
 #dealModal>.modal-card{box-sizing:border-box;width:100%;height:100dvh;max-width:none!important;max-height:100dvh!important;margin:0;padding:0;border:0;border-radius:0!important;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;animation:none}
 #dealModal>.modal-card>.modal-head{flex:none;padding:12px 16px;margin:0}
 #dealModal>.modal-card>#modalContent{flex:1;min-height:0;overflow:auto}
-#dealModal.show>.modal-card{animation:deal-slide-in 180ms ease-out both}
+#dealModal.show>.modal-card{animation:deal-slide-in 180ms ease-out}
 @keyframes deal-slide-in{from{transform:translateX(100%)}to{transform:none}}
 @media(prefers-reduced-motion:reduce){#dealModal.show>.modal-card{animation:none}}
 
