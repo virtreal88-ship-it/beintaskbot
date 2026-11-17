@@ -13,6 +13,7 @@ await page.evaluate(()=>tenantChakraCRM.renderDeals('dealsList',[{kommo_lead_id:
 await page.locator('[data-kommo-stage-key="1:3"] [data-deal-stage-badge]').waitFor();
 await page.evaluate(()=>{tenantChakraCRM.renderTasks([{id:'task',text:'Task',status:'pending',due_at:'2020-01-01T00:00:00Z'}],{source:'native'});});
 await page.locator('[data-task-stage-header]').first().waitFor();
+assert.equal(await page.locator('.task-source-panel').evaluate(n=>getComputedStyle(n).backgroundColor),await page.locator('#dealsList').evaluate(n=>getComputedStyle(n).backgroundColor),'task outer background matches deals');
 const taskHeight=(await page.locator('[data-task-stage-header]').first().boundingBox()).height;
 const dealHeight=(await page.locator('[data-deal-stage-header]').first().boundingBox()).height;
 assert(Math.abs(taskHeight-dealHeight)<=1,`task header ${taskHeight} should match deals ${dealHeight}`);

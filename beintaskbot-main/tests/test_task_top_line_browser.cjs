@@ -11,10 +11,12 @@ for(const width of [390,1440])for(const theme of ['light','dark'])for(const sour
  await page.evaluate(({source})=>{document.body.dataset.appUi='kwid';window.tenantChakraCRM.renderTasks([{id:'one',text:'Example task',status:'open',due_at:'2020-01-01'}],{source,target:source==='native'?'nativeTasksList':'tasksList'});},{source});
  await page.locator('[data-task-kanban]').waitFor();
  for(const selector of ['.task-source-panel',source==='native'?'#nativeTasksList':'#tasksList'])assert.equal(await page.locator(selector).evaluate(n=>getComputedStyle(n).borderTopWidth),'0px','no redundant upper line '+source);
+ for(const selector of ['.task-source-panel',source==='native'?'#nativeTasksList':'#tasksList'])assert.equal(await page.locator(selector).evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)','task wrapper shares page background '+source);
  assert.equal(await page.locator('[data-task-stage-header]').first().evaluate(n=>getComputedStyle(n).borderBottomWidth),'2px','stage underline retained');
  assert.equal(await page.locator('#other').evaluate(n=>getComputedStyle(n).borderTopWidth),'1px','unrelated panel unchanged');
  await page.getByRole('button',{name:'Таблица',exact:true}).click();
  assert.equal(await page.locator('.task-source-panel').evaluate(n=>getComputedStyle(n).borderTopWidth),'1px','table frame unchanged');
+ assert.equal(await page.locator('.task-source-panel').evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)','table wrapper shares page background');
  await page.getByRole('button',{name:'Канбан',exact:true}).click();
  assert.equal(await page.locator('.task-source-panel').evaluate(n=>getComputedStyle(n).borderTopWidth),'0px');
  fs.mkdirSync('tests/artifacts/task-top-line',{recursive:true});await page.screenshot({path:`tests/artifacts/task-top-line/${source}-${theme}-${width}.png`});

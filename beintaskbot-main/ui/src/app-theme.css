@@ -95,6 +95,8 @@ body[data-app-ui="kwid"] :is(input[type="checkbox"],input[type="radio"]) {accent
 body[data-app-ui="kwid"] .panel label {color:var(--app-ink);font-size:14px;font-weight:500;line-height:20px;margin:14px 0}
 body[data-app-ui="kwid"] :is(.panel,.table,.tl-card,.hot-card,.wf-card,[data-scope="card"][data-part="root"]) {background:var(--app-surface)!important;color:var(--app-ink)!important;border:1px solid var(--app-line)!important;border-radius:12px;box-shadow:0 1px 2px #00000008}
 body[data-app-ui="kwid"] .panel {padding:24px}
+/* Match the deal list: the task host shares the page background, not a card surface. */
+body[data-app-ui="kwid"] #view-tasks :is(.task-source-panel,#tasksList,#nativeTasksList) {background:transparent!important}
 /* Board wrappers are layout containers, not a second frame above the columns. */
 body[data-app-ui="kwid"] #view-tasks :is(.task-source-panel,#tasksList,#nativeTasksList):has([data-task-view="kanban"]) {border-top:0!important}
 body[data-app-ui="kwid"] .panel h2,body[data-app-ui="kwid"] .panel h3 {font-size:16px;font-weight:600;line-height:24px}
