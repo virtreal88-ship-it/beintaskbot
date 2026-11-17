@@ -4,6 +4,12 @@ on:
     paths:
       - 'beintaskbot-main/tenant_call_recording*.py'
       - 'beintaskbot-main/tenant_browser_calls*.py'
+      - 'beintaskbot-main/tenant_call_sources*.py'
+      - 'beintaskbot-main/tenant_call_audio_storage.py'
+      - 'beintaskbot-main/docs/tenant-call-sources.js'
+      - 'beintaskbot-main/tests/test_call_sources*'
+      - 'beintaskbot-main/tests/test_call_audio_storage.py'
+      - 'services/whatsapp-calls/**'
       - 'beintaskbot-main/docs/*browser-call*.js'
       - 'beintaskbot-main/tests/test_browser_calls*'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
@@ -15,7 +21,7 @@ permissions:
 jobs:
   recording-safety:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17
@@ -34,12 +40,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
       - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.3.14 playwright@1.62.1
       - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
-      - run: python -m pytest -q tests/test_call_recordings.py tests/test_browser_calls.py tests/test_tenant_web_routes.py tests/test_tenant_app_pwa_assets.py
+      - run: python -m pytest -q tests/test_call_recordings.py tests/test_browser_calls.py tests/test_call_sources.py tests/test_call_sources_audio_api.py tests/test_call_audio_storage.py tests/test_tenant_web_routes.py tests/test_tenant_app_pwa_assets.py
       - run: python -m pytest -q tests/test_browser_calls_postgres.py
         env:
           BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres dbname=postgres
       - run: node tests/test_browser_calls_ui.cjs
+      - run: node tests/test_browser_calls_ui.cjs
+        env:
+          CALL_TEST_MEDIA: websocket
       - run: node tests/test_connect_missed_calls_ui.cjs
+      - run: python -m pytest -q ../services/whatsapp-calls/test_supervisor.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.11'
+          cache-dependency-path: services/whatsapp-calls/engine/go.sum
+      - run: go test -race ./...
+        working-directory: services/whatsapp-calls/engine

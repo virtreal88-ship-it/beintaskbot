@@ -33,7 +33,7 @@ def _unique_object(pairs):
     return result
 
 
-def decode(data, public_key, *, now=None):
+def decode(data, public_key, *, now=None, retention_hours=24):
     """Signature authenticates the exact manifest; its hash authenticates WAV.
 
     Caller pins the public key to one configured source and checks the route.
@@ -41,6 +41,9 @@ def decode(data, public_key, *, now=None):
     """
     now = now or datetime.now(timezone.utc)
     try:
+        # Selected by the trusted source binding, never by uploaded metadata.
+        if type(retention_hours) is not int or retention_hours not in (24, 30*24):
+            raise ValueError('retention policy')
         if not isinstance(data, bytes) or not 100 < len(data) <= MAX_BUNDLE:
             raise ValueError('size')
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -70,7 +73,7 @@ def decode(data, public_key, *, now=None):
             raise ValueError('peer')
         start, end, expiry = [timestamp(manifest.get(k)) for k in ('started_at', 'ended_at', 'expires_at')]
         if not (now - timedelta(hours=24) < start <= end <= now + timedelta(seconds=30)
-                and end-start <= timedelta(seconds=125) and now < expiry <= start + timedelta(hours=24)):
+                and end-start <= timedelta(seconds=125) and now < expiry <= start + timedelta(hours=retention_hours)):
             raise ValueError('time bounds')
         duration = manifest.get('duration_ms')
         if type(duration) is not int or not 1 <= duration <= 120000:

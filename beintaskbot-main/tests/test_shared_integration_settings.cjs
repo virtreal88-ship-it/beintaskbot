@@ -50,6 +50,30 @@ function harness(provider, actions, role='worker', linearSettings={}){
  assert.equal(linkBody.expected_tenant_id,'tenant-a');assert.equal(linkBody.expected_user_id,42);
  assert.equal(link.confirmations.length,1);
  link.close();
+ // Actual shared source settings must expose the owner pairing modal, not only
+ // the legacy channel list. Opening it reads status without pairing or dialing.
+ for(const role of ['owner','worker']){
+  const callsHarness=harness('connect',{view:true,create:false,update:true,delete:false},role);
+  const channel='11111111-2222-4333-8444-555555555555',reads=[];
+  callsHarness.w.tenantProfileSnapshot={member:callsHarness.data.member};
+  callsHarness.w.HTMLDialogElement.prototype.showModal=function(){this.open=true};
+  callsHarness.w.HTMLDialogElement.prototype.close=function(){this.open=false};
+  callsHarness.w.eval(source('tenant-call-sources.js'));
+  callsHarness.w.fetch=async(url,options={})=>{reads.push({url,...options});return{ok:true,json:async()=>url.includes('/call-sources/')?{result:{state:'not_configured'}}:{success:true,channels:[{id:channel,name:'Source',active:true,status:'connected'},{id:'archived',active:false,linked:true},{id:'conflict',active:true,phoneConflict:true}]}};};
+  const connectWatcher=callsHarness.watchers.find(w=>w.provider==='connect');connectWatcher.reset();connectWatcher.activate(callsHarness.data);await tick();
+  const buttons=callsHarness.w.document.querySelectorAll('[data-connect-calls]');
+  assert.equal(buttons.length,role==='owner'?1:0,'only owner can pair exact active unconflicted source');
+  if(role==='owner'){
+   assert.equal(buttons[0].dataset.connectCalls,channel);buttons[0].click();await tick();
+   assert.equal(callsHarness.w.document.querySelector('dialog').open,true);
+   assert.match(callsHarness.w.document.querySelector('dialog').textContent,/30 дней/);
+   assert.equal(reads.filter(r=>r.url.includes('/call-sources/')).length,1);
+   assert.equal(reads.at(-1).method,'GET','opening settings cannot pair a phone or start a call');
+   callsHarness.w.document.querySelector('[aria-label="Закрыть настройки звонков"]').click();
+   assert.equal(callsHarness.w.document.querySelector('dialog'),null);
+  }
+  callsHarness.close();
+ }
  const reconnectHarness=harness('connect',{view:false,create:false,update:true,delete:false});
  const reconnectPayload=reconnectHarness.shared.command(reconnectHarness.data,'connect',{action:'reconnect_channel',channel_id:'synthetic'},'update');
  assert.equal(reconnectPayload.confirm_company_impact,true,'reconnect confirms company-wide webhook changes');

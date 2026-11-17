@@ -70,6 +70,19 @@ def test_signature_tracks_and_malformed_archives():
     with pytest.raises(TenantLinearError):decode(extra.getvalue(),public)
 
 
+def test_thirty_day_retention_requires_managed_source_policy():
+    key=Ed25519PrivateKey.generate();public=key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+    now=datetime.now(timezone.utc);start=now-timedelta(seconds=1)
+    expiry=start+timedelta(days=30)
+    raw,wav=bundle(key,started_at=start.isoformat(),ended_at=now.isoformat(),expires_at=expiry.isoformat())
+    assert decode(raw,public,now=now,retention_hours=720)[1]==wav
+    with pytest.raises(TenantLinearError):decode(raw,public,now=now)
+    too_long,_=bundle(key,started_at=start.isoformat(),expires_at=(expiry+timedelta(seconds=1)).isoformat())
+    with pytest.raises(TenantLinearError):decode(too_long,public,now=now,retention_hours=720)
+    for retention in (0,True,721,8760):
+        with pytest.raises(TenantLinearError):decode(raw,public,now=now,retention_hours=retention)
+
+
 def test_import_is_encrypted_idempotent_internal_and_readable(pilot):
     db,key,public,cfg,send=pilot;raw,wav=bundle(key)
     first=store.save(PROFILE,ROUTE,raw);second=store.save(PROFILE,ROUTE,raw)
