@@ -46,7 +46,10 @@ def handler(member_from_request,origin,logger,resource):
                         'Cache-Control':'private, max-age=3600',
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
                 elif resource=='dialogs':
-                    read=partial(listing,completion_preview=True) if query.get('completion_preview')=='1' else listing
+                    options={}
+                    if query.get('completion_preview')=='1': options['completion_preview']=True
+                    if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
+                    read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     result=await timing.run(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))

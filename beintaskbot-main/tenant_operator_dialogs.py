@@ -825,27 +825,30 @@ def _fold_group_routes(rows):
     return result
 
 
-def _completion_inbound_snapshot(cur, tenant, rows):
+def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     """Read-only optimistic tokens for already-authorized physical Connect routes.
 
-    One SQL round trip, same insertion ordering as lifecycle details/mutation.
+    One SQL round trip. Tokens match lifecycle insertion ordering; ordinary
+    lists only test presence and stop at the first row without sorting history.
     No message content, read markers, episode creation or action is performed.
     """
     routes=sorted({(str(r['channel_id']),str(r['conversation_id']),int(r['lead_id']))
                    for r in rows if r.get('provider')=='connect'})
     if not routes:return {}
+    ordering='' if presence_only else ' ORDER BY m.created_at DESC,m.id DESC'
     cur.execute("""WITH routes(channel_id,conversation_id,lead_id) AS (
       SELECT * FROM unnest(%s::text[],%s::text[],%s::bigint[]))
       SELECT r.channel_id,r.conversation_id,r.lead_id,m.id::text AS message_id
       FROM routes r LEFT JOIN LATERAL (
         SELECT id FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid
           AND m.channel='connect:'||r.channel_id AND m.kommo_lead_id=r.lead_id
-          AND m.direction='incoming' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
+          AND m.direction='incoming'"""+ordering+""" LIMIT 1
       ) m ON TRUE""",([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],tenant))
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active"):
+    if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
@@ -863,9 +866,11 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             from tenant_dialog_rollout import guard as rollout_guard
             rollout=rollout_guard(cur,tenant)
             group_fold= "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
-            if rollout.enforced:
+            if lifecycle != 'all':
                 sql=sql.replace('visible AS MATERIALIZED (','eligible AS MATERIALIZED (')
-                sql+=" , visible AS (SELECT eligible.* FROM eligible WHERE provider<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))) "
+                completed="EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))"
+                condition=("provider='connect' AND "+completed if lifecycle=='completed' else "provider<>'connect' OR NOT "+completed) if rollout.enforced else ('FALSE' if lifecycle=='completed' else 'TRUE')
+                sql+=" , visible AS (SELECT eligible.* FROM eligible WHERE "+condition+") "
             cur.execute(sql+"""
               SELECT (SELECT count(DISTINCT CASE
                 WHEN """+group_fold+"""
@@ -905,7 +910,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate
             from tenant_operator_list_access import ListAccess
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
-            inbound=_completion_inbound_snapshot(cur,tenant,rows) if completion_preview and rollout.enforced else {}
+            inbound=_completion_inbound_snapshot(cur,tenant,rows,presence_only=not completion_preview) if rollout.enforced else {}
             workflows={}
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
@@ -913,15 +918,22 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
             for r in rows:
+                action_capabilities={}
                 # The legacy, unscoped capability path is a no-op; avoid its
                 # per-group mode recheck under our already-retained barrier.
                 if rollout.enforced or policy.has_scoped_access('dialogs'):
-                    apply_capabilities(cur,tenant,policy,r,_list_access=list_access)
+                    apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
                     lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
-                        _rollout=rollout,_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
-                        _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))))
-            rows=[r for r in rows if (r.get('lifecycle') or {}).get('state') not in {'closed','dismissed'}]
+                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
+                        _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
+                        _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
+            # Mode is a read-only view over already-authorized physical routes.
+            # Recheck lifecycle ownership from the later snapshot as well.
+            rows=[r for r in rows if not (r.get('lifecycle') or {}).get('operator_id')
+                  or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
+            if lifecycle != 'all':
+                rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,rows)
                 rows=[_hide_shared_ai(r) for r in rows]
@@ -1177,9 +1189,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_connect_identity import conflicted
                 dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
             from tenant_dialog_access import apply_capabilities
-            apply_capabilities(cur,tenant,policy,dialog)
+            action_capabilities={}
+            apply_capabilities(cur,tenant,policy,dialog,_action_capabilities=action_capabilities)
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
-            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog)
+            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,_can_update=action_capabilities.get('update',False))
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
             if restricted_ai:

@@ -81,3 +81,24 @@ def test_completion_preview_retains_physical_source_tokens_and_visibility(projec
     owned={r['channel_id']:r for r in cards(44,completion_preview=True)[0]['group_sources']}
     assert owned[CA]['lifecycle']['can_close'] is True
     assert owned[CA]['lifecycle']['operator_id']==44
+
+
+def test_completed_modes_preserve_source_privacy_and_search(projection):
+    activate(projection)
+    change(44)
+    change(44,'close',1)
+    assert {r['channel_id'] for r in cards(44,lifecycle='all')[0]['group_sources']}=={CA,CB}
+    completed=cards(44,lifecycle='completed')
+    assert len(completed)==1
+    assert {r['channel_id'] for r in completed[0]['group_sources']}=={CA}
+    state=completed[0]['group_sources'][0]['lifecycle']
+    assert state['state']=='closed' and not state['can_close'] and not state['can_dismiss']
+    assert {r['channel_id'] for r in cards(44,lifecycle='active')[0]['group_sources']}=={CB}
+    # Neither owner privileges nor all/completed mode reveal another actor's route.
+    assert {r['channel_id'] for r in cards(11,lifecycle='all')[0]['group_sources']}=={CB}
+    assert cards(11,lifecycle='completed')==[]
+    assert cards(33,lifecycle='completed')==[]
+    assert cards(44,lifecycle='completed',search=G)
+    assert cards(44,lifecycle='completed',search='no-such-synthetic-contact')==[]
+    assert cards(44,lifecycle='completed',channel='connect:'+CB)==[]
+    assert projection.execute('SELECT state,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(A,CA,G))[0]=={'state':'closed','revision':2}
