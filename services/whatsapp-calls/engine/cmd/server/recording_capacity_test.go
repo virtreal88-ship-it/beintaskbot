@@ -1,11 +1,63 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRecordingUploadDoesNotBlockGatewayControl(t *testing.T) {
+	g, sess := testGateway(t)
+	h, err := g.server.recordings.begin(sess.id, "upload-provider", g.cfg.Account, g.cfg.Peers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.capture.Add(0, []float32{.2}, time.Now())
+	h.finish(false)
+	var polls atomic.Int32
+	upload, release := make(chan struct{}, 1), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/recording" {
+			select {
+			case upload <- struct{}{}:
+			default:
+			}
+			<-release
+			w.Write([]byte(`{"result":{}}`))
+			return
+		}
+		polls.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"commands": []any{}, "recordings": []map[string]any{{"call_id": randomUUID(), "provider_id": "upload-provider", "saved": false}}}})
+	}))
+	defer server.Close()
+	g.cfg.Endpoint = server.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { g.run(ctx); close(done) }()
+	select {
+	case <-upload:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("upload did not start")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for polls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	cancel()
+	<-done
+	if polls.Load() < 2 {
+		t.Fatal("recording upload blocked control heartbeat")
+	}
+}
 
 func TestSharedRecordingCapacityAndExactAcknowledgement(t *testing.T) {
 	s := testRecordingStore(t)

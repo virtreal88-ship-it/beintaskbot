@@ -87,3 +87,35 @@ func TestClosedManagedBridgeCannotStartProvider(t *testing.T) {
 		t.Fatal("late audio resurrected a closed call")
 	}
 }
+
+func TestStopSerializesWithDeferredProviderStartup(t *testing.T) {
+	g, sess := testGateway(t)
+	g.cfg.Managed = true
+	id := "starting-synthetic"
+	sess.createCall(id)
+	owner := "app:synthetic"
+	g.server.broker.upsertCall(CallRecord{SessionID: sess.id, CallID: id, Owner: &owner, Peer: g.cfg.Peers[0], Direction: "outbound", Status: StatusStarting})
+	g.makeBridge(sess, id, owner, "")
+	ac, _ := sess.reg.get(id)
+	bridge := ac.bridge.Load()
+	started, finish, stopped := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	g.armManaged(sess, id, func() error { close(started); <-finish; return nil })
+	go bridge.stream.startProvider()
+	<-started
+	go func() { sess.terminateCall(id, core.EndCallReasonUserEnded); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("stop overtook an admitted provider startup")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(finish)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not complete")
+	}
+	bridge.stream.startProvider()
+	if sess.reg.count() != 0 {
+		t.Fatal("prepared call retained after stop")
+	}
+}
