@@ -4,6 +4,7 @@ from pathlib import Path
 from aiohttp import web
 
 ASSETS = (
+    ('/assets/tenant-search-inputs.js', 'tenant-search-inputs.js', 'no-cache'),
     ('/app/manifest.webmanifest', 'tenant-app.webmanifest', 'no-cache, no-store, must-revalidate, max-age=0'),
     ('/app/pwa-sw.js', 'tenant-app-pwa-sw.js', 'no-cache, no-store, must-revalidate, max-age=0'),
     ('/app/pwa-icon-192.png', 'icon-192.png', 'public, max-age=86400'),

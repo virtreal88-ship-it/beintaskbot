@@ -38,9 +38,9 @@ try{for(const width of [390,1440])for(const manager of [false,true]){
   // An unrelated hidden API-key input must not share the search form. Enter is local filtering, never navigation.
   assert(await page.locator('#dealSearch').evaluate(n=>!!n.form&&!Array.from(n.form.elements).some(e=>e.type==='password')));
   const initialUrl=page.url();await page.evaluate(()=>window.searchPageSentinel=true);
-  await page.locator('#dealSearch').fill('Synthetic');await page.locator('#dealSearch').press('Enter');
+  await page.locator('#dealSearch').focus();await page.locator('#dealSearch').fill('Synthetic');await page.locator('#dealSearch').press('Enter');
   assert.equal(page.url(),initialUrl);assert(await page.evaluate(()=>window.searchPageSentinel));
-  assert.equal(await page.locator('#dealSearch').inputValue(),'Synthetic');await page.locator('#dealSearch').fill('');
+  assert.equal(await page.locator('#dealSearch').inputValue(),'Synthetic');await page.locator('#dealSearch').focus();await page.locator('#dealSearch').fill('');
  }
  await page.evaluate(()=>{window.tenantChatSend={bind(){}};for(const id of [7,8,9]){const b=document.createElement('button');b.id='fixtureOpen'+id;b.textContent='Open '+id;b.style.cssText='position:fixed;z-index:99999;top:0;left:'+((id-7)*90)+'px';b.onclick=()=>document.dispatchEvent(new CustomEvent('tenant-duplicate-open',{detail:{lead_id:id}}));document.body.append(b);}});
  async function open(id=7){await page.evaluate(()=>{testChat.started=performance.now();testChat.loaded=0;});await page.locator('#fixtureOpen'+id).click();await page.locator('#dealModal.show').waitFor();const shell=await page.evaluate(()=>performance.now()-testChat.started);await page.waitForFunction(()=>testChat.loaded>0);return {shell_ms:Math.round(shell),messages_ms:Math.round(await page.evaluate(()=>testChat.loaded-testChat.started)),rows:await page.evaluate(()=>testChat.count)};}
