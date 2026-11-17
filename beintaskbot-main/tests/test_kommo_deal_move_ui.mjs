@@ -21,3 +21,14 @@ const legacyKey='kommo-stage:a:7:7';storage.set(legacyKey,JSON.stringify({expect
 globalThis.fetch=async(url,options={})=>{assert(url.includes('request_id=legacy'));assert.equal(options.method,undefined);return {ok:true,json:async()=>({source_revision:'b'.repeat(64),success:true,state:'confirmed',lead_id:'7',pipeline_id:10,status_id:101,updated_at:1794614401})}};
 await moveKommoDeal(row,101,context);assert.equal(storage.size,0);
 console.log('PASS cross-pipeline tuple fence, GET-only replay, pipeline/raw receipt and legacy command');
+
+// An explicitly uncertain POST is resolved with one GET, never another PATCH.
+storage.clear();requests=[];
+globalThis.fetch=async(url,options={})=>{requests.push({url,options});return options.method==='POST'
+ ?{ok:false,json:async()=>({success:false,error:'board_outcome_unknown',keep_request:true})}
+ :{ok:true,json:async()=>({source_revision:'b'.repeat(64),success:true,state:'confirmed',lead_id:'7',pipeline_id:10,status_id:101,updated_at:1794614401})};};
+const reconciled=await moveKommoDeal(row,101,context);assert.equal(reconciled.status_id,101);assert.equal(requests.length,2);assert.equal(requests[0].options.method,'POST');assert.equal(requests[1].options.method,undefined);assert(requests[1].url.includes(JSON.parse(requests[0].options.body).request_id));assert.equal(storage.size,0);
+storage.clear();requests=[];
+globalThis.fetch=async(url,options={})=>{requests.push({url,options});return {ok:false,json:async()=>({success:false,error:'board_outcome_unknown',keep_request:true})}};
+await assert.rejects(moveKommoDeal(row,101,context),/Result unknown/);assert.equal(requests.length,2);assert.equal(storage.size,1);
+console.log('PASS one bounded GET-only reconciliation; unresolved command retained');
