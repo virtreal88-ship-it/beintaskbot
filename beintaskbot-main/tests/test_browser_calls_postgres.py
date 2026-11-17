@@ -1,6 +1,7 @@
 """Independent native PostgreSQL connections; disposable localhost database only."""
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event, current_thread
+import pytest
 import psycopg
 from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
@@ -8,6 +9,56 @@ from test_tenant_support_inbox import db, PROFILE
 from test_call_recordings import pilot, test_duration_constraint_upgrade_is_idempotent
 from test_browser_calls import gateway, command, snapshot, calls, TenantLinearError
 from test_call_sources import managed, sources, provider, CONVERSATION, A, CA
+
+
+@pytest.mark.parametrize('competitor', ['audio', 'sync'])
+def test_heartbeat_cannot_deadlock_with_call_row_then_dialog_authorization(managed,monkeypatch,competitor):
+    """Real row/advisory locks reproduce the production heartbeat inversion.
+
+    Park audio/sync after it has locked the call row, before dialog authority.
+    An unfenced heartbeat then owns the dialog and waits on that row: PostgreSQL
+    detects a cycle. The gateway fence keeps it outside this lock sequence.
+    """
+    import uuid
+    import tenant_platform
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    db,key,cfg=managed
+    cmd=command(media='websocket');started=calls.action(PROFILE,cmd)
+    work=calls.sync(cfg,snapshot(2))['commands'][0]
+    active=provider('connected',CONVERSATION,'outbound','lock-order-provider')
+    calls.sync(cfg,snapshot(3,active=[active],results=[{'id':work['id'],'ok':True,'provider_id':active['provider_id']}]))
+    with db.cursor() as cur:
+        lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute("INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision) VALUES(%s,%s,%s,%s,'accepted',11,1)",(A,CA,CONVERSATION,str(uuid.uuid4())));db.commit()
+    def connect():
+        return psycopg.connect(db.dsn,row_factory=dict_row,options='-c statement_timeout=8000')
+    for module in (calls,sources,tenant_platform):monkeypatch.setattr(module,'_connect',connect)
+    # Config discovery is independent of the transaction under examination.
+    monkeypatch.setattr(calls,'configurations',lambda *a,**k:[cfg])
+    row_locked=Event();resume=Event();heartbeat_authorized=Event()
+    original=calls.authorize
+    def authority(*args,**kwargs):
+        if current_thread().name.startswith('competitor'):
+            row_locked.set();assert resume.wait(5)
+        result=original(*args,**kwargs)
+        if current_thread().name.startswith('heartbeat'):heartbeat_authorized.set()
+        return result
+    monkeypatch.setattr(calls,'authorize',authority)
+    with ThreadPoolExecutor(max_workers=1,thread_name_prefix='competitor') as other, ThreadPoolExecutor(max_workers=1,thread_name_prefix='heartbeat') as heart:
+        future=other.submit(sources.audio_authority,PROFILE,started['id'],cmd['request_id']) if competitor=='audio' else other.submit(calls.sync,cfg,snapshot(4,active=[active]))
+        try:
+            assert row_locked.wait(5)
+            beat=heart.submit(calls.status,PROFILE,cmd['request_id'])
+            # Before the fix the heartbeat enters authorize while the other
+            # transaction owns the call row. With the fix it waits at the fence.
+            entered=heartbeat_authorized.wait(.5)
+        finally:resume.set()
+        result=future.result(timeout=10);status=beat.result(timeout=10)
+    assert not entered
+    assert status['calls'][0]['state']=='connected'
+    if competitor=='audio':assert result[1:]==(active['provider_id'],started['id'])
+    assert db.execute('SELECT count(*) AS n FROM saas_browser_calls')[0]['n']==1;db.commit()
 
 
 def test_simultaneous_claims_and_cancelled_start(gateway,monkeypatch):

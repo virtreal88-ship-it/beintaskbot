@@ -140,6 +140,26 @@ def test_api_origin_identity_and_gateway_credential_separation(gateway):
     asyncio.run(run())
 
 
+def test_api_database_diagnostic_is_allowlisted_and_contains_no_error_details(monkeypatch):
+    import asyncio
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    from unittest.mock import Mock
+    import psycopg
+    import tenant_browser_calls_api as api
+    async def run():
+        logger=Mock();app=web.Application()
+        app.router.add_get('/browser',api.handler(lambda r:PROFILE,'https://test.local',logger))
+        def failed(*args):raise psycopg.errors.DeadlockDetected('private SQL and identifiers')
+        monkeypatch.setattr(calls,'status',failed)
+        async with TestClient(TestServer(app)) as client:
+            response=await client.get('/browser?expected_tenant_id='+A+'&expected_user_id=11')
+            assert response.status==503
+            assert 'private' not in await response.text()
+        logger.warning.assert_called_once_with('browser_call_request_failed stage=%s code=%s','status','db_deadlock')
+    asyncio.run(run())
+
+
 def test_explicit_archived_owner_pilot_never_reopens_support_or_grants_employee_access(gateway,monkeypatch):
     from tenant_dialog_rollout import transition
     from tenant_dialog_lifecycle import migrate

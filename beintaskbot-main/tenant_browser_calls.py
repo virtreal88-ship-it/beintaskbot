@@ -179,10 +179,15 @@ def status(profile,request_id=None,heartbeat=True):
     configured=configurations(profile)
     if not configured:return {'enabled':False}
     sources=[];calls=[]
-    with _connect() as conn,conn.cursor() as cur:
-        tenant,actor,policy=access(cur,profile,'dialogs')
-        from tenant_dialog_access import require_source
-        for c in configured:
+    from tenant_dialog_access import require_source
+    for c in configured:
+        # Sync/action take this gateway fence before touching call rows or
+        # authorizing a dialog. A heartbeat must use the same order: otherwise
+        # it can own the dialog lock while a sync/audio check owns the call row.
+        # Separate transactions avoid retaining locks across unrelated sources.
+        with _connect() as conn,conn.cursor() as cur:
+            _lock(cur,c)
+            tenant,actor,policy=access(cur,profile,'dialogs')
             try:require_source(cur,tenant,policy,'connect',c['channel_id'],'view')
             except TenantLinearError:continue
             source,items=_source_status(cur,profile,c,tenant,actor,request_id,heartbeat)
