@@ -24,9 +24,14 @@
 .deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;padding:16px;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
 .deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,#ffe08b)}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
 @media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+#dealModal.deal-desktop-sidebar #modalContent{flex-direction:row;align-items:stretch}
+#dealModal.deal-desktop-sidebar .deal-info-panel{flex:0 0 clamp(300px,30vw,440px);width:clamp(300px,30vw,440px);box-sizing:border-box;border-right:1px solid var(--line);overscroll-behavior:contain}
+#dealModal.deal-desktop-sidebar .chat-placeholder{min-width:0}
 `;document.head.append(stageStyle);
   const date=value=>{const d=new Date(typeof value==='number'?value*1000:value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString():'';};
+  let cleanupLayout=()=>{};
   function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent}){
+    cleanupLayout();
     const c=labels(),container=document.createElement('div');container.className='kommo-deal-sections';container.innerHTML=`<section class="kommo-deal-section"><header><h3>${esc(c.tasks)}</h3><button type="button" class="primary" data-related-create hidden>+ ${esc(c.create)}</button></header><div data-related-tasks role="status">${esc(c.loading)}</div></section><section class="kommo-deal-section"><header><h3>${esc(c.notes)}</h3></header><div data-related-notes role="status">${esc(c.loading)}</div></section>`;
     const chat=host.querySelector('.chat-placeholder');host.insertBefore(container,chat);if(chat){const heading=document.createElement('h3');heading.className='kommo-deal-chat-title';heading.textContent=c.chat;chat.before(heading);}
     // Conversation-first card: related content stays available behind Info, not above chat.
@@ -46,9 +51,18 @@
     const infoLabel=({ru:'Инфо',az:'Məlumat',en:'Info'}[window.tenantI18n?.language]||'Məlumat');
     infoButton.textContent='ⓘ';infoButton.title=infoLabel;infoButton.setAttribute('aria-label',infoLabel);infoButton.setAttribute('aria-controls',info.id);infoButton.setAttribute('aria-expanded','false');
     head.insertBefore(infoButton,document.getElementById('closeModal'));
-    const setInfo=open=>{if(open)loadRelated();info.hidden=!open;if(chat)chat.hidden=open;infoButton.setAttribute('aria-expanded',String(open));};
+    const desktop=window.matchMedia?.('(min-width:1024px)');
+    let mobileInfoOpen=false;
+    const setInfo=open=>{
+      mobileInfoOpen=open;
+      const sideBySide=desktop?.matches===true,visible=sideBySide||open;
+      modal.classList.toggle('deal-desktop-sidebar',sideBySide);
+      info.hidden=!visible;if(chat)chat.hidden=!sideBySide&&open;
+      infoButton.hidden=sideBySide;infoButton.setAttribute('aria-expanded',String(visible));
+      if(visible)loadRelated();
+    };
     infoButton.onclick=()=>setInfo(info.hidden);
-    modal.onkeydown=event=>{if(event.key==='Escape'&&!info.hidden){event.preventDefault();event.stopPropagation();setInfo(false);infoButton.focus();}};
+    modal.onkeydown=event=>{if(event.key==='Escape'&&!desktop?.matches&&!info.hidden){event.preventDefault();event.stopPropagation();setInfo(false);infoButton.focus();}};
     if(chat){const rows=chat.querySelector('#chatRows');if(rows){const viewport=document.createElement('div');viewport.className='deal-chat-history';rows.before(viewport);viewport.append(rows);const composer=document.createElement('div');composer.className='deal-chat-compose';for(const node of [...chat.children])if(node!==viewport)composer.append(node);chat.append(composer);}}
     const current=()=>container.isConnected&&isCurrent()&&document.getElementById('dealModal')?.classList.contains('show');
     const flow=window.tenantTaskFlow,scope=flow?.capture();
@@ -148,6 +162,11 @@
     const notes=container.querySelector('[data-related-notes]');
     void (flow?flow.api('/api/platform/crm/deal/notes?lead_id='+encodeURIComponent(deal.kommo_lead_id),{scope}):Promise.reject(Error('scope_unavailable'))).then(result=>{if(!current())return;if(!Array.isArray(result.notes))throw Error('invalid_notes');window.tenantKommoDealNoteCreate?.mount({container,leadId:deal.kommo_lead_id,scope,current,canCreate:result.can_create===true,flow});notes.innerHTML=result.notes.map(item=>`<article class="kommo-related-card kommo-note-card"><small>${esc(date(item.created_at))}</small>${esc(item.text)}</article>`).join('')||`<p class="sub">${esc(c.emptyNotes)}</p>`;if(result.has_more)notes.insertAdjacentHTML('beforeend',`<p class="sub">${esc(c.limited)}</p>`);}).catch(()=>{if(current())notes.textContent=c.error;});
     }
+    const syncLayout=()=>{if(container.isConnected&&isCurrent())setInfo(mobileInfoOpen);};
+    desktop?.addEventListener?.('change',syncLayout);
+    cleanupLayout=()=>desktop?.removeEventListener?.('change',syncLayout);
+    // Related requests are independent of chat loading and never awaited here.
+    syncLayout();
   }
   window.tenantKommoDealCard={mount};
 })();
