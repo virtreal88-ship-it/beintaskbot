@@ -1196,6 +1196,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
     from tenant_call_recordings import offer_import
     dialog['test_recording_import_allowed']=offer_import({**profile,'role':policy.profile.get('role')},dialog)
+    from tenant_browser_calls import offer as offer_browser_call
+    dialog['browser_call_available']=offer_browser_call(profile,dialog)
     return {'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
