@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wacalls/internal/recording"
@@ -37,13 +38,14 @@ var directPeerPattern = regexp.MustCompile(`^[1-9][0-9]{5,21}@(s\.whatsapp\.net|
 func directPeer(peer string) bool { return directPeerPattern.MatchString(peer) }
 
 type recordingStore struct {
-	db        *sql.DB
-	mu        sync.Mutex
-	cfg       recordingConfig
-	seed      []byte
-	aead      cipher.AEAD
-	pendingMu sync.Mutex
-	pending   map[string]pendingRecording
+	db          *sql.DB
+	mu          sync.Mutex
+	cfg         recordingConfig
+	seed        []byte
+	aead        cipher.AEAD
+	pendingMu   sync.Mutex
+	pending     map[string]pendingRecording
+	lastQuality atomic.Pointer[recordingQuality]
 }
 type pendingRecording struct {
 	state     string
@@ -185,6 +187,9 @@ func (h *recordingHandle) finish(graceful bool) {
 	h.once.Do(func() {
 		defer debug.FreeOSMemory()
 		data, manifest, e := h.capture.Finish(time.Now(), graceful, h.store.seed)
+		if e == nil {
+			h.store.lastQuality.Store(qualityOf(manifest))
+		}
 		state := "failed"
 		var encrypted []byte
 		if e == nil {

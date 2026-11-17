@@ -23,6 +23,8 @@ type streamBridge struct {
 	startMu        sync.Mutex
 	startOnce      sync.Once
 	startRequested atomic.Bool
+	inputFrames    atomic.Uint64
+	outputFrames   atomic.Uint64
 	onStart        func() error
 }
 
@@ -67,6 +69,7 @@ func (s *streamBridge) write(pcm []float32) error {
 	case <-s.done:
 		return errors.New("audio_closed")
 	case s.output <- raw:
+		s.outputFrames.Add(1)
 		return nil
 	default:
 		s.close()
@@ -138,6 +141,7 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 		if bytes > 65536 {
 			return
 		}
+		s.inputFrames.Add(1)
 		if s.onPCM != nil {
 			// The first browser PCM (including muted silence) proves the whole
 			// authenticated relay is open. A private upstream handshake does not.

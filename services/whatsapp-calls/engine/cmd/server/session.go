@@ -28,6 +28,7 @@ type Session struct {
 
 	client *whatsmeow.Client
 	reg    *callRegistry
+	diag   callDiagnostics
 
 	mu   sync.Mutex
 	auth AuthSnapshot
@@ -148,6 +149,8 @@ func (s *Session) callForEvent(from types.JID, data *waBinary.Node) (*activeCall
 }
 
 func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
+	s.diag.offers.Add(1)
+	s.diag.lastOffer.Store(time.Now().UnixMilli())
 	node := wrapCall(evt.From, evt.Data)
 	callID := callIDFromNode(node)
 	if callID == "" {
@@ -157,6 +160,7 @@ func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
 		return
 	}
 	if max := s.mgr.maxCalls; max > 0 && s.reg.count() >= max {
+		s.diag.capacityRejected.Add(1)
 		s.rejectOffer(ctx, node, evt.From)
 		return
 	}
@@ -191,8 +195,14 @@ func (s *Session) handleEvent(rawEvt any) {
 		s.setAuth(AuthSnapshot{State: "open", Paired: true})
 	case *events.LoggedOut:
 		s.setAuth(AuthSnapshot{State: "logged_out", Paired: false})
+	case *events.Disconnected:
+		s.setAuth(AuthSnapshot{State: "disconnected", Paired: s.client.Store.ID != nil})
 	case *events.CallOffer:
 		s.onIncomingOffer(ctx, evt)
+	case *events.CallOfferNotice:
+		s.diag.offerNotices.Add(1)
+	case *events.UnknownCallEvent:
+		s.diag.unknownEvents.Add(1)
 	case *events.CallAccept:
 		if ac, ok := s.callForEvent(evt.From, evt.Data); ok {
 			ac.cm.HandleCallAccept(ctx, wrapCall(evt.From, evt.Data), evt.From)

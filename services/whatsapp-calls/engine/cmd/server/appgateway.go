@@ -188,7 +188,7 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	}
 	info := sess.info()
 	g.seq++
-	result := map[string]any{"boot_id": g.boot, "seq": g.seq, "connected": info.State == "open" && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account, "active": active, "ended": ended}
+	result := map[string]any{"boot_id": g.boot, "seq": g.seq, "connected": info.State == "open" && sess.transportReady() && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account, "active": active, "ended": ended}
 	if g.cfg.Managed {
 		result["max_seconds"] = recording.ManagedMaxSeconds
 		result["closed_process_boots"] = append([]string{}, g.retired...)
