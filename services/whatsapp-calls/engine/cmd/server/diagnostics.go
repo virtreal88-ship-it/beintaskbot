@@ -11,6 +11,8 @@ import (
 
 type callDiagnostics struct {
 	offers           atomic.Uint64
+	offerNotices     atomic.Uint64
+	unknownEvents    atomic.Uint64
 	lastOffer        atomic.Int64
 	capacityRejected atomic.Uint64
 }
@@ -35,6 +37,7 @@ func (s *Session) transportReady() bool {
 func (s *Session) diagnostics() map[string]any {
 	out := map[string]any{"transport_connected": s.client != nil && s.client.IsConnected(),
 		"logged_in": s.client != nil && s.client.IsLoggedIn(), "offer_events": s.diag.offers.Load(),
+		"offer_notice_events": s.diag.offerNotices.Load(), "unknown_call_events": s.diag.unknownEvents.Load(),
 		"last_offer_at_ms": s.diag.lastOffer.Load(), "capacity_rejections": s.diag.capacityRejected.Load(),
 		"observed_at_ms": time.Now().UnixMilli()}
 	var attached, started, input, output uint64

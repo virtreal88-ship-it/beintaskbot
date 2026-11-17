@@ -17,12 +17,17 @@ func TestPrivateDiagnosticsDoNotTrustOldOpenState(t *testing.T) {
 		t.Fatal("old open event advertised a disconnected transport")
 	}
 	s.handleEvent(&events.Disconnected{})
+	s.handleEvent(&events.CallOfferNotice{})
+	s.handleEvent(&events.UnknownCallEvent{})
 	if s.info().State != "disconnected" {
 		t.Fatal("disconnect did not invalidate event state")
 	}
 	d := s.diagnostics()
 	if d["transport_connected"] != false || d["logged_in"] != false || d["active_registry_calls"] != 0 {
 		t.Fatal(d)
+	}
+	if d["offer_events"] != uint64(0) || d["offer_notice_events"] != uint64(1) || d["unknown_call_events"] != uint64(1) {
+		t.Fatal("notice must not be confused with an actionable offer", d)
 	}
 }
 

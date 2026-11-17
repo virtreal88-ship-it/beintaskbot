@@ -199,6 +199,10 @@ func (s *Session) handleEvent(rawEvt any) {
 		s.setAuth(AuthSnapshot{State: "disconnected", Paired: s.client.Store.ID != nil})
 	case *events.CallOffer:
 		s.onIncomingOffer(ctx, evt)
+	case *events.CallOfferNotice:
+		s.diag.offerNotices.Add(1)
+	case *events.UnknownCallEvent:
+		s.diag.unknownEvents.Add(1)
 	case *events.CallAccept:
 		if ac, ok := s.callForEvent(evt.From, evt.Data); ok {
 			ac.cm.HandleCallAccept(ctx, wrapCall(evt.From, evt.Data), evt.From)
