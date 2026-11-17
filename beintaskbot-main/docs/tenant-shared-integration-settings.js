@@ -36,7 +36,7 @@
       const panel=document.createElement('article');panel.id=id;panel.className='panel integration-modal-panel';host.append(panel);
       const actions=row(data,provider).management_actions;
       const write=actions[connected(data,provider)?'update':'create'];
-      panel.innerHTML=`<h2>${provider==='connect'?'Connect WhatsApp':'BeinSystems'}</h2><p>Şirkətin ortaq bağlantısı · ${esc(row(data,provider).status)}</p><p data-message role="status"></p>`;
+      panel.innerHTML=`<h2>${provider==='connect'?'Connect WhatsApp':'BeinSystems'}</h2>${provider==='connect'?'':`<p>Şirkətin ortaq bağlantısı · ${esc(row(data,provider).status)}</p>`}<p data-message role="status"></p>`;
       if(write)panel.insertAdjacentHTML('beforeend',provider==='connect'?'<label>Connect API açarı<input data-key type="password" autocomplete="new-password"></label>':'<label>API ünvanı<input data-url type="url"></label><label>Filial<input data-branch></label><label>API token<input data-key type="password" autocomplete="new-password"></label>');
       const message=panel.querySelector('[data-message]');
       const button=(label,action)=>{const b=document.createElement('button');b.type='button';b.className='outline';b.textContent=label;b.onclick=async()=>{if(current!==epoch)return;b.disabled=true;try{await action();}catch(error){if(current===epoch)message.textContent=error.message;}finally{if(current===epoch)b.disabled=false;}};panel.append(b);return b;};
@@ -59,9 +59,9 @@
         }
         const labels={az:{name:'Ad',number:'Nömrə',pipeline:'Satış xətti',status:'Status',add:'+ Nömrə əlavə et',empty:'Qoşulmuş nömrə yoxdur.',loading:'Nömrələr yüklənir…',retry:'Yenidən yoxla',available:'Mövcud nömrələri yüklə',save:'Seçilmiş nömrələri qoş',conflict:'Nömrə konflikti',unknown:'Məlum deyil'},ru:{name:'Имя',number:'Номер',pipeline:'Воронка',status:'Статус',add:'+ Добавить номер',empty:'Нет подключённых номеров.',loading:'Загрузка номеров…',retry:'Повторить',available:'Загрузить доступные номера',save:'Подключить выбранные номера',conflict:'Конфликт номера',unknown:'Неизвестно'},en:{name:'Name',number:'Number',pipeline:'Pipeline',status:'Status',add:'+ Add number',empty:'No connected numbers.',loading:'Loading numbers…',retry:'Retry',available:'Load available numbers',save:'Connect selected numbers',conflict:'Phone conflict',unknown:'Unknown'}};
         const t=labels[window.tenantI18n?.language]||labels.az;
-        let channels=[],adding=false,loading=false,readSerial=0;
+        let channels=[],adding=!connected(data,provider),loading=false,readSerial=0;
         list.className='connect-numbers-wrap';
-        const keyLabel=panel.querySelector('[data-key]')?.closest('label');if(keyLabel)keyLabel.hidden=true;
+        const keyLabel=panel.querySelector('[data-key]')?.closest('label');if(keyLabel)keyLabel.hidden=connected(data,provider);
         const render=()=>{
           list.replaceChildren();
           const table=document.createElement('table');table.className='connect-numbers-table';
@@ -93,9 +93,11 @@
           finally{if(current===epoch&&serial===readSerial){loading=false;list.removeAttribute('aria-busy');}}
         };
         if(write){
-          const add=button(t.add,()=>{adding=!adding;add.setAttribute('aria-expanded',String(adding));if(keyLabel)keyLabel.hidden=!adding;available.hidden=!adding;save.hidden=!adding;render();});add.className='connect-number-add';add.setAttribute('aria-expanded','false');
-          const available=button(t.available,()=>loadChannels(true));available.hidden=true;
-          const save=button(t.save,async()=>{const key=panel.querySelector('[data-key]');const channel_ids=[...list.querySelectorAll('input:checked')].map(input=>input.value);if(!channel_ids.length)throw new Error('Kanal seçin.');const result=await post({api_key:key.value,channel_ids},connected(profile,provider)?'update':'create');if(!result)return;key.value='';if(actions.view)await loadChannels(false);});save.hidden=true;
+          const add=button(t.add,()=>window.tenantConnectPairing?.open(data.member,{isCurrent:()=>current===epoch&&can(profile,provider,connected(profile,provider)?'update':'create'),onComplete:async()=>{if(actions.view)await loadChannels(false);}}));add.className='connect-number-add';add.hidden=!connected(data,provider);
+          if(!connected(data,provider)){
+            const available=button(t.available,()=>loadChannels(true));
+            const setup=button(t.save,async()=>{const key=panel.querySelector('[data-key]');const channel_ids=[...list.querySelectorAll('input:checked')].map(input=>input.value);if(!channel_ids.length)throw new Error('Kanal seçin.');const result=await post({api_key:key.value,channel_ids},'create');if(!result)return;key.value='';keyLabel.hidden=true;available.hidden=true;setup.hidden=true;add.hidden=!actions.update;adding=false;if(actions.view)await loadChannels(false);});setup.dataset.connectInitialSetup='true';
+          }
         }
         render();if(actions.view)void loadChannels(false);
       }

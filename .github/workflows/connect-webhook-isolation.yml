@@ -42,6 +42,7 @@ jobs:
           tests/test_tenant_connect_access_api.py
           tests/test_tenant_connect_diagnostics.py
           tests/test_tenant_connect_configure.py
+          tests/test_connect_pairing.py
           tests/test_connect_webhook_deactivation.py
           tests/test_read_timing.py
           tests/test_tenant_app_pwa_assets.py

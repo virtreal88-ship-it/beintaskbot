@@ -19,6 +19,7 @@ from tenant_ai_dialog_scope import lock_dialog
 from datetime import datetime, timezone
 
 import requests
+from tenant_linear_policy import TenantLinearError
 
 from tenant_platform import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
 from tenant_member_store import member
@@ -396,13 +397,23 @@ def _public_channel(row: dict) -> dict:
 
 
 def _request(key: str, method: str, path: str, payload: dict | None = None, *,
-             safe_preflight_codes: tuple[str, ...] = ()) -> dict:
+             safe_preflight_codes: tuple[str, ...] = (), idempotency_key: str | None = None) -> dict:
     # HTTP header values must be Latin-1 encodable. Connect-generated API keys
     # are ASCII; fail clearly if a copied key contains a look-alike character.
     if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
         raise TenantPlatformError('Connect API açarı düzgün deyil. Açarı Connect panelindən yenidən kopyalayın.')
+    headers={'x-api-key': key, 'Accept': 'application/json'}
+    if idempotency_key is not None:
+        try:
+            valid = (method=='POST' and path=='/v1/channels/idempotent'
+                     and isinstance(idempotency_key,str) and str(uuid.UUID(idempotency_key))==idempotency_key)
+        except (ValueError, TypeError, AttributeError):
+            valid = False
+        if not valid:
+            raise TenantPlatformError('Connect idempotency key is invalid.')
+        headers['Idempotency-Key']=idempotency_key
     try:
-        response = requests.request(method, CONNECT_URL + path, headers={'x-api-key': key, 'Accept': 'application/json'},
+        response = requests.request(method, CONNECT_URL + path, headers=headers,
                                     json=payload, timeout=(5, 20), allow_redirects=False)
     except requests.RequestException as exc:
         raise TenantPlatformError('Connect xidməti əlçatan deyil.') from exc
@@ -605,7 +616,7 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
         return _configure_locked(profile, payload, callback_url)
 
 
-def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
+def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expected_pairing: dict | None = None) -> dict:
     _owner(profile)
     tenant = str(profile['tenant_id'])
     key = str(payload.get('api_key') or '').strip()
@@ -620,6 +631,14 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
     if not isinstance(remote, list):
         raise TenantPlatformError('Connect kanalları oxunmadı.')
     remote_by_id = {str(row.get('id')): row for row in remote if isinstance(row, dict) and row.get('id')}
+    if expected_pairing is not None:
+        expected_id = str(expected_pairing.get('id') or '')
+        verified = remote_by_id.get(expected_id) or {}
+        if (requested != {expected_id} or verified.get('status') != 'connected'
+                or verified.get('phone') != expected_pairing.get('phone')
+                or not re.fullmatch(r'\+?[1-9][0-9]{6,14}', str(verified.get('phone') or ''))
+                or verified.get('phoneConflict')):
+            raise TenantLinearError('connect_pairing_connection_changed', 409)
     if not requested.issubset(remote_by_id):
         raise TenantPlatformError('Seçilmiş kanal bu Connect hesabına aid deyil.')
     with _connect() as conn:
@@ -644,6 +663,12 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
     # only through the explicit per-channel disconnect action.
     selected = [remote_by_id[channel_id] for channel_id in sorted(requested | already_active)]
 
+    if expected_pairing is not None and not (previous and previous.get('api_key') == key
+            and previous.get('webhook_id') and previous.get('webhook_secret')):
+        # Pairing retries cannot safely create a new webhook: that endpoint has
+        # no idempotency receipt. Ordinary explicit configuration remains unchanged.
+        raise TenantLinearError('connect_pairing_webhook_repair_required', 409)
+
     # Reusing the existing tenant-owned subscription preserves the secret that
     # Connect already has. Creating a replacement on every settings save leaves
     # the old subscription active but its secret is no longer available here;
@@ -665,6 +690,8 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
             # Do not silently create a second subscription when the existing
             # one cannot be safely inspected; surface the connection failure.
             raise TenantPlatformError('Connect webhook mövcud abunəliyi yoxlanmadı.') from None
+    if hook is None and expected_pairing is not None:
+        raise TenantLinearError('connect_pairing_webhook_repair_required', 409)
     if hook is None:
         hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': list(CONNECT_WEBHOOK_EVENTS)})
         # Connect creates the secret and returns it once. Use it for HMAC verification.

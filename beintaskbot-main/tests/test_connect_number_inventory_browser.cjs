@@ -12,7 +12,7 @@ const {chromium}=require('playwright');
  assert.equal(await page.evaluate(()=>calls.filter(c=>c.body).length),1);assert.equal(await page.evaluate(()=>JSON.parse(calls.find(c=>c.body).body).api_key),'');
  await page.waitForFunction(()=>document.querySelector('[data-call-status-channel=one]')?.dataset.state==='offline');assert.equal(await page.locator('[data-call-status-channel=two]').getAttribute('data-state'),'online');assert.equal(await page.locator('[data-call-status-channel=one]').getAttribute('aria-label'),'Calls: source offline');assert.equal(await page.locator('.connect-call-status svg').count(),2);
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no page overflow');assert(await page.locator('.connect-numbers-wrap').evaluate(n=>n.scrollWidth>=n.clientWidth),'table owns overflow');
- await page.locator('.connect-number-add').click();assert.equal(await page.locator('[data-key]').isVisible(),true);assert.equal(await page.evaluate(()=>calls.filter(c=>c.body).length),1);
+ await page.evaluate(()=>{window.pairingOpened=false;window.tenantConnectPairing={open:()=>{window.pairingOpened=true}}});await page.locator('.connect-number-add').click();assert.equal(await page.evaluate(()=>pairingOpened),true);assert.equal(await page.locator('[data-key]').isVisible(),false);assert.equal(await page.evaluate(()=>calls.filter(c=>c.body).length),1);
  await page.close();
  }
  console.log('PASS Connect number table browser: 320–1440, light/dark, auto load, disclosure and contained horizontal overflow');

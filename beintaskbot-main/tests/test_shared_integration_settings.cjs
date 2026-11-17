@@ -34,22 +34,27 @@ function harness(provider, actions, role='worker', linearSettings={}){
  }
  // Existing connection: linking selected numbers with an empty key must confirm.
  const link=harness('connect',{view:true,create:false,update:true,delete:false});
+ assert.equal(link.w.document.body.textContent.includes('Şirkətin ortaq bağlantısı'),false,'Connect panel has no duplicate connection subtitle');
+ const marketplace=fs.readFileSync(path.join(__dirname,'../ui/src/main.jsx'),'utf8');
+ assert.ok(marketplace.includes('selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı'),'marketplace also hides Connect duplicate subtitle');
+ assert.ok(marketplace.includes('<StatusBadge tone={state.connected ? "green" : "orange"}>'),'top connection status retained');
  await tick();assert.equal(JSON.parse(link.calls[0].body).action,'channels');link.calls.length=0;
- const list=link.w.document.createElement('input');list.type='checkbox';list.checked=true;list.value='new-channel';
- link.w.document.querySelector('#sharedIntegration-connect > div').append(list);
- const linkButton=[...link.w.document.querySelectorAll('button')].find(b=>b.textContent==='Seçilmiş nömrələri qoş');
- link.w.confirm=()=>false;linkButton.click();await tick();
- assert.equal(link.calls.length,0,'declining link confirmation never posts');
- assert.equal(list.checked,true,'declined link retains selection');
- link.w.confirm=message=>{link.confirmations.push(message);return true;};
- linkButton.click();await tick();
- assert.equal(link.calls.filter(c=>JSON.parse(c.body||'{}').action!=='channels').length,1);
- const linkBody=JSON.parse(link.calls[0].body);
- assert.equal(linkBody.api_key,'');assert.deepEqual(linkBody.channel_ids,['new-channel']);
- assert.equal(linkBody.confirm_company_impact,true);
- assert.equal(linkBody.expected_tenant_id,'tenant-a');assert.equal(linkBody.expected_user_id,42);
- assert.equal(link.confirmations.length,1);
+ let opened;link.w.tenantConnectPairing={open:(member,options)=>{opened={member,options};}};
+ link.w.document.querySelector('.connect-number-add').click();await tick();
+ assert.equal(link.calls.length,0,'Add number delegates to confirmed QR flow, no implicit mutation');
+ assert.equal(opened.member.tenant_id,'tenant-a');assert.equal(opened.options.isCurrent(),true);
+ link.watchers.find(w=>w.provider==='connect').reset();assert.equal(opened.options.isCurrent(),false);
  link.close();
+ // Initial connection setup remains available without a stored key; it is not QR pairing.
+ const initial=harness('connect',{view:false,create:true,update:false,delete:false});
+ initial.data.integrations[0].status='not_connected';const initialWatcher=initial.watchers.find(w=>w.provider==='connect');initialWatcher.reset();initialWatcher.activate(initial.data);
+ assert.equal(initial.w.document.querySelector('[data-key]').closest('label').hidden,false);
+ assert.equal(initial.w.document.querySelector('.connect-number-add').hidden,true);
+ initial.w.document.querySelector('[data-key]').value='synthetic-initial-key';
+ initial.w.fetch=async(url,options)=>{initial.calls.push({url,...options});return {ok:true,json:async()=>JSON.parse(options.body).action==='channels'?{success:true,channels:[{id:'new',name:'Initial',active:false}]}:{success:true,connected:true}}};
+ [...initial.w.document.querySelectorAll('button')].find(b=>b.textContent==='Mövcud nömrələri yüklə').click();await tick();
+ initial.w.document.querySelector('tbody input').checked=true;initial.w.document.querySelector('[data-connect-initial-setup]').click();await tick();
+ assert.deepEqual(JSON.parse(initial.calls.at(-1).body).channel_ids,['new']);assert.equal(initial.w.document.querySelector('.connect-number-add').hidden,true,'create-only grant does not become update permission after setup');assert.equal(initial.w.document.querySelector('[data-key]').value,'');initial.close();
  // Actual shared source settings must expose the owner pairing modal, not only
  // the legacy channel list. Opening it reads status without pairing or dialing.
  for(const role of ['owner','worker']){

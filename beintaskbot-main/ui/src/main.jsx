@@ -1,3 +1,5 @@
+import QRCode from 'qrcode';
+window.tenantRenderPairingQR = text => QRCode.toDataURL(text, {width:320, margin:2, errorCorrectionLevel:'M'});
 import {useDealCardActivation} from './deal-card-activation.js';
 import { moveKommoDeal, verifyKommoDealMove, hasPendingKommoDealMove, canIdentifyKommoDeal } from "./kommo-deal-move.js";
 window.tenantKommoStageMove = { move: moveKommoDeal, canIdentify: canIdentifyKommoDeal };
@@ -1858,7 +1860,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
-                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box><Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box

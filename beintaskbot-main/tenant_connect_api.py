@@ -49,7 +49,10 @@ def settings_handler(member_from_request, origin: str, logger):
                 data = await request.json()
                 if not isinstance(data, dict):
                     raise TenantPlatformError('Sorğu düzgün deyil.')
-                if data.get('action') == 'disconnect':
+                if data.get('action') in {'pairing_start','pairing_status','pairing_refresh','pairing_complete'}:
+                    from tenant_connect_pairing import pairing
+                    result = await asyncio.to_thread(pairing, profile, data, origin.rstrip('/') + '/api/platform/connect/webhook')
+                elif data.get('action') == 'disconnect':
                     result = await asyncio.to_thread(disconnect, profile, authorization=data)
                 elif data.get('action') == 'disconnect_channel':
                     result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''), authorization=data)
