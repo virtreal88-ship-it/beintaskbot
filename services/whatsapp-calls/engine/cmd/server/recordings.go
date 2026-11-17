@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -23,11 +24,12 @@ import (
 )
 
 type recordingConfig struct {
-	Managed    bool     `json:"managed"`
-	Account    string   `json:"account_jid"`
-	Peers      []string `json:"allowed_peers"`
-	Seed       string   `json:"signing_seed"`
-	Encryption string   `json:"encryption_key"`
+	CapacityDir string   `json:"capacity_dir"`
+	Managed     bool     `json:"managed"`
+	Account     string   `json:"account_jid"`
+	Peers       []string `json:"allowed_peers"`
+	Seed        string   `json:"signing_seed"`
+	Encryption  string   `json:"encryption_key"`
 }
 
 var directPeerPattern = regexp.MustCompile(`^[1-9][0-9]{5,21}@(s\.whatsapp\.net|lid)$`)
@@ -47,12 +49,14 @@ type pendingRecording struct {
 	state     string
 	encrypted []byte
 	expires   time.Time
+	slot      *os.File
 }
 type recordingHandle struct {
 	id      string
 	capture *recording.Capture
 	store   *recordingStore
 	once    sync.Once
+	slot    *os.File
 }
 type recordingRow struct {
 	ID        string `json:"id"`
@@ -151,6 +155,16 @@ func (s *recordingStore) begin(session, call, account, peer string) (*recordingH
 	if count >= 20 {
 		return nil, errors.New("recording_storage_limit")
 	}
+	slot, capacityErr := s.acquireWork(true)
+	if capacityErr != nil {
+		return nil, capacityErr
+	}
+	reserved := false
+	defer func() {
+		if !reserved {
+			releaseWork(slot)
+		}
+	}()
 	id := newSessionID()
 	now := time.Now()
 	_, e := s.db.ExecContext(ctx, "INSERT INTO recordings(id,session_id,call_id,state,created_at,expires_at) VALUES(?,?,?,'recording',?,?)", id, session, call, now.UnixMilli(), now.Add(24*time.Hour).UnixMilli())
@@ -161,13 +175,15 @@ func (s *recordingStore) begin(session, call, account, peer string) (*recordingH
 	if s.cfg.Managed {
 		capture = recording.NewManaged(session, call, account, peer, now)
 	}
-	return &recordingHandle{id: id, capture: capture, store: s}, nil
+	reserved = true
+	return &recordingHandle{id: id, capture: capture, store: s, slot: slot}, nil
 }
 func (h *recordingHandle) finish(graceful bool) {
 	if h == nil {
 		return
 	}
 	h.once.Do(func() {
+		defer debug.FreeOSMemory()
 		data, manifest, e := h.capture.Finish(time.Now(), graceful, h.store.seed)
 		state := "failed"
 		var encrypted []byte
@@ -182,7 +198,7 @@ func (h *recordingHandle) finish(graceful bool) {
 			}
 		}
 		h.store.pendingMu.Lock()
-		h.store.pending[h.id] = pendingRecording{state, encrypted, time.Now().Add(24 * time.Hour)}
+		h.store.pending[h.id] = pendingRecording{state: state, encrypted: encrypted, expires: time.Now().Add(24 * time.Hour), slot: h.slot}
 		h.store.pendingMu.Unlock()
 		h.store.flushPending()
 	})
@@ -198,6 +214,7 @@ func (s *recordingStore) flushPending() {
 	defer s.pendingMu.Unlock()
 	for id, p := range s.pending {
 		if time.Now().After(p.expires) {
+			releaseWork(p.slot)
 			delete(s.pending, id)
 			continue
 		}
@@ -205,6 +222,7 @@ func (s *recordingStore) flushPending() {
 		_, err := s.db.ExecContext(ctx, "UPDATE recordings SET state=?,encrypted=? WHERE id=? AND state='recording'", p.state, p.encrypted, id)
 		cancel()
 		if err == nil {
+			releaseWork(p.slot)
 			delete(s.pending, id)
 		}
 	}

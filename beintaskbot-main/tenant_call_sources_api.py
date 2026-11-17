@@ -52,26 +52,42 @@ async def relay(request,profile,member,logger):
             socket=web.WebSocketResponse(max_msg_size=6400,compress=False,heartbeat=10)
             socket.headers.update(HEADERS)
             await socket.prepare(request)
-            async def transfer(source,target):
+            received={'browser':False,'provider':False}
+            async def transfer(source,target,side):
                 start=asyncio.get_running_loop().time();size=0
                 async for message in source:
-                    if message.type!=WSMsgType.BINARY or not message.data or len(message.data)>6400 or len(message.data)%2:break
+                    if message.type!=WSMsgType.BINARY:return side+'_closed'
+                    if not message.data or len(message.data)>6400 or len(message.data)%2:return side+'_invalid_pcm'
+                    received[side]=True
                     now=asyncio.get_running_loop().time()
                     if now-start>=1:start=now;size=0
                     size+=len(message.data)
-                    if size>65536:break
-                    await asyncio.wait_for(target.send_bytes(message.data),2)
+                    if size>65536:return side+'_rate_limit'
+                    try:await asyncio.wait_for(target.send_bytes(message.data),2)
+                    except asyncio.TimeoutError:return side+'_send_timeout'
+                return side+'_closed'
             async def recheck():
                 while True:
                     await asyncio.sleep(3)
                     fresh=member(request)
-                    if not fresh or any(str(fresh.get(k))!=v for k,v in identity.items()):return
-                    if await asyncio.to_thread(store.audio_authority,fresh,call,nonce)!=authority:return
-            tasks=[asyncio.create_task(transfer(socket,upstream)),asyncio.create_task(transfer(upstream,socket)),asyncio.create_task(recheck())]
-            try:await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED,timeout=130)
+                    if not fresh or any(str(fresh.get(k))!=v for k,v in identity.items()):return 'membership_changed'
+                    try:
+                        if await asyncio.to_thread(store.audio_authority,fresh,call,nonce)!=authority:return 'authority_changed'
+                    except TenantLinearError:return 'authority_denied'
+            tasks=[asyncio.create_task(transfer(socket,upstream,'browser')),asyncio.create_task(transfer(upstream,socket,'provider')),asyncio.create_task(recheck())]
+            code='relay_cancelled'
+            try:
+                done,_=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED,timeout=910)
+                code='duration_limit' if not done else 'transport_error'
+                for task in tasks:
+                    if task in done and not task.cancelled() and task.exception() is None:
+                        code=task.result();break
             finally:
                 for task in tasks:task.cancel()
                 results=await asyncio.gather(*tasks,return_exceptions=True)
-                if any(isinstance(r,Exception) for r in results):logger.info('call_audio_relay_closed')
+                # Only local enum codes and booleans, never exception strings,
+                # call IDs, account identifiers, audio, transcripts or tokens.
+                logger.info('call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
+                            code,received['browser'],received['provider'])
                 await socket.close()
             return socket

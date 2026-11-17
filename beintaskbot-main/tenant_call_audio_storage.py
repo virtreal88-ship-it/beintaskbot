@@ -15,9 +15,9 @@ def compress(wav):
             '-protocol_whitelist','pipe','-f','wav','-i','pipe:0','-map','0:a:0',
             '-c:a','libopus','-b:a','48k','-vbr','constrained','-application','voip',
             '-ac','2','-ar','48000','-f','ogg','pipe:1'],input=wav,stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,timeout=15,check=True)
+            stderr=subprocess.DEVNULL,timeout=60,check=True)
         encoded=result.stdout
-        if not encoded.startswith(b'OggS') or len(encoded)>1024*1024:
+        if not encoded.startswith(b'OggS') or len(encoded)>8*1024*1024:
             raise ValueError()
         return encoded
     except (OSError,ValueError,subprocess.SubprocessError):

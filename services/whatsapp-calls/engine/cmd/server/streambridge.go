@@ -14,12 +14,16 @@ import (
 )
 
 type streamBridge struct {
-	output   chan []byte
-	done     chan struct{}
-	once     sync.Once
-	attached atomic.Bool
-	onPCM    func([]float32)
-	onEnd    func()
+	output         chan []byte
+	done           chan struct{}
+	once           sync.Once
+	attached       atomic.Bool
+	onPCM          func([]float32)
+	onEnd          func()
+	startMu        sync.Mutex
+	startOnce      sync.Once
+	startRequested atomic.Bool
+	onStart        func() error
 }
 
 func newStreamBridge(onPCM func([]float32), onEnd func()) *Bridge {
@@ -27,6 +31,28 @@ func newStreamBridge(onPCM func([]float32), onEnd func()) *Bridge {
 	return &Bridge{stream: s}
 }
 func (s *streamBridge) close() { s.once.Do(func() { close(s.done) }) }
+func (s *streamBridge) setStart(start func() error) {
+	s.startMu.Lock()
+	s.onStart = start
+	s.startMu.Unlock()
+}
+func (s *streamBridge) startProvider() {
+	s.startOnce.Do(func() {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		s.startMu.Lock()
+		start := s.onStart
+		s.startMu.Unlock()
+		if start != nil {
+			if err := start(); err != nil {
+				s.close()
+			}
+		}
+	})
+}
 func (s *streamBridge) write(pcm []float32) error {
 	select {
 	case <-s.done:
@@ -113,7 +139,16 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.onPCM != nil {
+			// The first browser PCM (including muted silence) proves the whole
+			// authenticated relay is open. A private upstream handshake does not.
+			if s.startRequested.CompareAndSwap(false, true) {
+				go s.startProvider()
+			}
 			s.onPCM(media.PCMInt16LEToFloat32(data))
+		} else {
+			if s.startRequested.CompareAndSwap(false, true) {
+				go s.startProvider()
+			}
 		}
 	}
 }

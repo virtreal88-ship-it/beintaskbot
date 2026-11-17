@@ -5,7 +5,7 @@ import psycopg
 from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
 from test_tenant_support_inbox import db, PROFILE
-from test_call_recordings import pilot
+from test_call_recordings import pilot, test_duration_constraint_upgrade_is_idempotent
 from test_browser_calls import gateway, command, snapshot, calls, TenantLinearError
 from test_call_sources import managed, sources, provider, CONVERSATION, A, CA
 

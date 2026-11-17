@@ -22,12 +22,13 @@ ROUTE={'channel_id':CA,'conversation_id':CONVERSATION,'lead_id':41}
 
 def bundle(key, **changes):
     now=datetime.now(timezone.utc)
-    pcm=struct.pack('<hh',1000,-2000)*320
+    frames=changes.pop('_frames',320)
+    pcm=struct.pack('<hh',1000,-2000)*frames
     wav=struct.pack('<4sI4s4sIHHIIHH4sI',b'RIFF',36+len(pcm),b'WAVE',b'fmt ',16,1,2,16000,64000,4,16,b'data',len(pcm))+pcm
     m={'version':1,'session_id':'test-session','call_id':'test-call','account_jid':'123456789@s.whatsapp.net',
-       'peer_jid':PEER,'started_at':(now-timedelta(seconds=1)).isoformat(),'ended_at':now.isoformat(),
-       'expires_at':(now+timedelta(hours=23)).isoformat(),'duration_ms':20,'sample_rate':16000,
-       'channels':['employee','caller'],'samples_received':[320,320],'non_silent_samples':[320,320],
+       'peer_jid':PEER,'started_at':(now-timedelta(seconds=max(1,frames/16000))).isoformat(),'ended_at':now.isoformat(),
+       'expires_at':(now+timedelta(hours=23)).isoformat(),'duration_ms':frames//16,'sample_rate':16000,
+       'channels':['employee','caller'],'samples_received':[frames,frames],'non_silent_samples':[frames,frames],
        'gaps':[0,0],'complete':True,'end_code':'normal','sha256':hashlib.sha256(wav).hexdigest(),'consent_confirmed':True}
     m.update(changes);raw=json.dumps(m).encode()
     output=io.BytesIO()
@@ -218,3 +219,34 @@ def test_route_changed_after_authorization_is_not_silently_rebound(pilot,monkeyp
     with pytest.raises(TenantLinearError) as error:store.save(PROFILE,ROUTE,bundle(key)[0])
     assert error.value.status==409
     assert not db.execute('SELECT id FROM saas_test_call_recordings');db.commit()
+
+
+def test_full_fifteen_minute_bundle_requires_trusted_duration_and_encodes():
+    import shutil, subprocess, time
+    from tenant_call_audio_storage import compress
+    key=Ed25519PrivateKey.generate();public=key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+    raw,wav=bundle(key,_frames=16000*900)
+    with pytest.raises(TenantLinearError):decode(raw,public)
+    started=time.monotonic()
+    manifest,audio=decode(raw,public,max_seconds=900,retention_hours=720)
+    assert manifest['duration_ms']==900000 and audio==wav
+    encoded=compress(audio)
+    assert encoded.startswith(b'OggS') and len(encoded)<8*1024*1024
+    result=subprocess.run([shutil.which('ffmpeg'),'-v','error','-nostdin','-i','pipe:0','-map','0:a:0',
+        '-f','s16le','-acodec','pcm_s16le','-ac','2','-ar','16000','pipe:1'],input=encoded,
+        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=60,check=True)
+    assert len(result.stdout)==900*16000*4
+    print({'synthetic_duration_ms':900000,'signed_bundle_bytes':len(raw),'stored_opus_bytes':len(encoded),
+           'validation_encode_decode_seconds':round(time.monotonic()-started,2)})
+    for invalid in (True,0,901,3600):
+        with pytest.raises(TenantLinearError):decode(raw,public,max_seconds=invalid)
+
+
+def test_duration_constraint_upgrade_is_idempotent(pilot):
+    db,key,public,cfg,send=pilot
+    db.execute('ALTER TABLE saas_test_call_recordings DROP CONSTRAINT saas_test_call_recordings_duration_ms_check')
+    db.execute('ALTER TABLE saas_test_call_recordings ADD CONSTRAINT saas_test_call_recordings_duration_ms_check CHECK(duration_ms BETWEEN 1 AND 120000)');db.commit()
+    with db.cursor() as cur:store.migrate(cur);store.migrate(cur)
+    db.commit()
+    definition=db.execute("SELECT pg_get_constraintdef(oid) AS rule FROM pg_constraint WHERE conname='saas_test_call_recordings_duration_ms_check'")[0]['rule'];db.commit()
+    assert '900000' in definition and '120000' not in definition
