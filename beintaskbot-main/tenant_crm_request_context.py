@@ -1,6 +1,7 @@
 """Optional immutable browser intent for native CRM requests."""
 import re
 from uuid import UUID
+from moderation_demo import reviewer_actor_matches
 
 
 class CRMContextError(ValueError):
@@ -32,7 +33,8 @@ def require_expected_context(request, profile):
     tenant, actor = values[0][0], values[1][0]
     try:
         expected_tenant = str(UUID(str(tenant)))
-        if not re.fullmatch(r'[0-9]{1,19}', str(actor)) or int(actor) <= 0:
+        if not ((re.fullmatch(r'[0-9]{1,19}', str(actor)) and int(actor) > 0)
+                or reviewer_actor_matches(actor, profile)):
             raise ValueError
     except (ValueError, TypeError):
         raise CRMContextError('contacts_invalid_query') from None

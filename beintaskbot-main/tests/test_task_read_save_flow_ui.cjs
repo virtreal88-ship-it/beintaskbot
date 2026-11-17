@@ -11,6 +11,27 @@ const el=(b,id)=>b.d.getElementById(id),posts=b=>b.f.calls.filter(row=>row.metho
 async function create(b,source){el(b,'nativeTaskCreate').click();await settle();b.d.querySelector('[data-task-create-source="'+source+'"]').click();await settle();}
 async function refreshProfile(b,change){change(b.f);b.w.tenantRequestCoordinator.reset();await b.w.tenantReloadProfile();await settle();}
 const tests=[];function test(name,fn){tests.push([name,fn]);}
+test('verified isolated reviewer can read both task sources; unsigned synthetic IDs remain blocked',async()=>{
+ for(const config of [{reviewerActor:-1234567890,verifiedReviewer:true},{reviewerActor:-1234567890},{reviewerActor:0,verifiedReviewer:true},{reviewerActor:-1234567890,verifiedReviewer:true,manager:true}]){
+  const b=await mount(config);try{
+   const valid=config.verifiedReviewer===true&&config.reviewerActor<0&&!config.manager;
+   assert.equal(b.w.tenantTaskFlow.ready(),valid);
+   const reads=b.f.calls.filter(row=>row.url.includes('flow=1'));
+   if(valid){assert(reads.length>=2,'both bounded sources load');for(const read of reads)assert.equal(new URL(read.url,'https://fixture.test').searchParams.get('expected_user_id'),String(config.reviewerActor));
+    assert.equal(el(b,'nativeTaskCount').textContent,'Задач: 1 / 1');assert.equal(el(b,'kommoTaskCount').textContent,'Задач: 1 / 1');
+    await b.w.tenantTaskFlow.open('kommo','9007199254740993');await settle();assert.equal(el(b,'taskFlowCardTitle').textContent,'Saved external task');
+    await create(b,'native');assert.equal(el(b,'nativeTaskResponsible').querySelector('option[value=\"'+config.reviewerActor+'\"]').textContent,'Marketplace reviewer');
+    await refreshProfile(b,f=>{delete f.profile.capabilities.moderation_reviewer;});assert.equal(b.w.tenantTaskFlow.ready(),false,'revocation clears readiness');
+   }else assert.equal(reads.length,0,'no task read from invalid synthetic identity');
+   assert.equal(posts(b).length,0,'read-only navigation sends no writes');assert.deepEqual(b.errors,[]);
+  }finally{b.w.close();}
+ }
+});
+test('reviewer assignment options cannot substitute another synthetic actor',async()=>{
+ const b=await mount({reviewerActor:-1234567890,verifiedReviewer:true,reviewerOptionActor:-1234567891});try{
+  await create(b,'native');assert.equal(el(b,'nativeTaskSave').disabled,true);assert.equal(posts(b).length,0);assert.deepEqual(b.errors,[]);
+ }finally{b.w.close();}
+});
 test('native task create and edit show read-only client context without changing its write source',async()=>{
  const created=await mount({empty:true});try{await create(created,'native');assert.equal(el(created,'nativeTaskCustomerName').value,'Client A');assert.equal(el(created,'nativeTaskCustomerPhone').value,'+994501234567');assert.equal(el(created,'nativeTaskCustomerName').readOnly,true);assert.equal(el(created,'nativeTaskCustomerPhone').readOnly,true);el(created,'nativeTaskText').value='New task';el(created,'nativeTaskResponsible').value='22';el(created,'nativeTaskResponsible').dispatchEvent(new created.w.Event('change'));el(created,'nativeTaskForm').requestSubmit();await settle();const write=posts(created).at(-1);assert.equal(write.path,'/api/platform/crm/native/tasks');assert.equal(write.body.text,'New task');assert.equal(Object.hasOwn(write.body,'contact_name'),false);assert.equal(Object.hasOwn(write.body,'contact_phone'),false);assert.deepEqual(created.errors,[]);}finally{created.w.close();}
  const edited=await mount();try{await edited.w.tenantTaskFlow.open('native',edited.f.task);await settle();edited.d.querySelector('[data-task-card-edit]').click();await settle();assert.equal(el(edited,'nativeTaskCustomerName').value,'Client A');assert.equal(el(edited,'nativeTaskCustomerPhone').value,'+994501234567');assert.equal(el(edited,'nativeTaskText').value,'PRIVATE task A');assert.equal(posts(edited).length,0);assert.deepEqual(edited.errors,[]);}finally{edited.w.close();}
