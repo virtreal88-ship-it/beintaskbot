@@ -13,9 +13,20 @@
   const sameRoute=(a,b)=>a&&b&&['channel_id','conversation_id','lead_id'].every(k=>String(a[k])===String(b[k]));
   const make=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
   const labels={incoming:'Входящий звонок',starting:'Подключение…',ringing:'Вызов…',connected:'Разговор',ending:'Завершаем звонок…',ended:'Звонок завершён',failed:'Звонок не начался',unknown:'Завершение звонка пока не подтверждено'};
+  const icon={phone:'<path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/>',end:'<path d="M3 16v-4c5-5 13-5 18 0v4l-5-1v-3a13 13 0 0 0-8 0v3l-5 1Z"/>',mic:'<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',muted:'<path d="M9 9v3a3 3 0 0 0 5 2M15 9V5a3 3 0 0 0-6 0M5 10v2a7 7 0 0 0 12 5M19 12v-2M12 19v3M8 22h8M3 3l18 18"/>'};
+  const buttonIcon=(button,kind,label)=>{button.setAttribute('aria-label',label);button.title=label;button.innerHTML='<span class="browser-call-control-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+icon[kind]+'</svg></span>';button.append(make('span',label,'browser-call-control-label'));};
+  const contactName=(route,call)=>{const raw=String(call?.display_name||route?.customer_name||route?.display_name||route?.contact_name||'').trim();if(raw&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(raw))return raw.slice(0,120);const jid=String(route?.conversation_id||'');return /^[1-9][0-9]{5,21}@s\.whatsapp\.net$/.test(jid)?'+'+jid.split('@')[0]:'Контакт WhatsApp';};
+  const initials=name=>name.startsWith('+')||name==='Контакт WhatsApp'?'WA':name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>Array.from(part)[0]).join('').toLocaleUpperCase();
   const style=make('style');style.textContent=`
-    .browser-call-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--border,#dde3e8);background:transparent;color:inherit;cursor:pointer;flex:none}.browser-call-button svg{width:19px;height:19px}.browser-call-button:disabled{opacity:.45;cursor:default}
-    .browser-call-panel{border:1px solid #dce4e9;border-radius:20px;padding:24px;width:min(420px,calc(100vw - 32px));box-sizing:border-box;color:#17212b;background:#fff;box-shadow:0 18px 70px #10203033}.browser-call-panel::backdrop{background:#11223355}.browser-call-panel h2{margin:0 30px 12px 0;font-size:20px}.browser-call-panel p{line-height:1.5}.browser-call-close{position:absolute;right:12px;top:12px;background:none;border:0;font-size:24px;cursor:pointer}.browser-call-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.browser-call-actions button{padding:10px 16px;border:1px solid #d7e0e8;border-radius:12px;cursor:pointer}.browser-call-actions .accept{background:#087e53;color:white;border-color:#087e53}.browser-call-actions .end{background:#b42336;color:white;border-color:#b42336}.browser-call-panel label{display:flex;align-items:flex-start;gap:10px;line-height:1.4}.browser-call-panel small{display:block;margin-top:12px;color:#62717d}.browser-call-panel audio{width:100%;margin-top:12px}.browser-call-error{color:#a91d2e}`;document.head.append(style);
+    .browser-call-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--line,#e6eeea);background:transparent;color:inherit;cursor:pointer;flex:none}.browser-call-button svg{width:19px;height:19px}.browser-call-button:disabled{opacity:.45;cursor:default}
+    .browser-call-panel{position:fixed;border:1px solid var(--line,#e6eeea);border-radius:30px;padding:34px 28px 24px;width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;text-align:center;color:var(--ink,#102621);background:linear-gradient(150deg,color-mix(in srgb,var(--brand,#0a926e) 9%,var(--card,#fff)),var(--card,#fff) 62%);box-shadow:0 24px 90px #10262133;font-family:inherit}.browser-call-panel::backdrop{background:#10262166;backdrop-filter:blur(4px)}.browser-call-panel [hidden]{display:none!important}
+    .browser-call-panel .browser-call-kicker{margin:4px 35px 12px;color:var(--muted,#698079);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}.browser-call-panel h2{margin:0 12px 10px;font-size:clamp(24px,5vw,32px);font-weight:650;line-height:1.2;overflow-wrap:anywhere}.browser-call-panel p{line-height:1.5}.browser-call-state{margin:0;min-height:24px;font-size:14px;color:var(--muted,#698079)}
+    .browser-call-close{position:absolute;right:14px;top:14px;width:36px;height:36px;display:grid;place-items:center;border:0!important;border-radius:50%;background:transparent!important;color:var(--muted,#698079);font-size:27px;cursor:pointer}.browser-call-close:hover{background:var(--line,#e6eeea)!important}.browser-call-panel button:focus-visible{outline:3px solid var(--brand,#0a926e);outline-offset:4px}
+    .browser-call-avatar{display:grid;place-items:center;width:136px;height:136px;margin:42px auto;border-radius:50%;background:color-mix(in srgb,var(--brand,#0a926e) 12%,var(--card,#fff));color:var(--brand-deep,#086e55);font-size:48px;font-weight:600;letter-spacing:-.04em;box-shadow:0 0 0 14px color-mix(in srgb,var(--brand,#0a926e) 5%,transparent)}.browser-call-panel[data-state=incoming] .browser-call-avatar,.browser-call-panel[data-state=ringing] .browser-call-avatar{animation:browser-call-ring 2s ease-in-out infinite}@keyframes browser-call-ring{50%{box-shadow:0 0 0 23px color-mix(in srgb,var(--brand,#0a926e) 2%,transparent)}}
+    .browser-call-actions{display:flex;justify-content:center;gap:28px;margin:24px 0 20px}.browser-call-actions button{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:72px;padding:0;border:0!important;background:transparent!important;color:var(--ink,#102621);cursor:pointer;font:inherit}.browser-call-control-icon{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:var(--line,#e6eeea);color:var(--ink,#102621);transition:transform .15s,background .15s}.browser-call-control-icon svg{width:25px;height:25px}.browser-call-control-label{font-size:12px;line-height:1.4}.browser-call-actions .accept .browser-call-control-icon{background:var(--brand-deep,#086e55);color:#fff}.browser-call-actions .end .browser-call-control-icon,.browser-call-actions .reject .browser-call-control-icon{background:#c53645;color:#fff}.browser-call-actions button:hover .browser-call-control-icon{transform:translateY(-2px)}.browser-call-actions button:disabled{opacity:.45;cursor:default}.browser-call-actions .mute[aria-pressed=true] .browser-call-control-icon{background:color-mix(in srgb,var(--brand,#0a926e) 18%,var(--card,#fff));color:var(--brand-deep,#086e55)}
+    .browser-call-panel small{display:block;max-width:350px;margin:0 auto;color:var(--muted,#698079);font-size:11px;line-height:1.7}.browser-call-result{margin-top:12px;color:var(--muted,#698079);font-size:12px;line-height:1.5}.browser-call-error{margin:16px 0;padding:10px 12px;border-radius:12px;color:var(--danger,#b42318);background:color-mix(in srgb,var(--danger,#b42318) 7%,var(--card,#fff));font-size:13px}.browser-call-error:empty{display:none}
+    @media(max-width:480px){.browser-call-panel{padding:30px 20px 20px;border-radius:24px}.browser-call-avatar{margin:36px auto}.browser-call-actions{gap:20px}}@media(prefers-reduced-motion:reduce){.browser-call-panel .browser-call-avatar{animation:none}.browser-call-control-icon{transition:none}}
+  `;document.head.append(style);
   async function api(data,owner=profile(),keepalive=false){
     const q=query(owner);if(!data&&session?.request){q.set('request_id',session.request);if(session.stopping)q.set('heartbeat','0');}
     const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),7000);
@@ -28,36 +39,36 @@
   async function stop(s=session,hide=false){
     if(!s){if(hide)closeModal();return;}
     s.stopping=true;release(s);draw();
-    try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.error='Звонок отменён до подключения.';draw();}}catch(error){if(session===s){s.error='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
+    try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
     if(hide)closeModal();void poll();
   }
   function closeModal(){if(modal){modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
   function show(route,call=null){
     if(busy()&&modal){draw();if(!modal.node.open)modal.node.showModal();return;}
     if(busy()){route=session.route;call=session.call;}
-    closeModal();const node=make('dialog',undefined,'browser-call-panel'),title=make('h2',call?'Входящий звонок':'Звонок WhatsApp'),state=make('p'),error=make('p','','browser-call-error');
+    closeModal();const node=make('dialog',undefined,'browser-call-panel'),title=make('h2'),state=make('p','','browser-call-state'),error=make('p','','browser-call-error'),kicker=make('p','','browser-call-kicker'),avatar=make('div','','browser-call-avatar');state.setAttribute('aria-live','polite');error.setAttribute('role','alert');avatar.setAttribute('aria-hidden','true');
     node.setAttribute('aria-label','Звонок WhatsApp');const close=make('button','×','browser-call-close');close.setAttribute('aria-label','Закрыть звонок');
-    const consent=make('input');consent.type='checkbox';const consentLabel=make('label');consentLabel.append(consent,make('span','Участник предупреждён и согласен на запись обеих сторон.'));
-    const actions=make('div',undefined,'browser-call-actions'),start=make('button',call?'Принять':'Позвонить','accept'),reject=make('button','Отклонить'),end=make('button','Завершить','end');
-    for(const button of [start,reject,end,close])button.type='button';actions.append(start,reject,end);
-    const info=make('small');const result=make('div');
-    node.append(close,title,state,consentLabel,error,actions,info,result);document.body.append(node);
-    modal={node,title,state,error,consent,consentLabel,start,reject,end,result,info,route:routeOf(route),call};
+    const actions=make('div',undefined,'browser-call-actions'),start=make('button',undefined,'accept'),reject=make('button',undefined,'reject'),end=make('button',undefined,'end'),mute=make('button',undefined,'mute');
+    buttonIcon(start,'phone',call?'Принять':'Позвонить');buttonIcon(reject,'end','Отклонить');buttonIcon(end,'end','Завершить');buttonIcon(mute,'mic','Выключить микрофон');mute.setAttribute('aria-pressed','false');
+    for(const button of [start,reject,end,mute,close])button.type='button';actions.append(start,mute,reject,end);
+    const info=make('small');const result=make('div','','browser-call-result');
+    node.append(close,kicker,title,state,avatar,error,actions,info,result);document.body.append(node);
+    modal={node,title,state,error,start,reject,end,mute,kicker,avatar,result,info,name:contactName(route,call),route:routeOf(route),call};
     close.onclick=()=>{if(busy())void stop(session,true);else if(modal?.call&&!terminal(modal.call))void rejectCall();else closeModal();};
     node.addEventListener('cancel',event=>{event.preventDefault();close.click();});
-    consent.onchange=draw;start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();
+    start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();mute.onclick=()=>{const s=session;if(!s?.media||s.stopping)return;s.muted=!s.muted;s.media.setMuted(s.muted);draw();};
     draw();node.showModal();
   }
   async function rejectCall(){const m=modal;if(!m?.call)return;try{await api({...m.route,op:'reject',call_id:m.call.id,request_id:crypto.randomUUID()});closeModal();void poll();}catch(e){if(modal===m)m.error.textContent=e.message;}}
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
-    m.title.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';
+    m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=call?.display_name?contactName(m.route,call):m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=call?.state||'idle';
     const source=sourceOf(m.route);
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
     const number=/^[0-9]{5,22}$/.test(source.number||'')?' +'+source.number:'';
-    m.info.textContent='WhatsApp источника'+number+'. Максимум 2 минуты; запись хранится '+(source.permanent?'30 дней.':'24 часа.');m.error.textContent=s?.error||'';m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
-    m.start.disabled=!source.online||!m.consent.checked;m.reject.hidden=!call||call.state!=='incoming'||!!s;
-    m.end.hidden=!active&&!pending;m.end.disabled=!!s?.stopping;m.consentLabel.hidden=!!s;
+    m.info.textContent='WhatsApp источника'+number+'. Звонок записывается. Максимум 2 минуты; запись хранится '+(source.permanent?'30 дней.':'24 часа.');m.error.textContent=[s?.error,!terminal(call)&&s?.closeError].filter(Boolean).join(' ');m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
+    m.start.disabled=!source.online;m.reject.hidden=!call||call.state!=='incoming'||!!s;
+    m.end.hidden=!active&&!pending;m.end.disabled=!!s?.stopping;m.mute.hidden=!s?.media||!active||!!s?.stopping;m.mute.setAttribute('aria-pressed',String(!!s?.muted));buttonIcon(m.mute,s?.muted?'muted':'mic',s?.muted?'Включить микрофон':'Выключить микрофон');
     if(call&&terminal(call)){
       m.result.textContent=call.recording_state==='pending'?'Сохраняем запись в диалог…':call.recording_state==='incomplete'?'Запись сохранена. Захват отметил промежутки в аудиопотоке.':call.recording_state==='ready'?'Запись сохранена в диалог.':call.recording_state==='unconfirmed'?'Разговор завершён после перезапуска сервера. Сохранение записи не подтверждено.':'';
     }
@@ -70,7 +81,7 @@
     const managed=s.transport==='websocket',pc=managed?null:new RTCPeerConnection({iceServers:[]});
     let dc=pc?.createDataChannel('pcm',{ordered:true})||null,closed=false;
     const ctx=new AudioContext({sampleRate:16000});if(dc)dc.binaryType='arraybuffer';
-    const handle={pc,close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close();pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
+    const handle={pc,setMuted(muted){stream.getAudioTracks().forEach(track=>{track.enabled=!muted;});},close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close();pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
     try{
       await ctx.audioWorklet.addModule('/assets/browser-call-audio.js');await ctx.resume();
       const capture=new AudioWorkletNode(ctx,'bein-call-capture'),playback=new AudioWorkletNode(ctx,'bein-call-playback');
@@ -98,7 +109,9 @@
     }catch(e){handle.close();throw e;}
   }
   async function begin(){
-    const m=modal;if(!m||!m.consent.checked||!sourceOf(m.route).online||busy())return;
+    // The owner's recording policy is visible beside the explicit call action.
+    // Starting/accepting is still a user click, never an automatic incoming claim.
+    const m=modal;if(!m||!sourceOf(m.route).online||busy())return;
     const s={route:m.route,call:m.call,transport:sourceOf(m.route).media||'webrtc',request:crypto.randomUUID(),owner:{...profile()},identity:key(),preparing:true,stopping:false,error:''};session=s;draw();
     try{
       const offer=await media(s);if(s.stopping||session!==s||key()!==s.identity){release(s);return;}
@@ -117,7 +130,7 @@
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
         if(call){s.call=call;if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
-          if(terminal(call)){release(s);s.stopping=false;s.preparing=false;if(call.recording_id&&s.refreshed!==call.recording_id){s.refreshed=call.recording_id;if(sameRoute(window.tenantOperator?.currentDialog,s.route))void window.tenantOperator.openDialog({...s.route,provider:'connect'},true);}}
+          if(terminal(call)){release(s);s.stopping=false;s.preparing=false;s.closeError='';if(call.recording_id&&s.refreshed!==call.recording_id){s.refreshed=call.recording_id;if(sameRoute(window.tenantOperator?.currentDialog,s.route))void window.tenantOperator.openDialog({...s.route,provider:'connect'},true);}}
           if(call.error_code&&!terminal(call)&&!s.stopping){s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
       }
       const incoming=calls.find(c=>c.state==='incoming'&&!c.claimed);
