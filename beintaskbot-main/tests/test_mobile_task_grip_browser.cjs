@@ -3,6 +3,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
  for(const width of [320,390,430,1440]){
  const page=await browser.newPage({viewport:{width,height:900},hasTouch:width<700,timezoneId:'Asia/Baku'});
+ await page.clock.setFixedTime(new Date('2026-11-17T08:00:00Z'));
  await page.setContent('<html><body style="margin:0"><div id="tasksList"></div></body></html>');
  await page.addScriptTag({content:fs.readFileSync('docs/tenant-chakra-ui.js','utf8')});
  await page.addStyleTag({content:fs.readFileSync('ui/src/app-theme.css','utf8')});
@@ -13,6 +14,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
  assert.equal(await card.locator('[data-task-move-grip]').isVisible(),true);
  const a=await handle.boundingBox(),b=await card.boundingBox();assert(a.width>=44&&a.height>=44);assert(a.y-b.y<12&&a.x+a.width<=b.x+b.width,'handle stays in top corner');
  await handle.focus();await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>opened),['1'],'keyboard opens existing editor without changing deadline');assert.equal(await page.evaluate(()=>moves.length),0);
+ assert.equal(await card.evaluate(el=>el.closest('[data-task-column]').dataset.taskColumn),'today','fixture must drag from today to a different day');
  const cdp=await page.context().newCDPSession(page);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:a.x+a.width/2,y:a.y+a.height/2}]});
  await page.locator('[data-task-column="tomorrow"]').evaluate(el=>el.scrollIntoView({block:'nearest',inline:'center'}));
  const dest=await page.locator('[data-task-column="tomorrow"]').boundingBox();const x=Math.max(10,Math.min(width-10,dest.x+dest.width/2)),y=dest.y+25;
