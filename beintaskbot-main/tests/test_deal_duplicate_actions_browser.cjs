@@ -11,6 +11,7 @@ for(const width of [390,1024,1440])for(const theme of ['light','dark']){
  document.getElementById('dealModal').classList.add('show');const host=document.getElementById('modalContent');host.innerHTML='<button data-duplicate-search="7" data-duplicate-tenant="true" data-duplicate-phone="0551234567">Find</button><div class="chat-placeholder"><div id="chatRows">History</div><div><textarea id="chatText"></textarea></div></div>';
  tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'0551234567'},isCurrent:()=>true});document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:7}}));
  });
+ await page.locator('#dealModal>.modal-card').evaluate(async n=>{await Promise.all(n.getAnimations().map(a=>a.finished));});
  if(width>=1024){
   const chat=await page.locator('.chat-placeholder').boundingBox(),info=await page.locator('#dealInfoPanel').boundingBox();assert(chat.x+chat.width<=info.x+1,'chat left, info right');
   const support=page.locator('#supportCreateFromChat'),duplicate=page.locator('[data-duplicate-search]');assert(await support.locator('.deal-support-caption').isVisible());
