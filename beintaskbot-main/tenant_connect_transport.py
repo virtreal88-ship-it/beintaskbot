@@ -1347,11 +1347,14 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 record_message(cur,tenant,channel_id,conversation,str(source_message['id']))
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             from tenant_connect_identity import conflicted
-            if (lifecycle_enabled(cur, tenant) and not outbound and message_inserted and not ai_origin and employee is None
-                    and not uncertain_origin and not control_replayed and not identity_conflict
+            if (lifecycle_enabled(cur, tenant) and not outbound and message_inserted and not ai_origin
+                    and (employee is None or not coordinated) and not uncertain_origin and not control_replayed and not identity_conflict
                     and not role_override and not conflicted(cur,tenant,channel_id,conversation)):
                 from tenant_dialog_lifecycle import note_inbound
-                # Only a new durable customer message may reopen the queue.
+                # Fresh direct messages from configured staff also need a human
+                # response. Keep their employee identity and the no-AI return
+                # below; group employee replies and outbound echoes cannot
+                # reopen a customer queue. No admission/notice policy changes.
                 # Pass the provider timestamp, never our receipt time fallback:
                 # delayed history and duplicate webhooks are not new enquiries.
                 note_inbound(cur, tenant, channel_id, conversation,
