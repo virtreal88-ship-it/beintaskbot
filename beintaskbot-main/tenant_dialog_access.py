@@ -101,9 +101,11 @@ def allowed_channels(cur,tenant,policy,action='view',*,conversation=None):
     return channels
 
 
-def apply_capabilities(cur,tenant,policy,dialog,*,_list_access=None):
+def apply_capabilities(cur,tenant,policy,dialog,*,_list_access=None,_action_capabilities=None):
     """UI is a projection of the same independent server action scopes."""
     if not policy.has_scoped_access('dialogs'):
+        if _action_capabilities is not None:
+            _action_capabilities['update']=policy.legacy_allows('dialogs')
         if dialog.get('group_coordination'):filter_group(cur,tenant,policy,dialog['group_coordination'],_list_access=_list_access)
         return dialog
     can_update=True
@@ -113,6 +115,8 @@ def apply_capabilities(cur,tenant,policy,dialog,*,_list_access=None):
         else:
             can_update=_list_access.update[(dialog['provider'],str(dialog['channel_id']))]
     except TenantLinearError:can_update=False
+    if _action_capabilities is not None:
+        _action_capabilities['update']=can_update
     dialog['can_send']=bool(dialog.get('can_send') and can_update)
     if not can_update:dialog['send_block_reason']='permission_denied'
     dialog['can_use_copilot']=bool(dialog.get('can_use_copilot',True) and independent_ai_allowed(policy))

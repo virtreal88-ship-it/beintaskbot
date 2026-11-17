@@ -64,6 +64,47 @@ for(const state of ['waiting','accepted','closed']){
  assert.equal(d.querySelectorAll('.operator-unread-count').length,1);
  assert.equal(d.querySelector('.operator-unread-count').textContent,'2');
 }
+// Only an explicit server-proven absence suppresses New, never missing metadata.
+for(const [state,hasInbound,expected] of [['waiting',false,null],['waiting',undefined,'waiting'],['waiting',null,'waiting'],['waiting',true,'waiting'],['accepted',false,'accepted'],['closed',false,'closed']]){
+ visible=[{...a,lifecycle:{...a.lifecycle,state,has_inbound:hasInbound}}];
+ await w.tenantOperator.refresh();await tick();
+ assert.equal(d.querySelector('.operator-row .operator-lifecycle-badge')?.dataset.lifecycleState??null,expected);
+ assert.equal(d.querySelectorAll('.operator-row').length,1,'no-inbound history is retained');
+ assert.equal(d.querySelector('.operator-unread-count').textContent,'2','badge eligibility never changes unread counters');
+}
+single=false;
+const outgoingOnly={...a,lifecycle:{...a.lifecycle,has_inbound:false}};
+for(const [second,expected] of [
+ [{...b,lifecycle:{...b.lifecycle,state:'accepted',has_inbound:true}},'accepted'],
+ [{...b,lifecycle:{...b.lifecycle,state:'closed',has_inbound:false}},'closed'],
+ [{...b,lifecycle:{...b.lifecycle,has_inbound:false}},null],
+ [{...b,lifecycle:{...b.lifecycle,has_inbound:undefined}},'waiting'],
+ [{...b,lifecycle:{...b.lifecycle,has_inbound:true}},'waiting']]){
+ visible=[outgoingOnly,second];await w.tenantOperator.refresh();await tick();
+ assert.equal(d.querySelector('.operator-row .operator-lifecycle-badge')?.dataset.lifecycleState??null,expected,'outgoing-only source must not mask actionable group state');
+ assert.equal(d.querySelectorAll('.operator-row').length,1);
+ assert.equal(d.querySelector('.operator-unread-count').textContent,'2');
+}
+single=true;
+// Queue mode is visible outside advanced filters; completed history stays searchable.
+const queue=d.querySelector('#operatorLifecycle');assert(queue);assert(!queue.closest('#operatorAdvanced'));assert.equal(queue.value,'all');
+visible=[{...a,lifecycle:{...a.lifecycle,state:'dismissed',revision:10,has_inbound:true,can_accept:false,can_dismiss:false}}];
+await w.tenantOperator.refresh();await tick();
+assert.equal(d.querySelector('.operator-row .operator-lifecycle-badge').dataset.lifecycleState,'dismissed');
+for(const mode of ['completed','active','all']){
+ queue.value=mode;queue.dispatchEvent(new w.Event('change'));await tick();await tick();
+ const query=new URL(calls.filter(c=>c.url.includes('/dialogs?')).at(-1).url,'https://example.test').searchParams;
+ assert.equal(query.get('lifecycle'),mode);
+ assert.equal(d.querySelectorAll('.operator-row').length,mode==='active'?0:1);
+ await w.tenantOperator.refresh();assert.equal(queue.value,mode,'refresh preserves queue selection');
+}
+queue.value='completed';d.querySelector('#operatorSearch').value='Synthetic';d.querySelector('#operatorState').value='no_agent';
+await w.tenantOperator.refresh();
+const search=new URL(calls.filter(c=>c.url.includes('/dialogs?')).at(-1).url,'https://example.test').searchParams;
+assert.equal(search.get('lifecycle'),'completed');assert.equal(search.get('search'),'Synthetic');assert.equal(search.get('state'),'no_agent','AI-state filter stays independent');
+d.querySelector('[data-open-operator]').click();await tick();await tick();assert(calls.some(c=>c.url.includes('/dialogs/history')),'completed history can be opened without reopen');
+d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,telegram_id:44}}}));await tick();await tick();assert.equal(queue.value,'all','new identity resets view selection');
+queue.value='all';
 visible=[{...a,lifecycle_enabled:false}];await w.tenantOperator.refresh();await tick();assert(!d.querySelector('.operator-lifecycle-badge'),'legacy route gets no invented lifecycle');
 assert(!calls.some(c=>/send|dialogs_lifecycle/.test(c.url)));dom.window.close();console.log('PASS grouped card explicit source selection, refresh, no send or lifecycle mutation');
 })().catch(e=>{console.error(e);process.exitCode=1;});

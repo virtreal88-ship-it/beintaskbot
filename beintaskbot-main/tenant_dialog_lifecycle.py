@@ -227,7 +227,7 @@ def _targets(cur, tenant, policy, channel, actor):
 _UNSET_WORKFLOW=object()
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -247,8 +247,9 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
         'can_accept':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')),
-        'can_dismiss':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')) and bool(last),
+        'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
+        'has_inbound':bool(last) if details else _has_inbound,
         'can_close':state=='accepted' and own,'can_transfer':state=='accepted' and own,
         'can_submit_case':state=='closed' and own}
     if details:

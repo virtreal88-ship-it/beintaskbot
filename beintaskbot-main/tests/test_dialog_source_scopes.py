@@ -479,3 +479,32 @@ def test_kommo_pipeline_history_is_independent_and_filters_mixed_sources(scoped,
     with pytest.raises(TenantLinearError):history.page(person,41)
     db.execute('UPDATE saas_crm_deals SET pipeline_id=11 WHERE tenant_id=%s::uuid AND kommo_lead_id=701',(A,));db.commit()
     with pytest.raises(TenantLinearError):history.page(person,701)
+
+
+@pytest.mark.parametrize('update,allowed',[('none',False),('self',False),('department',True),('all',True)])
+def test_offline_dismiss_projection_preserves_independent_source_scope(scoped,update,allowed):
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_dialog_rollout import transition
+    db,person=scoped
+    with db.cursor() as cur:
+        lifecycle.migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.commit()
+    grants(db,33,'all',update)
+    db.execute("UPDATE saas_tenant_integrations SET status='disconnected' WHERE tenant_id=%s::uuid AND provider='connect'",(A,))
+    db.commit()
+    preview=next(r for r in dialogs.listing(person,completion_preview=True)['dialogs'] if r['lead_id']==41)
+    detail=dialogs.history(person,'connect',41,CA,'client')['dialog']
+    for row in (preview,detail):
+        assert row['lifecycle']['has_inbound'] is True
+        assert row['lifecycle']['can_dismiss'] is allowed
+        assert row['can_send'] is False
+        assert row['lifecycle']['can_accept'] is False
+    request=dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,action='dismiss',
+        expected_revision=0,request_id=str(uuid.uuid4()),message_id=preview['lifecycle']['last_inbound_id'])
+    # Revoke after preview: unchanged mutation must still reject without a write.
+    grants(db,33,'all','none')
+    with pytest.raises(TenantLinearError) as denied:lifecycle.mutate(person,request)
+    assert denied.value.status==403
+    assert not db.execute('SELECT 1 FROM saas_dialog_lifecycle_receipts WHERE request_id=%s::uuid',(request['request_id'],))
+    db.commit()
