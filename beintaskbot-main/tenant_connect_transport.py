@@ -29,7 +29,8 @@ from tenant_connect_direct_identity import (
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
-CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, 'call.missed')
+CONNECT_CALL_EVENTS = ('call.missed', 'call.rejected', 'call.invalidated')
+CONNECT_ACCEPTED_EVENTS = (*CONNECT_WEBHOOK_EVENTS, *CONNECT_CALL_EVENTS)
 
 
 def _preserved_webhook_events(current):
@@ -805,22 +806,22 @@ def _upgrade_missed_call_subscription(api_key, current):
             or current.get('active') is not True
             or not isinstance(events, list) or any(not isinstance(x, str) for x in events)):
         raise ValueError('Invalid existing managed subscription')
-    if 'call.missed' in events:
+    if set(CONNECT_CALL_EVENTS).issubset(events):
         return False
     _request(api_key, 'POST', '/v1/webhooks/' + webhook_id + '/events',
-             {'add': ['call.missed'], 'expectedUrl': url})
+             {'add': list(CONNECT_CALL_EVENTS), 'expectedUrl': url})
     hooks = _request(api_key, 'GET', '/v1/webhooks').get('data', [])
     matches = [hook for hook in hooks if isinstance(hook, dict) and str(hook.get('id') or '') == webhook_id]
     if (len(matches) != 1 or matches[0].get('url') != url
             or matches[0].get('active') is not current.get('active')
             or not isinstance(matches[0].get('events'), list)
-            or not set([*events, 'call.missed']).issubset(matches[0]['events'])):
+            or not set([*events, *CONNECT_CALL_EVENTS]).issubset(matches[0]['events'])):
         raise ValueError('Subscription addition readback mismatch')
     return True
 
 
 def sync_webhook_subscriptions() -> int:
-    """Add missed calls only to existing active CRM webhooks after deployment.
+    """Add call service events only to existing active CRM webhooks after deployment.
 
     This keeps existing company installations working without asking an owner
     to disconnect/reconnect a channel. The API key and webhook id remain
@@ -899,12 +900,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
     if not channel_id or not conversation:
         raise ConnectWebhookError('missing_route', 'Connect webhook kanal məlumatı yoxdur.', 400)
     call_occurred = None
-    if event_type == 'call.missed':
+    if event_type in CONNECT_CALL_EVENTS:
         from tenant_connect_calls import validate
         try:
             call_occurred = validate(event)
         except ValueError as exc:
-            raise ConnectWebhookError('invalid_call', 'Invalid missed call event.', 400) from exc
+            raise ConnectWebhookError('invalid_call', 'Invalid call service event.', 400) from exc
     metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None

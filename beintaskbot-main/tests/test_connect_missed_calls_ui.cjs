@@ -15,3 +15,22 @@ for(const [language,audio,video] of [['ru','Пропущенный звонок'
  }
 }
 console.log('missed call presentation RU/AZ/EN passed');
+for(const [language,audio,video] of [['ru','Отклонённый входящий звонок','Отклонённый входящий видеозвонок'],['az','Rədd edilmiş daxil olan zəng','Rədd edilmiş daxil olan videozəng'],['en','Rejected incoming call','Rejected incoming video call']]){
+ context.i18n.language=language;
+ for(const [isVideo,label] of [[false,audio],[true,video]]){
+  const markup=context.messageMarkup([{id:'call',external_id:'connect:call:2',source:'connect',direction:'system',message_type:'call_rejected',call_is_video:isVideo,happened_at:'2026-11-16T10:13:21Z'}]);
+  assert(markup.includes(label));assert(markup.includes('data-rejected-call'));
+  assert(!markup.includes('data-missed-call'));assert(!markup.includes('data-media-open'));
+  assert(!markup.includes('data-reply-message'));assert(!markup.includes('data-quote-jump'));
+ }
+}
+console.log('rejected incoming call presentation RU/AZ/EN passed');
+for(const [language,audio,video] of [['ru','Статус звонка уточнён','Статус видеозвонка уточнён'],['az','Zəngin statusu dəqiqləşdirildi','Videozəngin statusu dəqiqləşdirildi'],['en','Call status corrected','Video call status corrected']]){
+ context.i18n.language=language;
+ for(const [isVideo,label] of [[false,audio],[true,video]]){
+  const markup=context.messageMarkup([{id:'call',external_id:'connect:call:2',source:'connect',direction:'system',message_type:'call_invalidated',call_is_video:isVideo,happened_at:'2026-11-16T10:13:21Z'}]);
+  assert(markup.includes(label));assert(markup.includes('data-invalidated-call'));
+  for(const prohibited of ['data-missed-call','data-rejected-call','data-media-open','data-reply-message','data-quote-jump'])assert(!markup.includes(prohibited));
+ }
+}
+console.log('neutral corrected call presentation RU/AZ/EN passed');

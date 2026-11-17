@@ -311,7 +311,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     value['participant_alt'] = participant_alt
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
     value.pop('delivery_state', None)
-    if value.get('message_type') == 'call_missed':
+    if value.get('message_type') in {'call_missed', 'call_rejected', 'call_invalidated'}:
         value['call_is_video'] = isinstance(raw, dict) and raw.get('isVideo') is True
     if value['source'] == 'connect':
         # Display only a persisted provider/receipt status; viewing a dialog or
