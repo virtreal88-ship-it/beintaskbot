@@ -21,16 +21,17 @@ def handler(member_from_request, origin, logger, resource='import'):
             if resource=='audio':
                 if SLOTS.locked():raise TenantLinearError('Прослушивание занято. Повторите позже.',429)
                 async with SLOTS:
-                    data=await asyncio.to_thread(load,profile,request.match_info['record_id'])
+                    data,audio_type=await asyncio.to_thread(load,profile,request.match_info['record_id'],with_type=True)
                 selected=_byte_range(request.headers.get('Range'),len(data))
-                headers.update({'Accept-Ranges':'bytes','Content-Disposition':'inline; filename="test-call.wav"'})
+                extension='ogg' if audio_type=='audio/ogg' else 'wav'
+                headers.update({'Accept-Ranges':'bytes','Content-Disposition':'inline; filename="call.'+extension+'"'})
                 if selected is False:
                     headers['Content-Range']='bytes */'+str(len(data))
                     return web.Response(status=416,headers=headers)
                 if selected:
                     first,last=selected;headers['Content-Range']=f'bytes {first}-{last}/{len(data)}'
-                    return web.Response(body=data[first:last+1],status=206,content_type='audio/wav',headers=headers)
-                return web.Response(body=data,content_type='audio/wav',headers=headers)
+                    return web.Response(body=data[first:last+1],status=206,content_type=audio_type,headers=headers)
+                return web.Response(body=data,content_type=audio_type,headers=headers)
             route=dict(request.query)
             if request.method=='GET':
                 result=await asyncio.to_thread(capability,profile,route)

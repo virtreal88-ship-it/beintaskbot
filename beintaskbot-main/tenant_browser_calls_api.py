@@ -28,8 +28,8 @@ def handler(member,origin,logger,resource='browser'):
             if SLOTS.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
             if resource in {'sync','recording'}:
                 if request.headers.get('Origin') or request.headers.get('Cookie'):raise TenantLinearError('gateway_access_denied',403)
-                cfg=store.gateway_auth(request.headers.get('Authorization',''))
                 async with SLOTS:
+                    cfg=await asyncio.to_thread(store.gateway_auth,request.headers.get('Authorization',''))
                     raw=await body(request,MAX_BUNDLE if resource=='recording' else 128*1024)
                     if resource=='recording':
                         if request.content_type!='application/zip':raise TenantLinearError('recording_type_invalid',400)
