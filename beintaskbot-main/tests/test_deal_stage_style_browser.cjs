@@ -3,12 +3,15 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
 for(const width of [320,390,768,1440])for(const theme of ['light','dark']){
 const page=await browser.newPage({viewport:{width,height:900},colorScheme:theme});
-await page.setContent('<html lang="en"><body><div id="dealsList"></div><div id="nativeDealsList"></div></body></html>');
+const shell=fs.readFileSync('docs/tenant-app.html','utf8');
+await page.setContent('<html lang="en" data-app-theme="'+theme+'"><head>'+[...shell.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m=>m[0]).join('')+'</head><body><div id="dealsList"></div><div id="nativeDealsList"></div><section id="view-tasks"><div class="panel task-source-panel"><div id="tasksList"></div></div></section></body></html>');
 await page.evaluate(()=>{window.tenantViewDemand={watch(){}};window.fetch=async()=>({ok:true,json:async()=>({success:true,catalog:[{pipeline_id:1,name:'Sales',stages:[{stage_id:1,name:'New',color:'#22c55e'},{stage_id:2,name:'Working'},{stage_id:3,name:'Very long stage name '.repeat(12)}]}],hidden_stage_keys:[]})});});
 await page.addScriptTag({content:fs.readFileSync('docs/tenant-chakra-ui.js','utf8')});
+await page.addStyleTag({content:fs.readFileSync('ui/src/app-theme.css','utf8')});
+await page.evaluate(()=>{document.body.dataset.appUi='kwid';});
 await page.evaluate(()=>tenantChakraCRM.renderDeals('dealsList',[{kommo_lead_id:1,pipeline_id:1,status_id:1,name:'One'},{kommo_lead_id:2,pipeline_id:1,status_id:2,name:'Two'},{kommo_lead_id:3,pipeline_id:1,status_id:3,name:'Three'}],false,()=>{}));
 await page.locator('[data-kommo-stage-key="1:3"] [data-deal-stage-badge]').waitFor();
-await page.evaluate(()=>{const host=document.createElement('div');host.id='tasksList';document.body.append(host);tenantChakraCRM.renderTasks([{id:'task',text:'Task',status:'pending',due_at:'2020-01-01T00:00:00Z'}],{source:'native'});});
+await page.evaluate(()=>{tenantChakraCRM.renderTasks([{id:'task',text:'Task',status:'pending',due_at:'2020-01-01T00:00:00Z'}],{source:'native'});});
 await page.locator('[data-task-stage-header]').first().waitFor();
 const taskHeight=(await page.locator('[data-task-stage-header]').first().boundingBox()).height;
 const dealHeight=(await page.locator('[data-deal-stage-header]').first().boundingBox()).height;
@@ -16,10 +19,13 @@ assert(Math.abs(taskHeight-dealHeight)<=1,`task header ${taskHeight} should matc
 const geometry=await page.evaluate(()=>{
   const task=document.querySelector('[data-task-stage-header]'),deal=document.querySelector('[data-deal-stage-header]');
   const values=node=>{const css=getComputedStyle(node),col=getComputedStyle(node.parentElement);return {display:css.display,align:css.alignItems,justify:css.justifyContent,gap:css.gap,paddingBottom:css.paddingBottom,marginBottom:css.marginBottom,borderBottom:css.borderBottomWidth,columnPadding:col.padding,columnWidth:col.width,columnBackground:col.backgroundColor,columnRadius:col.borderRadius};};
+  const typography=node=>{const css=getComputedStyle(node);return {fontSize:css.fontSize,fontWeight:css.fontWeight,lineHeight:css.lineHeight,margin:css.margin,color:css.color}};
   const heading=task.querySelector('h2,h3'),count=task.querySelector('[data-task-stage-count]');
   const h=heading.getBoundingClientRect(),b=count.getBoundingClientRect();
-  return {task:values(task),deal:values(deal),countRight:b.left>=h.right,headingLeft:h.left===task.getBoundingClientRect().left,count:count.textContent};
+  return {taskType:typography(heading),dealType:typography(deal.querySelector('h2,h3')),taskLabel:typography(task.querySelector('p')),dealLabel:typography(deal.querySelector('p')),task:values(task),deal:values(deal),countRight:b.left>=h.right,headingLeft:h.left===task.getBoundingClientRect().left,count:count.textContent};
 });
+assert.deepEqual(geometry.taskType,geometry.dealType);assert.deepEqual(geometry.taskLabel,geometry.dealLabel);
+assert.equal(await page.locator('[data-task-title]').first().evaluate(n=>getComputedStyle(n).fontWeight),'400');
 assert.deepEqual(geometry.task,geometry.deal,'task columns share deal header spacing and surface');
 assert(geometry.countRight,'count sits to the right, not a second centred row');
 assert(geometry.headingLeft,'task title aligns with left edge like deal title');
