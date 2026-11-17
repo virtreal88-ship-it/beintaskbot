@@ -14,7 +14,7 @@ async function main(){
  const browser=await chromium.launch({headless:true});const context=await browser.newContext();
  let calls=[],posts=[],dropStart=false,deny=false;
  await context.route('**/api/platform/browser-calls?*',async r=>{const req=r.request(),url=new URL(req.url());if(deny)return r.fulfill({status:403,json:{error:'access revoked'}});
-   if(req.method()==='GET')return r.fulfill({json:{result:{enabled:true,online:true,calls:calls.map(c=>({...c,request_matches:url.searchParams.get('request_id')===c.nonce}))}}});
+   if(req.method()==='GET')return r.fulfill({json:{result:{enabled:true,online:true,test_number:'994123456789',calls:calls.map(c=>({...c,request_matches:url.searchParams.get('request_id')===c.nonce}))}}});
    const d=req.postDataJSON();posts.push(d);
    if(d.op==='start'||d.op==='accept'){assert(d.sdp_offer.startsWith('v=0'));const c={...d,id:d.call_id||'call-'+posts.length,nonce:d.request_id,direction:d.op==='start'?'outbound':'inbound',state:'connected',owned:true,claimed:true,recording_state:'pending'};calls=[c];if(dropStart)return r.abort('failed');return r.fulfill({json:{result:c}});}
    if(d.op==='end'){const c=calls.find(c=>c.id===d.call_id||c.nonce===d.request_id);if(c)c.state='ended';return r.fulfill({json:{result:c||{state:'not_started'}}});}
@@ -25,7 +25,7 @@ async function main(){
   const p=await context.newPage();await p.goto(origin);await p.waitForResponse(r=>r.url().includes('/browser-calls?')).catch(()=>{});
   const phone=p.getByRole('button',{name:'Звонок WhatsApp',exact:true});await phone.waitFor();
   const positions=await p.evaluate(()=>[document.querySelector('#operatorBrowserCallHost').getBoundingClientRect().right,document.querySelector('#more').getBoundingClientRect().left]);assert(positions[0]<=positions[1]);
-  await phone.click();assert(await p.getByRole('button',{name:'Позвонить',exact:true}).isDisabled());await p.locator('input[type=checkbox]').check();
+  await phone.click();assert(await p.getByText('Звонок через тестовый WhatsApp +994123456789.',{exact:false}).isVisible());assert(await p.getByRole('button',{name:'Позвонить',exact:true}).isDisabled());await p.locator('input[type=checkbox]').check();
   await p.evaluate(()=>{const b=document.querySelector('.accept');b.click();b.click();});await p.getByText('Разговор',{exact:true}).waitFor();assert.equal(posts.filter(x=>x.op==='start').length,1);
   await p.getByRole('button',{name:'Закрыть звонок'}).click();await p.locator('dialog').waitFor({state:'detached'});assert(await p.evaluate(()=>streams.every(s=>s.getTracks().every(t=>t.readyState==='ended'))));
   await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await p.waitForTimeout(300);await phone.click();await p.locator('input[type=checkbox]').check();

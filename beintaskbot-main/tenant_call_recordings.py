@@ -146,6 +146,7 @@ def persist(cur,tenant,actor,b,selected,manifest,wav,bundle):
       (record_id,tenant,channel,conversation,lead,actor,digest,bundle_digest,manifest['duration_ms'],
        manifest['complete'],manifest['end_code'],encrypted,manifest['started_at'],manifest['expires_at']))
     meta={'recording_id':record_id,'duration_ms':manifest['duration_ms'],'complete':manifest['complete'],
+          'call_account_number':manifest['account_jid'].split('@')[0],
           'expires_at':manifest['expires_at'],'conversationId':conversation,'test_recording':True,
           'archived_owner_binding':b.get('source_mode')=='archived_owner_binding'}
     # An internal timeline event, never an incoming customer message. This

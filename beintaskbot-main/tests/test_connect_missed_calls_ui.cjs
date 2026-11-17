@@ -46,9 +46,10 @@ console.log('unknown incoming call presentation RU/AZ/EN passed');
 context.member={tenant_id:'tenant-one',telegram_id:11};context.URLSearchParams=URLSearchParams;
 context.i18n.language='ru';
 const recorded={id:'recording-message',source:'connect',direction:'system',message_type:'call_recording',
- call_recording:{id:'a'.repeat(32),duration_ms:27183,complete:false,expires_at:new Date(Date.now()+60000).toISOString(),archived_owner_binding:true}};
+ call_recording:{account_number:'994123456789',id:'a'.repeat(32),duration_ms:27183,complete:false,expires_at:new Date(Date.now()+60000).toISOString(),archived_owner_binding:true}};
 const recordingMarkup=context.messageMarkup([recorded]);
 assert(recordingMarkup.includes('Возможны пропуски аудио'));
+assert(recordingMarkup.includes('WhatsApp звонка: +994123456789'));
 assert(recordingMarkup.includes('Привязано владельцем к архивному диалогу'));
 assert(recordingMarkup.includes('expected_tenant_id=tenant-one'));
 assert(recordingMarkup.includes('expected_user_id=11'));

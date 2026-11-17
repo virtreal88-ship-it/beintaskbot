@@ -150,7 +150,7 @@ def test_explicit_archived_owner_pilot_never_reopens_support_or_grants_employee_
         transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
     db.commit()
     with pytest.raises(TenantLinearError,match='Сначала примите'):calls.action(PROFILE,command())
-    cfg={**cfg,'archived_test_route':True,'actors':[11,33]}
+    cfg={**cfg,'owner_bound_test_route':True,'actors':[11,33]}
     monkeypatch.setenv('BEINTASKBOT_BROWSER_CALL_PILOT',json.dumps(cfg))
     person=employee(db,['dialogs'])
     with pytest.raises(TenantLinearError):calls.action(person,command())

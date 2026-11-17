@@ -2,7 +2,7 @@
  * No provider keys, remote iframe, message sends, or local HTTP requests. */
 (() => {
   'use strict';
-  let identity='',revision=0,polling=false,timer=null,enabled=true,online=false,calls=[],session=null,modal=null;
+  let identity='',revision=0,polling=false,timer=null,enabled=true,online=false,testNumber='',calls=[],session=null,modal=null;
   const terminal=call=>!call||['ended','failed'].includes(call.state);
   const busy=()=>!!session&&(session.preparing||session.stopping||!terminal(session.call));
   const profile=()=>window.tenantOperator?.member||window.tenantProfileSnapshot?.member;
@@ -39,9 +39,9 @@
     const consent=make('input');consent.type='checkbox';const consentLabel=make('label');consentLabel.append(consent,make('span','Участник предупреждён и согласен на запись обеих сторон.'));
     const actions=make('div',undefined,'browser-call-actions'),start=make('button',call?'Принять':'Позвонить','accept'),reject=make('button','Отклонить'),end=make('button','Завершить','end');
     for(const button of [start,reject,end,close])button.type='button';actions.append(start,reject,end);
-    const info=make('small','Тестовый номер. Максимум 2 минуты; запись доступна 24 часа.');const result=make('div');
+    const info=make('small');const result=make('div');
     node.append(close,title,state,consentLabel,error,actions,info,result);document.body.append(node);
-    modal={node,title,state,error,consent,consentLabel,start,reject,end,result,route:routeOf(route),call};
+    modal={node,title,state,error,consent,consentLabel,start,reject,end,result,info,route:routeOf(route),call};
     close.onclick=()=>{if(busy())void stop(session,true);else if(modal?.call&&!terminal(modal.call))void rejectCall();else closeModal();};
     node.addEventListener('cancel',event=>{event.preventDefault();close.click();});
     consent.onchange=draw;start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();
@@ -52,7 +52,7 @@
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
     m.title.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':online?'Готов к звонку':'Тестовый сервер звонков не подключён';
-    m.error.textContent=s?.error||'';m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
+    m.info.textContent='Звонок через тестовый WhatsApp'+(testNumber?' +'+testNumber:'')+'. Максимум 2 минуты; запись доступна 24 часа.';m.error.textContent=s?.error||'';m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
     m.start.disabled=!online||!m.consent.checked;m.reject.hidden=!call||call.state!=='incoming'||!!s;
     m.end.hidden=!active&&!pending;m.end.disabled=!!s?.stopping;m.consentLabel.hidden=!!s;
     if(call&&terminal(call)){
@@ -91,7 +91,7 @@
     if(polling||!identity||!enabled)return;polling=true;const generation=revision;
     try{
       const result=await api();if(generation!==revision||key()!==identity)return;
-      enabled=result.enabled===true;online=result.online===true;calls=result.calls||[];
+      enabled=result.enabled===true;online=result.online===true;testNumber=/^[0-9]{5,22}$/.test(result.test_number||'')?result.test_number:'';calls=result.calls||[];
       const s=session;
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
