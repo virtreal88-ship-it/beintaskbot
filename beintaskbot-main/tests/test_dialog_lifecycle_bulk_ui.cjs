@@ -29,7 +29,7 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
  d.querySelector('#operatorSearch').value='filter ignored';
  const button=d.querySelector('#operatorCompleteAll');assert(button);button.click();button.click();
  for(let i=0;i<30&&button.disabled;i++)await tick();
- const mutations=calls.filter(c=>c.body),notice=d.querySelector('#operatorNotice').textContent;
+ const mutations=calls.filter(c=>c.body),notice=d.querySelector('#operatorBulkCompletionStatus').textContent;
  assert(!calls.some(c=>c.url.includes('/dialogs/read')),'bulk completion never marks read');
  assert(!calls.some(c=>/send|copilot|support-tickets/.test(c.url)),'bulk never sends messages or creates cases');
  assert(!calls.some(c=>c.url.includes('/dialogs/history')),'preparation must not make one history request per dialogue');

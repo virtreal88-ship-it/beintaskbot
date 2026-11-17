@@ -5,6 +5,7 @@ No inference from support tickets, AI assignments, role, phone, or group members
 import hashlib
 import json
 import uuid
+import time
 from tenant_linear_policy import TenantLinearError
 
 
@@ -264,6 +265,24 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
 
 
 def mutate(profile, payload):
+    """Retry only a proven rolled-back completion transaction, never ambiguity.
+
+    PostgreSQL 40P01 aborts the transaction. _mutate_once has left its connection
+    context (and rolled back) before this handler runs. Each retry repeats all
+    authorization/CAS checks with the SAME request ID and original tokens.
+    This tolerates a startup-DDL collision; it does not solve migration ordering.
+    """
+    from psycopg.errors import DeadlockDetected
+    attempts=3 if payload.get('action') in {'close','dismiss'} else 1
+    for attempt in range(attempts):
+        try:
+            return _mutate_once(profile,payload)
+        except DeadlockDetected:
+            if attempt+1==attempts:raise
+            time.sleep(0.15*(attempt+1))
+
+
+def _mutate_once(profile, payload):
     if payload.get('action')=='case':
         from tenant_dialog_episode_cases import submit
         return submit(profile,payload)
