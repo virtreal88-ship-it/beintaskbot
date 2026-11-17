@@ -246,3 +246,88 @@ def test_active_group_list_batches_guards_and_retains_capabilities(fixture, monk
     assert optimized == legacy
     assert len(legacy_sql) > len(optimized_sql) + 600
     print(f'ACTIVE GROUP GUARDS 1→61: statements {len(small_sql)}→{len(optimized_sql)}, legacy {len(legacy_sql)}')
+
+
+class _ListAccessCursor:
+    """Controlled before/after-lock responses, not a real concurrency proof."""
+    def __init__(self, routes, *, changed_link=False, transferred=False, missing=False):
+        self.routes = routes
+        self.changed_link, self.transferred, self.missing = changed_link, transferred, missing
+        self.calls, self.result, self.link_reads = [], [], 0
+        self.locked = False
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        if 'JOIN saas_connect_channels ch' in sql:
+            assert params[0] == A and 'c.tenant_id=%s::uuid' in sql
+            self.result = [dict(channel_id=c, conversation_id=g) for c, g in reversed(self.routes)]
+        elif 'FROM saas_connect_dialog_links' in sql:
+            assert params[0] == A and 'tenant_id=%s::uuid' in sql
+            self.link_reads += 1
+            if self.link_reads == 2:
+                assert self.locked
+            self.result = ([dict(channel_id=self.routes[0][0], source_id=self.routes[0][1],
+                                 canonical_id='999999999@g.us')]
+                           if self.changed_link and self.link_reads == 2 else [])
+        elif 'pg_advisory_xact_lock' in sql:
+            assert 'WITH ORDINALITY' in sql and 'ORDER BY n' in sql
+            self.locked = True
+            self.result = []
+        elif 'FROM saas_ai_conversation_state' in sql:
+            assert self.locked and params[0] == A and 'FOR SHARE' in sql
+            self.result = []
+        elif 'LEFT JOIN saas_dialog_workflows' in sql:
+            assert self.locked and self.link_reads == 2 and params[0] == A
+            assert 'w.tenant_id=c.tenant_id' in sql and 'c.tenant_id=%s::uuid' in sql
+            self.result = ([] if self.missing else [dict(channel_id=c, conversation_id=g,
+                state='accepted' if self.transferred else 'waiting',
+                operator_id=44 if self.transferred else None) for c, g in self.routes])
+        else:
+            raise AssertionError('Unexpected SQL: ' + sql)
+
+    def fetchall(self):
+        return self.result
+
+
+def _controlled_list_access(monkeypatch, cursor):
+    from types import SimpleNamespace
+    import tenant_dialog_access as source_access
+    import tenant_dialog_lifecycle as lifecycle
+    import tenant_connect_dialog_equivalence as equivalence
+    from tenant_operator_list_access import ListAccess
+    checked_sources = []
+    monkeypatch.setattr(source_access, 'require_source',
+                        lambda cur, tenant, policy, provider, channel, action:
+                        checked_sources.append((tenant, provider, channel, action)))
+    monkeypatch.setattr(source_access, 'sql_filter', lambda *args: 'TRUE')
+    monkeypatch.setattr(lifecycle, 'visibility_sql', lambda *args: 'TRUE')
+    monkeypatch.setattr(equivalence, 'available', lambda cur: True)
+    policy = SimpleNamespace(profile={'tenant_id': A, 'telegram_id': 11},
+                             has_scoped_access=lambda module: False)
+    rows = [dict(provider='connect', channel_id=c,
+                 group_coordination={'group_jid': g}) for c, g in cursor.routes]
+    result = ListAccess(cursor, A, policy, rows, SimpleNamespace(enforced=True))
+    return result, checked_sources
+
+
+def test_list_access_batch_lock_keys_match_route_protocol(monkeypatch):
+    routes = [(CB, '222222222@g.us'), (CA, '111111111@g.us'), (CB, '111111111@g.us')]
+    cursor = _ListAccessCursor(routes)
+    result, sources = _controlled_list_access(monkeypatch, cursor)
+    batches = [params[0] for sql, params in cursor.calls if 'pg_advisory_xact_lock' in sql]
+    expected = []
+    for channel, group in sorted(routes, key=lambda route: (route[1], route[0])):
+        expected.extend(['ai-group:' + json.dumps([A, 'connect', group]),
+                         'ai-dialog:' + json.dumps([A, 'connect', channel, group])])
+    assert batches == [expected]
+    assert sources == [(A, 'connect', c, 'view') for c in sorted({CA, CB})]
+    assert result.groups == {'111111111@g.us': {CA, CB}, '222222222@g.us': {CB}}
+
+
+@pytest.mark.parametrize('change,status', [('changed_link', 409), ('transferred', 404), ('missing', 409)])
+def test_list_access_revalidates_after_batch_lock(monkeypatch, change, status):
+    cursor = _ListAccessCursor([(CA, '111111111@g.us')], **{change: True})
+    with pytest.raises(TenantLinearError) as denied:
+        _controlled_list_access(monkeypatch, cursor)
+    assert denied.value.status == status
+    assert cursor.locked and cursor.link_reads == 2
