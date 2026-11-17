@@ -127,6 +127,13 @@ def disable_device(profile: dict, device_id: object) -> None:
 
 def disable_browser_device(profile: dict, device_id: object) -> None:
     """Logout ends this person's SaaS bindings on the current browser only."""
+    # Review identities cannot register push devices. A cookie may belong to
+    # the real account used in another tab: never detach that account's device.
+    actor = profile.get('telegram_id')
+    if isinstance(actor, int) and not isinstance(actor, bool) and actor < 0 and profile.get('active') is True:
+        from moderation_demo import identity_allowed
+        if identity_allowed(str(profile.get('tenant_id') or ''), actor):
+            return
     _,user=_identity(profile)
     if not isinstance(device_id,str) or not re.fullmatch(r'[a-f0-9]{64}',device_id):
         raise ValueError('Cihaz kodu düzgün deyil.')

@@ -33,6 +33,29 @@ class PushStorageTests(unittest.TestCase):
                                              '_fernet':Mock(return_value=self.cipher),'TenantPlatformError':TenantPlatformError})
         self.profile=person();self.sub=subscription()
 
+    def test_verified_reviewer_logout_does_not_touch_foreign_push_device(self):
+        from unittest.mock import patch
+        import moderation_demo
+        current = moderation_demo.DemoConfig('00000000-0000-0000-0000-000000000123', 'review', 'unused', 9999999999)
+        profile = {**self.profile, 'tenant_id': current.tenant_id, 'telegram_id': current.user_id}
+        with patch.object(moderation_demo, 'config', return_value=current):
+            self.module.disable_browser_device(profile, 'a' * 64)
+            self.module._connect.assert_not_called()
+            # Cleanup exemption does not authorize registration or other push APIs.
+            for action in (lambda: self.module.register_device(profile, self.sub),
+                           lambda: self.module.list_devices(profile),
+                           lambda: self.module.disable_device(profile, 'a' * 64)):
+                with self.assertRaises(TenantPlatformError): action()
+            for invalid in ({**profile, 'tenant_id': 'foreign'},
+                            {**profile, 'telegram_id': current.user_id - 1},
+                            {**profile, 'active': False}):
+                with self.assertRaises(TenantPlatformError):
+                    self.module.disable_browser_device(invalid, 'a' * 64)
+        with patch.object(moderation_demo, 'config', return_value=None):
+            with self.assertRaises(TenantPlatformError):
+                self.module.disable_browser_device(profile, 'a' * 64)
+        self.module._connect.assert_not_called()
+
     def test_normalization_keeps_only_expected_keys_and_canonical_host(self):
         self.sub['tenant_id']='foreign';self.sub['endpoint']=self.sub['endpoint'].replace('fcm.googleapis.com','FCM.GOOGLEAPIS.COM:443')
         normalized=self.module.normalize_subscription(self.sub)
