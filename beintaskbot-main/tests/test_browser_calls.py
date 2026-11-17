@@ -162,3 +162,36 @@ def test_explicit_archived_owner_pilot_never_reopens_support_or_grants_employee_
     assert calls.status(PROFILE)['calls']==[]
     # Gateway independently stops media after the operator loses authorization.
     assert calls.sync(cfg,snapshot(2))['commands'][0]['cancelled']
+
+
+def test_company_rollout_keeps_fresh_source_ownership_and_tenant_boundaries(gateway,monkeypatch):
+    from tenant_dialog_rollout import transition
+    from tenant_dialog_lifecycle import migrate
+    from test_tenant_operator_workspace import employee
+    from test_dialog_source_scopes import grants
+    db,key,cfg=gateway
+    person=employee(db,['dialogs'])
+    assert calls.status(person)=={'enabled':False}
+    cfg={**cfg,'all_company_members':True,'owner_bound_test_route':True}
+    monkeypatch.setenv('BEINTASKBOT_BROWSER_CALL_PILOT',json.dumps(cfg))
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
+    with db.cursor() as cur:
+        migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.commit()
+    grants(db,33,'self','self')
+    assert calls.offer(person,ROUTE)
+    assert not calls.offer({'tenant_id':B,'telegram_id':33},ROUTE)
+    with pytest.raises(TenantLinearError):calls.action(person,command())
+    db.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s::uuid,%s::uuid,33,11)',(A,CA));db.commit()
+    # Company availability never grants the owner's no-reopen exception to staff.
+    with pytest.raises(TenantLinearError,match='Сначала примите'):calls.action(person,command())
+    db.execute("INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision) VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',33,1)",(A,CA,CONVERSATION,str(uuid.uuid4())));db.commit()
+    call=calls.action(person,command());assert call['state']=='starting'
+    assert calls.status(person)['calls'][0]['owned']
+    # A fresh source revocation hides the call and cancels the queued provider action.
+    db.execute('DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=33',(A,));db.commit()
+    assert calls.status(person)['calls']==[]
+    assert calls.sync(cfg,snapshot(2))['commands'][0]['cancelled']
+    db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=33',(A,));db.commit()
+    with pytest.raises(TenantLinearError):calls.status(person)

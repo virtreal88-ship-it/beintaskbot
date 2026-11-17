@@ -81,9 +81,14 @@ def _lock(cur,c):
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('browser-call:'+c['tenant_id']+':'+c['gateway_id'],))
 
 
+def member_enabled(c,profile):
+    return (str(profile.get('tenant_id'))==c['tenant_id'] and
+            (c.get('all_company_members') is True or int(profile.get('telegram_id') or 0) in c['actors']))
+
+
 def authorize(cur,profile,route,c,*,write=False):
     tenant,actor,policy=access(cur,profile,'dialogs',action='update' if write else 'view')
-    if tenant!=c['tenant_id'] or actor not in c['actors']:
+    if not member_enabled(c,policy.profile):
         raise TenantLinearError('Звонки пока недоступны этому сотруднику.',403)
     try:
         channel=str(uuid.UUID(str(route['channel_id'])));lead=int(route['lead_id']);conversation=str(route['conversation_id'])
@@ -94,15 +99,14 @@ def authorize(cur,profile,route,c,*,write=False):
     source=cur.fetchone()
     # A dedicated test gateway may be explicitly bound to the selected archived
     # route. It never changes that source or claims it is live in Connect.
-    if not source or (not source['active'] and c.get('owner_bound_test_route') is not True):
+    owner_bound_test=c.get('owner_bound_test_route') is True and policy.profile.get('role')=='owner'
+    if not source or (not source['active'] and not owner_bound_test):
         raise TenantLinearError('Источник звонка недоступен.',403)
-    owner_bound_test=c.get('owner_bound_test_route') is True
     if owner_bound_test:
         # Explicit owner-selected lab destination, not a Connect send or a reopened
         # support episode. It may be archived or an already completed support conversation.
         # Still enforce current source update grants and lifecycle visibility;
         # never access a conversation assigned to another employee.
-        if policy.profile.get('role')!='owner':raise TenantLinearError('Адресный тест доступен только владельцу.',403)
         from tenant_dialog_access import require_source
         require_source(cur,tenant,policy,'connect',channel,'update' if write else 'view')
     selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead,action='update' if write and not owner_bound_test else 'view')
@@ -114,7 +118,7 @@ def authorize(cur,profile,route,c,*,write=False):
 
 def offer(profile,route):
     c=config()
-    return bool(c and str(profile.get('tenant_id'))==c['tenant_id'] and int(profile.get('telegram_id') or 0) in c['actors']
+    return bool(c and member_enabled(c,profile)
         and str(route.get('channel_id'))==c['channel_id'] and any(str(v['lead_id'])==str(route.get('lead_id'))
         and v['conversation_id']==str(route.get('conversation_id')) for v in c['routes'].values()))
 
@@ -129,7 +133,7 @@ def _public(row,actor):
 
 def status(profile,request_id=None,heartbeat=True):
     c=config()
-    if not c or str(profile.get('tenant_id'))!=c['tenant_id'] or int(profile.get('telegram_id') or 0) not in c['actors']:
+    if not c or not member_enabled(c,profile):
         return {'enabled':False}
     with _connect() as conn,conn.cursor() as cur:
         tenant,actor,_=access(cur,profile,'dialogs')
