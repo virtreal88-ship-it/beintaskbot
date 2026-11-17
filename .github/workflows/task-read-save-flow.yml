@@ -142,5 +142,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: deal-source-screenshots
-          path: beintaskbot-main/tests/artifacts/deal-source/
+          path: |
+            beintaskbot-main/tests/artifacts/deal-source/
+            beintaskbot-main/tests/artifacts/deal-stage-style/
           if-no-files-found: ignore

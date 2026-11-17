@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {moveKommoDeal} from '../ui/src/kommo-deal-move.js';
+import {moveKommoDeal,verifyKommoDealMove} from '../ui/src/kommo-deal-move.js';
 const storage=new Map();globalThis.sessionStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
 const row={source_revision:'a'.repeat(64),kommo_lead_id:7,pipeline_id:10,status_id:100,source_updated_at:'2026-11-14T00:00:00Z',raw:{updated_at:1794614400}},context={tenant_id:'a',user_id:'7'};
 let requests=[];await assert.rejects(moveKommoDeal({...row,source_revision:null},101,context),/Sync and refresh/);assert.equal(storage.size,0);globalThis.fetch=async(url,options={})=>{requests.push({url,options});throw Error('lost response')};
@@ -32,3 +32,8 @@ storage.clear();requests=[];
 globalThis.fetch=async(url,options={})=>{requests.push({url,options});return {ok:false,json:async()=>({success:false,error:'board_outcome_unknown',keep_request:true})}};
 await assert.rejects(moveKommoDeal(row,101,context),/Result unknown/);assert.equal(requests.length,2);assert.equal(storage.size,1);
 console.log('PASS one bounded GET-only reconciliation; unresolved command retained');
+
+// Background checks must never manufacture a command when storage disappeared.
+storage.clear();requests=[];globalThis.fetch=async()=>{throw Error('must not fetch')};
+assert.equal(await verifyKommoDealMove(row,101,context),null);assert.equal(storage.size,0);
+console.log('PASS verification-only absent request does not post or create a UUID');
