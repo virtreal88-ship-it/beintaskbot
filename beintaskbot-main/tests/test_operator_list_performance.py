@@ -207,6 +207,11 @@ def test_active_lifecycle_uses_one_batch_workflow_snapshot(fixture):
     fixture.commit()
     before,before_sql=measured(fixture,dialogs.listing)
     add_rows(fixture,80)
+    # The active view contains requests, not outgoing-only/empty history.
+    fixture.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+      SELECT gen_random_uuid(),%s::uuid,1000+n,'active-perf-'||n,%s,'incoming','Synthetic request'
+      FROM generate_series(1,80) n''',(A,'connect:'+CA))
+    fixture.commit()
     after,after_sql=measured(fixture,dialogs.listing)
     assert len(after['dialogs'])>len(before['dialogs'])
     assert all(row['lifecycle']['state']=='waiting' for row in after['dialogs'])
@@ -231,6 +236,9 @@ def test_active_group_list_batches_guards_and_retains_capabilities(fixture, monk
               conversation_id,lead_id,conversation_kind,contact_name,last_message_at)
               VALUES(%s::uuid,%s::uuid,%s,%s,'group','Synthetic group',now())''',
               (A, CA, str(120363001000+n)+'@g.us', 9000+n))
+            fixture.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+              VALUES(gen_random_uuid(),%s::uuid,%s,%s,%s,'incoming','Synthetic group request')''',
+              (A,9000+n,'active-group-perf-'+str(n),'connect:'+CA))
         fixture.commit()
     add_groups(0, 1)
     small, small_sql = measured(fixture, dialogs.listing)

@@ -17,10 +17,11 @@ def test_active_group_card_retains_exact_authorized_sources_and_filters(projecti
     activate(projection)
     result=cards()
     assert len(result)==1
-    assert {r['channel_id'] for r in result[0]['group_sources']}=={CA,CB}
-    assert {r['lead_id'] for r in result[0]['group_sources']}=={1001,1002}
+    assert {r['channel_id'] for r in result[0]['group_sources']}=={CB}
+    assert {r['lead_id'] for r in result[0]['group_sources']}=={1002}
     assert {r['channel_id'] for r in cards(33)[0]['group_sources']}=={CB}
-    assert {r['channel_id'] for r in cards(channel='connect:'+CA)[0]['group_sources']}=={CA}
+    assert cards(channel='connect:'+CA)==[]
+    assert {r['channel_id'] for r in cards(lifecycle='all')[0]['group_sources']}=={CA,CB}
     assert {r['channel_id'] for r in cards(channel='connect:'+CB)[0]['group_sources']}=={CB}
     assert cards()==cards()  # repeated list read is stable and read only
     assert dialogs.listing({'tenant_id':A,'telegram_id':11},offset=50)['dialogs']==[]
@@ -55,6 +56,8 @@ def test_closed_source_reopens_once_without_duplicate_card(projection):
     change(44)
     change(44,'close',1)
     assert len(cards(44)[0]['group_sources'])==1
+    from test_connect_group_history import add
+    add(projection,99,CA,event='synthetic-fresh',direction='incoming')
     for _ in range(2):
         with projection.cursor() as cur:
             lifecycle.note_inbound(cur,A,CA,G,'synthetic-fresh','2099-01-01T00:00:00Z')
