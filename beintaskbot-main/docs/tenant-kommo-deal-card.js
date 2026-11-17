@@ -24,9 +24,12 @@
 .deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;padding:16px;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
 .deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,#ffe08b)}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
 @media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
-#dealModal.deal-desktop-sidebar #modalContent{flex-direction:row;align-items:stretch}
-#dealModal.deal-desktop-sidebar .deal-info-panel{flex:0 0 clamp(300px,30vw,440px);width:clamp(300px,30vw,440px);box-sizing:border-box;border-right:1px solid var(--line);overscroll-behavior:contain}
+#dealModal.deal-desktop-sidebar #modalContent{flex-direction:row-reverse;align-items:stretch}
+#dealModal.deal-desktop-sidebar .deal-info-panel{flex:0 0 clamp(300px,30vw,440px);width:clamp(300px,30vw,440px);box-sizing:border-box;border-left:1px solid var(--line);overscroll-behavior:contain}
 #dealModal.deal-desktop-sidebar .chat-placeholder{min-width:0}
+#dealModal .deal-support-caption{display:none}
+#dealModal.deal-desktop-sidebar .deal-support-caption{display:inline;margin-left:6px}
+#dealModal.deal-desktop-sidebar .deal-duplicate-action{flex:none;min-height:44px}
 `;document.head.append(stageStyle);
   const date=value=>{const d=new Date(typeof value==='number'?value*1000:value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString():'';};
   let cleanupLayout=()=>{};
@@ -51,12 +54,16 @@
     const infoLabel=({ru:'Инфо',az:'Məlumat',en:'Info'}[window.tenantI18n?.language]||'Məlumat');
     infoButton.textContent='ⓘ';infoButton.title=infoLabel;infoButton.setAttribute('aria-label',infoLabel);infoButton.setAttribute('aria-controls',info.id);infoButton.setAttribute('aria-expanded','false');
     head.insertBefore(infoButton,document.getElementById('closeModal'));
+    const duplicate=info.querySelector('[data-duplicate-search]');
+    const duplicateHome=duplicate?document.createComment('duplicate-search-home'):null;
+    if(duplicate){duplicate.before(duplicateHome);duplicate.classList.add('deal-duplicate-action');duplicate.textContent=({ru:'Найти дубликат',az:'Dublikatları tap',en:'Find duplicate'}[window.tenantI18n?.language]||'Dublikatları tap');}
     const desktop=window.matchMedia?.('(min-width:1024px)');
     let mobileInfoOpen=false;
     const setInfo=open=>{
       mobileInfoOpen=open;
       const sideBySide=desktop?.matches===true,visible=sideBySide||open;
       modal.classList.toggle('deal-desktop-sidebar',sideBySide);
+      if(duplicate){if(sideBySide){infoButton.before(duplicate);duplicate.dataset.dealHeaderExtra='1';duplicate.dataset.duplicateAuto='true';duplicate.style.marginTop='0';}else{duplicateHome.after(duplicate);delete duplicate.dataset.dealHeaderExtra;delete duplicate.dataset.duplicateAuto;duplicate.style.marginTop='12px';}}
       info.hidden=!visible;if(chat)chat.hidden=!sideBySide&&open;
       infoButton.hidden=sideBySide;infoButton.setAttribute('aria-expanded',String(visible));
       if(visible)loadRelated();

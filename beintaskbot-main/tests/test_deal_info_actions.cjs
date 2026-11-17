@@ -22,7 +22,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  }
  open();await settle();
  const info=d.getElementById('dealInfoPanel'),support=d.getElementById('supportCreateFromChat'),complete=[...host.querySelectorAll('button')].find(b=>b.textContent==='Sövdələşməni tamamla'),toggle=d.querySelector('.deal-info-toggle');
-assert.equal(complete,undefined);assert(support);assert.equal(support.parentElement,toggle.parentElement);assert.equal(support.nextElementSibling,toggle);assert.equal(support.textContent,'+');assert.equal(support.getAttribute('aria-label'),'Создать обращение');assert.equal(support.title,'Создать обращение');assert.equal(info.hidden,true);assert.equal(host.querySelector(':scope > button'),null);
+assert.equal(complete,undefined);assert(support);assert.equal(support.parentElement,toggle.parentElement);assert.equal(support.nextElementSibling,toggle);assert.equal(support.firstChild.textContent,'+');assert.equal(support.querySelector('.deal-support-caption').textContent,'Создать обращение');assert.equal(support.getAttribute('aria-label'),'Создать обращение');assert.equal(support.title,'Создать обращение');assert.equal(info.hidden,true);assert.equal(host.querySelector(':scope > button'),null);
  const input=d.getElementById('chatText');input.value='Unsent draft';toggle.click();assert.equal(info.hidden,false);assert.equal(d.querySelector('.chat-placeholder').hidden,true);
 
  w.tenantOperator={hasRight:()=>true,openManualCaseCreate:async(...args)=>manual.push(args)};support.click();await settle();assert.equal(manual.length,1);assert.deepEqual(JSON.parse(JSON.stringify(manual[0][0])),{provider:'connect',lead_id:7,channel_id:'channel',conversation_id:'conversation'});assert.equal(manual[0][1],support);assert.equal(manual[0][2](),true);

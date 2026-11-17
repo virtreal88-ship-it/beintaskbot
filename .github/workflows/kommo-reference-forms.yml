@@ -4,6 +4,9 @@ on:
     paths:
       - 'beintaskbot-main/docs/tenant-task*.js'
       - 'beintaskbot-main/docs/tenant-kommo-deal-card.js'
+      - 'beintaskbot-main/docs/deal-phone-duplicates.js'
+      - 'beintaskbot-main/tests/test_deal_duplicate_actions_browser.cjs'
+      - 'beintaskbot-main/tests/test_phone_duplicates_ui.cjs'
       - 'beintaskbot-main/docs/tenant-kommo-deal-note-create.js'
       - 'beintaskbot-main/docs/tenant-deal-completion.js'
       - 'beintaskbot-main/docs/tenant-support-inbox.js'
@@ -80,6 +83,8 @@ jobs:
           node tests/test_task_date_note_browser.cjs
           node tests/test_deal_info_actions.cjs
           node tests/test_deal_desktop_sidebar.cjs
+          node tests/test_phone_duplicates_ui.cjs
+          node tests/test_deal_duplicate_actions_browser.cjs
           node tests/test_deal_stage_receipt_integration.cjs
           node tests/test_deal_stage_stale_notice.cjs
           node tests/test_tenant_deal_completion_ui.cjs
