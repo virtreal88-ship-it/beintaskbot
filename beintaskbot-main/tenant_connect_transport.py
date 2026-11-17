@@ -663,6 +663,12 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
     # only through the explicit per-channel disconnect action.
     selected = [remote_by_id[channel_id] for channel_id in sorted(requested | already_active)]
 
+    if expected_pairing is not None and not (previous and previous.get('api_key') == key
+            and previous.get('webhook_id') and previous.get('webhook_secret')):
+        # Pairing retries cannot safely create a new webhook: that endpoint has
+        # no idempotency receipt. Ordinary explicit configuration remains unchanged.
+        raise TenantLinearError('connect_pairing_webhook_repair_required', 409)
+
     # Reusing the existing tenant-owned subscription preserves the secret that
     # Connect already has. Creating a replacement on every settings save leaves
     # the old subscription active but its secret is no longer available here;
@@ -684,6 +690,8 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
             # Do not silently create a second subscription when the existing
             # one cannot be safely inspected; surface the connection failure.
             raise TenantPlatformError('Connect webhook mövcud abunəliyi yoxlanmadı.') from None
+    if hook is None and expected_pairing is not None:
+        raise TenantLinearError('connect_pairing_webhook_repair_required', 409)
     if hook is None:
         hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': list(CONNECT_WEBHOOK_EVENTS)})
         # Connect creates the secret and returns it once. Use it for HMAC verification.

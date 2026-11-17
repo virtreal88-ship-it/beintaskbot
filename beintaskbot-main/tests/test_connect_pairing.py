@@ -195,3 +195,57 @@ def test_http_pairing_post_only_origin_guard_and_no_store(monkeypatch):
     assert worker.call_count==1
     assert asyncio.run(api.settings_handler(lambda _:None,'https://crm.test',Mock())(Request())).status==403
     assert worker.call_count==1
+
+
+@pytest.mark.parametrize('stored,remote_hooks',[
+ ({'api_key':KEY},[]),
+ ({'api_key':KEY,'webhook_id':'old','webhook_secret':'old-secret'},[]),
+ ({'api_key':KEY,'webhook_id':'old','webhook_secret':'old-secret'},[{'id':'old','url':'https://wrong.example/webhook'}]),
+ ({'api_key':KEY,'webhook_id':'old'},[{'id':'old','url':'https://crm.test/webhook'}]),
+])
+def test_pairing_missing_existing_hook_requires_repair_without_post_or_activation(monkeypatch,stored,remote_hooks):
+    from test_tenant_connect_configure import Connection
+    connection=Connection();factory=Mock(return_value=connection)
+    cipher=Mock();cipher.decrypt.return_value=json.dumps(stored).encode()
+    calls=[]
+    def remote(key,method,path,payload=None):
+        calls.append((method,path,payload))
+        if path=='/v1/channels':return {'data':[{'id':C,'status':'connected','phone':'+994501234567'}]}
+        if path=='/v1/webhooks' and method=='GET':return {'data':remote_hooks}
+        raise AssertionError('unexpected provider mutation')
+    monkeypatch.setattr(transport,'_owner',lambda _:None)
+    monkeypatch.setattr(transport,'_schema',lambda _:None)
+    monkeypatch.setattr(transport,'_connect',factory)
+    monkeypatch.setattr(transport,'_fernet',lambda:cipher)
+    monkeypatch.setattr(transport,'_request',remote)
+    for _ in range(2):
+        with pytest.raises(TenantLinearError,match='webhook_repair_required'):
+            transport._configure_locked(PROFILE,{'api_key':KEY,'channel_ids':[C]},'https://crm.test/webhook',expected_pairing={'id':C,'phone':'+994501234567'})
+    assert not any(method=='POST' for method,_,_ in calls)
+    assert not any('INSERT' in sql or 'UPDATE' in sql for sql,_ in connection.value.calls)
+    cipher.encrypt.assert_not_called()
+
+
+def test_pairing_repeated_complete_reuses_hook_preserves_old_channels_and_call_events(monkeypatch):
+    from test_tenant_connect_configure import Connection
+    old='00000000-0000-0000-0000-000000000104'
+    reads=[Connection(),Connection()];writes=[Connection(),Connection()]
+    for connection in reads:connection.value.fetchall=lambda:[{'connect_channel_id':old}]
+    factory=Mock(side_effect=[reads[0],writes[0],reads[1],writes[1]])
+    cipher=Mock();cipher.decrypt.return_value=json.dumps({'api_key':KEY,'webhook_id':'existing','webhook_secret':'original-secret'}).encode();cipher.encrypt.return_value=b'encrypted'
+    events=list(transport.CONNECT_WEBHOOK_EVENTS)+list(transport.CONNECT_CALL_EVENTS)
+    calls=[]
+    def remote(key,method,path,payload=None):
+        calls.append((method,path,payload))
+        if path=='/v1/channels':return {'data':[{'id':C,'status':'connected','phone':'+994501234567'},{'id':old,'status':'connected','phone':'+994509876543'}]}
+        if path=='/v1/webhooks' and method=='GET':return {'data':[{'id':'existing','url':'https://crm.test/webhook','events':events,'active':True}]}
+        if path=='/v1/webhooks/existing' and method=='PATCH':return {'id':'existing'}
+        raise AssertionError('no new webhook is allowed')
+    for name,value in [('_owner',lambda _:None),('_schema',lambda _:None),('_connect',factory),('_fernet',lambda:cipher),('_request',remote),('status',Mock(return_value={'connected':True}))]:monkeypatch.setattr(transport,name,value)
+    for _ in range(2):transport._configure_locked(PROFILE,{'api_key':KEY,'channel_ids':[C]},'https://crm.test/webhook',expected_pairing={'id':C,'phone':'+994501234567'})
+    assert not any(method=='POST' for method,_,_ in calls)
+    patches=[payload for method,path,payload in calls if method=='PATCH']
+    assert len(patches)==2 and all(set(payload['events'])==set(events) for payload in patches)
+    for connection in writes:
+        assert {args[1] for sql,args in connection.value.calls if 'INSERT INTO saas_connect_channels' in sql}=={C,old}
+    assert all(json.loads(call.args[0])['webhook_secret']=='original-secret' for call in cipher.encrypt.call_args_list)
