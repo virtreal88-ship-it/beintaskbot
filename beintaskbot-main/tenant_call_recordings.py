@@ -24,6 +24,7 @@ def migrate(cur):
       happened_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(tenant_id,channel_id,call_digest))''')
+    cur.execute('ALTER TABLE saas_test_call_recordings ADD COLUMN IF NOT EXISTS browser_call_id UUID')
     cur.execute('CREATE INDEX IF NOT EXISTS saas_test_call_recordings_expiry ON saas_test_call_recordings(expires_at) WHERE encrypted IS NOT NULL')
 
 
@@ -113,41 +114,47 @@ def save(profile, route, bundle):
         pinned=b.get('archive_call') or {}
         if manifest['call_id']!=pinned.get('call_id') or manifest['sha256']!=pinned.get('sha256'):
             raise TenantLinearError('Для архивного диалога разрешена только согласованная запись.',403)
-    digest=hashlib.sha256((manifest['account_jid']+'\0'+manifest['call_id']).encode()).hexdigest()
-    bundle_digest=hashlib.sha256(bundle).hexdigest()
-    encrypted=_fernet().encrypt(wav)
     with _connect() as conn, conn.cursor() as cur:
         tenant,actor,current,selected=_authorize(cur,profile,route,write=True)
         if current!=b:
             raise TenantLinearError('Настройка теста изменилась. Повторите проверку.',409)
-        channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead=selected['lead_id']
-        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",('test-call-recordings:'+tenant,))
-        cur.execute('''SELECT id,bundle_digest,conversation_id,lead_id FROM saas_test_call_recordings
-          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND call_digest=%s FOR UPDATE''',(tenant,channel,digest))
-        old=cur.fetchone()
-        if old:
-            if old['bundle_digest']!=bundle_digest or old['conversation_id']!=conversation or old['lead_id']!=lead:
-                raise TenantLinearError('Конфликт повторного сохранения записи.',409)
-            return {'id':str(old['id']),'duplicate':True}
-        cur.execute("SELECT count(*) AS n FROM saas_test_call_recordings WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(tenant,))
-        if cur.fetchone()['n']>=20:
-            raise TenantLinearError('Достигнут лимит тестовых записей за 24 часа.',429)
-        record_id=str(uuid.uuid4())
-        cur.execute('''INSERT INTO saas_test_call_recordings
-          (id,tenant_id,channel_id,conversation_id,lead_id,actor_id,call_digest,bundle_digest,
-           duration_ms,complete,end_code,encrypted,happened_at,expires_at)
-          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz)''',
-          (record_id,tenant,channel,conversation,lead,actor,digest,bundle_digest,manifest['duration_ms'],
-           manifest['complete'],manifest['end_code'],encrypted,manifest['started_at'],manifest['expires_at']))
-        meta={'recording_id':record_id,'duration_ms':manifest['duration_ms'],'complete':manifest['complete'],
-              'expires_at':manifest['expires_at'],'conversationId':conversation,'test_recording':True,
-              'archived_owner_binding':b.get('source_mode')=='archived_owner_binding'}
-        # An internal timeline event, never an incoming customer message. This
-        # path deliberately does not call provider send, AI, CRM or inbox jobs.
-        cur.execute('''INSERT INTO saas_crm_messages
-          (id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
-          VALUES(%s::uuid,%s::uuid,%s,%s,'system',%s,'Beintaskbot','','call_recording','',%s::timestamptz,%s::jsonb)''',
-          (uuid.uuid4(),tenant,lead,'internal:call-recording:'+record_id,'connect:'+channel,manifest['started_at'],_json(meta)))
+        return persist(cur,tenant,actor,b,selected,manifest,wav,bundle)
+
+
+def persist(cur,tenant,actor,b,selected,manifest,wav,bundle):
+    """Shared transaction body; callers must establish current exact authority."""
+    digest=hashlib.sha256((manifest['account_jid']+'\0'+manifest['call_id']).encode()).hexdigest()
+    bundle_digest=hashlib.sha256(bundle).hexdigest()
+    encrypted=_fernet().encrypt(wav)
+    channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead=selected['lead_id']
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",('test-call-recordings:'+tenant,))
+    cur.execute('''SELECT id,bundle_digest,conversation_id,lead_id FROM saas_test_call_recordings
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND call_digest=%s FOR UPDATE''',(tenant,channel,digest))
+    old=cur.fetchone()
+    if old:
+        if old['bundle_digest']!=bundle_digest or old['conversation_id']!=conversation or old['lead_id']!=lead:
+            raise TenantLinearError('Конфликт повторного сохранения записи.',409)
+        return {'id':str(old['id']),'duplicate':True}
+    cur.execute("SELECT count(*) AS n FROM saas_test_call_recordings WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(tenant,))
+    if cur.fetchone()['n']>=20:
+        raise TenantLinearError('Достигнут лимит тестовых записей за 24 часа.',429)
+    record_id=str(uuid.uuid4())
+    cur.execute('''INSERT INTO saas_test_call_recordings
+      (id,tenant_id,channel_id,conversation_id,lead_id,actor_id,call_digest,bundle_digest,
+       duration_ms,complete,end_code,encrypted,happened_at,expires_at)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz)''',
+      (record_id,tenant,channel,conversation,lead,actor,digest,bundle_digest,manifest['duration_ms'],
+       manifest['complete'],manifest['end_code'],encrypted,manifest['started_at'],manifest['expires_at']))
+    meta={'recording_id':record_id,'duration_ms':manifest['duration_ms'],'complete':manifest['complete'],
+          'call_account_number':manifest['account_jid'].split('@')[0],
+          'expires_at':manifest['expires_at'],'conversationId':conversation,'test_recording':True,
+          'archived_owner_binding':b.get('source_mode')=='archived_owner_binding'}
+    # An internal timeline event, never an incoming customer message. This
+    # path deliberately does not call provider send, AI, CRM or inbox jobs.
+    cur.execute('''INSERT INTO saas_crm_messages
+      (id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
+      VALUES(%s::uuid,%s::uuid,%s,%s,'system',%s,'Beintaskbot','','call_recording','',%s::timestamptz,%s::jsonb)''',
+      (uuid.uuid4(),tenant,lead,'internal:call-recording:'+record_id,'connect:'+channel,manifest['started_at'],_json(meta)))
     return {'id':record_id,'duplicate':False}
 
 
@@ -161,7 +168,13 @@ def load(profile, record_id):
                     (str(profile.get('tenant_id')),record_id))
         row=cur.fetchone()
         if not row:raise TenantLinearError('Запись недоступна.',404)
-        _authorize(cur,profile,row)
+        if row.get('browser_call_id'):
+            from tenant_browser_calls import config, authorize
+            c=config()
+            if not c:raise TenantLinearError('Тест звонков завершён.',403)
+            authorize(cur,profile,row,c)
+        else:
+            _authorize(cur,profile,row)
         if not row['encrypted'] or timestamp(row['expires_at'])<=datetime.now(timezone.utc):
             raise TenantLinearError('Срок хранения записи истёк.',410)
         audio=_fernet().decrypt(bytes(row['encrypted']))

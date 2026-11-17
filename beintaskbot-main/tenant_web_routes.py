@@ -24,6 +24,7 @@ from tenant_customer_voice_api import handler as customer_voice_handler, receipt
 from tenant_chat_history_api import handler as chat_history_handler
 from tenant_chat_attachment_api import handler as chat_attachment_handler
 from tenant_call_recordings_api import handler as call_recordings_handler
+from tenant_browser_calls_api import handler as browser_calls_handler
 from tenant_chat_review_api import handler as chat_review_handler
 from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_owner_asr_comparison_api import handler as owner_asr_comparison_handler
@@ -71,6 +72,9 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
         ('/api/platform/test-call-recordings', call_recordings_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/browser-calls', browser_calls_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/call-gateway/sync', browser_calls_handler(member,origin,logger,'sync'), ('POST',)),
+        ('/api/platform/call-gateway/recording', browser_calls_handler(member,origin,logger,'recording'), ('POST',)),
         ('/api/platform/test-call-recordings/{record_id:[0-9a-fA-F-]{36}}', call_recordings_handler(member,origin,logger,'audio'), ('GET',)),
         ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
@@ -155,6 +159,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
+        ('dialogs/preferences', operator_handler(member, origin, logger, 'view_preferences'), ('GET','POST')),
         ('dialogs/sources', operator_handler(member, origin, logger, 'sources'), ('GET','POST')),
         ('dialogs/group-participants', operator_handler(member, origin, logger, 'group_participants'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),

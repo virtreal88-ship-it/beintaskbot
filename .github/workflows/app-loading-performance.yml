@@ -63,6 +63,7 @@ jobs:
           tests/test_tenant_deal_api.py
           tests/test_kommo_board_catalog.py
           tests/test_tenant_deal_board_preferences.py
+          tests/test_dialog_view_preferences.py
           tests/test_tenant_crm_repository.py
           tests/test_tenant_crm_queries.py
           tests/test_operator_list_performance.py

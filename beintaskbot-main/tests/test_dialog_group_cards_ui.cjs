@@ -7,7 +7,8 @@ const source=(channel,lead)=>({provider:'connect',lead_id:lead,channel_id:channe
 const a=source('Source A',41),b=source('Source B',42);let visible=[a,b], single=false;const calls=[];
 w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
 w.fetch=async(url,options={})=>{url=String(url);calls.push({url,method:options.method||'GET'});let result;
-if(url.includes('/dialogs/history')){const q=new URL(url,'https://example.test').searchParams;result={dialog:q.get('channel_id')===a.channel_id?a:b,messages:[],next_before:null};}
+if(url.endsWith('/dialogs/preferences'))result={channel:'',agent:'',state:'',lifecycle:'all'};
+else if(url.includes('/dialogs/history')){const q=new URL(url,'https://example.test').searchParams;result={dialog:q.get('channel_id')===a.channel_id?a:b,messages:[],next_before:null};}
 else if(url.includes('/dialogs?'))result={dialogs:[{...visible[0],unread_count:2,...(single?{}:{group_sources:visible})}],channels:[],agents:[],attention_count:0,total_count:1,next_offset:url.includes('offset=50')?null:50};
 else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
 else if(url.includes('/dialogs/read'))result={updated:true};else throw Error(url);
@@ -86,8 +87,8 @@ for(const [second,expected] of [
  assert.equal(d.querySelector('.operator-unread-count').textContent,'2');
 }
 single=true;
-// Queue mode is visible outside advanced filters; completed history stays searchable.
-const queue=d.querySelector('#operatorLifecycle');assert(queue);assert(!queue.closest('#operatorAdvanced'));assert.equal(queue.value,'all');
+// Queue mode shares the filter popover; completed history stays searchable.
+const queue=d.querySelector('#operatorLifecycle');assert(queue);assert(queue.closest('#operatorAdvanced'));assert.equal(queue.value,'all');
 visible=[{...a,lifecycle:{...a.lifecycle,state:'dismissed',revision:10,has_inbound:true,can_accept:false,can_dismiss:false}}];
 await w.tenantOperator.refresh();await tick();
 assert.equal(d.querySelector('.operator-row .operator-lifecycle-badge').dataset.lifecycleState,'dismissed');

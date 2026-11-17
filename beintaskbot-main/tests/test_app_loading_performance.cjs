@@ -56,7 +56,7 @@ async function requestTests(){
 }
 function browser(view='dialogs',url=''){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view='+view+url,runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,requests=[];
- w.Headers=Headers;w.Response=Response;w.fetch=(url,options={})=>{const task=deferred();requests.push({url:String(url),options,...task});return task.promise;};
+ w.Headers=Headers;w.Response=Response;w.fetch=(url,options={})=>{if(String(url).endsWith('/dialogs/preferences'))return Promise.resolve(response({success:true,result:{channel:'',agent:'',state:'',lifecycle:'all'}}));const task=deferred();requests.push({url:String(url),options,...task});return task.promise;};
  w.eval(read('docs/tenant-request-coordinator.js'));w.eval(read('docs/tenant-view-demand.js'));
  w.tenantI18n={language:'en',t:key=>key,source:text=>text,capture:()=>{},date:value=>String(value||'')};
  w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+view));
@@ -91,7 +91,7 @@ async function dialogTests(){
  const b=browser(),{w,requests,emit,reply}=b;
  try{
   w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
-  emit('tenant-profile',profile);emit('tenant-view',{view:'dialogs'});assert.equal(requests.length,1,'profile, initial install, view share one list');
+  emit('tenant-profile',profile);emit('tenant-view',{view:'dialogs'});await settle();assert.equal(requests.length,1,'profile, initial install, view share one list');
   reply(requests[0],list([row(1)]));await settle();assert.match(w.document.getElementById('operatorRows').textContent,/Synthetic 1/);
   emit('tenant-view',{view:'tasks'});emit('tenant-view',{view:'dialogs'});await settle();assert.equal(requests.length,1,'same-scope recent navigation reuses memory');
   const slow=w.tenantOperator.refresh();assert.equal(requests.length,2,'explicit/poll refresh bypasses completed reuse');
@@ -223,7 +223,7 @@ async function linearRouterReloadTests(){
 async function focusTests(){
  const b=browser(),{w,requests,emit,reply}=b;
  try{
-  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));emit('tenant-profile',profile);
+  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));emit('tenant-profile',profile);await settle();
   reply(requests[0],list([row(1)]));await settle();
   const old=w.tenantOperator.refresh();const oldRequest=requests.at(-1);
   w.dispatchEvent(new w.Event('focus'));w.dispatchEvent(new w.Event('focus'));
@@ -298,7 +298,7 @@ async function hiddenChatActionTests(){
 async function sameScopePendingFocusTests(){
  const b=browser(),{w,requests,emit,reply}=b;
  try{
-  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));emit('tenant-profile',profile);
+  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));emit('tenant-profile',profile);await settle();
   const oldList=requests[0];const previousOpen=w.tenantOperator.openDialog(row(1));reply(requests.at(-1),{dialog:row(1),messages:[]});await previousOpen;const oldOpen=w.tenantOperator.openDialog(row(3)),oldHistory=requests.at(-1);
   w.dispatchEvent(new w.Event('focus'));const reauth=requests.at(-1);reauth.resolve(response(profile));await settle();
   const newList=requests.filter(r=>r.url.includes('/dialogs?')).at(-1),newHistory=requests.filter(r=>r.url.includes('/history?')).at(-1);
