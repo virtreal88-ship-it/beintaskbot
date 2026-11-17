@@ -102,7 +102,7 @@
       }
       const incoming=calls.find(c=>c.state==='incoming'&&!c.claimed);
       if(incoming&&!busy()&&(!modal||terminal(session?.call||modal.call))){closeModal();session=null;show(incoming,incoming);}
-      if(modal?.call&&!session){const fresh=calls.find(c=>c.id===modal.call.id);if(fresh){modal.call=fresh;if(fresh.claimed&&!fresh.owned)closeModal();}else closeModal();}
+      if(modal?.call&&!session){const fresh=calls.find(c=>c.id===modal.call.id);if(fresh){modal.call=fresh;if(fresh.claimed)closeModal();}else closeModal();}
       mount();draw();
     }catch(e){online=false;if(e.status===403){enabled=false;release(session);session=null;closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}}
     finally{polling=false;schedule();}
