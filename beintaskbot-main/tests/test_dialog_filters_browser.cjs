@@ -1,0 +1,33 @@
+const {chromium}=require('../.support-test-deps/node_modules/playwright');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.join(__dirname,'..'),tenant='00000000-0000-0000-0000-000000000101';
+(async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
+for(const width of [320,390,1280])for(const theme of ['light','dark']){
+const page=await browser.newPage({viewport:{width,height:800}}),errors=[],requests=[],saved=new Map();let user=33,failSave=false,hangPreferences=false;
+const profile=()=>({success:true,member:{tenant_id:tenant,telegram_id:user,active:true,role:'worker',permissions:['dialogs']},capabilities:{modules:{dialogs:true}}});
+saved.set(33,{channel:'connect:c1',agent:'a1',state:'manual',lifecycle:'active'});
+page.on('pageerror',e=>errors.push(e.message));
+await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url()),name=url.pathname;requests.push({name,method:req.method(),query:url.search,body:req.postData()});
+if(name==='/app')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});
+if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
+if(name==='/api/platform/me')return route.fulfill({json:profile()});
+let result={};if(name.endsWith('/dialogs/preferences')){if(hangPreferences&&req.method()==='GET'){await new Promise(resolve=>setTimeout(resolve,9000));return route.fulfill({json:{success:true,result:{channel:'connect:c1',agent:'a1',state:'manual',lifecycle:'completed'}}}).catch(()=>{});}if(req.method()==='POST'){if(failSave)return route.fulfill({status:503,json:{success:false,error:'Synthetic save failure'}});const data=req.postDataJSON();assert.equal(data.expected_user_id,user);saved.set(user,Object.fromEntries(['channel','agent','state','lifecycle'].map(k=>[k,data[k]])));}result=saved.get(user)||{channel:'',agent:'',state:'',lifecycle:'all'};}
+else if(name.endsWith('/dialogs'))result={dialogs:[],channels:url.searchParams.get('lifecycle')==='completed'?[]:[{id:'connect:c1',name:'Channel 1'},{id:'connect:c2',name:'Channel 2'}],agents:url.searchParams.get('lifecycle')==='completed'?[]:[{id:'a1',name:'Agent 1'}],total_count:0,next_offset:null};
+else if(name.endsWith('/developer-marker'))result={enabled:false};
+return route.fulfill({json:{success:true,result}});});
+await page.goto('https://crm.test/app?view=dialogs');await page.waitForFunction(()=>document.querySelector('#operatorChannel')?.value==='connect:c1'&&!document.querySelector('#operatorChannel').disabled);await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
+assert.equal(await page.locator('#operatorAdvanced').isVisible(),false,'filters collapsed on every viewport');
+const list=requests.find(r=>r.name.endsWith('/dialogs'));assert(list.query.includes('channel=connect%3Ac1')&&list.query.includes('lifecycle=active'),'first list uses restored server selection');
+const toggle=page.locator('#operatorFiltersToggle');await toggle.click();await page.locator('#operatorAdvanced').waitFor();assert.equal(await page.locator('#operatorAdvanced select').count(),4);
+const box=await page.locator('#operatorAdvanced').boundingBox();assert(box.x>=7&&box.x+box.width<=width-7&&box.y>=7&&box.y+box.height<=793,JSON.stringify(box));
+const icons=await page.locator('#operatorToolsMenu,#operatorFiltersToggle').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,h:r.height};}));assert(Math.abs(icons[0].y-icons[1].y)<2&&icons[1].x>icons[0].x,'filter next to ellipsis');
+await page.locator('#operatorChannel').selectOption('connect:c2');await page.locator('#operatorLifecycle').selectOption('completed');await page.waitForFunction(()=>document.querySelector('#operatorFilterSaveStatus').textContent.match(/Saved|Сохранено|Saxlanıldı/));assert.equal(saved.get(33).channel,'connect:c2');assert.equal(saved.get(33).lifecycle,'completed');
+await page.keyboard.press('Escape');assert.equal(await page.locator('#operatorAdvanced').isVisible(),false);assert.equal(await toggle.evaluate(n=>n===document.activeElement),true);
+await page.reload();await page.waitForFunction(()=>document.querySelector('#operatorLifecycle')?.value==='completed'&&!document.querySelector('#operatorChannel').disabled);assert.equal(await page.locator('#operatorChannel').inputValue(),'connect:c2');await page.waitForTimeout(200);assert.equal(await page.locator('#operatorChannel').inputValue(),'connect:c2','zero-result catalog keeps restored filter');assert.equal(await page.locator('#operatorAgent').inputValue(),'a1');
+await toggle.click();failSave=true;await page.locator('#operatorState').selectOption('attention');await page.waitForFunction(()=>document.querySelector('#operatorFilterSaveStatus').textContent.match(/only now|только сейчас|yalnız indi/));assert.equal(saved.get(33).state,'manual','failed save not reported persisted');failSave=false;
+user=44;await page.evaluate(profile=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:profile})),profile());await page.waitForFunction(()=>document.querySelector('#operatorLifecycle')?.value==='all'&&!document.querySelector('#operatorChannel').disabled);assert.equal(await page.locator('#operatorChannel').inputValue(),'');assert.equal(await page.locator('#operatorAgent').inputValue(),'');assert.equal(await page.locator('#operatorState').inputValue(),'');assert.equal(await page.locator('#operatorAdvanced').isVisible(),false);
+if(width===320&&theme==='light'){hangPreferences=true;user=55;const before=requests.filter(r=>r.name.endsWith('/dialogs')).length;await page.evaluate(profile=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:profile})),profile());await page.waitForFunction(()=>!document.querySelector('#operatorChannel').disabled,{},{timeout:12000});assert(requests.filter(r=>r.name.endsWith('/dialogs')).length>before,'preference timeout does not block list');await page.waitForTimeout(1500);assert.equal(await page.locator('#operatorLifecycle').inputValue(),'all','late preferences do not overwrite fallback');}
+assert.deepEqual(errors,[]);assert(requests.filter(r=>r.method==='POST').every(r=>r.name.endsWith('/dialogs/preferences')),'only personal preference mutation');
+await page.close();
+}console.log('PASS filter popover: four selects, desktop/mobile, themes, server restore, ordered saves, failed save, user isolation');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
