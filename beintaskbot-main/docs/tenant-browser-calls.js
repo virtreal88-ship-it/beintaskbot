@@ -2,7 +2,8 @@
  * No provider keys, remote iframe, message sends, or local HTTP requests. */
 (() => {
   'use strict';
-  let identity='',revision=0,polling=false,timer=null,enabled=true,online=false,testNumber='',calls=[],session=null,modal=null;
+  let identity='',revision=0,polling=false,timer=null,enabled=true,online=false,testNumber='',sources=[],calls=[],session=null,modal=null;
+  const sourceOf=route=>sources.find(item=>String(item.channel_id)===String(route?.channel_id))||{online:false};
   const terminal=call=>!call||['ended','failed'].includes(call.state);
   const busy=()=>!!session&&(session.preparing||session.stopping||!terminal(session.call));
   const profile=()=>window.tenantOperator?.member||window.tenantProfileSnapshot?.member;
@@ -51,12 +52,14 @@
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
     m.title.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';
-    m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':online?'Готов к звонку':'Тестовый сервер звонков не подключён';
-    m.info.textContent='Звонок через тестовый WhatsApp'+(testNumber?' +'+testNumber:'')+'. Максимум 2 минуты; запись доступна 24 часа.';m.error.textContent=s?.error||'';m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
-    m.start.disabled=!online||!m.consent.checked;m.reject.hidden=!call||call.state!=='incoming'||!!s;
+    const source=sourceOf(m.route);
+    m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
+    const number=/^[0-9]{5,22}$/.test(source.number||'')?' +'+source.number:'';
+    m.info.textContent='WhatsApp источника'+number+'. Максимум 2 минуты; запись хранится '+(source.permanent?'30 дней.':'24 часа.');m.error.textContent=s?.error||'';m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
+    m.start.disabled=!source.online||!m.consent.checked;m.reject.hidden=!call||call.state!=='incoming'||!!s;
     m.end.hidden=!active&&!pending;m.end.disabled=!!s?.stopping;m.consentLabel.hidden=!!s;
     if(call&&terminal(call)){
-      m.result.textContent=call.recording_state==='pending'?'Сохраняем запись в диалог…':call.recording_state==='incomplete'?'Запись сохранена. Захват отметил промежутки в аудиопотоке.':call.recording_state==='ready'?'Запись сохранена в диалог.':'';
+      m.result.textContent=call.recording_state==='pending'?'Сохраняем запись в диалог…':call.recording_state==='incomplete'?'Запись сохранена. Захват отметил промежутки в аудиопотоке.':call.recording_state==='ready'?'Запись сохранена в диалог.':call.recording_state==='unconfirmed'?'Разговор завершён после перезапуска сервера. Сохранение записи не подтверждено.':'';
     }
   }
   async function media(s){
@@ -64,14 +67,30 @@
     const unlock=await window.acquireTenantMicrophone();if(typeof unlock!=='function')throw new Error('Микрофон уже используется в другой вкладке или голосовом режиме.');if(s.stopping||key()!==s.identity){unlock();throw new Error('Звонок отменён');}s.release=unlock;
     const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
     if(s.stopping||key()!==s.identity){stream.getTracks().forEach(t=>t.stop());throw new Error('Звонок отменён');}
-    const pc=new RTCPeerConnection({iceServers:[]}),dc=pc.createDataChannel('pcm',{ordered:true}),ctx=new AudioContext({sampleRate:16000});dc.binaryType='arraybuffer';let closed=false;
-    const handle={pc,close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());pc.close();void ctx.close().catch(()=>{});}};s.media=handle;
+    const managed=s.transport==='websocket',pc=managed?null:new RTCPeerConnection({iceServers:[]});
+    let dc=pc?.createDataChannel('pcm',{ordered:true})||null,closed=false;
+    const ctx=new AudioContext({sampleRate:16000});if(dc)dc.binaryType='arraybuffer';
+    const handle={pc,close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close();pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
     try{
       await ctx.audioWorklet.addModule('/assets/browser-call-audio.js');await ctx.resume();
       const capture=new AudioWorkletNode(ctx,'bein-call-capture'),playback=new AudioWorkletNode(ctx,'bein-call-playback');
       ctx.createMediaStreamSource(stream).connect(capture);capture.connect(ctx.destination);playback.connect(ctx.destination);
-      capture.port.onmessage=e=>{if(closed||dc.readyState!=='open'||dc.bufferedAmount>131072)return;const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);};
-      dc.onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
+      capture.port.onmessage=e=>{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);};
+      const onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
+      if(managed){
+        handle.connect=()=>new Promise((resolve,reject)=>{
+          if(closed||s.stopping||key()!==s.identity||!s.call?.id){reject(new Error('Звонок отменён'));return;}
+          const url=new URL('/api/platform/browser-calls/'+encodeURIComponent(s.call.id)+'/audio',location.origin);url.protocol=location.protocol==='https:'?'wss:':'ws:';
+          const parameters=query(s.owner);parameters.set('request_id',s.request);url.search=parameters.toString();
+          dc=new WebSocket(url);dc.binaryType='arraybuffer';dc.onmessage=onmessage;
+          const timeout=setTimeout(()=>{reject(new Error('Не удалось подключить звук'));dc.close();},7000);
+          dc.onopen=()=>{clearTimeout(timeout);if(closed||s.stopping||key()!==s.identity){dc.close();reject(new Error('Звонок отменён'));}else resolve();};
+          dc.onerror=()=>{clearTimeout(timeout);reject(new Error('Не удалось подключить звук'));};
+          dc.onclose=()=>{clearTimeout(timeout);reject(new Error('Аудиосоединение закрыто'));if(!closed&&!s.stopping)void stop(s);};
+        });
+        if(closed||s.stopping)throw new Error('Звонок отменён');return '';
+      }
+      dc.onmessage=onmessage;
       pc.onconnectionstatechange=()=>{if(!closed&&['failed','closed'].includes(pc.connectionState))void stop(s);};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);
       await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>{pc.removeEventListener('icegatheringstatechange',done);reject(new Error('Не удалось подготовить аудиосоединение.'));},10000);function done(){if(pc.iceGatheringState==='complete'){clearTimeout(timeout);pc.removeEventListener('icegatheringstatechange',done);resolve();}}pc.addEventListener('icegatheringstatechange',done);done();});
@@ -79,11 +98,11 @@
     }catch(e){handle.close();throw e;}
   }
   async function begin(){
-    const m=modal;if(!m||!m.consent.checked||!online||busy())return;
-    const s={route:m.route,call:m.call,request:crypto.randomUUID(),owner:{...profile()},identity:key(),preparing:true,stopping:false,error:''};session=s;draw();
+    const m=modal;if(!m||!m.consent.checked||!sourceOf(m.route).online||busy())return;
+    const s={route:m.route,call:m.call,transport:sourceOf(m.route).media||'webrtc',request:crypto.randomUUID(),owner:{...profile()},identity:key(),preparing:true,stopping:false,error:''};session=s;draw();
     try{
       const offer=await media(s);if(s.stopping||session!==s||key()!==s.identity){release(s);return;}
-      s.sent=true;const call=await api({...s.route,op:m.call?'accept':'start',call_id:m.call?.id,request_id:s.request,sdp_offer:offer,consent_confirmed:true},s.owner);
+      s.sent=true;const call=await api({...s.route,op:m.call?'accept':'start',call_id:m.call?.id,request_id:s.request,media:s.transport,sdp_offer:offer,consent_confirmed:true},s.owner);
       s.call=call;s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}draw();void poll();
     }catch(e){release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
   }
@@ -92,11 +111,12 @@
     try{
       const result=await api();if(generation!==revision||key()!==identity)return;
       enabled=result.enabled===true;online=result.online===true;testNumber=/^[0-9]{5,22}$/.test(result.test_number||'')?result.test_number:'';calls=result.calls||[];
+      sources=Array.isArray(result.sources)?result.sources:[];
       const s=session;
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
-        if(call){s.call=call;if(!terminal(call)&&call.sdp_answer&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
+        if(call){s.call=call;if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
           if(terminal(call)){release(s);s.stopping=false;s.preparing=false;if(call.recording_id&&s.refreshed!==call.recording_id){s.refreshed=call.recording_id;if(sameRoute(window.tenantOperator?.currentDialog,s.route))void window.tenantOperator.openDialog({...s.route,provider:'connect'},true);}}
           if(call.error_code&&!terminal(call)&&!s.stopping){s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
       }
@@ -104,7 +124,7 @@
       if(incoming&&!busy()&&(!modal||terminal(session?.call||modal.call))){closeModal();session=null;show(incoming,incoming);}
       if(modal?.call&&!session){const fresh=calls.find(c=>c.id===modal.call.id);if(fresh){modal.call=fresh;if(fresh.claimed)closeModal();}else closeModal();}
       mount();draw();
-    }catch(e){online=false;if(e.status===403){enabled=false;release(session);session=null;closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}}
+    }catch(e){online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
     finally{polling=false;schedule();}
   }
   function schedule(){clearTimeout(timer);if(identity&&enabled)timer=setTimeout(()=>void poll(),2000);}
@@ -117,9 +137,10 @@
     button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg>';
     button.onclick=()=>{if(session&&terminal(session.call)){release(session);session=null;}show(route);};host.append(button);
   }
-  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){void stop(session);release(session);session=null;}closeModal();identity=fresh;enabled=true;calls=[];online=false;}mount();void poll();}
+  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){void stop(session);release(session);session=null;}closeModal();identity=fresh;enabled=true;calls=[];sources=[];online=false;}mount();void poll();}
   document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-chat-attachments-ready',mount);
-  document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';enabled=false;closeModal();});
+  document.addEventListener('tenant-calls-updated',event=>{enabled=true;const route=window.tenantOperator?.currentDialog;if(route&&String(route.channel_id)===String(event.detail?.channel_id)&&!String(route.conversation_id).endsWith('@g.us'))route.browser_call_available=true;mount();void poll();});
+  document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';sources=[];enabled=false;closeModal();});
   window.addEventListener('pagehide',()=>{clearTimeout(timer);if(busy())void stop(session);release(session);});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
   changed();

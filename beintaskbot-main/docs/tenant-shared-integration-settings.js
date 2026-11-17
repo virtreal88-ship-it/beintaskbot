@@ -65,6 +65,7 @@
             const entry=document.createElement('div');entry.textContent=`${channel.name||channel.id} · ${channel.status||''}`;list.append(entry);
             const actionButton=(label,action,scope)=>{if(!actions[scope])return;const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=async()=>{b.disabled=true;try{if(current!==epoch)return;await post({action,channel_id:channel.id},scope);}catch(e){if(current===epoch)message.textContent=e.message;}finally{if(current===epoch)b.disabled=false;}};entry.append(b);};
             if(channel.active || channel.linked){actionButton('Status','channel_status','view');if(!channel.phoneConflict)actionButton('Yenidən qoş','reconnect_channel','update');if(channel.active)actionButton('Ayır','disconnect_channel','delete');}
+            if(profile.member?.role==='owner'&&channel.active&&!channel.phoneConflict){const calls=document.createElement('button');calls.type='button';calls.className='outline';calls.textContent='Zənglər';calls.dataset.connectCalls=channel.id;entry.append(calls);}
             else if(write&&!channel.phoneConflict){const choice=document.createElement('input');choice.type='checkbox';choice.value=channel.id;entry.prepend(choice);}
           }
         });

@@ -25,6 +25,7 @@ def migrate(cur):
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(tenant_id,channel_id,call_digest))''')
     cur.execute('ALTER TABLE saas_test_call_recordings ADD COLUMN IF NOT EXISTS browser_call_id UUID')
+    cur.execute("ALTER TABLE saas_test_call_recordings ADD COLUMN IF NOT EXISTS audio_type TEXT NOT NULL DEFAULT 'audio/wav'")
     cur.execute('CREATE INDEX IF NOT EXISTS saas_test_call_recordings_expiry ON saas_test_call_recordings(expires_at) WHERE encrypted IS NOT NULL')
 
 
@@ -121,11 +122,11 @@ def save(profile, route, bundle):
         return persist(cur,tenant,actor,b,selected,manifest,wav,bundle)
 
 
-def persist(cur,tenant,actor,b,selected,manifest,wav,bundle):
+def persist(cur,tenant,actor,b,selected,manifest,wav,bundle,*,encoded_audio=None):
     """Shared transaction body; callers must establish current exact authority."""
     digest=hashlib.sha256((manifest['account_jid']+'\0'+manifest['call_id']).encode()).hexdigest()
     bundle_digest=hashlib.sha256(bundle).hexdigest()
-    encrypted=_fernet().encrypt(wav)
+    encrypted=_fernet().encrypt(encoded_audio if encoded_audio is not None else wav)
     channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead=selected['lead_id']
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",('test-call-recordings:'+tenant,))
     cur.execute('''SELECT id,bundle_digest,conversation_id,lead_id FROM saas_test_call_recordings
@@ -141,13 +142,14 @@ def persist(cur,tenant,actor,b,selected,manifest,wav,bundle):
     record_id=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_test_call_recordings
       (id,tenant_id,channel_id,conversation_id,lead_id,actor_id,call_digest,bundle_digest,
-       duration_ms,complete,end_code,encrypted,happened_at,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz)''',
+       duration_ms,complete,end_code,encrypted,happened_at,expires_at,audio_type)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz,%s)''',
       (record_id,tenant,channel,conversation,lead,actor,digest,bundle_digest,manifest['duration_ms'],
-       manifest['complete'],manifest['end_code'],encrypted,manifest['started_at'],manifest['expires_at']))
+       manifest['complete'],manifest['end_code'],encrypted,manifest['started_at'],manifest['expires_at'],
+       'audio/ogg' if encoded_audio is not None else 'audio/wav'))
     meta={'recording_id':record_id,'duration_ms':manifest['duration_ms'],'complete':manifest['complete'],
           'call_account_number':manifest['account_jid'].split('@')[0],
-          'expires_at':manifest['expires_at'],'conversationId':conversation,'test_recording':True,
+          'expires_at':manifest['expires_at'],'conversationId':conversation,'test_recording':not b.get('managed',False),
           'archived_owner_binding':b.get('source_mode')=='archived_owner_binding'}
     # An internal timeline event, never an incoming customer message. This
     # path deliberately does not call provider send, AI, CRM or inbox jobs.
@@ -158,7 +160,7 @@ def persist(cur,tenant,actor,b,selected,manifest,wav,bundle):
     return {'id':record_id,'duplicate':False}
 
 
-def load(profile, record_id):
+def load(profile, record_id, *, with_type=False):
     try:record_id=str(uuid.UUID(str(record_id)))
     except ValueError:raise TenantLinearError('Запись недоступна.',404) from None
     with _connect() as conn, conn.cursor() as cur:
@@ -169,16 +171,22 @@ def load(profile, record_id):
         row=cur.fetchone()
         if not row:raise TenantLinearError('Запись недоступна.',404)
         if row.get('browser_call_id'):
-            from tenant_browser_calls import config, authorize
-            c=config()
-            if not c:raise TenantLinearError('Тест звонков завершён.',403)
-            authorize(cur,profile,row,c)
+            # Pairing readiness and a pilot feature deadline are not a read
+            # entitlement. Recording access follows fresh dialog/source rights
+            # for its stored physical route throughout its retention period.
+            tenant,_,policy=access(cur,profile,'dialogs')
+            selected=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']),row['lead_id'])
+            if (str(selected.get('connect_channel_id'))!=str(row['channel_id'])
+                    or selected.get('conversation_id')!=row['conversation_id']
+                    or selected.get('lead_id')!=row['lead_id']):
+                raise TenantLinearError('Адрес записи изменился.',409)
         else:
             _authorize(cur,profile,row)
         if not row['encrypted'] or timestamp(row['expires_at'])<=datetime.now(timezone.utc):
             raise TenantLinearError('Срок хранения записи истёк.',410)
         audio=_fernet().decrypt(bytes(row['encrypted']))
-    return audio
+    audio_type='audio/ogg' if row.get('audio_type')=='audio/ogg' else 'audio/wav'
+    return (audio,audio_type) if with_type else audio
 
 
 def purge():
