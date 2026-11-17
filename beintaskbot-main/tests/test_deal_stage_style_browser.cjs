@@ -40,9 +40,14 @@ await page.evaluate(()=>{
 });
 const editable=page.locator('#editableDeal [data-deal-stage-control]');await editable.waitFor();
 assert.equal(await page.locator('#editableDeal [data-deal-stage-badge]').count(),0);
-assert.equal(await editable.evaluate(n=>getComputedStyle(n).borderRadius),'9999px');
-assert.equal(await editable.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(224, 247, 232)');
-assert((await editable.boundingBox()).height>=44);
+const compact=page.locator('#editableDeal [data-compact-stage-pill]');
+assert.equal(await compact.evaluate(n=>getComputedStyle(n).borderRadius),'9999px');
+assert.equal(await compact.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(224, 247, 232)');
+assert.equal((await compact.boundingBox()).height,28,'visual pill remains compact');
+assert.equal((await editable.boundingBox()).height,44,'transparent native select retains touch target');
+assert((await compact.boundingBox()).width<150,'pill width follows current name, not longest option');
+await editable.focus();assert.equal(await compact.evaluate(n=>getComputedStyle(n).outlineStyle),'solid');
+assert.equal(await page.locator('#editableDeal').getByRole('button',{name:'Move deal'}).count(),0,'no second drag-handle row after policy loads');
 assert(await editable.evaluate(n=>n.getBoundingClientRect().right<=innerWidth));
 assert((await editable.boundingBox()).y>(await page.locator('#editableDeal').getByText('Editable client',{exact:true}).first().boundingBox()).y);
 await page.evaluate(()=>tenantChakraCRM.renderNativeDeals([{id:'n',title:'Native',pipeline_id:'p',stage_id:'a'}],{tenantId:'a',userId:1,workflows:[{pipeline_id:'p',stage_id:'a',stage_name:'Open'},{pipeline_id:'p',stage_id:'b',stage_name:'Closed'}]}));
