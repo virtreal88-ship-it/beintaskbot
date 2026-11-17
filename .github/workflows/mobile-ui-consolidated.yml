@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'beintaskbot-main/ui/src/**'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/tests/test_dialog_filters_browser.cjs'
       - 'beintaskbot-main/docs/tenant-chakra-ui.js'
       - 'beintaskbot-main/docs/tenant-mobile-crm-toolbar.js'
       - 'beintaskbot-main/tests/*mobile*'
@@ -36,6 +38,7 @@ jobs:
           node tests/test_tenant_notification_bell_ux_browser.cjs
           node tests/test_voice_card_mobile_browser.cjs
           node tests/test_list_toolbar_mobile_browser.cjs
+          node tests/test_dialog_filters_browser.cjs
           node tests/test_message_attachment_menu_browser.cjs
           node tests/test_photo_preview_browser.cjs
       - uses: actions/upload-artifact@v4
