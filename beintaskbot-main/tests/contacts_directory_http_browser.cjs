@@ -103,7 +103,7 @@ assert(origin && mode && actor && nativeId, 'Required isolated HTTP fixture is m
       return u.pathname==='/api/platform/crm/native/contacts' && u.searchParams.get('listing')==='1' &&
         (u.searchParams.get('search')||'')===value;
     });
-    await page.locator('#customerSearch').fill(value);
+    await page.locator('#customerSearch').focus();await page.locator('#customerSearch').fill(value);
     await response;
     await settled();
   };
