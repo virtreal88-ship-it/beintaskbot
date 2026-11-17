@@ -63,7 +63,8 @@ func managedHandler(s *server, host, token string) http.Handler {
 						}
 					}
 				}
-				out["connected"] = infos[0].State == "open" && out["account_jid"] == s.appGateway.cfg.Account
+				out["connected"] = infos[0].State == "open" && sess.transportReady() && out["account_jid"] == s.appGateway.cfg.Account
+				out["diagnostics"] = sess.diagnostics()
 			}
 			writeJSON(w, 200, out)
 			return

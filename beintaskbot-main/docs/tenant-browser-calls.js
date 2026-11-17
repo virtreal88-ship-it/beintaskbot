@@ -4,6 +4,23 @@
   'use strict';
   let identity='',revision=0,polling=false,timer=null,enabled=true,online=false,testNumber='',sources=[],calls=[],session=null,modal=null;
   const sourceOf=route=>sources.find(item=>String(item.channel_id)===String(route?.channel_id))||{online:false};
+  let ringContext=null,ringTimer=null,ringing=false;const ringNodes=new Set();
+  function stopRing(){ringing=false;clearInterval(ringTimer);ringTimer=null;for(const oscillator of ringNodes){try{oscillator.stop();oscillator.disconnect();}catch{}}ringNodes.clear();}
+  function ringPulse(){
+    if(!ringing||!identity||key()!==identity||!enabled||ringContext?.state!=='running')return;
+    const soundKey='tenant.call-ring.'+identity;
+    const play=()=>{if(!ringing)return;try{if(Date.now()-Number(localStorage.getItem(soundKey)||0)<2200)return;localStorage.setItem(soundKey,String(Date.now()));}catch{}
+      for(const delay of [0,.3]){const oscillator=ringContext.createOscillator(),gain=ringContext.createGain(),at=ringContext.currentTime+delay;oscillator.type='sine';oscillator.frequency.value=660;gain.gain.setValueAtTime(.0001,at);gain.gain.exponentialRampToValueAtTime(.09,at+.025);gain.gain.exponentialRampToValueAtTime(.0001,at+.22);oscillator.connect(gain);gain.connect(ringContext.destination);ringNodes.add(oscillator);oscillator.onended=()=>{ringNodes.delete(oscillator);oscillator.disconnect();gain.disconnect();};oscillator.start(at);oscillator.stop(at+.24);}};
+    if(navigator.locks)void navigator.locks.request(soundKey,{ifAvailable:true},lock=>{if(lock)play();}).catch(()=>{});else play();
+  }
+  async function unlockRing(){
+    if(!identity||!enabled)return;try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;ringContext=ringContext||new Audio();await ringContext.resume();if(ringing)ringPulse();if(modal)modal.sound.hidden=(session?.call||modal.call)?.state!=='incoming'||busy()||ringContext.state==='running';}catch{}
+  }
+  function updateRing(call){
+    const shouldRing=enabled&&sourceOf(modal?.route).online&&call?.state==='incoming'&&!call.claimed&&!busy();
+    if(!shouldRing){stopRing();return;}if(ringing)return;ringing=true;ringPulse();ringTimer=setInterval(ringPulse,3000);
+  }
+  window.addEventListener('pointerdown',()=>void unlockRing(),{passive:true});window.addEventListener('keydown',()=>void unlockRing());
   const terminal=call=>!call||['ended','failed'].includes(call.state);
   const busy=()=>!!session&&(session.preparing||session.stopping||!terminal(session.call));
   const profile=()=>window.tenantOperator?.member||window.tenantProfileSnapshot?.member;
@@ -19,14 +36,14 @@
   const initials=name=>name.startsWith('+')||name==='Контакт WhatsApp'?'WA':name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>Array.from(part)[0]).join('').toLocaleUpperCase();
   const style=make('style');style.textContent=`
     .browser-call-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--line,#e6eeea);background:transparent;color:inherit;cursor:pointer;flex:none}.browser-call-button svg{width:19px;height:19px}.browser-call-button:disabled{opacity:.45;cursor:default}
-    .browser-call-panel{position:fixed;inset:auto 20px 20px auto;margin:0;z-index:1200;border:1px solid var(--line,#e6eeea);border-radius:30px;padding:34px 28px 24px;width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;text-align:center;color:var(--ink,#102621);background:linear-gradient(150deg,color-mix(in srgb,var(--brand,#0a926e) 9%,var(--card,#fff)),var(--card,#fff) 62%);box-shadow:0 24px 90px #10262133;font-family:inherit}.browser-call-panel [hidden]{display:none!important}
+    .browser-call-panel{position:fixed;inset:72px auto auto 20px;margin:0;z-index:1200;border:1px solid var(--line,#e6eeea);border-radius:30px;padding:34px 28px 24px;width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 84px);overflow:auto;box-sizing:border-box;text-align:center;color:var(--ink,#102621);background:linear-gradient(150deg,color-mix(in srgb,var(--brand,#0a926e) 9%,var(--card,#fff)),var(--card,#fff) 62%);box-shadow:0 24px 90px #10262133;font-family:inherit}.browser-call-panel [hidden]{display:none!important}
     .browser-call-panel .browser-call-kicker{margin:4px 35px 12px;color:var(--muted,#698079);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}.browser-call-panel h2{margin:0 12px 10px;font-size:clamp(24px,5vw,32px);font-weight:650;line-height:1.2;overflow-wrap:anywhere}.browser-call-panel p{line-height:1.5}.browser-call-state{margin:0;min-height:24px;font-size:14px;color:var(--muted,#698079)}
     .browser-call-close{position:absolute;right:14px;top:14px;width:36px;height:36px;display:grid;place-items:center;border:0!important;border-radius:50%;background:transparent!important;color:var(--muted,#698079);font-size:27px;cursor:pointer}.browser-call-close:hover{background:var(--line,#e6eeea)!important}.browser-call-panel button:focus-visible{outline:3px solid var(--brand,#0a926e);outline-offset:4px}
     .browser-call-avatar{display:grid;place-items:center;width:136px;height:136px;margin:42px auto;border-radius:50%;background:color-mix(in srgb,var(--brand,#0a926e) 12%,var(--card,#fff));color:var(--brand-deep,#086e55);font-size:48px;font-weight:600;letter-spacing:-.04em;box-shadow:0 0 0 14px color-mix(in srgb,var(--brand,#0a926e) 5%,transparent)}.browser-call-panel[data-state=incoming] .browser-call-avatar,.browser-call-panel[data-state=ringing] .browser-call-avatar{animation:browser-call-ring 2s ease-in-out infinite}@keyframes browser-call-ring{50%{box-shadow:0 0 0 23px color-mix(in srgb,var(--brand,#0a926e) 2%,transparent)}}
     .browser-call-actions{display:flex;justify-content:center;gap:28px;margin:24px 0 20px}.browser-call-actions button{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:72px;padding:0;border:0!important;background:transparent!important;color:var(--ink,#102621);cursor:pointer;font:inherit}.browser-call-control-icon{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:var(--line,#e6eeea);color:var(--ink,#102621);transition:transform .15s,background .15s}.browser-call-control-icon svg{width:25px;height:25px}.browser-call-control-label{font-size:12px;line-height:1.4}.browser-call-actions .accept .browser-call-control-icon{background:var(--brand-deep,#086e55);color:#fff}.browser-call-actions .end .browser-call-control-icon,.browser-call-actions .reject .browser-call-control-icon{background:#c53645;color:#fff}.browser-call-actions button:hover .browser-call-control-icon{transform:translateY(-2px)}.browser-call-actions button:disabled{opacity:.45;cursor:default}.browser-call-actions .mute[aria-pressed=true] .browser-call-control-icon{background:color-mix(in srgb,var(--brand,#0a926e) 18%,var(--card,#fff));color:var(--brand-deep,#086e55)}
     .browser-call-panel small{display:block;max-width:350px;margin:0 auto;color:var(--muted,#698079);font-size:11px;line-height:1.7}.browser-call-result{margin-top:12px;color:var(--muted,#698079);font-size:12px;line-height:1.5}.browser-call-error{margin:16px 0;padding:10px 12px;border-radius:12px;color:var(--danger,#b42318);background:color-mix(in srgb,var(--danger,#b42318) 7%,var(--card,#fff));font-size:13px}.browser-call-error:empty{display:none}
     .browser-call-panel[data-state=incoming]{width:min(380px,calc(100vw - 24px));padding:20px 20px 16px;border-radius:22px;box-shadow:0 12px 45px #10262126}.browser-call-panel[data-state=incoming] .browser-call-kicker{margin:0 28px 6px 0;text-align:left;font-size:10px}.browser-call-panel[data-state=incoming] h2{text-align:left;font-size:20px;margin:0 28px 4px 0}.browser-call-panel[data-state=incoming] .browser-call-state{text-align:left;font-size:12px;min-height:18px}.browser-call-panel[data-state=incoming] .browser-call-avatar{display:none}.browser-call-panel[data-state=incoming] .browser-call-actions{margin:16px 0 10px;gap:32px}.browser-call-panel[data-state=incoming] .browser-call-control-icon{width:46px;height:46px}.browser-call-panel[data-state=incoming] small{font-size:10px;line-height:1.4}
-    @media(max-width:480px){.browser-call-panel{right:12px;bottom:12px;padding:30px 20px 20px;border-radius:24px}.browser-call-avatar{margin:36px auto}.browser-call-actions{gap:20px}}@media(prefers-reduced-motion:reduce){.browser-call-panel .browser-call-avatar{animation:none}.browser-call-control-icon{transition:none}}
+    @media(max-width:480px){.browser-call-panel{left:12px;right:auto;top:64px;bottom:auto;max-height:calc(100dvh - 76px);padding:30px 20px 20px;border-radius:24px}.browser-call-avatar{margin:36px auto}.browser-call-actions{gap:20px}}@media(prefers-reduced-motion:reduce){.browser-call-panel .browser-call-avatar{animation:none}.browser-call-control-icon{transition:none}}
   `;document.head.append(style);
   async function api(data,owner=profile(),keepalive=false){
     const q=query(owner);if(!data&&session?.request){q.set('request_id',session.request);if(session.stopping)q.set('heartbeat','0');}
@@ -36,14 +53,14 @@
       const payload=await response.json();if(!response.ok){const error=new Error(payload.error||'Не удалось подтвердить звонок');error.status=response.status;throw error;}return payload.result;
     }finally{clearTimeout(timeout);}
   }
-  function release(s){if(!s)return;s.media?.close();s.media=null;s.release?.();s.release=null;}
+  function release(s){if(!s)return;clearTimeout(s.connectTimer);s.media?.close();s.media=null;s.release?.();s.release=null;}
   async function stop(s=session,hide=false){
     if(!s){if(hide)closeModal();return;}
     s.stopping=true;release(s);draw();
     try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
     if(hide)closeModal();void poll();
   }
-  function closeModal(){if(modal){modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
+  function closeModal(){stopRing();if(modal){modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
   function show(route,call=null){
     if(busy()&&modal){draw();if(!modal.node.open)modal.node.show();return;}
     if(busy()){route=session.route;call=session.call;}
@@ -53,8 +70,9 @@
     buttonIcon(start,'phone',call?'Принять':'Позвонить');buttonIcon(reject,'end','Отклонить');buttonIcon(end,'end','Завершить');buttonIcon(mute,'mic','Выключить микрофон');mute.setAttribute('aria-pressed','false');
     for(const button of [start,reject,end,mute,close])button.type='button';actions.append(start,mute,reject,end);
     const info=make('small');const result=make('div','','browser-call-result');
-    node.append(close,kicker,title,state,avatar,error,actions,info,result);document.body.append(node);
-    modal={node,title,state,error,start,reject,end,mute,kicker,avatar,result,info,name:contactName(route,call),route:routeOf(route),call};
+    const sound=make('button','Включить звук звонка','browser-call-sound');sound.type='button';sound.hidden=true;sound.onclick=()=>void unlockRing();
+    node.append(close,kicker,title,state,avatar,error,actions,sound,info,result);document.body.append(node);
+    modal={node,title,state,error,start,reject,end,mute,kicker,avatar,result,info,sound,name:contactName(route,call),route:routeOf(route),call};
     close.onclick=()=>{if(busy())void stop(session,true);else if(modal?.call&&!terminal(modal.call))void rejectCall();else closeModal();};
     node.addEventListener('cancel',event=>{event.preventDefault();close.click();});
     start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();mute.onclick=()=>{const s=session;if(!s?.media||s.stopping)return;s.muted=!s.muted;s.media.setMuted(s.muted);draw();};
@@ -63,6 +81,7 @@
   async function rejectCall(){const m=modal;if(!m?.call)return;try{await api({...m.route,op:'reject',call_id:m.call.id,request_id:crypto.randomUUID()});closeModal();void poll();}catch(e){if(modal===m)m.error.textContent=e.message;}}
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
+    updateRing(call);m.sound.hidden=call?.state!=='incoming'||busy()||ringContext?.state==='running';
     m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=call?.display_name?contactName(m.route,call):m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
     const source=sourceOf(m.route);
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
@@ -87,7 +106,7 @@
       await ctx.audioWorklet.addModule('/assets/browser-call-audio.js');await ctx.resume();
       const capture=new AudioWorkletNode(ctx,'bein-call-capture'),playback=new AudioWorkletNode(ctx,'bein-call-playback');
       ctx.createMediaStreamSource(stream).connect(capture);capture.connect(ctx.destination);playback.connect(ctx.destination);
-      capture.port.onmessage=e=>{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);};
+      capture.port.onmessage=e=>{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);s.pcmSent=true;};
       const onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
       if(managed){
         handle.connect=()=>new Promise((resolve,reject)=>{
@@ -117,7 +136,8 @@
     try{
       const offer=await media(s);if(s.stopping||session!==s||key()!==s.identity){release(s);return;}
       s.sent=true;const call=await api({...s.route,op:m.call?'accept':'start',call_id:m.call?.id,request_id:s.request,media:s.transport,sdp_offer:offer,consent_confirmed:true},s.owner);
-      s.call=call;s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}draw();void poll();
+      s.call=call;s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}
+      s.connectTimer=setTimeout(()=>{if(session===s&&!s.stopping&&!terminal(s.call)&&(!s.pcmSent||s.call.direction==='inbound'&&s.call.state!=='connected')){s.error='Не удалось подтвердить подключение звука. Завершаем попытку; после подтверждения можно повторить.';void stop(s);}},20000);draw();void poll();
     }catch(e){release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
   }
   async function poll(){
@@ -130,7 +150,7 @@
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
-        if(call){s.call=call;if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
+        if(call){s.call=call;if(call.state==='connected')clearTimeout(s.connectTimer);if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
           if(terminal(call)){release(s);s.stopping=false;s.preparing=false;s.closeError='';if(call.recording_id&&s.refreshed!==call.recording_id){s.refreshed=call.recording_id;if(sameRoute(window.tenantOperator?.currentDialog,s.route))void window.tenantOperator.openDialog({...s.route,provider:'connect'},true);}}
           if(call.error_code&&!terminal(call)&&!s.stopping){s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
       }
@@ -155,7 +175,7 @@
   document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-chat-attachments-ready',mount);
   document.addEventListener('tenant-calls-updated',event=>{enabled=true;const route=window.tenantOperator?.currentDialog;if(route&&String(route.channel_id)===String(event.detail?.channel_id)&&!String(route.conversation_id).endsWith('@g.us'))route.browser_call_available=true;mount();void poll();});
   document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';sources=[];enabled=false;closeModal();});
-  window.addEventListener('pagehide',()=>{clearTimeout(timer);if(busy())void stop(session);release(session);});
+  window.addEventListener('pagehide',()=>{stopRing();clearTimeout(timer);if(busy())void stop(session);release(session);});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
   changed();
 })();
