@@ -63,6 +63,21 @@ class FakeCursor:
 
 
 class BeinSystemsOperatorTests(unittest.TestCase):
+    def test_link_connection_scope_rejects_unconfigured_and_malformed_metadata(self):
+        instance = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        for row in (None, {}, {"metadata": None}, {"metadata": []},
+                    {"metadata": {"generation": "g"}},
+                    {"metadata": {"generation": "g", "connection_instance_id": ""}},
+                    {"metadata": {"generation": "g", "connection_instance_id": "not-a-uuid"}},
+                    {"metadata": {"generation": "", "connection_instance_id": instance}},
+                    {"metadata": {"generation": "  ", "connection_instance_id": instance}},
+                    {"metadata": {"generation": 7, "connection_instance_id": instance}}):
+            with self.subTest(row=row):
+                self.assertEqual(operator._link_connection_scope(row), (None, None))
+        self.assertEqual(operator._link_connection_scope({"metadata": {
+            "generation": "exact-generation", "connection_instance_id": instance.upper()}}),
+            ("exact-generation", instance))
+
     def test_operator_login_401_is_marked_as_provider_auth_failure(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         request = MagicMock(method="POST")

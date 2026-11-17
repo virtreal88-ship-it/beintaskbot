@@ -960,6 +960,21 @@ def revoke_link(profile, link_id):
     return {"id": str(row["id"]), "version": int(row["version"]), "status": "revoked"}
 
 
+def _link_connection_scope(integration):
+    """Read-only link fence; missing/invalid identity can never match old links."""
+    metadata = integration.get("metadata") if isinstance(integration, dict) else None
+    if not isinstance(metadata, dict):
+        return None, None
+    generation = metadata.get("generation")
+    if not isinstance(generation, str) or not generation.strip():
+        return None, None
+    try:
+        instance = str(uuid.UUID(str(metadata.get("connection_instance_id") or "")))
+    except (ValueError, TypeError, AttributeError):
+        return None, None
+    return generation, instance
+
+
 def links_for_local(profile, *, local_entity_type, local_entity_id):
     tenant = _tenant(profile)
     try:
@@ -993,15 +1008,14 @@ def links_for_local(profile, *, local_entity_type, local_entity_id):
                 if not resource:
                     raise OperatorError("CRM-контакт недоступен по вашим правам.")
             integration = _operator_row(cur, tenant)
-            metadata = integration.get("metadata") if integration and isinstance(integration.get("metadata"), dict) else {}
+            generation, instance = _link_connection_scope(integration)
             cur.execute("""SELECT l.id,l.external_entity_type,l.external_id,l.external_scope_id,
                 l.verification_basis,l.evidence_summary,l.verified_at,l.verified_by,l.revoked_at,l.version,
-                (l.revoked_at IS NULL AND l.connection_generation=%s AND l.connection_instance_id=%s) AS current
+                COALESCE(l.revoked_at IS NULL AND l.connection_generation=%s AND l.connection_instance_id=%s,FALSE) AS current
               FROM saas_beinsystems_operator_links l
               WHERE l.tenant_id=%s::uuid AND l.local_entity_type=%s AND l.local_entity_id=%s::uuid
               ORDER BY l.created_at DESC LIMIT 50""",
-              (str(metadata.get("generation") or ""), str(metadata.get("connection_instance_id") or ""),
-               tenant, local_entity_type, local_id))
+              (generation, instance, tenant, local_entity_type, local_id))
             rows = cur.fetchall()
     return [{"id": str(row["id"]), "external_type": row["external_entity_type"],
              "external_id": row["external_id"], "scope_id": row["external_scope_id"],
@@ -1044,9 +1058,10 @@ def dialog_context(profile, *, channel_id, conversation_id):
                 return {"status": "crm_contact_unresolved", "account_links": [],
                         "profile_user_links": []}
             integration = _operator_row(cur, tenant)
-            metadata = integration.get("metadata") if integration and isinstance(integration.get("metadata"), dict) else {}
-            generation = str(metadata.get("generation") or "")
-            instance = str(metadata.get("connection_instance_id") or "")
+            generation, instance = _link_connection_scope(integration)
+            if instance is None:
+                return {"status": "unlinked", "contact_id": str(contact["contact_id"]),
+                        "account_links": [], "profile_user_links": []}
             local_targets = [("contact", str(contact["contact_id"]))]
             if contact.get("company_id"):
                 local_targets.append(("company", str(contact["company_id"])))
