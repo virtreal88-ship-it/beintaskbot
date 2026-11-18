@@ -119,10 +119,11 @@ def test_fresh_source_revocation_after_auth_snapshot(capture,monkeypatch,sql):
     assert not db.execute('SELECT event_id FROM saas_whatsapp_native_inbox');db.commit()
 
 
-def test_cursor_write_failure_rolls_back_event_and_returns_no_receipt(capture):
+@pytest.mark.parametrize('failure',["RAISE EXCEPTION 'synthetic cursor failure';",'RETURN NULL;'])
+def test_cursor_write_failure_rolls_back_event_and_returns_no_receipt(capture,failure):
     db,_,_=capture
     db.execute('''CREATE FUNCTION test_fail_native_cursor() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RAISE EXCEPTION 'synthetic cursor failure'; END; $$''')
+      BEGIN '''+failure+''' END; $$''')
     db.execute('''CREATE TRIGGER test_native_cursor_failure BEFORE UPDATE ON saas_whatsapp_capture_generations
       FOR EACH ROW EXECUTE FUNCTION test_fail_native_cursor()''');db.commit()
     try:

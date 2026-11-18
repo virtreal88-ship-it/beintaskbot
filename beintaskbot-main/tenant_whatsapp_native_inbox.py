@@ -117,6 +117,7 @@ def store_delivery(header, raw):
         previous = cur.fetchone()
         if previous:
             if (previous['sequence'] != event['sequence'] or previous['after_sequence'] != delivery['after']
+                    or capture['stored_sequence'] < previous['sequence']
                     or not hmac.compare_digest(previous['payload_sha256'],digest)):
                 raise _error('native_event_conflict',409)
         else:
@@ -131,8 +132,12 @@ def store_delivery(header, raw):
               VALUES(%s,%s,%s,%s,%s,%s,%s,%s)''',
               (*key,event['id'],event['sequence'],delivery['after'],digest,sealed))
             cur.execute('''UPDATE saas_whatsapp_capture_generations SET stored_sequence=%s
-              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND stored_sequence=%s''',
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND stored_sequence=%s
+              RETURNING stored_sequence''',
               (event['sequence'],*key,delivery['after']))
+            advanced = cur.fetchone()
+            if not advanced or advanced['stored_sequence'] != event['sequence']:
+                raise _error('native_cursor_conflict',409)
     # Context manager commit succeeded. Never acknowledge in a finally block or
     # before commit; an uncertain outcome is retried with the same event ID.
     return {'version':1,'scope':scope,'after':delivery['after'],'sequence':event['sequence'],
