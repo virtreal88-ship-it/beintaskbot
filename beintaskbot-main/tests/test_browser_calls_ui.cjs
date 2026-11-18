@@ -32,6 +32,19 @@ async function main(){
   assert(!(await p.locator('dialog').innerText()).includes('994123456789'),'source number must not impersonate the customer');
   await p.getByRole('button',{name:'Закрыть звонок'}).click();await p.evaluate(()=>tenantOperator.currentDialog.conversation_id='123456789@lid');await phone.click();assert(await p.locator('.browser-call-phone').isHidden(),'opaque LID must not appear as a phone');await p.getByRole('button',{name:'Закрыть звонок'}).click();await p.evaluate(()=>tenantOperator.currentDialog.conversation_id='994102135103@s.whatsapp.net');await phone.click();
   await p.evaluate(()=>{const b=document.querySelector('.accept');b.click();b.click();});await p.getByText('Разговор',{exact:true}).waitFor();assert.equal(posts.filter(x=>x.op==='start').length,1);if(managed){for(let i=0;i<40&&!frames;i++)await p.waitForTimeout(100);assert(frames>0,'managed PCM must actually reach the WebSocket mock');}
+  if(managed){
+    // A real AudioWorklet runs while the document's JS is blocked. Match the
+    // unchanged relay's byte budget; a queued backlog used to close the call.
+    const captured=await p.evaluate(async()=>{
+      const sent=[],original=WebSocket.prototype.send;
+      WebSocket.prototype.send=function(data){sent.push({at:performance.now(),bytes:data.byteLength});return original.call(this,data);};
+      try{const until=performance.now()+3200;while(performance.now()<until){};await new Promise(resolve=>setTimeout(resolve,1200));return sent;}
+      finally{WebSocket.prototype.send=original;}
+    });
+    assert(captured.length>20,'capture resumes after the stall');
+    for(const frame of captured){const bytes=captured.filter(x=>x.at>=frame.at&&x.at<frame.at+1000).reduce((n,x)=>n+x.bytes,0);assert(bytes<=65536,'main-thread stall must not flush an over-limit PCM burst: '+bytes);}
+    assert.equal(calls[0].state,'connected');
+  }
   assert.equal(await p.locator('dialog').evaluate(e=>e.matches(':modal')),false,'call panel must not block the workspace');
   const duration=p.getByRole('timer',{name:'Длительность разговора'});await duration.waitFor();await p.waitForFunction(()=>/^00:0[1-9]$/.test(document.querySelector('[role=timer]').textContent));
   const clockBefore=await duration.innerText();await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await p.waitForTimeout(300);assert((await duration.innerText())>=clockBefore,'status refresh must not reset duration');

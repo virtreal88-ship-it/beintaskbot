@@ -72,7 +72,20 @@ def test_prebrowser_provider_backlog_hits_existing_rate_guard_safely(monkeypatch
                     while True:
                         message=await asyncio.wait_for(socket.receive(),3)
                         if message.type!=WSMsgType.BINARY:break
-                logger.info.assert_called_once_with(
+                logger.info.assert_any_call(
                     'call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
                     'provider_rate_limit',False,True)
     asyncio.run(run())
+
+
+def test_close_evidence_never_exposes_exception_or_unknown_peer_code():
+    from tenant_call_sources_api import close_evidence
+    for code,error,expected in [
+        (1006,asyncio.TimeoutError('secret upstream detail'),(1006,'timeout')),
+        (1006,ConnectionResetError('secret'),(1006,'connection_lost')),
+        (1000,None,(1000,'none')),
+        (4123,RuntimeError('secret'),(0,'transport_error')),
+        (None,None,(0,'none')),
+    ]:
+        socket=Mock(close_code=code);socket.exception.return_value=error
+        assert close_evidence(socket)==expected

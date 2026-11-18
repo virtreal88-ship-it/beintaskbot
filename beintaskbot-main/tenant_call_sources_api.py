@@ -8,6 +8,15 @@ from tenant_linear_policy import TenantLinearError
 import tenant_call_sources as store
 
 
+def close_evidence(socket):
+    """Fixed transport enums only; never log exception text or peer payloads."""
+    code=getattr(socket,'close_code',None)
+    code=code if code in {1000,1001,1002,1003,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015} else 0
+    error=socket.exception()
+    kind='timeout' if isinstance(error,asyncio.TimeoutError) else 'connection_lost' if isinstance(error,ConnectionError) else 'transport_error' if error is not None else 'none'
+    return code,kind
+
+
 def handler(member,origin,logger,resource='source'):
     async def handle(request):
         try:
@@ -89,5 +98,9 @@ async def relay(request,profile,member,logger):
                 # call IDs, account identifiers, audio, transcripts or tokens.
                 logger.info('call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
                             code,received['browser'],received['provider'])
+                browser_code,browser_error=close_evidence(socket)
+                provider_code,provider_error=close_evidence(upstream)
+                logger.info('call_audio_transport_end browser_code=%s browser_error=%s provider_code=%s provider_error=%s',
+                            browser_code,browser_error,provider_code,provider_error)
                 await socket.close()
             return socket
