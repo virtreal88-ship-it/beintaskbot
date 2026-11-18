@@ -1,7 +1,9 @@
 package unified
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,66 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestGroupSenderKeyAndContentWithSameProviderID(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		for _, fast := range []bool{false, true} {
+			j := journal(t, database(t, filepath.Join(t.TempDir(), "journal.db")), testScope)
+			info := types.MessageInfo{MessageSource: types.MessageSource{
+				Chat:   types.NewJID("120363000000001", types.GroupServer),
+				Sender: types.NewJID("15550000002", types.DefaultUserServer), IsGroup: true},
+				ID: "SAME_PROVIDER_ID", Timestamp: time.Unix(1700000000, 0)}
+			keyMessage := &waE2E.Message{}
+			key := &waE2E.SenderKeyDistributionMessage{GroupID: proto.String(info.Chat.String()), AxolotlSenderKeyDistributionMessage: []byte("synthetic key")}
+			if fast {
+				keyMessage.FastRatchetKeySenderKeyDistributionMessage = key
+			} else {
+				keyMessage.SenderKeyDistributionMessage = key
+			}
+			control := &events.Message{Info: info, Message: keyMessage}
+			content := &events.Message{Info: info, Message: &waE2E.Message{Conversation: proto.String("GROUP CONTENT")}}
+			ordered := []*events.Message{control, content}
+			if reverse {
+				ordered[0], ordered[1] = ordered[1], ordered[0]
+			}
+			for repeat := 0; repeat < 3; repeat++ {
+				for _, e := range ordered {
+					if !j.Capture(context.Background(), e) {
+						t.Fatal("capture failed")
+					}
+				}
+			}
+			rows, err := j.Events(context.Background(), 0, 10)
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("key/content collision or replay duplication: count=%d err=%v", len(rows), err)
+			}
+			var controls, texts int
+			for _, row := range rows {
+				var envelope Envelope
+				if json.Unmarshal(row.Payload, &envelope) != nil {
+					t.Fatal("invalid envelope")
+				}
+				if envelope.Variant == "control" && envelope.MessageType == "unsupported" {
+					controls++
+				}
+				if envelope.Variant == "" && envelope.MessageType == "text" && envelope.Text == "GROUP CONTENT" {
+					texts++
+				}
+			}
+			if controls != 1 || texts != 1 {
+				t.Fatal("original content lost or key projected as text")
+			}
+			// A provider may instead include content and the key in one protobuf.
+			combined := proto.Clone(keyMessage).(*waE2E.Message)
+			combined.Conversation = proto.String("GROUP CONTENT")
+			combinedID, combinedEnvelope, _, _ := MessageEnvelope(&events.Message{Info: info, Message: combined})
+			contentID, _, _, _ := MessageEnvelope(content)
+			if combinedID != contentID || combinedEnvelope.Variant != "" || combinedEnvelope.MessageType != "text" {
+				t.Fatal("combined content lost its original identity")
+			}
+		}
+	}
+}
 
 func TestMessageEnvelopePreservesIdentityAndExplicitProviderFacts(t *testing.T) {
 	chat := types.NewJID("120363000000001", types.GroupServer)
