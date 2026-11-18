@@ -1088,7 +1088,10 @@ def mark_all_read(profile, payload=None):
     # accepts no operation-specific fields or client-selected dialog IDs.
     if payload not in (None, {}):
         raise TenantLinearError('Некорректный запрос.')
-    snapshot=listing(profile,all_rows=True,include_read_cursors=True)
+    # The operation ignores the current UI filters, including the active vs.
+    # completed queue mode. Keep the existing route ACL projection, but capture
+    # both open and closed accessible conversations.
+    snapshot=listing(profile,all_rows=True,lifecycle='all',include_read_cursors=True)
     targets=[row for card in snapshot.get('dialogs',[]) for row in card.get('group_sources',[card])
              if int(row.get('unread_count') or 0)>0 and row.get('read_through_message_id')]
     updated=0

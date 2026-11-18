@@ -258,3 +258,24 @@ def test_active_keeps_unknown_inbound_metadata(active,monkeypatch,missing):
     monkeypatch.setattr(lifecycle,'decorate',unknown)
     result=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
     assert any(row['lead_id']==41 for row in result['dialogs']), 'unknown is not confirmed outgoing-only'
+
+
+def test_mark_all_read_clears_unread_messages_in_closed_dialogs(active):
+    dialogs.listing(PROFILE, lifecycle='all')  # establish the employee's initial cursor
+    message(active, 94)
+    accept=dict(provider='connect', channel_id=CA, conversation_id='client', lead_id=41,
+                action='accept', expected_revision=0, request_id=str(uuid.uuid4()))
+    lifecycle.mutate(PROFILE, accept)
+    close={**accept, 'action':'close', 'expected_revision':1, 'request_id':str(uuid.uuid4())}
+    lifecycle.mutate(PROFILE, close)
+
+    before=dialogs.listing(PROFILE, lifecycle='completed')
+    assert before['unread_count']==1
+    assert before['dialogs'][0]['lifecycle']['state']=='closed'
+
+    result=dialogs.mark_all_read(PROFILE)
+
+    assert result['updated_dialogs']==1
+    after=dialogs.listing(PROFILE, lifecycle='completed')
+    assert after['unread_count']==0
+    assert after['dialogs'][0]['unread_count']==0
