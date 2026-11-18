@@ -650,6 +650,9 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
             native_modes=modes(cur,tenant)
             if requested.intersection(native_modes):
                 raise TenantPlatformError('Этот источник уже переводится на единый WhatsApp. Используйте его окно подключения; старый движок повторно не включается.')
+            native_accounts={mode['account_jid'].split('@')[0] for mode in native_modes.values()}
+            if any(str(remote_by_id[source].get('phone') or '').lstrip('+') in native_accounts for source in requested):
+                raise TenantPlatformError('Этот номер уже подключён к единому WhatsApp. Второй отправитель через Connect не включается.')
             for source,mode in native_modes.items():
                 remote_by_id[source]={**remote_by_id.get(source,{}),'id':source,'name':mode['name'],
                     'status':'connected' if mode['enabled'] else 'disconnected','phone':mode['account_jid'].split('@')[0]}

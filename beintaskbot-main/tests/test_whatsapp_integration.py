@@ -96,3 +96,12 @@ def test_cross_company_revocation_and_pending_limit_fail_closed(setup):
     db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s',(A,));db.commit()
     with pytest.raises(TenantLinearError):app.pairing(PROFILE,one['channel_id'])
     db.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s',(A,));db.commit()
+
+
+def test_reserve_connector_cannot_enable_same_native_number_under_another_id(setup):
+    db,account,legacy,remote=setup
+    app.begin(PROFILE,'994100000777','Synthetic')
+    legacy.return_value={'data':[{'id':CA,'phone':'994100000777','status':'connected'}]}
+    with pytest.raises(Exception,match='Второй отправитель'):
+        transport._configure_locked({**PROFILE,'role':'owner'},{'api_key':'synthetic','channel_ids':[CA]},'https://unused.invalid')
+    assert all(call.args[1]=='GET' for call in legacy.call_args_list)
