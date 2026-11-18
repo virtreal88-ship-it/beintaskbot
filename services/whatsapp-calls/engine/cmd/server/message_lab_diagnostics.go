@@ -18,6 +18,19 @@ type labDiagnostics struct {
 	counts map[string]uint64
 }
 
+func (d *labDiagnostics) once(code string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.counts == nil {
+		d.counts = map[string]uint64{}
+	}
+	if d.counts[code] != 0 {
+		return false
+	}
+	d.counts[code] = 1
+	return true
+}
+
 func (d *labDiagnostics) add(code string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -280,6 +280,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	}
 	m := s.sessions.messageLab
 	s.registerLabMedia(mux, m)
+	s.registerLabReceiveProbe(mux, m)
 	mux.HandleFunc("GET /unified-lab", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(w, messageLabHTML)
