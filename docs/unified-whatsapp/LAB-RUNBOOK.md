@@ -268,3 +268,68 @@ The later group-discovery binary is
 Each replacement followed a fresh zero-active/zero-unknown check, graceful old
 process exit and a retained SQLite/config/binary backup. No new QR or production
 source changes occurred. These are lab results, not `/app` acceptance.
+
+### Group and restart evidence, 18 November
+
+The owner created one isolated two-person group. Read-only provider discovery
+required the exact approved PN members as well as the test name; only then was
+that exact group JID added to the lab allowlist. The outgoing control arrived.
+The later explicit incoming personal/group controls were retained as sequences
+26/27, each once, with the correct chat and the approved sender. A group name
+alone was never used to combine or authorize chats.
+
+With active calls zero and no unknown send/start operations, the test process
+was gracefully stopped for 315 seconds. The user sent a new direct control
+while it was down. The same binary/config/database resumed without QR and
+captured it once at sequence 28. All first 27 encrypted row hashes were
+unchanged; five accepted send operations and one completed call command were
+unchanged. Private `offline-recovery-evidence.json` retains before/after hashes
+and times. No message or session data was deleted. This does not cover forced
+crash during send, a network partition, or SaaS `/app` projection.
+
+The Worker HTTP delivery permit now survives caller cancellation until its
+synchronous DB transaction actually finishes. A cancellation regression test
+checks repeated cancellation and a late DB error without releasing capacity or
+returning a false stored receipt.
+
+### Reject investigation (not yet accepted)
+
+The first reject removed the local card but the caller reported continued
+ringing. The old call manager launched a query with the HTTP request context
+and ignored its result; the HTTP route also forced local success. The first
+candidate completed a detached, bounded write through the pinned client's
+RejectCall. Its `transport_sent` diagnostic still did **not** stop the caller
+(owner explicitly confirmed continued ringing). Do not treat that as success.
+
+The next candidate preserved the offered peer and creator separately and
+required a correlated `ack class=call type=reject` without a server error.
+The actual test returned `ack_timeout` after eight seconds. Both offered JIDs
+were equal, non-device LIDs; stripping a device address therefore did not explain
+this test. The later remote terminate cleared the registry with no media or
+recording. Private `reject-ack-evidence.json` retains safe counters/times only.
+An earlier diagnostic incorrectly attributed that later terminate to the
+attempted browser reject; the code now marks local rejection only on ACK.
+
+A further candidate defers preaccept until explicit Accept. The prior code sent
+it immediately while ringing. The reverse-engineered [reject flow](https://wacrg.org/spec/signalling/flow-call-rejected/)
+describes rejection before preaccept; this is a testable hypothesis, not a
+confirmed provider cause. Local tests cover offer/accept/reject ordering, timeout,
+wrong/late ACK, explicit NACK, request cancellation, duplicate decisions and
+remote termination races. `lab-client-reject.patch`, applied after the outbound
+patch, also stops swallowing HTTP failures and clearing a newer incoming call.
+The lab client builds successfully; its failure message does not claim closure.
+
+These changes are not a production rollout. Remote rejection and incoming
+acceptance must both be verified before promoting the changed sequence.
+
+### CRM projection foundation (not wired to production)
+
+The common Go envelope retains stable event identity, participant/direction,
+caption, MIME/size/name and quote metadata while keeping provider protobuf
+encrypted/private. A Python converter validates the encrypted inbox scope and
+content hash and builds an allowlisted existing CRM event shape. It deliberately
+rejects control/reaction/edit events as fresh customer messages and never exposes
+raw protobuf, keys or download URLs. Exact provider-ID lookup, the transaction
+consumer, current source-generation ownership and media/outgoing adapters still
+need integration. There is no automatic CRM mutation or AI dispatch from this
+converter. Unit tests are not `/app` acceptance evidence.

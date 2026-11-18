@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"wacalls/internal/unified"
 )
@@ -35,6 +36,28 @@ func TestLabProviderDiagnosticsNeverRetainContent(t *testing.T) {
 	values["provider_decrypt_started"] = 0
 	if d.snapshot()["provider_decrypt_started"] != 20 {
 		t.Fatal("snapshot aliases internal state")
+	}
+}
+
+func TestCallControlDiagnosticsRetainOnlyStructure(t *testing.T) {
+	m := &messageLab{}
+	l := m.providerLogger(waLog.Noop)
+	secret := "secret-identifier"
+	peer := types.JID{User: secret, Server: types.HiddenUserServer, Device: 4}
+	creator := peer.ToNonAD()
+	l.Sub("Recv").Debugf("%s", &waBinary.Node{Tag: "call", Attrs: waBinary.Attrs{"from": peer, "id": secret}, Content: []waBinary.Node{{Tag: "offer", Attrs: waBinary.Attrs{"call-creator": creator, "call-id": secret}}}})
+	l.Sub("Send").Debugf("%s", &waBinary.Node{Tag: "call", Attrs: waBinary.Attrs{"to": peer, "id": secret}, Content: []waBinary.Node{{Tag: "reject", Attrs: waBinary.Attrs{"call-creator": creator, "call-id": secret}}}})
+	for _, code := range []any{nil, 403, secret} {
+		attrs := waBinary.Attrs{"class": "call", "type": "reject", "id": secret}
+		if code != nil {
+			attrs["error"] = code
+		}
+		l.Sub("Recv").Debugf("%s", &waBinary.Node{Tag: "ack", Attrs: attrs, Content: []byte(secret)})
+	}
+	counts := m.diagnostics.snapshot()
+	raw, _ := json.Marshal(counts)
+	if strings.Contains(string(raw), secret) || counts["offer_route_lid"] != 1 || counts["offer_route_device"] != 1 || counts["reject_route_device"] != 1 || counts["reject_ack_error_absent"] != 1 || counts["reject_ack_error_403"] != 1 || counts["reject_ack_error_other"] != 1 || counts["reject_explicit_from"] != 0 || counts["offer_route_creator_equal"] != 0 {
+		t.Fatal("unsafe/missing structural counters")
 	}
 }
 

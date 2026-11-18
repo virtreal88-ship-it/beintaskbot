@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	waBinary "go.mau.fi/whatsmeow/binary"
+	"go.mau.fi/whatsmeow/types"
 	"log/slog"
 	"testing"
 	"wacalls/internal/voip/core"
@@ -13,6 +14,9 @@ import (
 type terminalSocket struct{ core.VoipSocket }
 
 func (terminalSocket) Query(context.Context, waBinary.Node) (*waBinary.Node, error) { return nil, nil }
+func (terminalSocket) RejectIncomingCall(context.Context, types.JID, types.JID, string) error {
+	return nil
+}
 
 func TestEndedCallbackFollowsLocalMediaCleanup(t *testing.T) {
 	for _, mode := range []string{"local", "reject", "remote"} {

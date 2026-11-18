@@ -10,6 +10,32 @@ import tenant_whatsapp_native_inbox as inbox
 SLOTS = asyncio.Semaphore(2)
 
 
+async def _finish_thread(function, *args):
+    """A disconnected HTTP caller cannot free a slot while its DB write runs.
+
+    Cancelling to_thread does not stop the underlying synchronous transaction.
+    Keep the permit until it actually finishes, including repeated cancellation;
+    the sender will retry its persisted event if it did not receive a receipt.
+    """
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    try:
+        while True:
+            try:
+                result = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if task.done():
+                    # Retrieve any exception without logging the DB payload.
+                    task.result()
+                    break
+    finally:
+        if cancelled:
+            raise asyncio.CancelledError
+    return result
+
+
 def handler(member, origin, logger):
     async def handle(request):
         try:
@@ -23,7 +49,7 @@ def handler(member, origin, logger):
                 raise TenantLinearError('native_inbox_busy', 429)
             async with SLOTS:
                 authorization = request.headers.get('Authorization', '')
-                cfg = await asyncio.to_thread(tenant_browser_calls.gateway_auth, authorization)
+                cfg = await _finish_thread(tenant_browser_calls.gateway_auth, authorization)
                 if cfg.get('managed') is not True:
                     raise TenantLinearError('native_source_denied', 403)
                 if request.content_type != 'application/json' or request.headers.get('Content-Encoding'):
@@ -31,7 +57,7 @@ def handler(member, origin, logger):
                 raw = await asyncio.wait_for(body(request, inbox.MAX_DELIVERY), 10)
                 # store_delivery repeats authentication and locks/rechecks the
                 # source in its commit transaction, including credential revoke.
-                receipt = await asyncio.to_thread(inbox.store_delivery, authorization, raw)
+                receipt = await _finish_thread(inbox.store_delivery, authorization, raw)
             return web.json_response(receipt, headers=HEADERS)
         except TenantLinearError as error:
             return web.json_response({'error': str(error)}, status=error.status, headers=HEADERS)

@@ -350,9 +350,10 @@ func (g *appGateway) performOwned(ctx context.Context, sess *Session, cmd appCom
 		}
 		if cmd.Op == "reject" {
 			if ac, exists := sess.reg.get(cmd.ProviderID); exists {
-				ac.markEnd("command_reject")
+				origin := "command_reject"
+				ac.rejectOrigin.Store(&origin)
 				if err := ac.cm.RejectCall(ctx, cmd.ProviderID, core.EndCallReasonDeclined); err != nil {
-					out.Error = "call_ended"
+					out.Error = "call_reject_unconfirmed"
 					return out
 				}
 			}

@@ -4,9 +4,11 @@ package main
 
 import (
 	"errors"
+	"strconv"
 	"sync"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"wacalls/internal/unified"
 )
@@ -52,6 +54,7 @@ func (d *labDiagnostics) snapshot() map[string]uint64 {
 type labProviderLogger struct {
 	diagnostics *labDiagnostics
 	receive     bool
+	send        bool
 }
 
 // NewClient snapshots its child loggers. Install this before construction so
@@ -64,6 +67,11 @@ func (m *messageLab) providerLogger(fallback waLog.Logger) waLog.Logger {
 }
 
 func (l labProviderLogger) record(level, format string, args []any) {
+	if (l.receive || l.send) && level == "debug" && format == "%s" && len(args) == 1 {
+		if node, ok := args[0].(*waBinary.Node); ok && node != nil {
+			l.callShape(node)
+		}
+	}
 	if l.receive && level == "debug" && format == "%s" && len(args) == 1 {
 		code := "provider_frame_other"
 		if node, ok := args[0].(*waBinary.Node); ok && node != nil {
@@ -120,5 +128,95 @@ func (l labProviderLogger) Warnf(f string, a ...any)  { l.record("warning", f, a
 func (l labProviderLogger) Infof(f string, a ...any)  { l.record("info", f, a) }
 func (l labProviderLogger) Debugf(f string, a ...any) { l.record("debug", f, a) }
 func (l labProviderLogger) Sub(module string) waLog.Logger {
-	return labProviderLogger{diagnostics: l.diagnostics, receive: module == "Recv"}
+	return labProviderLogger{diagnostics: l.diagnostics, receive: module == "Recv", send: module == "Send"}
+}
+
+// Structural counters only: never retain or format the node or any identifier.
+func (l labProviderLogger) callShape(node *waBinary.Node) {
+	if l.receive && node.Tag == "ack" {
+		class, _ := node.Attrs["class"].(string)
+		switch class {
+		case "call", "receipt", "message":
+		default:
+			class = "other"
+		}
+		action, _ := node.Attrs["type"].(string)
+		switch action {
+		case "offer", "preaccept", "accept", "reject", "terminate", "":
+		default:
+			action = "other"
+		}
+		if action == "" {
+			action = "absent"
+		}
+		l.diagnostics.add("ack_" + class + "_" + action)
+	}
+	if l.receive && node.Tag == "ack" && node.Attrs["class"] == "call" && node.Attrs["type"] == "reject" {
+		code := "absent"
+		switch v := node.Attrs["error"].(type) {
+		case string:
+			code = v
+		case int:
+			code = strconv.Itoa(v)
+		case int64:
+			code = strconv.FormatInt(v, 10)
+		case nil:
+		default:
+			code = "other"
+		}
+		switch code {
+		case "absent", "0", "400", "401", "403", "404", "409", "429", "439", "500", "503":
+		default:
+			code = "other"
+		}
+		l.diagnostics.add("reject_ack_error_" + code)
+		return
+	}
+	children := node.GetChildren()
+	if node.Tag != "call" || len(children) != 1 {
+		return
+	}
+	child := children[0]
+	if l.send && child.Tag == "preaccept" {
+		l.diagnostics.add("sent_preaccept")
+	}
+	prefix := ""
+	if l.receive && child.Tag == "offer" {
+		prefix = "offer"
+	} else if l.send && child.Tag == "reject" {
+		prefix = "reject"
+	} else {
+		return
+	}
+	attr := "to"
+	if l.receive {
+		attr = "from"
+	}
+	peer, peerOK := node.Attrs[attr].(types.JID)
+	creator, creatorOK := child.Attrs["call-creator"].(types.JID)
+	for _, item := range []struct {
+		name string
+		jid  types.JID
+		ok   bool
+	}{{"route", peer, peerOK}, {"creator", creator, creatorOK}} {
+		ns := "unknown"
+		if item.ok {
+			switch item.jid.Server {
+			case types.HiddenUserServer:
+				ns = "lid"
+			case types.DefaultUserServer:
+				ns = "pn"
+			}
+		}
+		l.diagnostics.add(prefix + "_" + item.name + "_" + ns)
+		if item.ok && item.jid.Device != 0 {
+			l.diagnostics.add(prefix + "_" + item.name + "_device")
+		}
+	}
+	if peerOK && creatorOK && peer == creator {
+		l.diagnostics.add(prefix + "_route_creator_equal")
+	}
+	if _, ok := node.Attrs["from"]; l.send && ok {
+		l.diagnostics.add("reject_explicit_from")
+	}
 }

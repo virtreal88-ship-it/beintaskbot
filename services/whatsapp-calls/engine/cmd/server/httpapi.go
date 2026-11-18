@@ -302,10 +302,14 @@ func (s *server) doAccept(sess *Session, w http.ResponseWriter, r *http.Request)
 func (s *server) doReject(sess *Session, w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if ac, ok := sess.reg.get(id); ok {
-		_ = ac.cm.RejectCall(r.Context(), id, core.EndCallReasonDeclined)
+		origin := "browser_reject"
+		ac.rejectOrigin.Store(&origin)
+		if err := ac.cm.RejectCall(r.Context(), id, core.EndCallReasonDeclined); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "call_reject_unconfirmed"})
+			return
+		}
 	}
-	sess.removeCall(id)
-	s.broker.endCall(id, string(core.EndCallReasonDeclined))
+	// OnEnded owns registry/broker cleanup. A failed send keeps the ringing call.
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

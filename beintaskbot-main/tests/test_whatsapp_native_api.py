@@ -59,3 +59,32 @@ def test_inbox_saturation_does_not_use_call_slots(monkeypatch):
             assert (await client.post('/messages',json={})).status==429
             auth.assert_not_called()
     asyncio.run(run())
+
+
+def test_cancelled_requests_keep_capacity_until_transactions_finish(monkeypatch):
+    import threading
+    async def run():
+        started, finish = threading.Event(), threading.Event()
+        slots = asyncio.Semaphore(1)
+        def slow_commit():
+            started.set()
+            assert finish.wait(4)
+            raise RuntimeError('SYNTHETIC_PRIVATE_COMMIT_ERROR')
+        async def request():
+            async with slots:
+                await api._finish_thread(slow_commit)
+        job = asyncio.create_task(request())
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            job.cancel()
+            await asyncio.sleep(0)
+            job.cancel()
+            await asyncio.sleep(0)
+            assert slots.locked() and not job.done()
+        finally:
+            finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await job
+        assert not slots.locked()
+        assert await api._finish_thread(lambda: 'committed') == 'committed'
+    asyncio.run(run())

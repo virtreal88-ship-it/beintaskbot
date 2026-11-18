@@ -4,10 +4,8 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -160,23 +158,7 @@ func (m *messageLab) attach(s *Session) bool {
 	return true
 }
 
-type labEnvelope struct {
-	Kind         string `json:"kind"`
-	Chat         string `json:"chat"`
-	Sender       string `json:"sender,omitempty"`
-	SenderAlt    string `json:"sender_alt,omitempty"`
-	RecipientAlt string `json:"recipient_alt,omitempty"`
-	ProviderID   string `json:"provider_id"`
-	FromMe       bool   `json:"from_me"`
-	Timestamp    int64  `json:"timestamp"`
-	Text         string `json:"text,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Proto        []byte `json:"proto,omitempty"` // encrypted in SQLite; never returned by HTTP.
-	MediaKind    string `json:"media_kind,omitempty"`
-	MediaMime    string `json:"media_mime,omitempty"`
-	MediaSize    uint64 `json:"media_size,omitempty"`
-	FileName     string `json:"file_name,omitempty"`
-}
+type labEnvelope = unified.Envelope
 
 func (m *messageLab) capture(ctx context.Context, raw any) bool {
 	var envelope labEnvelope
@@ -188,30 +170,19 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 			m.diagnostics.add("message_chat_denied")
 			return true
 		}
-		// Do not retain view-once or expiring content in this research journal.
-		if event.IsViewOnce || event.IsViewOnceV2 || event.IsViewOnceV2Extension || event.IsEphemeral {
+		key, message, retain, err := unified.MessageEnvelope(event)
+		if err != nil {
+			return false
+		}
+		if !retain {
 			m.diagnostics.add("message_expiring_ignored")
 			return true
 		}
-		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event.Message)
-		if err != nil || event.Info.ID == "" {
+		// Preserve the existing identity bytes; append() also handles receipts.
+		if json.Unmarshal([]byte(key), &identity) != nil {
 			return false
 		}
-		envelope = labEnvelope{Kind: "message", Chat: event.Info.Chat.String(), Sender: event.Info.Sender.String(),
-			SenderAlt: event.Info.SenderAlt.String(), RecipientAlt: event.Info.RecipientAlt.String(),
-			ProviderID: event.Info.ID, FromMe: event.Info.IsFromMe, Timestamp: event.Info.Timestamp.UnixMilli(),
-			Text: event.Message.GetConversation(), Proto: data}
-		if envelope.Text == "" {
-			envelope.Text = event.Message.GetExtendedTextMessage().GetText()
-		}
-		envelope.MediaKind, envelope.MediaMime, envelope.MediaSize, envelope.FileName = labMediaFacts(event.Message)
-		// An edit of the same provider ID is a different event; redelivery is not.
-		variant := "original"
-		if event.IsEdit || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil {
-			hash := sha256.Sum256(data)
-			variant = hex.EncodeToString(hash[:])
-		}
-		identity = []any{"message", envelope.Chat, envelope.Sender, envelope.FromMe, envelope.ProviderID, variant}
+		envelope = message
 	case *events.Receipt:
 		m.diagnostics.add("receipt_seen")
 		if !m.allows(event.Chat) {

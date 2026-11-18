@@ -119,6 +119,20 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		s.removeCall(c.CallID, c.StateData.EndReason == core.EndCallReasonUserEnded)
 		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
 	}
+	cm.OnControl = func(operation, code string) {
+		ac, ok := s.reg.get(callID)
+		if !ok || ac.cm != cm {
+			return
+		}
+		if operation == "reject" && (code == "provider_acknowledged" || code == "transport_unconfirmed" || code == "ack_timeout" || code == "ack_invalid" || code == "ack_rejected") {
+			s.diag.lastControl.Store(&callControlDiagnostic{operation, code, time.Now().UnixMilli()})
+			if code == "provider_acknowledged" {
+				if origin := ac.rejectOrigin.Load(); origin != nil {
+					ac.markEnd(*origin)
+				}
+			}
+		}
+	}
 	cm.OnPeerAudio = func(pcm16 []float32) {
 		ac, ok := s.reg.get(callID)
 		if !ok {

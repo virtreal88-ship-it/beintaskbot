@@ -17,6 +17,13 @@ type callDiagnostics struct {
 	capacityRejected atomic.Uint64
 	lastEnd          atomic.Pointer[callEndDiagnostic]
 	lastStream       atomic.Pointer[streamEndDiagnostic]
+	lastControl      atomic.Pointer[callControlDiagnostic]
+}
+
+type callControlDiagnostic struct {
+	Operation string `json:"operation"`
+	Code      string `json:"code"`
+	AtMS      int64  `json:"at_ms"`
 }
 
 type callEndDiagnostic struct {
@@ -86,6 +93,7 @@ func (s *Session) diagnostics() map[string]any {
 	out["output_frames"] = output
 	out["last_call_end"] = s.diag.lastEnd.Load()
 	out["last_stream_end"] = s.diag.lastStream.Load()
+	out["last_control_signal"] = s.diag.lastControl.Load()
 	if s.mgr.recordings != nil {
 		out["last_recording_quality"] = s.mgr.recordings.lastQuality.Load()
 	}

@@ -74,21 +74,7 @@ func labUploadMessage(request labMediaUpload, upload whatsmeow.UploadResponse) *
 }
 
 func labMediaFacts(message *waE2E.Message) (kind, mime string, size uint64, name string) {
-	switch {
-	case message.GetImageMessage() != nil:
-		m := message.GetImageMessage()
-		return "image", m.GetMimetype(), m.GetFileLength(), "image"
-	case message.GetAudioMessage() != nil:
-		m := message.GetAudioMessage()
-		return "audio", m.GetMimetype(), m.GetFileLength(), "audio"
-	case message.GetVideoMessage() != nil:
-		m := message.GetVideoMessage()
-		return "video", m.GetMimetype(), m.GetFileLength(), "video"
-	case message.GetDocumentMessage() != nil:
-		m := message.GetDocumentMessage()
-		return "document", m.GetMimetype(), m.GetFileLength(), m.GetFileName()
-	}
-	return
+	return unified.MediaFacts(message)
 }
 
 func (s *server) labReady(m *messageLab) (*Session, bool) {
