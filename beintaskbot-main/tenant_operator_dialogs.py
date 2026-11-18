@@ -560,10 +560,12 @@ def projection(cur, policy, *, include_read_cursors=False):
           "        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL\n"
           "          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id\n"
           "            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text\n"
+          "          AND m.direction IN ('incoming','outgoing')\n"
           "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*")
         sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*',
           ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
           "        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'\n"
+          "          AND m.direction IN ('incoming','outgoing')\n"
           "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*")
     return sql,params
 
