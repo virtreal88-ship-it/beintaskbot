@@ -137,6 +137,38 @@ func TestLabDisabledWithoutRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestLabStatusExposesExistingCallCountersOnlyWithAuth(t *testing.T) {
+	m, s, _ := labFixture(t)
+	mgr := newTestManager(t)
+	session := mgr.addUnconnected(t, "test")
+	m.cfg.SessionID = session.id
+	mgr.messageLab = m
+	s.sessions = mgr
+	session.handleEvent(&events.CallOfferNotice{})
+	token := strings.Repeat("x", 40)
+	guard, _ := newLabGuard("http://127.0.0.1:8080", token)
+	for _, authenticated := range []bool{false, true} {
+		r := httptest.NewRequest("GET", "http://127.0.0.1:8080/api/unified-lab/status", nil)
+		if authenticated {
+			r.SetBasicAuth("lab", token)
+		}
+		w := httptest.NewRecorder()
+		guard.wrap(s.routes()).ServeHTTP(w, r)
+		if !authenticated {
+			if w.Code != 401 || strings.Contains(w.Body.String(), "call_diagnostics") {
+				t.Fatal("call metadata exposed without authentication")
+			}
+			continue
+		}
+		var out struct {
+			Call map[string]any `json:"call_diagnostics"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Call["offer_notice_events"] != float64(1) || out.Call["offer_events"] != float64(0) || out.Call["active_registry_calls"] != float64(0) {
+			t.Fatal("notice confused with an actionable call")
+		}
+	}
+}
+
 func TestLabPinsExistingSlotEvenForAuthenticatedCallUI(t *testing.T) {
 	m, s, _ := labFixture(t)
 	handler := s.routes()

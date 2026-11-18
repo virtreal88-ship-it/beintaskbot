@@ -101,13 +101,18 @@ small TXT document were accepted by WhatsApp; the participant confirmed receivin
 both. Repeating the text operation retained the original provider ID and did not
 create another send row. Provider delivery/read receipt events are not confirmed.
 
-Two reported participant replies have not appeared in the encrypted event journal.
-Content-free diagnostics currently show a live provider connection and service IQ
+Reported participant replies did not appear in the old linked device's encrypted event journal.
+Content-free diagnostics on that device showed a live provider connection and service IQ
 responses, but no message or receipt frames. This does not establish whether the
-reply reached the primary test phone. Do not label it a decryption, peer-filter or
+linked device received the reply; the owner confirmed delivery to the primary
+test phone. Do not label it a decryption, peer-filter or
 journal bug without evidence from that stage. The diagnostic logger is installed
 before client construction (whatsmeow snapshots child loggers), classifies only
 fixed frame tags and never serializes nodes, IDs, contents or errors.
+Call-frame subtypes distinguish an actionable offer from an offer notice and
+termination; the authenticated lab status also reuses the existing safe call
+counters. A call frame or notice alone is not evidence that the browser could
+accept a call.
 
 An authenticated, same-origin `POST /api/unified-lab/receive-probe` accepts only
 `{"action":"devices"}`, `{"action":"announce-offline"}`, or
@@ -136,6 +141,14 @@ for the configured slot, reusing SessionManager and the existing QR/SSE display.
 Repeated clicks reuse pending pairing; a paired slot cannot be reset this way.
 The pre-pair callback rejects every account except the configured test account,
 before persistence. Startup/read-only page loads do not create a slot or QR.
+
+The fresh link was scanned by the owner on 18 November. The same unified binary
+now receives/decrypts message frames and filters unapproved chats. One new
+outgoing control message was accepted; delivery/read receipt events were retained.
+The participant's matching reply appeared once in the encrypted journal and in
+the browser at 09:24:08 UTC. This proves a bidirectional text exchange on the fresh
+link, not the root cause of the old device's missing incoming path. The old device
+was not logged out or deleted, and no production source was reset.
 
 The roster query returned the current local device and primary phone. The owner
 confirmed the earlier reply exists on the primary test phone and the latest

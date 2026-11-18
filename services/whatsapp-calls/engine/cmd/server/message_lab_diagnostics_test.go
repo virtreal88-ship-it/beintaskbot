@@ -56,3 +56,21 @@ func TestLabFrameDiagnosticsOnlyRetainAllowedType(t *testing.T) {
 		t.Fatal("disabled lab changed logger")
 	}
 }
+
+func TestLabCallFramesSeparateOfferFromNoticeWithoutContent(t *testing.T) {
+	m := &messageLab{}
+	l := m.providerLogger(waLog.Noop).Sub("Recv")
+	secret := "private-call-id-private-key"
+	for _, kind := range []string{"offer", "offer_notice", "terminate", secret} {
+		l.Debugf("%s", &waBinary.Node{Tag: "call", Attrs: waBinary.Attrs{"id": secret}, Content: []waBinary.Node{
+			{Tag: kind, Attrs: waBinary.Attrs{"call-id": secret}, Content: []byte(secret)},
+		}})
+	}
+	// Multiple children are not an actionable offer in the pinned SDK.
+	l.Debugf("%s", &waBinary.Node{Tag: "call", Content: []waBinary.Node{{Tag: "offer"}, {Tag: "offer_notice"}}})
+	counts := m.diagnostics.snapshot()
+	raw, _ := json.Marshal(counts)
+	if strings.Contains(string(raw), "private") || counts["provider_frame_call"] != 5 || counts["provider_call_offer"] != 1 || counts["provider_call_offer_notice"] != 1 || counts["provider_call_terminate"] != 1 || counts["provider_call_other"] != 2 {
+		t.Fatal("unsafe or ambiguous call diagnostics")
+	}
+}

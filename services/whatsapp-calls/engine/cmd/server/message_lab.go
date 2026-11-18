@@ -298,7 +298,11 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/unified-lab/status", func(w http.ResponseWriter, r *http.Request) {
 		session, ok := s.sessions.Get(m.cfg.SessionID)
 		ready := ok && m.matches(session) && session.client.IsConnected()
-		writeJSON(w, 200, map[string]any{"ready": ready, "chats": m.cfg.AllowedChats, "session_id": m.cfg.SessionID, "diagnostics": m.diagnostics.snapshot()})
+		out := map[string]any{"ready": ready, "chats": m.cfg.AllowedChats, "session_id": m.cfg.SessionID, "diagnostics": m.diagnostics.snapshot()}
+		if ok {
+			out["call_diagnostics"] = session.diagnostics()
+		}
+		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("GET /api/unified-lab/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

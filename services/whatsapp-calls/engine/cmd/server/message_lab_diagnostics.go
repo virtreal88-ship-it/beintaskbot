@@ -71,6 +71,17 @@ func (l labProviderLogger) record(level, format string, args []any) {
 			case "message", "appdata", "receipt", "call", "notification", "success", "failure", "iq", "ib", "ack", "stream:error", "xmlstreamend":
 				code = "provider_frame_" + node.Tag
 			}
+			if node.Tag == "call" {
+				kind := "other"
+				children := node.GetChildren()
+				if len(children) == 1 {
+					switch children[0].Tag {
+					case "offer", "offer_notice", "accept", "preaccept", "transport", "terminate", "reject", "relaylatency":
+						kind = children[0].Tag
+					}
+				}
+				l.diagnostics.add("provider_call_" + kind)
+			}
 		}
 		l.diagnostics.add(code)
 		return
