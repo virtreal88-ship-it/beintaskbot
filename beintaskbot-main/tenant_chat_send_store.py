@@ -233,7 +233,7 @@ def quoted_status_credentials(item):
                 raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
             if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
                 raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
-            return {**integration['route'],'native_actor_id':item['key'][1]}
+            return {**integration['route'],**({'native_actor_id':item['key'][1]} if integration['route'].get('native') else {})}
 
 
 def record_quoted_delivery(item,message_id,status):
@@ -296,7 +296,7 @@ def read_quoted_receipt(session,lead_id,request_id=None):
             quote=quote_target(cur,profile['tenant_id'],command,connection) if command.get('quote_message_id') else None
             if quote and quote!=route.get('quoted_external_message_id'):raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
             return {'key':(profile['tenant_id'],profile['telegram_id'],row['request_id']),'command':command,'connection':connection,
-                'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id'],'native_actor_id':profile['telegram_id']}}
+                'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id'],**({'native_actor_id':profile['telegram_id']} if integration['route'].get('native') else {})}}
 
 
 def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
