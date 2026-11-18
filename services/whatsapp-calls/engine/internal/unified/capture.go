@@ -25,9 +25,9 @@ func (j *Journal) Capture(ctx context.Context, raw any) bool {
 		return err == nil
 	case *events.Receipt:
 		for _, id := range event.MessageIDs {
-			envelope := Envelope{Kind: "receipt", Chat: event.Chat.String(), Sender: event.Sender.String(), ProviderID: id,
+			envelope := Envelope{Kind: "receipt", Chat: event.Chat.ToNonAD().String(), Sender: event.Sender.ToNonAD().String(), ProviderID: id,
 				FromMe: event.IsFromMe, Timestamp: event.Timestamp.UnixMilli(), Status: string(event.Type)}
-			key, _ := json.Marshal([]any{"receipt", envelope.Chat, envelope.Sender, id, envelope.Status, envelope.Timestamp})
+			key, _ := json.Marshal([]any{"receipt", event.Chat.String(), event.Sender.String(), id, envelope.Status, envelope.Timestamp})
 			payload, err := json.Marshal(envelope)
 			if err != nil {
 				return false

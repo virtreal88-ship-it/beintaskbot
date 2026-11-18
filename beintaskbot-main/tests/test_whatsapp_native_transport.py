@@ -109,3 +109,48 @@ def test_prepared_legacy_dispatch_is_blocked_after_native_activation(configured)
         with pytest.raises(TenantPlatformError,match='native_source_changed'):
             native.guard_dispatch(cur,A,old)
     db.rollback()
+
+
+def test_quote_requires_exact_existing_dialog_evidence(configured,monkeypatch):
+    from test_whatsapp_native_projection import message
+    from test_whatsapp_native_inbox import delivery,store
+    import tenant_whatsapp_native_projection as projection
+    import tenant_whatsapp_native_inbox as inbox
+    db,route=configured;call=accepted(monkeypatch)
+    monkeypatch.setattr(projection,'_fernet',inbox._fernet)
+    value=delivery();value['event']['payload']=message(sender_alt='');store(value)
+    db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',(route['conversation_id'],A,CA))
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",(json.dumps({'externalMessageId':'SYNTHETIC_MESSAGE_1','nativeEventId':'a'*64}),A));db.commit()
+    native.text(route,'reply',str(uuid.uuid4()),quoted_message_id='SYNTHETIC_MESSAGE_1')
+    assert call.call_args.kwargs['json']['quote_event']=='a'*64
+    assert call.call_args.kwargs['json']['quote_id']=='SYNTHETIC_MESSAGE_1'
+    call.reset_mock()
+    for changed in ({**route,'conversation_id':'15550000003@s.whatsapp.net'},{**route,'tenant_id':B}):
+        with pytest.raises(TenantPlatformError):native.text(changed,'reply',str(uuid.uuid4()),quoted_message_id='SYNTHETIC_MESSAGE_1')
+        db.rollback()
+    call.assert_not_called()
+
+
+def test_lookup_is_read_only_exact_actor_operation(configured,monkeypatch):
+    db,route=configured;call=accepted(monkeypatch)
+    route={**route,'author_id':11,'crm_conversation_id':41}
+    request=str(uuid.uuid4())
+    result=native.lookup(route,request)
+    assert result['providerAccepted'] and not result['delivered']
+    assert call.call_args.args[0].endswith('/messages/status')
+    assert call.call_args.kwargs['json']['operation']=='employee:11:'+request
+    assert 'text' not in call.call_args.kwargs['json']
+    assert call.call_count==1
+
+
+@pytest.mark.parametrize('original,canonical,from_me',[
+    ('123456789012@lid','15550000002@s.whatsapp.net',False),
+    ('15550000002@s.whatsapp.net','123456789012@lid',False),
+    ('123456789012@lid','15550000002@s.whatsapp.net',True)])
+def test_quote_alias_requires_same_provider_party(original,canonical,from_me):
+    evidence={'chat':original,'sender':original if not from_me else '15550000001@s.whatsapp.net',
+      'from_me':from_me,('recipient_alt' if from_me else 'sender_alt'):canonical}
+    facts={'_crm_provider_conversation_id':original}
+    assert native.quote_chat_matches(evidence,canonical,facts)
+    assert not native.quote_chat_matches(evidence,'15550000003@s.whatsapp.net',facts)
+    assert not native.quote_chat_matches(evidence,canonical,{'_crm_provider_conversation_id':'another'})

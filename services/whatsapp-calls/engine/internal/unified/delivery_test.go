@@ -3,6 +3,7 @@ package unified
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -188,5 +189,54 @@ func TestDeliveryStorageFailureAndChangedPayloadDoNotAcknowledge(t *testing.T) {
 	}
 	if !errors.Is(j.ConfirmStored(ctx, stored(d)), ErrConflict) {
 		t.Fatal("receipt acknowledged changed payload")
+	}
+}
+
+func TestCapacityCountsUnconfirmedNotLifetime(t *testing.T) {
+	ctx := context.Background()
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "capacity.db")), testScope)
+	// Fast fixture of retained, encrypted events with real source event IDs.
+	tx, err := j.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10000; i++ {
+		id := j.digest("event", fmt.Sprint(i))
+		body, _ := j.seal("event:"+id, []byte(`{"text":"synthetic"}`))
+		if _, err = tx.Exec(`INSERT INTO unified_events(scope,event_id,body) VALUES(?,?,?)`, j.scope, id, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = j.Append(ctx, "new", []byte(`{}`)); !errors.Is(err, ErrCapacity) {
+		t.Fatal("unconfirmed overflow", err)
+	}
+	d := next(t, j)
+	bad := stored(d)
+	bad.Proof = "0000000000000000000000000000000000000000000000000000000000000000"
+	if err = j.ConfirmStored(ctx, bad); err == nil {
+		t.Fatal("bad ACK accepted")
+	}
+	if _, err = j.Append(ctx, "new", []byte(`{}`)); !errors.Is(err, ErrCapacity) {
+		t.Fatal("bad ACK freed space")
+	}
+	if err = j.ConfirmStored(ctx, stored(d)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = j.Append(ctx, "new", []byte(`{}`)); err != nil {
+		t.Fatal("delivered history still blocks", err)
+	}
+	if _, err = j.Event(ctx, d.Event.ID); err != nil {
+		t.Fatal("media evidence removed")
+	}
+	if id, err := j.Append(ctx, "0", []byte(`{"changed":true}`)); err != nil || id != d.Event.ID {
+		t.Fatal("old replay rejected", err)
+	}
+	var count int
+	j.db.QueryRow(`SELECT COUNT(*) FROM unified_events WHERE scope=?`, j.scope).Scan(&count)
+	if count != 10001 {
+		t.Fatal("lost history or duplicate", count)
 	}
 }

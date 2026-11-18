@@ -110,7 +110,7 @@ def reserve(session, command):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            profile, connection, _ = authority(cur, session, command['lead_id'])
+            profile, connection, integration = authority(cur, session, command['lead_id'])
             quote=quote_target(cur,profile['tenant_id'],command,connection)
             key = (profile['tenant_id'], int(profile['telegram_id']), command['request_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"chat-send:{key[0]}:{command['lead_id']}",))
@@ -122,10 +122,10 @@ def reserve(session, command):
                     raise TenantLinearError('Eyni sorğu kodu ilə fərqli mesaj göndərilib.', 409)
                 if row['state'] == 'accepted':
                     cached={'state':'accepted','message_id':row['message_id'],**({'manual_review':True} if row.get('resolution') else {})}
-                    return {'cached_result':cached,**({'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote} if command.get('quote_message_id') else {})}
+                    return {'cached_result':cached,**({'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote,'native':bool(integration.get('route',{}).get('native'))} if command.get('quote_message_id') else {})}
                 from tenant_connect_transport import quoted_once_scope
-                if quote and connection[0]=='connect' and quoted_once_scope(key[0],connection[1]) and row['state'] in {'sending','unknown'}:
-                    return {'check_only':True,'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote}
+                if quote and connection[0]=='connect' and (integration.get('route',{}).get('native') or quoted_once_scope(key[0],connection[1])) and row['state'] in {'sending','unknown'}:
+                    return {'check_only':True,'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote,'native':bool(integration.get('route',{}).get('native'))}
                 error = TenantLinearError('Bu sorğu təkrarlanmır. Göndərilmə vəziyyətini Kommo-da yoxlayın.', 409)
                 error.keep_request = row['state'] != 'blocked'
                 conn.commit()  # Persist stale receipt transitions before returning the refusal.
@@ -179,7 +179,7 @@ def mark_sending(item, route):
                 tokens = _kommo_send_tokens(integration, profile['tenant_id'])
                 credentials = {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
             from tenant_connect_transport import quoted_once_scope
-            if item.get('quote') and connection[0]=='connect' and quoted_once_scope(profile['tenant_id'],connection[1]):
+            if item.get('quote') and connection[0]=='connect' and (credentials.get('native') or quoted_once_scope(profile['tenant_id'],connection[1])):
                 route={**route,'quote_protocol':True,'quote_message_id':item['command']['quote_message_id'],'quote_channel_id':connection[1],
                     'quote_conversation_id':connection[2],'quoted_external_message_id':item['quote']}
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _row as lifecycle_row
@@ -233,7 +233,7 @@ def quoted_status_credentials(item):
                 raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
             if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
                 raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
-            return integration['route']
+            return {**integration['route'],'native_actor_id':item['key'][1]}
 
 
 def record_quoted_delivery(item,message_id,status):
@@ -280,7 +280,7 @@ def read_quoted_receipt(session,lead_id,request_id=None):
     with _connect() as conn:
         with conn.cursor() as cur:
             profile,connection,integration=authority(cur,session,lead_id)
-            if connection[0]!='connect' or not quoted_once_scope(profile['tenant_id'],connection[1]):
+            if connection[0]!='connect' or not (integration.get('route',{}).get('native') or quoted_once_scope(profile['tenant_id'],connection[1])):
                 raise TenantLinearError('İstinad vəziyyəti bu çat üçün əlçatan deyil.',404)
             cur.execute("""SELECT request_id::text,lead_id,state,message_id,route FROM saas_chat_send_receipts
               WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s """+
@@ -296,7 +296,7 @@ def read_quoted_receipt(session,lead_id,request_id=None):
             quote=quote_target(cur,profile['tenant_id'],command,connection) if command.get('quote_message_id') else None
             if quote and quote!=route.get('quoted_external_message_id'):raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
             return {'key':(profile['tenant_id'],profile['telegram_id'],row['request_id']),'command':command,'connection':connection,
-                'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id']}}
+                'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id'],'native_actor_id':profile['telegram_id']}}
 
 
 def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):

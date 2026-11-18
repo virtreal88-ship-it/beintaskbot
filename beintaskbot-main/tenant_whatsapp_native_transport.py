@@ -28,6 +28,8 @@ def migrate(cur):
       PRIMARY KEY(tenant_id,channel_id),
       FOREIGN KEY(tenant_id,channel_id,generation)
         REFERENCES saas_whatsapp_capture_generations(tenant_id,channel_id,generation))''')
+    from tenant_whatsapp_native_status import migrate as status_migrate
+    status_migrate(cur)
 
 
 def bind(cur, route):
@@ -77,7 +79,7 @@ def dispatch_cursor(route):
             yield cur
 
 
-def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b''):
+def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None):
     request_id=str(uuid.UUID(str(request_id)))
     if not isinstance(content,bytes) or len(content)>10*1024*1024:
         raise TenantPlatformError('native_media_invalid')
@@ -92,6 +94,8 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
         payload={'scope':current['native']['scope'],'operation':operation,
             'chat':route['conversation_id'],'kind':kind,'text':text,'mime':mime,'name':name,
             'data':base64.b64encode(content).decode('ascii')}
+        if quoted_message_id is not None:
+            payload.update(resolve_quote(cur,current,quoted_message_id))
         # Keep the current source locked through dispatch. Caller also holds its
         # normal actor/dialogue authorization transaction. Never retry HTTP.
         try:
@@ -119,9 +123,45 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
 
 
 def text(route, value, request_id, *, quoted_message_id=None):
-    if quoted_message_id is not None:
-        raise TenantPlatformError('native_quote_not_enabled')
-    return submit(route,request_id,text=value)
+    return submit(route,request_id,text=value,quoted_message_id=quoted_message_id)
+
+
+def resolve_quote(cur,route,provider_id):
+    if not isinstance(provider_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider_id):
+        raise TenantPlatformError('native_quote_scope_denied')
+    cur.execute("""SELECT m.raw FROM saas_crm_messages m
+      JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.raw->>'externalMessageId'=%s
+        AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s""",
+      (route['tenant_id'],'connect:'+route['channel_id'],provider_id,route['channel_id'],route['conversation_id']))
+    rows=cur.fetchall()
+    if len(rows)!=1:raise TenantPlatformError('native_quote_scope_denied')
+    facts=rows[0]['raw'] or {}
+    event_id=facts.get('nativeEventId')
+    if not isinstance(event_id,str) or not re.fullmatch(r'[0-9a-f]{64}',event_id):
+        raise TenantPlatformError('native_quote_evidence_missing')
+    scope=route['native']['scope']
+    cur.execute("""SELECT * FROM saas_whatsapp_native_inbox
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND event_id=%s""",
+      (scope['tenant'],scope['source'],scope['generation'],event_id))
+    row=cur.fetchone()
+    if not row:raise TenantPlatformError('native_quote_evidence_missing')
+    from tenant_whatsapp_native_projection import open_stored
+    evidence=open_stored(row,scope)
+    if (evidence.get('kind')!='message' or evidence.get('variant') or
+            evidence.get('provider_id')!=provider_id or not quote_chat_matches(evidence,route['conversation_id'],facts)):
+        raise TenantPlatformError('native_quote_scope_denied')
+    return {'quote_event':event_id,'quote_id':provider_id}
+
+
+def quote_chat_matches(evidence,conversation,facts):
+    original=facts.get('_crm_provider_conversation_id') or facts.get('conversationId') or conversation
+    if evidence.get('chat')!=original:return False
+    if original==conversation:return True
+    if original.endswith('@g.us') or conversation.endswith('@g.us'):return False
+    alternate=evidence.get('recipient_alt') if evidence.get('from_me') else evidence.get('sender_alt')
+    if not evidence.get('from_me') and evidence.get('sender')!=original:return False
+    return alternate==conversation and {original.split('@')[-1],conversation.split('@')[-1]}=={'s.whatsapp.net','lid'}
 
 
 def media_receipt(route,request_id,*,kind,mime,name='',caption='',content):
@@ -181,3 +221,46 @@ def download(route,message_id,*,max_bytes,allowed_types):
         except (requests.RequestException,ValueError):
             raise TenantPlatformError('native_media_unavailable') from None
         return bytes(content),mime
+
+
+def lookup(route,request_id):
+    """Private read of this actor's exact operation. Never resend on uncertainty."""
+    request_id=str(uuid.UUID(str(request_id)))
+    actor=route.get('native_actor_id',route.get('author_id'))
+    if actor is None:raise TenantPlatformError('native_receipt_actor_required')
+    from tenant_call_sources import service
+    from tenant_whatsapp_native_identity import message_id
+    url,token=service()
+    with dispatch_cursor(route) as cur:
+        current=bind(cur,route)
+        if not current.get('native') or current['native']!=route.get('native'):
+            raise TenantPlatformError('native_source_changed')
+        payload={'scope':current['native']['scope'],'chat':route['conversation_id'],
+                 'operation':'employee:'+str(int(actor))+':'+request_id}
+        try:
+            with requests.post(url+'/v1/sources/'+current['native']['gateway_id']+'/messages/status',
+                  headers={'Authorization':'Bearer '+token},json=payload,timeout=(5,15),allow_redirects=False,stream=True) as response:
+                body=bytearray()
+                for chunk in response.iter_content(4096):
+                    body.extend(chunk)
+                    if len(body)>16384:raise ValueError()
+                value=json.loads(body);result=value.get('result',{});provider=result.get('provider_id')
+                if (response.status_code!=200 or result.get('state') not in {'unknown','accepted'} or
+                        not isinstance(provider,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider) or
+                        value.get('confirmed') is not (result['state']=='accepted')):raise ValueError()
+        except (requests.RequestException,ValueError,TypeError,AttributeError):
+            raise TenantPlatformError('native_receipt_unavailable') from None
+        accepted=result['state']=='accepted'
+        status='sent' if accepted else 'unknown'
+        if accepted and not route['conversation_id'].endswith('@g.us'):
+            cur.execute("""SELECT MAX(rank) AS rank FROM saas_whatsapp_native_status
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND chat=%s AND provider_id=%s""",
+              (route['tenant_id'],route['channel_id'],route['conversation_id'],provider))
+            rank=cur.fetchone()['rank']
+            status={2:'delivered',3:'read'}.get(rank,status)
+    return {'id':message_id(route['tenant_id'],route['channel_id'],route['conversation_id'],provider,True),
+        'operationId':request_id,'channelId':route['channel_id'],'conversationId':route['conversation_id'],
+        'clientMessageId':request_id,'authorId':str(actor),'crmConversationId':str(route.get('crm_conversation_id','')),
+        'inputHash':route.get('input_hash',''),'type':route.get('media_type','audio'),
+        'status':status,'providerAccepted':accepted,'externalMessageId':provider,
+        'delivered':status in {'delivered','read'},'retrySafe':False}

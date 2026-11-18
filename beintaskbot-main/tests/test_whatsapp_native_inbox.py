@@ -34,6 +34,8 @@ def capture(managed,monkeypatch):
       VALUES(%s,%s,'test-generation-1',%s,%s,TRUE)''',(A,CA,MANAGED,cfg['account_jid']))
     db.commit()
     yield db,cipher,cfg
+    if db.execute("SELECT to_regclass('saas_whatsapp_native_status') AS table_name")[0]['table_name']:
+        db.execute('DELETE FROM saas_whatsapp_native_status')
     db.execute('DELETE FROM saas_whatsapp_native_inbox')
     db.execute('DELETE FROM saas_whatsapp_capture_generations');db.commit()
 

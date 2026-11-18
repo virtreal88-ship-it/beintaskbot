@@ -84,15 +84,45 @@ CREATE TABLE IF NOT EXISTS unified_bindings(scope TEXT PRIMARY KEY, key_check TE
 CREATE TABLE IF NOT EXISTS unified_events(
  sequence INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, event_id TEXT NOT NULL,
  body BLOB NOT NULL, UNIQUE(scope,event_id));
+CREATE INDEX IF NOT EXISTS unified_events_pending ON unified_events(scope,sequence);
 CREATE TABLE IF NOT EXISTS unified_sends(
  scope TEXT NOT NULL, operation TEXT NOT NULL, fingerprint TEXT NOT NULL,
- provider_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('unknown','accepted')),
+ peer_hash TEXT NOT NULL DEFAULT '', provider_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('unknown','accepted')),
  PRIMARY KEY(scope,operation), UNIQUE(scope,provider_id));
 CREATE TABLE IF NOT EXISTS unified_consumers(
  scope TEXT NOT NULL, consumer TEXT NOT NULL, sequence INTEGER NOT NULL DEFAULT 0 CHECK(sequence>=0),
  PRIMARY KEY(scope,consumer));`)
 	if err != nil {
 		return nil, err
+	}
+	// Upgrade old durable sends without inventing their destination. Legacy
+	// rows with no peer evidence remain unavailable to the new lookup.
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(unified_sends)")
+	if err != nil {
+		return nil, err
+	}
+	hasPeer := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if name == "peer_hash" {
+			hasPeer = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if !hasPeer {
+		if _, err = db.ExecContext(ctx, "ALTER TABLE unified_sends ADD COLUMN peer_hash TEXT NOT NULL DEFAULT ''"); err != nil {
+			return nil, err
+		}
 	}
 	for _, namespace := range []string{j.operationScope, j.scope} {
 		check := j.digestForScope(namespace, "key-check")
@@ -157,10 +187,13 @@ func (j *Journal) Append(ctx context.Context, identity string, payload []byte) (
 	if err != nil {
 		return "", err
 	}
-	// Bound the lab journal. Existing IDs are still successful at capacity.
+	// Bound outstanding delivery, not lifetime history. ConfirmStored is the only
+	// writer of this cursor. Retain encrypted events for media and replay dedup;
+	// neither an attempted HTTP delivery nor a browser read frees queue capacity.
 	result, err := j.db.ExecContext(ctx, `INSERT INTO unified_events(scope,event_id,body)
- SELECT ?,?,? WHERE (SELECT COUNT(*) FROM unified_events WHERE scope=?) < 10000
- ON CONFLICT(scope,event_id) DO NOTHING`, j.scope, id, body, j.scope)
+ SELECT ?,?,? WHERE (SELECT COUNT(*) FROM unified_events WHERE scope=? AND sequence >
+ COALESCE((SELECT sequence FROM unified_consumers WHERE scope=? AND consumer=?),0)) < 10000
+ ON CONFLICT(scope,event_id) DO NOTHING`, j.scope, id, body, j.scope, j.scope, WorkerInbox)
 	if err != nil {
 		return "", err
 	}
@@ -237,7 +270,7 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 	if len(providerID) < 1 || len(providerID) > 200 {
 		return Result{}, ErrConfiguration
 	}
-	result, err := j.db.ExecContext(ctx, `INSERT INTO unified_sends(scope,operation,fingerprint,provider_id,state) VALUES(?,?,?,?,'unknown') ON CONFLICT DO NOTHING`, j.operationScope, op, fingerprint, providerID)
+	result, err := j.db.ExecContext(ctx, `INSERT INTO unified_sends(scope,operation,fingerprint,peer_hash,provider_id,state) VALUES(?,?,?,?,?,'unknown') ON CONFLICT DO NOTHING`, j.operationScope, op, fingerprint, j.digestForScope(j.operationScope, "peer", peer), providerID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -279,4 +312,15 @@ func (j *Journal) BufferSeal(kind, identity string, payload []byte) ([]byte, err
 }
 func (j *Journal) BufferOpen(kind, identity string, body []byte) ([]byte, error) {
 	return j.openForScope(j.operationScope, fmt.Sprintf("buffer:%s:%s", kind, identity), body)
+}
+
+// Lookup never connects or dispatches. Exact operation, source and peer only.
+func (j *Journal) Lookup(ctx context.Context, operation, peer string) (Result, error) {
+	if operation == "" || len(operation) > 128 || !messagePeer.MatchString(peer) {
+		return Result{}, ErrConfiguration
+	}
+	var result Result
+	err := j.db.QueryRowContext(ctx, `SELECT provider_id,state FROM unified_sends WHERE scope=? AND operation=? AND peer_hash=?`,
+		j.operationScope, j.digestForScope(j.operationScope, "operation", operation), j.digestForScope(j.operationScope, "peer", peer)).Scan(&result.ProviderID, &result.State)
+	return result, err
 }

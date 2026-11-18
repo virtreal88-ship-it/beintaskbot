@@ -69,6 +69,10 @@ func managedHandler(s *server, host, token string) http.Handler {
 			writeJSON(w, 200, out)
 			return
 		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/status" {
+			s.handleManagedMessageStatus(w, r)
+			return
+		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages" {
 			s.handleManagedMessage(w, r)
 			return

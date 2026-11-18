@@ -17,14 +17,16 @@ import (
 // Outgoing is private Worker-to-engine data, never a browser authorization.
 // Scope is checked against the process binding before calling Deliver.
 type Outgoing struct {
-	Scope     Scope  `json:"scope"`
-	Operation string `json:"operation"`
-	Chat      string `json:"chat"`
-	Kind      string `json:"kind"`
-	Text      string `json:"text"`
-	MIME      string `json:"mime"`
-	Name      string `json:"name"`
-	Data      []byte `json:"data"`
+	Scope      Scope  `json:"scope"`
+	Operation  string `json:"operation"`
+	Chat       string `json:"chat"`
+	Kind       string `json:"kind"`
+	Text       string `json:"text"`
+	MIME       string `json:"mime"`
+	Name       string `json:"name"`
+	Data       []byte `json:"data"`
+	QuoteEvent string `json:"quote_event,omitempty"`
+	QuoteID    string `json:"quote_id,omitempty"`
 }
 
 type MessageClient interface {
@@ -38,6 +40,9 @@ var messagePeer = regexp.MustCompile(`^[1-9][0-9]{4,29}(?:-[0-9]{5,20})?@(s\.wha
 func (r Outgoing) Validate(scope Scope) error {
 	if r.Scope != scope || r.Operation == "" || len(r.Operation) > 128 || !messagePeer.MatchString(r.Chat) ||
 		!utf8.ValidString(r.Text) || len(r.Text) > 65536 || strings.ContainsRune(r.Text, 0) || len(r.Name) > 200 || strings.ContainsAny(r.Name, "/\\\x00\r\n") {
+		return ErrConfiguration
+	}
+	if (r.QuoteEvent == "") != (r.QuoteID == "") || (r.QuoteEvent != "" && (len(r.QuoteEvent) != 64 || r.Kind != "text")) {
 		return ErrConfiguration
 	}
 	if r.Kind == "text" {
@@ -77,6 +82,19 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	if err != nil || chat.Device != 0 {
 		return Result{}, ErrConfiguration
 	}
+	var quote *waE2E.ContextInfo
+	if request.QuoteEvent != "" {
+		event, err := j.Event(ctx, request.QuoteEvent)
+		var evidence Envelope
+		if err != nil || json.Unmarshal(event.Payload, &evidence) != nil || evidence.Kind != "message" || evidence.Variant != "" || !quoteChatMatches(evidence, request.Chat) || evidence.ProviderID != request.QuoteID || !messagePeer.MatchString(evidence.Sender) || strings.HasSuffix(evidence.Sender, "@g.us") {
+			return Result{}, ErrConflict
+		}
+		original := &waE2E.Message{}
+		if len(evidence.Proto) == 0 || proto.Unmarshal(evidence.Proto, original) != nil {
+			return Result{}, ErrConflict
+		}
+		quote = &waE2E.ContextInfo{StanzaID: &evidence.ProviderID, Participant: &evidence.Sender, RemoteJID: &request.Chat, QuotedMessage: original}
+	}
 	fingerprint := request
 	fingerprint.Data = nil
 	// Generation is an ownership fence, not a new send identity.
@@ -88,6 +106,9 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	}{fingerprint, digest})
 	return j.Send(ctx, request.Operation, request.Chat, body, client.GenerateMessageID, func(ctx context.Context, id string) error {
 		msg := &waE2E.Message{Conversation: proto.String(request.Text)}
+		if quote != nil {
+			msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: &request.Text, ContextInfo: quote}}
+		}
 		if request.Kind != "text" {
 			mediaType := whatsmeow.MediaDocument
 			switch request.Kind {
@@ -119,4 +140,21 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		}
 		return nil
 	})
+}
+
+func quoteChatMatches(e Envelope, chat string) bool {
+	if e.Chat == chat {
+		return true
+	}
+	if !messagePeer.MatchString(e.Chat) || strings.HasSuffix(e.Chat, "@g.us") || strings.HasSuffix(chat, "@g.us") {
+		return false
+	}
+	alternate := e.RecipientAlt
+	if !e.FromMe {
+		if e.Sender != e.Chat {
+			return false
+		}
+		alternate = e.SenderAlt
+	}
+	return alternate == chat && ((strings.HasSuffix(e.Chat, "@lid") && strings.HasSuffix(chat, "@s.whatsapp.net")) || (strings.HasSuffix(e.Chat, "@s.whatsapp.net") && strings.HasSuffix(chat, "@lid")))
 }

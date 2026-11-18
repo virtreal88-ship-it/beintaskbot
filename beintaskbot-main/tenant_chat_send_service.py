@@ -14,13 +14,13 @@ async def run(session, data, request, wait_slot, logger):
     except TenantLinearError as error:
         if isinstance(data,dict) and data.get('quote_message_id'):error.keep_request=True
         raise
-    scoped_quote=bool(item.get('quote') and item.get('connection',[None])[0]=='connect' and quoted_once_scope(item['key'][0],item['connection'][1]))
+    scoped_quote=bool(item.get('quote') and item.get('connection',[None])[0]=='connect' and (item.get('native') or quoted_once_scope(item['key'][0],item['connection'][1])))
     if item.get('check_only'):
         # Timeout/inflight recovery is a GET, never another provider POST.
         status=await _quoted_status(item,None)
-        if status.get('message_id'):
+        if status.get('message_id') and status.get('provider_accepted'):
             await asyncio.to_thread(accept_quoted_lookup,item,status['message_id'])
-        return {'state':'accepted' if status.get('message_id') else 'unknown',**status}
+        return {'state':'accepted' if status.get('provider_accepted') else 'unknown',**status}
     if 'cached_result' in item:
         if scoped_quote:
             return {**item['cached_result'],**await _quoted_status(item,item['cached_result']['message_id'])}
@@ -33,6 +33,7 @@ async def run(session, data, request, wait_slot, logger):
         if is_connect:
             route = {'origin': 'connect'}
             profile, credentials = await asyncio.to_thread(mark_sending, item, route)
+            if credentials.get('native') and item.get('quote'):scoped_quote=True
         else:
             async with asyncio.timeout(45):
                 route = await resolve_route(tenant, lead_id, request)
@@ -75,7 +76,9 @@ async def _quoted_status(item,message_id):
         status=await asyncio.to_thread(quoted_delivery_status,credentials,message_id,item['command']['request_id'],item['quote'])
         if status.get('message_id'):
             if status.get('provider_accepted'):
-                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],author=(item.get('profile') or {}).get('display_name') or str(item['key'][1]),actor=item['key'][1],quoted_message_id=item['quote'])
+                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],author=(item.get('profile') or {}).get('display_name') or str(item['key'][1]),actor=item['key'][1],quoted_message_id=item['quote'],**({'receipt':{
+                    '_crm_native_send_receipt':True,'channelId':credentials['channel_id'],'conversationId':credentials['conversation_id'],
+                    'externalMessageId':status['provider_message_id'],'fromMe':True}} if credentials.get('native') else {}))
             await asyncio.to_thread(record_quoted_delivery,item,status['message_id'],status)
         return status
     except Exception:

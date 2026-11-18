@@ -1836,6 +1836,9 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             from tenant_dialog_rollout import guard as rollout_guard
             rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
+            if route.get('native') and facts.get('externalMessageId'):
+                from tenant_whatsapp_native_status import lock as native_status_lock
+                native_status_lock(cur,str(tenant),str(route['channel_id']),facts['externalMessageId'])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**facts,**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
@@ -1857,6 +1860,9 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                 update={**facts,'status':old.get('status') if old.get('status') in {'delivered','read'} else 'sent'}
                 cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                             (_json(update),tenant,str(existing['id'])))
+            if route.get('native') and facts.get('externalMessageId'):
+                from tenant_whatsapp_native_status import reconcile as native_reconcile
+                native_reconcile(cur,str(tenant),str(route['channel_id']),facts['externalMessageId'])
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             if lifecycle_enabled(cur, tenant):
                 cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,'connect:'+external_id,'connect:'+route['channel_id'],lead_id))
@@ -1890,6 +1896,13 @@ def _validate_quoted_once(result,route,request_id,quoted_message_id,message_id=N
 
 def quoted_delivery_status(route,message_id,request_id,quoted_message_id):
     """Exact-scope request lookup recovers timed-out responses without another POST."""
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import lookup
+        value=lookup(route,request_id)
+        if message_id and value['id']!=message_id:raise TenantPlatformError('native_receipt_identity_changed')
+        return {'message_id':value['id'],'quote_protocol':True,'delivery_state':value['status'],
+          'provider_accepted':value['providerAccepted'],'delivery_phase':'accepted' if value['providerAccepted'] else 'unknown',
+          'delivered':value['delivered'],'retry_safe':False,'provider_message_id':value['externalMessageId']}
     if not quoted_once_scope(route.get('tenant_id'),route['channel_id']):
         raise TenantPlatformError('Quoted receipt scope unavailable.')
     if not message_id and not quoted_message_id:raise TenantPlatformError('Exact quoted receipt identity required.')

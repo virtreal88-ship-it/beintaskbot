@@ -58,6 +58,9 @@ def _checked_receipt(value, route, request_id):
 
 
 def _connect_receipt(route, request_id):
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import lookup
+        return _checked_receipt(lookup(route,request_id),route,request_id)
     value = _request(route['api_key'], 'GET', '/v1/channels/' + route['channel_id'] + '/customer-voice/requests/' + request_id + '?' +
                      urlencode({'conversationId': route['conversation_id']}))
     return _checked_receipt(value, route, request_id)
@@ -141,10 +144,14 @@ def record_acceptance(session, item, receipt):
         with conn.cursor() as cur:
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             receipt_options={'lifecycle_status':request_id} if lifecycle_enabled(cur, session['tenant_id']) else {}
-            profile, connection, _ = authority(cur, session, item['lead_id'],**receipt_options)
+            profile, connection, integration = authority(cur, session, item['lead_id'],**receipt_options)
             if connection != item['connection'] or connection[0] != 'connect':
                 raise TenantLinearError('Dialoqa giriş dəyişib.', 409)
             lock_dialog(cur, tenant, 'connect', connection[1], connection[2])
+            native=bool(integration.get('route',{}).get('native'))
+            if native:
+                from tenant_whatsapp_native_status import lock as status_lock
+                status_lock(cur,tenant,connection[1],receipt['provider_message_id'])
             if lifecycle_enabled(cur, session['tenant_id']):
                 from tenant_dialog_lifecycle import record_reconciled_dispatch
                 record_reconciled_dispatch(cur,tenant,actor,item['lead_id'],request_id,connection[1],connection[2],receipt)
@@ -184,6 +191,7 @@ def record_acceptance(session, item, receipt):
             if isinstance(operation_id,str):
                 try:facts['connect_operation_id']=str(uuid.UUID(operation_id))
                 except ValueError:pass
+            if native:facts.update(channelId=connection[1],conversationId=connection[2])
             author = str(profile.get('display_name') or 'Operator')[:120]
             if existing:
                 cur.execute('''UPDATE saas_crm_messages SET author_name=%s,message_type='audio',raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb
@@ -192,6 +200,9 @@ def record_acceptance(session, item, receipt):
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,'','audio','',now(),%s::jsonb)''',
                             (uuid.uuid4(), tenant, item['lead_id'], external, 'connect:' + connection[1], author, _json(facts)))
+            if native:
+                from tenant_whatsapp_native_status import reconcile
+                reconcile(cur,tenant,connection[1],receipt['provider_message_id'])
             if lifecycle_enabled(cur, session['tenant_id']):
                 from tenant_dialog_lifecycle import record_message
                 cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,external,'connect:'+connection[1],item['lead_id']))

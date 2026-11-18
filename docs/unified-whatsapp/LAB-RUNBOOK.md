@@ -467,3 +467,31 @@ still needs archival/retention that preserves deduplication and attachment
 evidence. Quotes, receipt recovery/status projection, complete send consumer
 coverage, explicit cutover tooling and live …103 acceptance remain required.
 Neither …103 nor …101 has been switched by this implementation.
+
+
+## Worker outbound completion — 18 November (not a production activation)
+
+- The journal capacity now counts only events after the authenticated Worker
+  cursor, rather than all lifetime events. 10,000 unconfirmed events still exert
+  backpressure. Ciphertext, sequence and dedup identities remain available for
+  attachments and retransmissions after confirmation. This is not a retention
+  purge: retained disk usage still requires monitoring and an archive policy.
+- Native text quotes resolve an exact CRM provider message in the current
+  tenant/source/dialog and its encrypted inbox event. The engine independently
+  checks its retained event, chat, provider ID and original protobuf. Legacy-only
+  quotes without retained evidence fail closed. PN/LID quotes require the original
+  provider chat plus that event’s exact confirmed counterpart pair;
+  no arbitrary browser-supplied quoted text or protobuf is accepted.
+- Remote delivery/read receipts are durable and monotonic, including receipt
+  before echo, with an exact provider ID and conversation. Local read-self/retry
+  receipts never mark a customer delivery. Group receipts remain per recipient;
+  they do not claim every member read the message.
+- Private operation status requires exact source/account/generation, actor+request
+  and peer. It never calls the provider or retries an unknown send. Existing old
+  journal operations without saved peer evidence cannot be looked up by guessing.
+- Customer media/voice and quote status adapters use this private operation lookup;
+  no sentinel credential is passed to Connect. Existing actor/lifecycle guards
+  still run before the adapter. Optional migrations remain explicit.
+
+Validation here is isolated tests, not a live /app conversation or source cutover.
+Existing lab provider evidence above predates these Worker adapter changes.

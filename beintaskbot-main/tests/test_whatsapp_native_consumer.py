@@ -123,3 +123,81 @@ def test_crm_failure_rolls_back_event_marker_for_retry(ready, monkeypatch):
     consumer.consume(reference)
     assert len(db.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s AND raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'", (A,))) == 1
     db.commit()
+
+
+def receipt_delivery(db,reference,*,status='read',chat='15550000002@s.whatsapp.net',sender=None,from_me=False):
+    sequence=db.execute('SELECT stored_sequence FROM saas_whatsapp_capture_generations')[0]['stored_sequence']
+    db.commit()
+    value=delivery(after=sequence)
+    value['event']={'sequence':sequence+1,'id':format(sequence+1,'064x'),'payload':{
+      'kind':'receipt','chat':chat,'sender':sender or chat,'provider_id':'SYNTHETIC_MESSAGE_1',
+      'from_me':from_me,'timestamp':1700000000000,'status':status}}
+    store(value)
+    consumer.consume((*reference[:3],value['event']['id']))
+
+
+def outgoing_fixture(db):
+    db.execute("UPDATE saas_crm_messages SET direction='outgoing' WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")
+    db.commit()
+
+
+def test_remote_status_monotonic_and_no_customer_turn(ready):
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    before=db.execute('SELECT COUNT(*) AS n FROM saas_crm_messages')[0]['n'];db.commit()
+    receipt_delivery(db,reference,status='read')
+    receipt_delivery(db,reference,status='')
+    row=db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]
+    assert row['raw']['status']=='read'
+    assert db.execute('SELECT COUNT(*) AS n FROM saas_crm_messages')[0]['n']==before
+    db.commit()
+
+
+def test_receipt_before_message_reconciles_after_echo(ready):
+    db,reference=ready;activate(db)
+    receipt_delivery(db,reference)
+    consumer.consume(reference);outgoing_fixture(db)
+    from tenant_whatsapp_native_status import reconcile
+    with db.cursor() as cur:reconcile(cur,A,CA,'SYNTHETIC_MESSAGE_1')
+    assert db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]['raw']['status']=='read'
+    db.commit()
+
+
+@pytest.mark.parametrize('status,from_me',[('read-self',True),('retry',False),('inactive',False),('read',True)])
+def test_local_and_control_receipts_do_not_mark_customer_read(ready,status,from_me):
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    receipt_delivery(db,reference,status=status,from_me=from_me)
+    assert not db.execute('SELECT * FROM saas_whatsapp_native_status')
+    db.commit()
+
+
+def test_other_chat_receipt_cannot_update_same_provider_id(ready):
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    receipt_delivery(db,reference,chat='15550000003@s.whatsapp.net')
+    row=db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]
+    assert row['raw'].get('status')!='read'
+    db.commit()
+
+
+def test_device_receipt_does_not_block_following_message(ready):
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    receipt_delivery(db,reference,sender='15550000002:2@s.whatsapp.net',status='')
+    row=db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]
+    assert row['raw']['status']=='delivered'
+    sequence=db.execute('SELECT stored_sequence FROM saas_whatsapp_capture_generations')[0]['stored_sequence'];db.commit()
+    value=delivery(after=sequence)
+    value['event']={'sequence':sequence+1,'id':'d'*64,'payload':message(sender_alt='',provider_id='SYNTHETIC_AFTER_DEVICE')}
+    store(value);consumer.consume((*reference[:3],'d'*64))
+    assert db.execute("SELECT 1 FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_AFTER_DEVICE'")
+    db.commit()
+
+
+@pytest.mark.parametrize('chat',['status@broadcast','123456789@newsletter'])
+def test_non_crm_receipt_is_retained_without_stalling(ready,chat):
+    db,reference=ready;activate(db)
+    receipt_delivery(db,reference,chat=chat,sender='15550000002@s.whatsapp.net',status='')
+    assert not db.execute('SELECT 1 FROM saas_whatsapp_native_status')
+    assert len(db.execute('SELECT 1 FROM saas_whatsapp_native_inbox'))==2
+    db.commit()
+    consumer.consume(reference)
+    assert db.execute("SELECT 1 FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")
+    db.commit()

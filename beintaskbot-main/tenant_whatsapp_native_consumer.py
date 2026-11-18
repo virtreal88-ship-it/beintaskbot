@@ -19,9 +19,11 @@ def migrate(cur):
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_one_projection_generation
       ON saas_whatsapp_capture_generations(tenant_id,channel_id)
       WHERE projection_enabled''')
+    from tenant_whatsapp_native_status import migrate as status_migrate
+    status_migrate(cur)
 
 
-def load(cur, reference, *, lock=False):
+def load_evidence(cur, reference, *, lock=False):
     if os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION') != '1':
         raise TenantLinearError('native_projection_disabled', 409)
     tenant, source, generation, event_id = reference
@@ -38,6 +40,12 @@ def load(cur, reference, *, lock=False):
         raise TenantLinearError('native_projection_source_changed', 409)
     scope = dict(tenant=tenant, source=source, generation=generation, account=row['account_jid'])
     payload = open_stored(row, scope)
+    return scope, payload
+
+
+def load(cur, reference, *, lock=False):
+    scope, payload = load_evidence(cur,reference,lock=lock)
+    tenant, source, generation, event_id = reference
     # Stable across reconnect/generation changes, but never across source/chat/
     # direction. A proven legacy mapping replaces this ID under the dialog lock.
     identity = [tenant, source, payload.get('chat'), payload.get('provider_id'), payload.get('from_me')]
@@ -50,11 +58,24 @@ def consume(reference):
     if len(reference) != 4 or not all(isinstance(x, str) for x in reference):
         raise TenantLinearError('native_projection_reference_invalid', 400)
     with _connect() as conn, conn.cursor() as cur:
+        scope,payload=load_evidence(cur,reference,lock=True)
+        if payload.get('kind')=='receipt':
+            from tenant_whatsapp_native_status import observe
+            result=observe(cur,scope,payload)
+            conn.commit()
+            return result
         _, event = load(cur, reference)
     from tenant_connect_transport import _ingest_once
     # The shared path re-reads authenticated encrypted evidence and locks the
     # current source/generation in the SAME transaction as CRM/lifecycle/AI.
-    return _ingest_once(b'', '', event, _native_reference=reference)
+    result=_ingest_once(b'', '', event, _native_reference=reference)
+    if event['data']['fromMe']:
+        with _connect() as conn,conn.cursor() as cur:
+            scope,payload=load_evidence(cur,reference,lock=True)
+            from tenant_whatsapp_native_status import reconcile
+            reconcile(cur,scope['tenant'],scope['source'],payload['provider_id'])
+            conn.commit()
+    return result
 
 
 def project_stored(receipt):

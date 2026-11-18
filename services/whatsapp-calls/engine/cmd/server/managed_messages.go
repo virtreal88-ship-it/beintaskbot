@@ -107,3 +107,28 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, code, map[string]any{"result": result, "confirmed": err == nil})
 }
+
+func (s *server) handleManagedMessageStatus(w http.ResponseWriter, r *http.Request) {
+	g := s.appGateway
+	if g == nil || g.messages == nil || g.cfg.Messaging == nil {
+		http.Error(w, "native_messaging_disabled", 409)
+		return
+	}
+	var request struct {
+		Scope     unified.Scope `json:"scope"`
+		Operation string        `json:"operation"`
+		Chat      string        `json:"chat"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4097))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Scope != g.cfg.Messaging.Scope {
+		http.Error(w, "native_message_invalid", 400)
+		return
+	}
+	result, err := g.messages.Lookup(r.Context(), request.Operation, request.Chat)
+	if err != nil {
+		http.Error(w, "native_receipt_unavailable", 404)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"result": result, "confirmed": result.State == "accepted"})
+}
