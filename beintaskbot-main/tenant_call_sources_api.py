@@ -92,14 +92,16 @@ async def relay(request,profile,member,logger):
                     if task in done and not task.cancelled() and task.exception() is None:
                         code=task.result();break
             finally:
+                # Snapshot before cancelling peer reads: cancellation itself can
+                # set an abnormal-close code and must not masquerade as cause.
+                browser_code,browser_error=close_evidence(socket)
+                provider_code,provider_error=close_evidence(upstream)
                 for task in tasks:task.cancel()
                 results=await asyncio.gather(*tasks,return_exceptions=True)
                 # Only local enum codes and booleans, never exception strings,
                 # call IDs, account identifiers, audio, transcripts or tokens.
                 logger.info('call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
                             code,received['browser'],received['provider'])
-                browser_code,browser_error=close_evidence(socket)
-                provider_code,provider_error=close_evidence(upstream)
                 logger.info('call_audio_transport_end browser_code=%s browser_error=%s provider_code=%s provider_error=%s',
                             browser_code,browser_error,provider_code,provider_error)
                 await socket.close()
