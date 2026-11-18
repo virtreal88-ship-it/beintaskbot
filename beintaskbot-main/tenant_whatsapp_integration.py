@@ -67,12 +67,14 @@ def inventory(profile):
         tenant,_=owner(cur,profile)
         schema(cur)
         rows=list(rollout.modes(cur,tenant).items())
-        cur.execute('''SELECT o.channel_id,c.name,o.account_jid FROM saas_whatsapp_onboarding o
+        cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
+        ready=cur.fetchone()['ready']
+        if ready:cur.execute('''SELECT o.channel_id,c.name,o.account_jid FROM saas_whatsapp_onboarding o
           JOIN saas_connect_channels c ON c.tenant_id=o.tenant_id AND c.connect_channel_id=o.channel_id
           LEFT JOIN saas_whatsapp_native_routes r ON r.tenant_id=o.tenant_id AND r.channel_id=o.channel_id
           WHERE o.tenant_id=%s::uuid AND r.channel_id IS NULL''',(tenant,))
         pending=[{'id':str(r['channel_id']),'name':r['name'],'phone':r['account_jid'].split('@')[0],
-            'state':'preparing','messages_ready':False,'calls_ready':False,'activation_pending':True} for r in cur.fetchall()]
+            'state':'preparing','messages_ready':False,'calls_ready':False,'activation_pending':True} for r in (cur.fetchall() if ready else [])]
     def status(item):
         source,row=item
         try:
