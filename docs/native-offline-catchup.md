@@ -13,3 +13,5 @@ Protocol background (not proof of our runtime result):
 - https://github.com/devlikeapro/waha/issues/2349
 
 Implementation is original Go code using the existing whatsmeow socket wrapper; no Baileys/Evolution code was copied. Live acceptance remains required: queue completion, incoming message exactly once, media and statuses, then source-preserving cutover.
+
+An additional confirmed projection blocker on the test source was an authenticated group message whose sender and alternate included a linked-device suffix. The old direct-address validator rejected it, returning 409 for every delivery retry. Projection now accepts bounded protocol device addresses for participants only and retains the exact account/domain, conversation, encrypted event and source binding. Tests cover device bounds, cross-conversation rejection and idempotent ingestion of retained device-addressed events. No journal row is edited or skipped.

@@ -13,7 +13,7 @@ import tenant_connect_transport as transport
 
 
 @pytest.fixture
-def ready(capture, monkeypatch):
+def ready(capture, monkeypatch, request):
     db, cipher, cfg = capture
     monkeypatch.setattr(projection, '_fernet', lambda: cipher)
     monkeypatch.setattr(consumer, '_connect', lambda: db)
@@ -23,6 +23,8 @@ def ready(capture, monkeypatch):
         consumer.migrate(cur)
     value = delivery()
     value['event']['payload'] = message(sender_alt='')
+    if getattr(request,'param',None)=='device':
+        value['event']['payload']['sender']='15550000002:34@s.whatsapp.net'
     store(value)
     reference = (A, CA, value['scope']['generation'], value['event']['id'])
     yield db, reference
@@ -40,6 +42,7 @@ def test_capture_is_not_projection_authority(ready):
     db.rollback()
 
 
+@pytest.mark.parametrize('ready',['canonical','device'],indirect=True)
 def test_same_crm_path_preserves_history_and_duplicate_is_idempotent(ready):
     db, reference = ready
     activate(db)

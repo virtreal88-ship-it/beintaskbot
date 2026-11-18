@@ -80,8 +80,35 @@ def test_group_author_and_caption_quote_are_explicit_without_merging_by_name():
     {'kind':'receipt'}, {'variant':'control'}, {'message_type':'unsupported'},
     {'_crm_signed_outbound_receipt':True}, {'ai_authored':True}, {'url':'https://private.invalid'},
     {'from_me':1}, {'timestamp':True}, {'timestamp':-1000}, {'timestamp':10**25},
-    {'chat':'same display name'}, {'sender':'15550000002:3@s.whatsapp.net'}, {'provider_id':'../invalid'},
+    {'chat':'same display name'}, {'sender':'15550000002:65536@s.whatsapp.net'}, {'provider_id':'../invalid'},
     {'media_kind':'document','message_type':'image'}, {'message_type':'audio','media_kind':'audio','media_size':True},
 ])
 def test_malformed_or_unsupported_event_is_not_a_new_ai_turn(changes):
     with pytest.raises(TenantLinearError):event(message(**changes))
+
+
+def test_authenticated_device_participant_keeps_group_and_author_without_mutating_evidence():
+    payload=message(chat='120363123456789@g.us',sender='188888888:34@lid',sender_alt='15550000002:34@s.whatsapp.net')
+    before=copy.deepcopy(payload)
+    data=event(payload)['data']
+    assert data['participantJid']=='188888888@lid'
+    assert data['participantAlt']=='15550000002@s.whatsapp.net'
+    assert data['conversationId']==payload['chat'] and 'directIdentity' not in data
+    assert payload==before
+    direct=event(message(sender='15550000002:3@s.whatsapp.net',sender_alt='188888888.1:3@lid'))['data']
+    assert direct['directIdentity']=={'jid':'15550000002@s.whatsapp.net','lid':'188888888@lid'}
+    spoof=event(message(sender='15550000003:3@s.whatsapp.net'))['data']
+    assert 'directIdentity' not in spoof
+
+
+@pytest.mark.parametrize('jid',[
+    '15550000002:-1@s.whatsapp.net','15550000002:65536@s.whatsapp.net',
+    '15550000002.256:1@s.whatsapp.net','15550000002:1@g.us',
+    '15550000002:1@broadcast','15550000002:1:2@s.whatsapp.net',
+])
+def test_invalid_device_participants_remain_rejected(jid):
+    with pytest.raises(TenantLinearError):event(message(sender=jid))
+
+
+def test_participant_normalization_does_not_rewrite_conversation_scope():
+    with pytest.raises(TenantLinearError):event(message(chat='15550000002:3@s.whatsapp.net'))
