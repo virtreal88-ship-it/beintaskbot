@@ -20,6 +20,7 @@ type CallManager struct {
 
 	mu          sync.Mutex
 	currentCall *CallInfo
+	rejecting   bool
 
 	rtpSession  *media.RtpSession
 	srtpSession *media.SrtpSession
@@ -46,6 +47,7 @@ type CallManager struct {
 	OnIncoming    func(*CallInfo)
 	OnEnded       func(*CallInfo)
 	OnPeerAudio   func([]float32)
+	OnControl     func(operation, code string)
 }
 
 func NewCallManager(sock core.VoipSocket, log *slog.Logger) *CallManager {
@@ -136,7 +138,7 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 		m.mu.Unlock()
 		return &CallError{"no incoming call with id " + callID}
 	}
-	if !call.CanAccept() {
+	if m.rejecting || !call.CanAccept() {
 		m.mu.Unlock()
 		return &CallError{"call cannot be accepted in state " + string(call.StateData.State)}
 	}
@@ -190,16 +192,47 @@ func (m *CallManager) setupIncomingMedia(call *CallInfo, relayData *core.RelayDa
 func (m *CallManager) RejectCall(ctx context.Context, callID string, reason core.EndCallReason) error {
 	m.mu.Lock()
 	call := m.currentCall
-	if call == nil || call.CallID != callID {
+	if call == nil || call.CallID != callID || !call.CanAccept() || m.rejecting {
 		m.mu.Unlock()
-		return &CallError{"no call with id " + callID}
+		return &CallError{"call_reject_not_available"}
 	}
-	_ = call.ApplyTransition(Transition{Type: TransitionLocalRejected, Reason: reason})
-	node := signaling.BuildRejectStanza(wanode.MustJID(call.PeerJid), call.CallID, wanode.MustJID(call.CallCreator))
-	m.emitState()
+	m.rejecting = true
+	peer, creator := wanode.MustJID(call.PeerJid), wanode.MustJID(call.CallCreator)
 	m.mu.Unlock()
 
-	go func() { _, _ = m.sock.Query(ctx, node) }()
+	// HTTP request cancellation used to race the fire-and-forget send. Complete
+	// one bounded acknowledged send before ending locally; never retry silently.
+	// No CallManager mutex is held during I/O or remote terminal callbacks.
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
+	err := m.sock.RejectIncomingCall(sendCtx, peer, creator, callID)
+	cancel()
+	code := "provider_acknowledged"
+	if err != nil {
+		code = "transport_unconfirmed"
+		switch err.Error() {
+		case "ack_timeout", "ack_invalid", "ack_rejected":
+			code = err.Error()
+		}
+	}
+	if m.OnControl != nil {
+		m.OnControl("reject", code)
+	}
+	m.mu.Lock()
+	m.rejecting = false
+	if m.currentCall != call || call.IsEnded() {
+		m.mu.Unlock()
+		return nil // A remote terminal event already performed cleanup.
+	}
+	if err != nil {
+		m.mu.Unlock()
+		return &CallError{"call_reject_unconfirmed"}
+	}
+	if err = call.ApplyTransition(Transition{Type: TransitionLocalRejected, Reason: reason}); err != nil {
+		m.mu.Unlock()
+		return &CallError{"call_reject_state_changed"}
+	}
+	m.emitState()
+	m.mu.Unlock()
 	m.cleanupMedia()
 	if m.OnEnded != nil {
 		m.OnEnded(call)

@@ -398,7 +398,7 @@ def sync(c,data):
                 safe={'ok':result['ok'],'provider_id':provider,
                       'sdp_answer':result.get('sdp_answer','') if result['ok'] else '',
                       'error_code':result.get('error_code') if result.get('error_code') in
-                      {'busy','scope_denied','microphone_setup_failed','call_ended','provider_start_failed','command_uncertain','recording_unavailable'} else ''}
+                      {'busy','scope_denied','microphone_setup_failed','call_ended','call_reject_unconfirmed','provider_start_failed','command_uncertain','recording_unavailable'} else ''}
                 cur.execute("UPDATE saas_browser_call_commands SET state='done',result=%s::jsonb,payload='{}'::jsonb WHERE id=%s::uuid",(_json(safe),result['id']))
                 cur.execute('UPDATE saas_browser_calls SET provider_id=COALESCE(provider_id,%s),updated_at=now() WHERE id=%s::uuid',(provider,str(command['call_id'])))
                 if result.get('not_started') is True and not provider and command['op']=='start' and not result['ok']:

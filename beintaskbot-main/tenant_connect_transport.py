@@ -398,6 +398,8 @@ def _public_channel(row: dict) -> dict:
 
 def _request(key: str, method: str, path: str, payload: dict | None = None, *,
              safe_preflight_codes: tuple[str, ...] = (), idempotency_key: str | None = None) -> dict:
+    if key == 'native-route-requires-dispatch':
+        raise TenantPlatformError('native_operation_not_enabled')
     # HTTP header values must be Latin-1 encodable. Connect-generated API keys
     # are ASCII; fail clearly if a copied key contains a look-alike character.
     if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
@@ -644,6 +646,13 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
+            from tenant_whatsapp_native_rollout import modes
+            native_modes=modes(cur,tenant)
+            if requested.intersection(native_modes):
+                raise TenantPlatformError('Этот источник уже переводится на единый WhatsApp. Используйте его окно подключения; старый движок повторно не включается.')
+            for source,mode in native_modes.items():
+                remote_by_id[source]={**remote_by_id.get(source,{}),'id':source,'name':mode['name'],
+                    'status':'connected' if mode['enabled'] else 'disconnected','phone':mode['account_jid'].split('@')[0]}
             cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected'", (tenant,))
             row = cur.fetchone()
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
@@ -748,10 +757,17 @@ def channels(profile: dict, api_key: str, *, authorization=None) -> list[dict]:
             linked_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
             active_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
+            from tenant_whatsapp_native_rollout import modes
+            native_modes=modes(cur,tenant)
+    rows=[row for row in rows if isinstance(row,dict) and str(row.get('id')) not in native_modes]
+    rows.extend({'id':source,'name':mode['name'],'phone':mode['account_jid'].split('@')[0],
+        'status':'connected' if mode['enabled'] and mode['state']=='ready' else 'connecting' if not mode['enabled'] else 'disconnected'}
+        for source,mode in native_modes.items())
     return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or ''),
              'phone': str(row.get('phone') or ''), 'phoneConflict': bool(row.get('phoneConflict')),
              'duplicateChannelId': str(row.get('duplicateChannelId') or ''),
-             'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids}
+             'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids,
+             **({'native':True,'native_staged':not native_modes[str(row['id'])]['enabled']} if str(row.get('id')) in native_modes else {})}
             for row in rows if isinstance(row, dict) and row.get('id')]
 
 
@@ -794,6 +810,9 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
         with conn.cursor() as cur:
             cur.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
             local = cur.fetchone()
+            from tenant_whatsapp_native_rollout import modes
+            if channel_id in modes(cur,tenant):
+                raise TenantPlatformError('Единый WhatsApp требует подтверждённого завершения звонков перед отключением. Старое подключение не изменено.')
     if not local:
         raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
     if local.get('active'):
@@ -807,7 +826,7 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
     return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
 
 
-@operation('connect', lambda v: 'update' if v['reconnect'] else 'view', data_arg='authorization')
+@operation('connect', lambda v: 'connect' if v['reconnect'] else 'view', data_arg='authorization')
 def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
                    callback_url: str = '', authorization=None) -> dict:
     _owner(profile)
@@ -819,6 +838,13 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
             if not cur.fetchone():
                 raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
+            from tenant_whatsapp_native_rollout import modes
+            native_mode=modes(cur,tenant).get(channel_id)
+    if native_mode:
+        from tenant_call_sources import provision,source_status
+        current=provision(profile,channel_id) if reconnect else source_status(profile,channel_id)
+        return {'id':channel_id,'status':'connected' if current['state']=='ready' and not current.get('activation_pending') else 'connecting' if current['state']=='pairing' or current.get('activation_pending') else 'disconnected',
+            'phone':current.get('phone',''),'native':True,'qr':'data:image/png;base64,'+current['qr'] if current.get('qr') else ''}
     credentials = _stored_connect_credentials(profile)
     if reconnect:
         configure(profile, {**(authorization or {}), 'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
@@ -959,7 +985,9 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             time.sleep(0.05 * (attempt + 1))
 
 
-def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
+def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=None) -> bool:
+    if _native_reference is not None and event.get('type') not in ('message.inbound.received', 'message.outbound.observed'):
+        raise TenantLinearError('native_event_not_projectable', 409)
     if event.get('type') == 'channel.connection.updated':
         from tenant_connect_health import ingest as ingest_health
         return ingest_health(raw, signature, event)
@@ -1006,18 +1034,22 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             ensure_notice_schema(conn)
         conn.commit()  # Release all DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
-            cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
-            matches = []
-            for row in cur.fetchall():
-                try:
-                    secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()).get('webhook_secret', '')
-                except Exception:
-                    continue
-                if _verify_signature(secret, raw, signature):
-                    matches.append(str(row['tenant_id']))
-            if len(matches) != 1:
-                raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
-            tenant = matches[0]
+            if _native_reference is not None:
+                from tenant_whatsapp_native_consumer import authorize
+                tenant = authorize(cur, _native_reference, event)
+            else:
+                cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
+                matches = []
+                for row in cur.fetchall():
+                    try:
+                        secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()).get('webhook_secret', '')
+                    except Exception:
+                        continue
+                    if _verify_signature(secret, raw, signature):
+                        matches.append(str(row['tenant_id']))
+                if len(matches) != 1:
+                    raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
+                tenant = matches[0]
             from tenant_dialog_rollout import guard as rollout_guard
             rollout_guard(cur, tenant)
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
@@ -1071,6 +1103,13 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 data = {**data, 'originalConversationId': data.get('originalConversationId') or original_conversation,
                         '_crm_provider_conversation_id':original_conversation,'conversationId': conversation}
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
+            if _native_reference is not None:
+                from tenant_whatsapp_native_consumer import preserve_identity
+                data = preserve_identity(cur, tenant, channel_id, conversation, data)
+            elif event_type in ('message.inbound.received','message.outbound.observed'):
+                from tenant_whatsapp_native_consumer import preserve_late_legacy_identity
+                data = preserve_late_legacy_identity(cur, tenant, channel_id, conversation, data,
+                    outgoing=event_type=='message.outbound.observed' or data.get('fromMe') is True)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             if call_occurred is not None:
@@ -1472,7 +1511,8 @@ def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = Fal
     if not row: return None
     try: secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
     except Exception as exc: raise TenantPlatformError('Connect açarı oxunmadı.') from exc
-    return {'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')}
+    from tenant_whatsapp_native_transport import bind
+    return bind(cur,{'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')})
 
 
 QUOTED_ONCE_TENANT='e09a5c24-093f-4141-992d-532052e00c90'
@@ -1483,6 +1523,10 @@ def quoted_once_scope(tenant,channel):
 
 
 def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None, return_receipt=False):
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text
+        result=native_text(route,text,client_message_id,quoted_message_id=quoted_message_id)
+        return result if return_receipt else result['message_id']
     from tenant_ai_group_coordination import group_jid
     if group_jid(route.get('conversation_id')):
         # Group sends must use Connect's synchronous at-most-once path. The
@@ -1509,6 +1553,8 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
         client_message_id = str(uuid.UUID(str(run_id)))
     except (ValueError, TypeError, AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    if route.get('native'):
+        return send(route,text,client_message_id)
     from tenant_ai_group_coordination import group_jid
     if group_jid(route.get('conversation_id')):
         result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/group-messages',
@@ -1525,6 +1571,8 @@ def send_ai_reply_with_receipt(route: dict, text: str, request_id: str) -> str:
         client_message_id=str(uuid.UUID(str(request_id)))
     except (ValueError,TypeError,AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    if route.get('native'):
+        return send(route,text,client_message_id)
     result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/messages',
         {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id})
     if not isinstance(result,dict) or not isinstance(result.get('id'),str) or not result['id']:
@@ -1543,6 +1591,16 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     try: key=str(uuid.UUID(str(request_id)))
     except (ValueError,TypeError,AttributeError): raise TenantPlatformError('Invalid group request ID.') from None
     if not group_jid(route.get('conversation_id')): raise TenantPlatformError('Group route required.')
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text, submit as native_submit
+        if not media:return native_text(route,text,key,quoted_message_id=quoted_message_id)
+        import base64
+        encoded=media.get('base64','')
+        if not isinstance(encoded,str) or len(encoded)>14*1024*1024:raise TenantPlatformError('native_media_invalid')
+        try:content=base64.b64decode(encoded,validate=True)
+        except ValueError:raise TenantPlatformError('native_media_invalid') from None
+        return native_submit(route,key,text=text,kind=str(media['type']),mime=media.get('mimeType',''),
+          name=media.get('fileName',''),content=content,quoted_message_id=quoted_message_id)
     payload={'conversationId':route['conversation_id'],'type':str(media['type']) if media else 'text',
       'text':text,'clientMessageId':key}
     if quoted_message_id is not None:
@@ -1577,6 +1635,10 @@ def send_consultation_with_receipt(route, text, request_id):
     """Accept Connect's durable queue receipt without claiming provider delivery."""
     from tenant_ai_group_coordination import group_jid
     key=str(uuid.UUID(str(request_id)))
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text
+        result=native_text(route,text,key)
+        return {'state':'sent','message_id':result['message_id'],'external_message_id':result['external_message_id']}
     endpoint='/group-messages' if group_jid(route.get('conversation_id')) else '/messages'
     result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+endpoint,
         {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
@@ -1609,6 +1671,16 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
             or any(ord(char)<33 for char in conversation_id)
             or route.get('conversation_id')!=conversation_id):
         raise TenantPlatformError('Connect əlavəsi düzgün deyil.')
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import download
+        try:
+            content,mime=download(route,message_id,max_bytes=limits[expected_type],allowed_types=allowed[expected_type])
+            return {'type':expected_type,'base64':base64.b64encode(content).decode('ascii'),
+                'mimeType':mime,'fileName':'case-attachment'}
+        except TenantPlatformError as error:
+            if str(error)!='native_media_evidence_missing' or not route.get('legacy_media_key'):
+                raise
+            route={**route,'api_key':route['legacy_media_key']}
     try:
         url=CONNECT_URL+'/v1/channels/'+str(route['channel_id'])+'/messages/'+message_id+'/media?'+urlencode({'conversationId':conversation_id})
         response=requests.get(url,
@@ -1794,12 +1866,13 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None, quoted_message_id=None, receipt=None) -> None:
     facts={}
     if receipt is not None:
-        if (not isinstance(receipt,dict) or receipt.get('_crm_group_send_receipt') is not True
+        native_receipt=isinstance(receipt,dict) and receipt.get('_crm_native_send_receipt') is True and bool(route.get('native'))
+        if (not isinstance(receipt,dict) or (not native_receipt and receipt.get('_crm_group_send_receipt') is not True)
             or receipt.get('channelId')!=route['channel_id'] or receipt.get('conversationId')!=route['conversation_id']
-            or not route['conversation_id'].endswith('@g.us') or receipt.get('fromMe') is not True
+            or (not native_receipt and not route['conversation_id'].endswith('@g.us')) or receipt.get('fromMe') is not True
             or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',str(receipt.get('externalMessageId') or ''))):
             raise TenantPlatformError('Connect group receipt scope mismatch.')
-        facts={key:receipt[key] for key in ('channelId','conversationId','externalMessageId','fromMe','_crm_group_send_receipt')}
+        facts={key:receipt[key] for key in ('channelId','conversationId','externalMessageId','fromMe','_crm_group_send_receipt','_crm_native_send_receipt') if key in receipt}
         facts['status']='sent'
         if re.fullmatch(r'[1-9][0-9]{5,14}@s[.]whatsapp[.]net',str(receipt.get('participantJid') or '')):
             facts['participantJid']=receipt['participantJid']
@@ -1815,6 +1888,9 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             from tenant_dialog_rollout import guard as rollout_guard
             rollout_guard(cur, tenant)
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
+            if route.get('native') and facts.get('externalMessageId'):
+                from tenant_whatsapp_native_status import lock as native_status_lock
+                native_status_lock(cur,str(tenant),str(route['channel_id']),facts['externalMessageId'])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**facts,**({'verified_employee_id':int(actor)} if actor is not None else {}),**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
@@ -1836,6 +1912,9 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                 update={**facts,'status':old.get('status') if old.get('status') in {'delivered','read'} else 'sent'}
                 cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                             (_json(update),tenant,str(existing['id'])))
+            if route.get('native') and facts.get('externalMessageId'):
+                from tenant_whatsapp_native_status import reconcile as native_reconcile
+                native_reconcile(cur,str(tenant),str(route['channel_id']),facts['externalMessageId'])
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             if lifecycle_enabled(cur, tenant):
                 cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND kommo_lead_id=%s',(tenant,'connect:'+external_id,'connect:'+route['channel_id'],lead_id))
@@ -1869,6 +1948,13 @@ def _validate_quoted_once(result,route,request_id,quoted_message_id,message_id=N
 
 def quoted_delivery_status(route,message_id,request_id,quoted_message_id):
     """Exact-scope request lookup recovers timed-out responses without another POST."""
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import lookup
+        value=lookup(route,request_id)
+        if message_id and value['id']!=message_id:raise TenantPlatformError('native_receipt_identity_changed')
+        return {'message_id':value['id'],'quote_protocol':True,'delivery_state':value['status'],
+          'provider_accepted':value['providerAccepted'],'delivery_phase':'accepted' if value['providerAccepted'] else 'unknown',
+          'delivered':value['delivered'],'retry_safe':False,'provider_message_id':value['externalMessageId']}
     if not quoted_once_scope(route.get('tenant_id'),route['channel_id']):
         raise TenantPlatformError('Quoted receipt scope unavailable.')
     if not message_id and not quoted_message_id:raise TenantPlatformError('Exact quoted receipt identity required.')

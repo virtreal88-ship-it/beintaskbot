@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"wacalls/internal/recording"
+	"wacalls/internal/unified"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
@@ -35,6 +35,7 @@ type Session struct {
 }
 
 func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) *Session {
+	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
 	s := &Session{
 		id:     id,
 		name:   name,
@@ -44,7 +45,9 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 		auth:   AuthSnapshot{State: "connecting"},
 		reg:    newCallRegistry(),
 	}
-	client.AddEventHandler(s.handleEvent)
+	if !mgr.nativeGateway.attachMessages(s) && (mgr.messageLab == nil || !mgr.messageLab.attach(s)) {
+		client.AddEventHandler(s.handleEvent)
+	}
 	return s
 }
 
@@ -55,10 +58,7 @@ func (s *Session) createCall(callID string) *call.CallManager {
 	if !s.reg.addBounded(callID, ac, s.mgr.maxCalls) {
 		return nil
 	}
-	seconds := recording.MaxSeconds
-	if s.mgr.recordings != nil && s.mgr.recordings.cfg.Managed {
-		seconds = recording.ManagedMaxSeconds
-	}
+	seconds := s.mgr.recordings.maxSeconds()
 	ac.timer.Store(time.AfterFunc(time.Duration(seconds)*time.Second, func() {
 		if current, ok := s.reg.get(callID); ok && current == ac {
 			ac.markEnd("duration_limit")
@@ -120,6 +120,20 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		}
 		s.removeCall(c.CallID, c.StateData.EndReason == core.EndCallReasonUserEnded)
 		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
+	}
+	cm.OnControl = func(operation, code string) {
+		ac, ok := s.reg.get(callID)
+		if !ok || ac.cm != cm {
+			return
+		}
+		if operation == "reject" && (code == "provider_acknowledged" || code == "transport_unconfirmed" || code == "ack_timeout" || code == "ack_invalid" || code == "ack_rejected") {
+			s.diag.lastControl.Store(&callControlDiagnostic{operation, code, time.Now().UnixMilli()})
+			if code == "provider_acknowledged" {
+				if origin := ac.rejectOrigin.Load(); origin != nil {
+					ac.markEnd(*origin)
+				}
+			}
+		}
 	}
 	cm.OnPeerAudio = func(pcm16 []float32) {
 		ac, ok := s.reg.get(callID)
@@ -364,10 +378,13 @@ func (s *Session) teardownAllCalls() {
 }
 
 func (s *Session) replaceClient(client *whatsmeow.Client) {
+	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
 	s.teardownAllCalls()
 	s.client.Disconnect()
 	s.client = client
-	client.AddEventHandler(s.handleEvent)
+	if !s.mgr.nativeGateway.attachMessages(s) && (s.mgr.messageLab == nil || !s.mgr.messageLab.attach(s)) {
+		client.AddEventHandler(s.handleEvent)
+	}
 }
 
 func (s *Session) shutdown() {

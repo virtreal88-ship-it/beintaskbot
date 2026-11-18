@@ -4,6 +4,7 @@ Worker is the sole control/media client. Each source has an immutable identity,
 separate SQLite session, signing key and command journal on the private volume.
 """
 import asyncio
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -61,6 +62,7 @@ class Supervisor:
         self.endpoint=worker.rstrip('/')+'/api/platform/call-gateway'
         self.binary=binary;self.sources={};self.lock=asyncio.Lock();self.client=None;self.volume_lock=None
         self.stopping=False
+        self.message_slots=asyncio.Semaphore(2)
 
     async def start(self,app):
         # Linux volume fencing: two replicas/processes must never restore the
@@ -88,8 +90,17 @@ class Supervisor:
 
     def configure(self,source):
         data=self.sources[source]['data'];folder=self.root/source;b=data['binding']
-        atomic_json(folder/'gateway.json',{'managed':True,'endpoint':self.endpoint,'token':b['gateway_token'],
-                    'account_jid':b['account_jid'],'allowed_peers':[]})
+        gateway={'managed':True,'endpoint':self.endpoint,'token':b['gateway_token'],
+                    'account_jid':b['account_jid'],'allowed_peers':[]}
+        if data.get('messaging') is not None:
+            cfg=data['messaging']
+            if (set(cfg)!={'generation','key'} or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',cfg['generation'])
+                    or not re.fullmatch(r'[0-9a-f]{64}',cfg['key'])):
+                raise ValueError('native_messaging_configuration_invalid')
+            gateway['messaging']={'scope':{'tenant':b['tenant_id'],'source':b['channel_id'],
+                'account':b['account_jid'],'generation':cfg['generation']},
+                'key':base64.b64encode(bytes.fromhex(cfg['key'])).decode('ascii')}
+        atomic_json(folder/'gateway.json',gateway)
         atomic_json(folder/'recordings.json',{'capacity_dir':str(self.root),'managed':True,'account_jid':b['account_jid'],'allowed_peers':[],
                     'signing_seed':data['signing_seed'],'encryption_key':data['encryption_key']})
         fd=os.open(folder/'http-token',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
@@ -166,7 +177,13 @@ class Supervisor:
 
     async def provision(self,request):
         self.authorize(request);source=safe_uuid(request.match_info['source'])
-        try:spec=binding(await request.json())
+        try:
+            payload=await request.json()
+            if not isinstance(payload,dict):raise web.HTTPBadRequest(text='source_binding_invalid')
+            generation=payload.pop('messaging_generation',None)
+            if generation is not None and (not isinstance(generation,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',generation)):
+                raise web.HTTPBadRequest(text='native_messaging_configuration_invalid')
+            spec=binding(payload)
         except (json.JSONDecodeError,UnicodeDecodeError):raise web.HTTPBadRequest(text='source_binding_invalid') from None
         async with self.lock:
             entry=self.sources.get(source)
@@ -176,6 +193,10 @@ class Supervisor:
                 old=json.dumps(entry['data']['binding'],sort_keys=True)
                 if not hmac.compare_digest(old,json.dumps(spec,sort_keys=True)):
                     raise web.HTTPConflict(text='source_binding_changed')
+                if generation is not None and entry['data'].get('messaging',{}).get('generation')!=generation:
+                    # Existing devices require a separately fenced maintenance
+                    # transition. Provision never restarts a live call engine.
+                    raise web.HTTPConflict(text='source_messaging_transition_required')
             else:
                 if len(self.sources)>=MAX_SOURCES:raise web.HTTPServiceUnavailable(text='calls_source_capacity')
                 if any(e['data']['binding']['account_jid']==spec['account_jid'] for e in self.sources.values()):
@@ -184,6 +205,8 @@ class Supervisor:
                 port=next(p for p in range(18000,18000+MAX_SOURCES) if p not in ports)
                 data={'binding':spec,'port':port,'http_token':secrets.token_hex(32),
                       'signing_seed':secrets.token_hex(32),'encryption_key':secrets.token_hex(32)}
+                if generation is not None:
+                    data['messaging']={'generation':generation,'key':secrets.token_hex(32)}
                 folder=self.root/source
                 folder.mkdir(mode=0o700,exist_ok=False)
                 atomic_json(folder/'source.json',data)
@@ -203,6 +226,38 @@ class Supervisor:
         source,entry=self.entry(request)
         result=await self.engine(source,'/internal/status')
         return web.json_response(result,headers={'Cache-Control':'no-store'})
+
+    async def messages(self,request):
+        source,entry=self.entry(request)
+        data=entry['data'];cfg=data.get('messaging');b=data['binding']
+        if not cfg:raise web.HTTPConflict(text='native_messaging_disabled')
+        if self.message_slots.locked():raise web.HTTPTooManyRequests(text='native_messaging_busy')
+        async with self.message_slots:
+            return await self._messages(request,source,entry,cfg,b)
+
+    async def _messages(self,request,source,entry,cfg,b):
+        data=entry['data']
+        raw=await request.clone(client_max_size=15*1024*1024).read()
+        if len(raw)>15*1024*1024:raise web.HTTPRequestEntityTooLarge(max_size=15*1024*1024,actual_size=len(raw))
+        try:payload=json.loads(raw)
+        except (ValueError,UnicodeError):raise web.HTTPBadRequest(text='native_message_invalid') from None
+        expected={'tenant':b['tenant_id'],'source':b['channel_id'],'account':b['account_jid'],'generation':cfg['generation']}
+        if not isinstance(payload,dict) or payload.get('scope')!=expected:
+            raise web.HTTPForbidden(text='native_message_scope_denied')
+        suffix='/media' if request.path.endswith('/media') else '/status' if request.path.endswith('/status') else ''
+        if self.client is None:raise web.HTTPServiceUnavailable(text='calls_service_unavailable')
+        # No retries: a lost response may follow an accepted provider send.
+        async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages'+suffix,
+                data=raw,headers={'Authorization':'Bearer '+data['http_token'],'Content-Type':'application/json'},
+                allow_redirects=False,timeout=ClientTimeout(total=35)) as upstream:
+            chunks=[];size=0
+            async for chunk in upstream.content.iter_chunked(65536):
+                size+=len(chunk)
+                if size>11*1024*1024:raise web.HTTPBadGateway(text='native_response_invalid')
+                chunks.append(chunk)
+            content_type='application/octet-stream' if suffix and upstream.status==200 else 'application/json'
+            return web.Response(body=b''.join(chunks),status=upstream.status,content_type=content_type,
+                headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'attachment'})
 
     async def audio(self,request):
         source,entry=self.entry(request)
@@ -258,6 +313,9 @@ def make_app(supervisor):
     app.router.add_get('/healthz',lambda r:web.json_response({'ok':True}))
     app.router.add_post('/v1/sources/{source}',supervisor.provision)
     app.router.add_get('/v1/sources/{source}',supervisor.status)
+    app.router.add_post('/v1/sources/{source}/messages',supervisor.messages)
+    app.router.add_post('/v1/sources/{source}/messages/status',supervisor.messages)
+    app.router.add_post('/v1/sources/{source}/messages/media',supervisor.messages)
     app.router.add_get('/v1/sources/{source}/audio/{provider}/{call}',supervisor.audio)
     app.on_startup.append(supervisor.start);app.on_cleanup.append(supervisor.stop)
     return app

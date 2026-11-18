@@ -247,6 +247,8 @@ def test_mutation_wrappers_do_not_leak_previous_settings(monkeypatch,provider,ac
 
 def test_connect_reconnect_normalizes_nested_action_without_second_fence(monkeypatch):
     import tenant_connect_transport as transport
+    import tenant_whatsapp_native_rollout as rollout
+    monkeypatch.setattr(rollout,'modes',lambda cur,tenant:{})
     factory,conn,cur,read=setup_guard(profile({'update':'all','view':'none','create':'none'}))
     cur.fetchone.return_value={'exists':True}
     monkeypatch.setattr(transport,'_connect',factory);monkeypatch.setattr(transport,'_schema',Mock())
@@ -280,3 +282,33 @@ def test_connect_reconnect_denied_before_remote_mutation(monkeypatch,scopes,conf
         transport.channel_status(SESSION,'11111111-1111-4111-8111-111111111111',reconnect=True,
             authorization=context(confirm_company_impact=confirmed))
     configure.assert_not_called();remote.assert_not_called()
+
+
+@pytest.mark.parametrize('confirmed',[False,True])
+def test_native_reconnect_keeps_company_impact_confirmation(monkeypatch,confirmed):
+    import tenant_connect_transport as transport
+    import tenant_whatsapp_native_rollout as rollout
+    import tenant_call_sources as sources
+    channel='11111111-1111-4111-8111-111111111111'
+    factory,conn,cur,read=setup_guard(profile({'update':'all','view':'all'},role='owner'))
+    cur.fetchone.return_value={'exists':True}
+    monkeypatch.setattr(transport,'_connect',factory)
+    monkeypatch.setattr(transport,'_schema',Mock())
+    monkeypatch.setattr(rollout,'modes',lambda cur,tenant:{channel:{'enabled':False}})
+    provision=Mock(return_value={'state':'pairing','activation_pending':True,'qr':'synthetic'})
+    monkeypatch.setattr(sources,'provision',provision)
+    legacy=Mock(side_effect=AssertionError('native must not use legacy'))
+    monkeypatch.setattr(transport,'_request',legacy)
+    with read:
+        if confirmed:
+            result=transport.channel_status(SESSION,channel,reconnect=True,
+                authorization=context(confirm_company_impact=True))
+            assert result['native'] is True
+            provision.assert_called_once_with(SESSION,channel)
+        else:
+            with pytest.raises(TenantLinearError,match='integration_company_impact_confirmation_required'):
+                transport.channel_status(SESSION,channel,reconnect=True,
+                    authorization=context(confirm_company_impact=False))
+            provision.assert_not_called()
+    legacy.assert_not_called()
+    assert sum('shared-integration:' in str(call.args) for call in cur.execute.call_args_list)==1

@@ -199,6 +199,15 @@ def test_background_classification_reserves_foreground_slot_through_joins_and_ca
         ai=asyncio.create_task(media.download_media(item(message='ai',kind=kind)))
         joined_ai=asyncio.create_task(media.download_media(item(kind=kind)))
         while media._media_active<2:await asyncio.sleep(.001)
+        # Reserving an executor slot precedes the second thread entering its
+        # coroutine. Wait for actual transport entry before asserting joins.
+        async def both_started():
+            while transport.await_count<2:await asyncio.sleep(.001)
+        try:
+            await asyncio.wait_for(both_started(),2)
+        except BaseException:
+            release.set()
+            raise
         auto_a.cancel()
         with pytest.raises(asyncio.CancelledError):await auto_a
         assert media._media_auto_active==1 and not joined_ai.done()

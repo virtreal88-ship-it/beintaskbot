@@ -69,6 +69,18 @@ func managedHandler(s *server, host, token string) http.Handler {
 			writeJSON(w, 200, out)
 			return
 		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/status" {
+			s.handleManagedMessageStatus(w, r)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages" {
+			s.handleManagedMessage(w, r)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/media" {
+			s.handleManagedMedia(w, r)
+			return
+		}
 		if match := streamPath.FindStringSubmatch(r.URL.Path); r.Method == "GET" && match != nil {
 			infos := s.sessions.infos()
 			if len(infos) != 1 || infos[0].State != "open" {

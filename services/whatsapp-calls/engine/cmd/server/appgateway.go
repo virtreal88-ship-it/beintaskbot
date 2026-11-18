@@ -21,18 +21,20 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"sync/atomic"
 	"wacalls/internal/recording"
+	"wacalls/internal/unified"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
 	"wacalls/internal/wa"
 )
 
 type appGatewayConfig struct {
-	Managed  bool     `json:"managed"`
-	Endpoint string   `json:"endpoint"`
-	Token    string   `json:"token"`
-	Session  string   `json:"session_id"`
-	Account  string   `json:"account_jid"`
-	Peers    []string `json:"allowed_peers"`
+	Messaging *managedMessagingConfig `json:"messaging,omitempty"`
+	Managed   bool                    `json:"managed"`
+	Endpoint  string                  `json:"endpoint"`
+	Token     string                  `json:"token"`
+	Session   string                  `json:"session_id"`
+	Account   string                  `json:"account_jid"`
+	Peers     []string                `json:"allowed_peers"`
 }
 type appCommand struct {
 	ID         string `json:"id"`
@@ -56,6 +58,7 @@ type appResult struct {
 	NotStarted bool   `json:"not_started,omitempty"`
 }
 type appGateway struct {
+	messages  *unified.Journal
 	server    *server
 	cfg       appGatewayConfig
 	boot      string
@@ -98,6 +101,38 @@ func newAppGateway(s *server, path string) (*appGateway, error) {
 		return nil, err
 	}
 	g := &appGateway{server: s, cfg: c, boot: randomUUID(), client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("gateway_redirect_denied") }}}
+	if c.Messaging != nil {
+		if !c.Managed || c.Messaging.Scope.Account != c.Account {
+			return nil, unified.ErrConfiguration
+		}
+		g.messages, err = unified.New(context.Background(), s.sessions.store.db, c.Messaging.Scope, c.Messaging.Key)
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
+		rows, err := s.sessions.store.db.Query("SELECT COALESCE(jid,'') FROM sessions")
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
+		count := 0
+		for rows.Next() {
+			var raw string
+			if rows.Scan(&raw) != nil {
+				rows.Close()
+				return nil, unified.ErrConfiguration
+			}
+			count++
+			jid, parseErr := types.ParseJID(raw)
+			if count > 1 || (raw != "" && (parseErr != nil || jid.ToNonAD().String() != c.Account)) {
+				rows.Close()
+				return nil, unified.ErrConfiguration
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
+	}
 	if c.Managed {
 		if !s.runtimeExclusive {
 			return nil, errors.New("runtime_fence_required")
@@ -279,6 +314,12 @@ func (g *appGateway) bundle(provider string) ([]byte, error) {
 	return store.aead.Open(nil, encrypted[:n], encrypted[n:], []byte(id))
 }
 func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand) appResult {
+	return g.executeOwned(ctx, sess, cmd, "app:"+cmd.CallID)
+}
+
+// Ownership is selected by the authenticated server entry point, never by a
+// browser payload. The isolated lab reuses this same immutable command journal.
+func (g *appGateway) executeOwned(ctx context.Context, sess *Session, cmd appCommand, owner string) appResult {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	failed := appResult{ID: cmd.ID, Error: "scope_denied", NotStarted: cmd.Op == "start"}
@@ -288,6 +329,9 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	canonical := cmd
 	canonical.Cancelled = false
 	request, _ := json.Marshal(canonical)
+	if owner != "app:"+cmd.CallID {
+		request = append([]byte(owner+"\x00"), request...)
+	}
 	digest := sha256.Sum256(request)
 	fingerprint := hex.EncodeToString(digest[:])
 	var prior string
@@ -307,7 +351,7 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	if _, err = g.server.sessions.store.db.Exec("INSERT INTO app_commands(id,request,state) VALUES(?,?,'executing')", cmd.ID, fingerprint); err != nil {
 		return appResult{ID: cmd.ID, Error: "command_uncertain"}
 	}
-	out := g.perform(ctx, sess, cmd)
+	out := g.performOwned(ctx, sess, cmd, owner)
 	encoded, _ := json.Marshal(out)
 	if _, err = g.server.sessions.store.db.Exec("UPDATE app_commands SET state='done',result=? WHERE id=? AND state='executing'", encoded, cmd.ID); err != nil {
 		return appResult{ID: cmd.ID, Error: "command_uncertain", ProviderID: out.ProviderID}
@@ -315,13 +359,16 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	return out
 }
 func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand) appResult {
+	return g.performOwned(ctx, sess, cmd, "app:"+cmd.CallID)
+}
+
+func (g *appGateway) performOwned(ctx context.Context, sess *Session, cmd appCommand, owner string) appResult {
 	out := appResult{ID: cmd.ID, ProviderID: cmd.ProviderID}
 	if cmd.Cancelled && cmd.Op == "start" {
 		out.Error = "call_ended"
 		out.NotStarted = true
 		return out
 	}
-	owner := "app:" + cmd.CallID
 	if cmd.Op == "end" || cmd.Op == "reject" || cmd.Cancelled {
 		if cmd.ProviderID == "" {
 			out.OK = true
@@ -338,9 +385,10 @@ func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand)
 		}
 		if cmd.Op == "reject" {
 			if ac, exists := sess.reg.get(cmd.ProviderID); exists {
-				ac.markEnd("command_reject")
+				origin := "command_reject"
+				ac.rejectOrigin.Store(&origin)
 				if err := ac.cm.RejectCall(ctx, cmd.ProviderID, core.EndCallReasonDeclined); err != nil {
-					out.Error = "call_ended"
+					out.Error = "call_reject_unconfirmed"
 					return out
 				}
 			}

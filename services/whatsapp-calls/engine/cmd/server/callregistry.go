@@ -9,16 +9,17 @@ import (
 )
 
 type activeCall struct {
-	id          string
-	launchMu    sync.Mutex
-	prepared    atomic.Bool
-	recording   atomic.Pointer[recordingHandle]
-	interrupted atomic.Bool
-	endOrigin   atomic.Pointer[string]
-	cm          *call.CallManager
-	bridge      atomic.Pointer[Bridge]
-	setupMu     sync.Mutex
-	timer       atomic.Pointer[time.Timer]
+	id           string
+	launchMu     sync.Mutex
+	prepared     atomic.Bool
+	recording    atomic.Pointer[recordingHandle]
+	interrupted  atomic.Bool
+	endOrigin    atomic.Pointer[string]
+	rejectOrigin atomic.Pointer[string]
+	cm           *call.CallManager
+	bridge       atomic.Pointer[Bridge]
+	setupMu      sync.Mutex
+	timer        atomic.Pointer[time.Timer]
 }
 
 func (a *activeCall) markEnd(origin string) { a.endOrigin.CompareAndSwap(nil, &origin) }

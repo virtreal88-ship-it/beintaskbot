@@ -89,18 +89,29 @@ func main() {
 		os.Exit(1)
 	}
 	srv.sessions.recordings = srv.recordings
-
-	if err := srv.sessions.Restore(ctx); err != nil {
-		log.Error("session restore failed", "err", err)
+	srv.sessions.messageLab, err = newMessageLab(ctx, srv.sessions.store.db, *appGatewayConfigFile)
+	if err != nil {
+		log.Error("startup failed")
 		os.Exit(1)
 	}
+	if err := srv.sessions.messageLab.prepareCallTests(srv); err != nil {
+		log.Error("test_call_configuration_invalid")
+		os.Exit(1)
+	}
+
 	srv.appGateway, err = newAppGateway(srv, *appGatewayConfigFile)
 	if err != nil {
 		log.Error("startup failed")
 		os.Exit(1)
 	}
+	srv.sessions.nativeGateway = srv.appGateway
+	if err := srv.sessions.Restore(ctx); err != nil {
+		log.Error("session restore failed", "err", err)
+		os.Exit(1)
+	}
 	guard.appControlled = srv.appGateway != nil
 	go srv.appGateway.run(ctx)
+	go srv.appGateway.deliverMessages(ctx)
 
 	var handler http.Handler = guard.wrap(srv.routes())
 	if srv.appGateway != nil && srv.appGateway.cfg.Managed {

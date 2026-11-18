@@ -181,6 +181,27 @@ def retry_after_seconds(value, default=60):
 
 async def _download_media(item, *, max_bytes=None, preview_documents=False):
     route = dict(item['route'])
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import download
+        kind=item['row']['message_type']
+        types={'image':IMAGE_TYPES,'audio':AUDIO_TYPES,'voice':AUDIO_TYPES,'video':VIDEO_TYPES,
+            'document':DOCUMENT_PREVIEW_TYPES if preview_documents else DOCUMENT_TYPES}.get(kind,set())
+        cap=media_limit(kind)
+        if max_bytes is not None:cap=min(cap,max(0,int(max_bytes)))
+        # This runs in the existing bounded media executor; a synchronous fetch
+        # keeps its physical slot until I/O ends even if the UI disconnects.
+        try:
+            content,mime=download(route,item['message_id'],max_bytes=cap,allowed_types=types)
+        except Exception as error:
+            # Existing historical attachments stay readable during migration.
+            # Only this read path may use the retained legacy media credential.
+            if str(error)!='native_media_evidence_missing' or not route.get('legacy_media_key'):
+                raise
+            legacy={**route,'api_key':route['legacy_media_key']}
+            legacy.pop('native',None)
+            return await _download_media({**item,'route':legacy},max_bytes=max_bytes,preview_documents=preview_documents)
+        if kind in {'audio','voice'}:mime=canonical_audio_mime(content,mime)
+        return content,mime
     raw=item.get('row',{}).get('raw') or {}
     from tenant_connect_direct_identity import direct_identity
     source=direct_identity(raw.get('_crm_provider_conversation_id')) if isinstance(raw,dict) else ''

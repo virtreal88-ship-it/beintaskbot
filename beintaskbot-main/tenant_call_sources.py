@@ -68,11 +68,24 @@ def _owner(cur,profile,channel):
     cur.execute('SELECT active,status FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid FOR SHARE',(tenant,channel))
     row=cur.fetchone()
     if not row or not row['active'] or row['status'] in ('disabled','error'):
-        raise TenantLinearError('Источник отключён или его номер не подтверждён.',409)
+        from tenant_whatsapp_native_rollout import staged
+        if not row or not staged(cur,tenant,channel):
+            raise TenantLinearError('Источник отключён или его номер не подтверждён.',409)
     return tenant,actor
 
 
 def confirmed_account(profile,channel):
+    from tenant_whatsapp_native_transport import bind
+    with _connect() as conn,conn.cursor() as cur:
+        tenant,_,policy=access(cur,profile,'dialogs',action='update')
+        from tenant_dialog_access import require_source
+        require_source(cur,tenant,policy,'connect',channel,'update')
+        route=bind(cur,{'tenant_id':tenant,'channel_id':channel,'api_key':''})
+    if route.get('native'):
+        result=remote('/v1/sources/'+route['native']['gateway_id'])
+        if result.get('connected') is not True or result.get('account_jid')!=route['native']['scope']['account']:
+            raise TenantLinearError('Единый WhatsApp не подтвердил номер источника.',409)
+        return result['account_jid']
     from tenant_connect_transport import _stored_connect_credentials, _request
     credentials=_stored_connect_credentials(profile)
     current=_request(credentials['api_key'],'GET','/v1/channels/'+channel+'/status')
@@ -86,6 +99,15 @@ def provision(profile,channel):
     channel=str(uuid.UUID(str(channel)))
     with _connect() as conn,conn.cursor() as cur:
         tenant,actor=_owner(cur,profile,channel)
+        from tenant_whatsapp_native_rollout import staged
+        pending=staged(cur,tenant,channel)
+        if pending:
+            cur.execute('SELECT * FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,channel))
+            paired=cur.fetchone()
+    if pending:
+        remote('/v1/sources/'+str(paired['gateway_id']),{'tenant_id':tenant,'channel_id':channel,
+            'account_jid':paired['account_jid'],'gateway_token':_fernet().decrypt(bytes(paired['encrypted_token'])).decode()})
+        return source_status(profile,channel)
     account=confirmed_account(profile,channel)
     service()  # Fail before reserving any binding if hosting is not configured.
     with _connect() as conn,conn.cursor() as cur:
@@ -122,6 +144,8 @@ def source_status(profile,channel):
     channel=str(uuid.UUID(str(channel)))
     with _connect() as conn,conn.cursor() as cur:
         tenant,_=_owner(cur,profile,channel)
+        from tenant_whatsapp_native_rollout import modes
+        native_mode=modes(cur,tenant).get(channel)
         cur.execute('SELECT * FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,channel))
         row=cur.fetchone()
     if not row:return {'channel_id':channel,'state':'not_configured'}
@@ -136,7 +160,8 @@ def source_status(profile,channel):
     if qr is not None and (not isinstance(qr,str) or len(qr)>24000 or not re.fullmatch(r'[A-Za-z0-9+/=]*',qr)):
         raise TenantLinearError('QR подключения недоступен.',503)
     return {'channel_id':channel,'state':state,'phone':row['account_jid'].split('@')[0],'qr':qr,
-            'permanent':True,'retention_hours':30*24}
+            'permanent':True,'retention_hours':30*24,
+            **({'unified':True,'activation_pending':not native_mode['enabled']} if native_mode else {})}
 
 
 def as_config(row):

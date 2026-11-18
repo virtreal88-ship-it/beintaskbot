@@ -26,3 +26,28 @@ def validate_recording(content, mime):
     if not matched:
         raise VoiceError('voice_unsupported')
     return validate_audio(content, extension, mime, max_seconds=MAX_RECORDING_SECONDS)
+
+
+def native_opus(content,mime):
+    """Bounded local conversion of an already validated browser recording."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    content,extension,_=validate_recording(content,mime)
+    try:
+        with tempfile.TemporaryDirectory(prefix='native-voice-') as folder:
+            source=Path(folder)/('input.'+extension);target=Path(folder)/'output.ogg'
+            source.write_bytes(content)
+            result=subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-xerror',
+              '-protocol_whitelist','file,pipe','-format_whitelist','ogg,mov,matroska,webm',
+              '-i',str(source),'-map','0:a:0','-vn','-sn','-dn','-map_metadata','-1',
+              '-threads','1','-ac','1','-ar','48000','-c:a','libopus','-b:a','32k','-application','voip',
+              '-t',str(MAX_RECORDING_SECONDS+1),'-fs',str(MAX_RECORDING_BYTES+1),'-f','ogg',str(target)],
+              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20,check=False)
+            if result.returncode or not target.exists():raise VoiceError('voice_invalid_audio')
+            if not 0<target.stat().st_size<=MAX_RECORDING_BYTES:raise VoiceError('voice_size_limit')
+            output=target.read_bytes()
+            validate_recording(output,'audio/ogg')
+            return output
+    except FileNotFoundError:raise VoiceError('voice_decoder_unavailable') from None
+    except subprocess.TimeoutExpired:raise VoiceError('voice_decode_timeout') from None

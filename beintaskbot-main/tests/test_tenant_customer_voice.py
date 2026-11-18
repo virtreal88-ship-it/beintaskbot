@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from tenant_connect_voice import VoiceError
-from tenant_customer_voice import MAX_RECORDING_BYTES, validate_recording
+from tenant_customer_voice import MAX_RECORDING_BYTES, validate_recording, native_opus
 
 
 class CustomerVoiceTest(unittest.TestCase):
@@ -25,6 +25,10 @@ class CustomerVoiceTest(unittest.TestCase):
                     result, _, actual_mime = validate_recording(content, mime)
                     self.assertEqual(result, content)
                     self.assertEqual(actual_mime, mime.split(';')[0])
+                    opus=native_opus(content,mime)
+                    self.assertTrue(opus.startswith(b'OggS'))
+                    self.assertIn(b'OpusHead',opus[:200])
+                    validate_recording(opus,'audio/ogg')
 
     def test_reject_wrong_type_corrupt_payload_and_size(self):
         cases = [(b'not audio', 'audio/ogg'), (b'OggS' + b'bad', 'audio/webm'),

@@ -1,0 +1,2 @@
+# Preserve upstream notice bytes, including original trailing whitespace.
+notices/*.txt -text -whitespace

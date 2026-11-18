@@ -2,6 +2,7 @@ package wa
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"wacalls/internal/voip/core"
@@ -35,6 +36,56 @@ func (s *Socket) AccountDeviceIdentityNode() (waBinary.Node, bool) {
 
 func (s *Socket) SendNode(ctx context.Context, node waBinary.Node) error {
 	return s.di().SendNode(ctx, node)
+}
+
+// Preserve the offered routing and creator separately. Client.RejectCall drops
+// the device address, substitutes creator for route and only awaits a write.
+// A correlated server ACK is required here; it still is not a peer UI receipt.
+func (s *Socket) RejectIncomingCall(ctx context.Context, peer, creator types.JID, callID string) error {
+	own := s.OwnPN()
+	if own.IsEmpty() {
+		return errors.New("transport_unconfirmed")
+	}
+	node := buildRejectRequest(own, peer, creator, callID, s.cli.GenerateMessageID())
+	return rejectWithAcknowledgement(ctx, s.Query, node)
+}
+
+func buildRejectRequest(own, peer, creator types.JID, callID, requestID string) waBinary.Node {
+	// Match upstream 592721a (fixes whatsmeow #1182 for our exact SDK pin):
+	// sender + count=0, with NO tctoken child. Retain the offered destination
+	// and creator separately, plus our bounded correlated-ACK requirement.
+	node := signaling.BuildRejectStanza(peer, callID, creator)
+	node.Attrs["from"] = own.ToNonAD()
+	node.Attrs["id"] = requestID
+	children := node.GetChildren()
+	children[0].Attrs["count"] = "0"
+	node.Content = children
+	return node
+}
+
+func rejectWithAcknowledgement(ctx context.Context, query func(context.Context, waBinary.Node) (*waBinary.Node, error), node waBinary.Node) error {
+	response, err := query(ctx, node)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.New("ack_timeout")
+		}
+		return errors.New("transport_unconfirmed")
+	}
+	if response == nil {
+		return errors.New("ack_timeout")
+	}
+	if response.Tag != "ack" || response.Attrs["id"] != node.Attrs["id"] || response.Attrs["class"] != "call" || response.Attrs["type"] != "reject" {
+		return errors.New("ack_invalid")
+	}
+	if value, exists := response.Attrs["error"]; exists && value != "0" && value != 0 {
+		return errors.New("ack_rejected")
+	}
+	for _, child := range response.GetChildren() {
+		if child.Tag == "error" {
+			return errors.New("ack_rejected")
+		}
+	}
+	return nil
 }
 
 func (s *Socket) Query(ctx context.Context, node waBinary.Node) (*waBinary.Node, error) {

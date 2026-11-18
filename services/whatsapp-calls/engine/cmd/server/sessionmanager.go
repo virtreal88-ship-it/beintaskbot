@@ -13,14 +13,16 @@ import (
 )
 
 type SessionManager struct {
-	recordings *recordingStore
-	appCtx     context.Context
-	container  *sqlstore.Container
-	broker     *Broker
-	store      *sessionStore
-	waLogger   waLog.Logger
-	log        *slog.Logger
-	maxCalls   int
+	nativeGateway *appGateway
+	messageLab    *messageLab
+	recordings    *recordingStore
+	appCtx        context.Context
+	container     *sqlstore.Container
+	broker        *Broker
+	store         *sessionStore
+	waLogger      waLog.Logger
+	log           *slog.Logger
+	maxCalls      int
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -120,7 +122,7 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 			_ = m.store.delete(ctx, row.ID)
 			continue
 		}
-		client := whatsmeow.NewClient(device, m.waLogger)
+		client := whatsmeow.NewClient(device, m.messageLab.providerLogger(m.waLogger))
 		s := newSession(m, row.ID, row.Name, client)
 		m.register(s)
 		if err := s.connect(ctx); err != nil {
@@ -133,12 +135,15 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 }
 
 func (m *SessionManager) Create(name string) (string, error) {
-	id := newSessionID()
+	return m.createWithID(newSessionID(), name)
+}
+
+func (m *SessionManager) createWithID(id, name string) (string, error) {
 	if err := m.store.insert(m.appCtx, id, name); err != nil {
 		return "", err
 	}
 	device := m.container.NewDevice()
-	client := whatsmeow.NewClient(device, m.waLogger)
+	client := whatsmeow.NewClient(device, m.messageLab.providerLogger(m.waLogger))
 	s := newSession(m, id, name, client)
 	m.register(s)
 	m.broker.emitSessionList(m.infos())
@@ -182,7 +187,7 @@ func (m *SessionManager) Logout(ctx context.Context, id string) error {
 			m.log.Warn("logout failed", "session", id, "err", err)
 		}
 	}
-	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.waLogger))
+	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.messageLab.providerLogger(m.waLogger)))
 	_ = m.store.setJID(ctx, id, "")
 	s.setAuth(AuthSnapshot{State: "logged_out", Paired: false})
 	m.log.Info("session disconnected", "session", id)
@@ -197,7 +202,7 @@ func (m *SessionManager) Pair(id string) error {
 	if s.client.Store.ID != nil {
 		return fmt.Errorf("session already paired")
 	}
-	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.waLogger))
+	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.messageLab.providerLogger(m.waLogger)))
 	if err := s.startPairing(m.appCtx); err != nil {
 		return fmt.Errorf("start pairing: %w", err)
 	}

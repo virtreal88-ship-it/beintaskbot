@@ -1,0 +1,24 @@
+diff --git a/client/src/components/domain/call/IncomingCallModal.tsx b/client/src/components/domain/call/IncomingCallModal.tsx
+index f8c0644..8a6f92a 100644
+--- a/client/src/components/domain/call/IncomingCallModal.tsx
++++ b/client/src/components/domain/call/IncomingCallModal.tsx
+@@ -81,0 +82,2 @@ export const IncomingCallModal = () => {
++        {reject.isError && reject.variables?.sid === incoming?.sessionId && reject.variables?.callId === incoming?.callId &&
++          <p role="alert" className="text-sm text-destructive">Отклонение не подтверждено WhatsApp. Вызов ещё может продолжаться; ожидаем завершения со стороны телефона.</p>}
+diff --git a/client/src/hooks/useRejectCall.ts b/client/src/hooks/useRejectCall.ts
+index 31cf7a5..f42f5b9 100644
+--- a/client/src/hooks/useRejectCall.ts
++++ b/client/src/hooks/useRejectCall.ts
+@@ -3 +3 @@ import { rejectCall } from "@/services/calls";
+-import { clearIncoming } from "@/stores/calls";
++import { useCalls } from "@/stores/calls";
+@@ -8,3 +8 @@ export const useRejectCall = () =>
+-      try {
+-        await rejectCall(vars.sid, vars.callId);
+-      } catch {}
++      await rejectCall(vars.sid, vars.callId);
+@@ -12 +10,3 @@ export const useRejectCall = () =>
+-    onSettled: () => clearIncoming(),
++    onSuccess: (_, vars) => useCalls.setState((state) =>
++      state.incoming?.sessionId === vars.sid && state.incoming?.callId === vars.callId
++        ? { incoming: null } : state),

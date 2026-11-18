@@ -25,7 +25,8 @@ class ConnectAiSendTests(unittest.TestCase):
                  'conversation_id': 'test-contact@s.whatsapp.net'}
         captured = {}
 
-        def request(key, method, path, payload):
+        def request(key, method, path, payload, **options):
+            self.assertEqual(options, {'safe_preflight_codes': ('conversation_identity_conflict',)})
             captured.update(key=key, method=method, path=path, payload=payload)
             return {'id': 'message-accepted'}
 

@@ -1,0 +1,132 @@
+From 1c5adb30bc874819419f95191d437bc0c12eb064 Mon Sep 17 00:00:00 2001
+From: Abdulaziz <kkimov834@gmail.com>
+Date: Wed, 18 Nov 2026 14:35:48 +0400
+Subject: [PATCH] Add one scoped outbound unified lab call control
+
+---
+ .../components/domain/call/LabCallTest.tsx    | 38 +++++++++++++++++++
+ client/src/lib/webrtc.ts                      | 29 ++++++++++----
+ client/src/pages/CallsPage.tsx                |  3 +-
+ 3 files changed, 62 insertions(+), 8 deletions(-)
+ create mode 100644 client/src/components/domain/call/LabCallTest.tsx
+
+diff --git a/client/src/components/domain/call/LabCallTest.tsx b/client/src/components/domain/call/LabCallTest.tsx
+new file mode 100644
+index 0000000..ca3e0b4
+--- /dev/null
++++ b/client/src/components/domain/call/LabCallTest.tsx
+@@ -0,0 +1,38 @@
++import { useEffect, useRef, useState } from 'react';
++import { apiGet } from '@/lib/api';
++import { openLabOutgoingCall } from '@/lib/webrtc';
++import { registerOwnConnection } from '@/stores/calls';
++import { useDevices } from '@/stores/devices';
++import { endCall } from '@/services/calls';
++import { Button } from '@/components/ui/button';
++
++// Isolated lab only: the server exposes exactly one pre-approved destination.
++// An unknown launch keeps this control blocked until operator inspection.
++export const LabCallTest = ({sid,busy}:{sid:string;busy:boolean}) => {
++  const [profile,setProfile]=useState<{ready:boolean;call_test_peer?:string;call_test_max_seconds?:number}|null>(null);
++  const [consent,setConsent]=useState(false);
++  const [state,setState]=useState<'idle'|'starting'|'started'|'unknown'>('idle');
++  const [error,setError]=useState('');
++  const locked=useRef(false);
++  const micId=useDevices(s=>s.micId);
++  useEffect(()=>{let disposed=false;apiGet<typeof profile>('/api/unified-lab/status').then(p=>{if(!disposed)setProfile(p)}).catch(()=>{});return()=>{disposed=true}},[sid]);
++  if(!profile?.call_test_peer)return <p>Тестовый приём звонков. Исходящие вызовы отключены.</p>;
++  const start=async()=>{
++    if(locked.current||busy||!consent||!profile.ready)return;
++    locked.current=true;setState('starting');setError('');
++    try {
++      const {callId,conn}=await openLabOutgoingCall(sid,profile.call_test_peer!,crypto.randomUUID(),micId);
++      if(!registerOwnConnection(callId,conn)) {
++        await endCall(sid,callId).catch(()=>{});
++        throw new Error('Звонок завершился до подключения звука');
++      }
++      setState('started');
++    } catch {setState('unknown');setError('Результат запуска требует проверки. Не запускайте новый звонок. Кнопка завершения доступна в карточке вызова, если он появился.');}
++  };
++  return <section className="space-y-3 rounded-xl border p-4">
++    <p>Единый WhatsApp: тестовый вызов только на …{profile.call_test_peer.split('@')[0].slice(-4)}. До {Math.floor((profile.call_test_max_seconds??0)/60)} минут.</p>
++    <label className="flex gap-2"><input type="checkbox" checked={consent} disabled={state!=='idle'} onChange={e=>setConsent(e.target.checked)}/>Участник согласен на запись обеих сторон. Тестовая запись хранится 24 часа.</label>
++    <Button disabled={busy||!consent||!profile.ready||state!=='idle'} onClick={()=>void start()}>{state==='starting'?'Подключение…':state==='started'?'Тестовый вызов запущен':'Позвонить согласованному участнику'}</Button>
++    {error&&<p role="alert">{error}</p>}
++  </section>;
++};
+diff --git a/client/src/lib/webrtc.ts b/client/src/lib/webrtc.ts
+index a9906b0..d2c5cf9 100644
+--- a/client/src/lib/webrtc.ts
++++ b/client/src/lib/webrtc.ts
+@@ -16,10 +16,9 @@ export type OpenCall = {
+   close: () => void;
+ };
+ 
+-export const openCall = async (
+-  sid: string,
+-  callId: string,
++const openConnection = async (
+   micDeviceId: string | null,
++  exchange: (offer: string) => Promise<string>,
+ ): Promise<OpenCall> => {
+   const micStream = await navigator.mediaDevices.getUserMedia({
+     audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
+@@ -68,10 +67,7 @@ export const openCall = async (
+       });
+   });
+ 
+-  const { sdp_answer } = await apiPost<{ sdp_answer: string }>(
+-    `/api/sessions/${sid}/calls/${callId}/webrtc`,
+-    { sdp_offer: pc.localDescription!.sdp },
+-  );
++  const sdp_answer = await exchange(pc.localDescription!.sdp!);
+   await pc.setRemoteDescription({ type: "answer", sdp: sdp_answer });
+ 
+   return {
+@@ -82,3 +78,22 @@ export const openCall = async (
+   };
+   } catch(error) { close(); throw error; }
+ };
++
++export const openCall = (sid: string, callId: string, micDeviceId: string | null): Promise<OpenCall> =>
++  openConnection(micDeviceId, async offer => {
++    const result = await apiPost<{ sdp_answer: string }>(`/api/sessions/${sid}/calls/${callId}/webrtc`, {sdp_offer:offer});
++    return result.sdp_answer;
++  });
++
++export const openLabOutgoingCall = async (sid: string, peer: string, operation: string, micDeviceId: string | null) => {
++  let callId = '';
++  const conn = await openConnection(micDeviceId, async offer => {
++    const result = await apiPost<{ok:boolean;provider_id:string;sdp_answer:string}>(`/api/unified-lab/calls`, {
++      operation,session_id:sid,peer,sdp_offer:offer,consent_confirmed:true,
++    });
++    if (!result.ok || !result.provider_id || !result.sdp_answer) throw new Error('Запуск не подтверждён; повторно не звоните');
++    callId=result.provider_id;
++    return result.sdp_answer;
++  });
++  return {callId,conn};
++};
+diff --git a/client/src/pages/CallsPage.tsx b/client/src/pages/CallsPage.tsx
+index 7a2fcb3..cdac87f 100644
+--- a/client/src/pages/CallsPage.tsx
++++ b/client/src/pages/CallsPage.tsx
+@@ -5,6 +5,7 @@ import { OtherCallsList } from "@/components/domain/call/OtherCallsList";
+ import { HistoryDrawer } from "@/components/domain/history/HistoryDrawer";
+ import { EmptyState } from "@/components/shared/EmptyState";
+ import { isMine, useCalls } from "@/stores/calls";
++import { LabCallTest } from '@/components/domain/call/LabCallTest';
+ 
+ export const CallsPage = ({ sid }: { sid: string }) => {
+   const calls = useCalls((s) => s.calls);
+@@ -27,7 +28,7 @@ export const CallsPage = ({ sid }: { sid: string }) => {
+         </h2>
+         <HistoryDrawer sid={sid} />
+       </div>
+-      <p role="status">Тестовый приём звонков. Исходящие вызовы отключены.</p>
++      <LabCallTest sid={sid} busy={sessionCalls.length>0}/>
+       {mine.length > 0 ? (
+         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+           {mine.map((c) => (
+-- 
+2.53.0.windows.1
+

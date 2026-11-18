@@ -18,6 +18,8 @@ type VoipSocket interface {
 
 	Query(ctx context.Context, node waBinary.Node) (*waBinary.Node, error)
 
+	RejectIncomingCall(ctx context.Context, peer, creator types.JID, callID string) error
+
 	GetUSyncDevices(ctx context.Context, jids []types.JID) ([]types.JID, error)
 
 	AssertSessions(ctx context.Context, jids []types.JID, force bool) error
