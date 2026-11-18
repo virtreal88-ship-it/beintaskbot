@@ -7,6 +7,11 @@ on:
       - 'railway.toml'
       - 'start.sh'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
+      - 'beintaskbot-main/tenant_consultation_chat.py'
+      - 'beintaskbot-main/tenant_consultation_chat_lock.py'
+      - 'beintaskbot-main/tests/test_chat_send_schema_preflight.py'
+      - 'beintaskbot-main/tenant_consultation_chat_media.py'
+      - 'beintaskbot-main/tests/test_consultation_chat*.py'
       - 'beintaskbot-main/tenant_developer_question_draft.py'
       - 'beintaskbot-main/tests/test_developer_question_draft*'
       - 'beintaskbot-main/tests/test_developer_question_clarity_browser.cjs'
@@ -22,6 +27,10 @@ on:
       - 'beintaskbot-main/docs/tenant-operator-i18n.js'
       - 'beintaskbot-main/tests/test_support_case_materials*'
       - 'beintaskbot-main/docs/tenant-support-consultations.js'
+      - 'beintaskbot-main/docs/tenant-case-chat-media.js'
+      - 'beintaskbot-main/tests/test_case_chat_media*'
+      - 'beintaskbot-main/tests/test_operator_active_case*'
+      - 'beintaskbot-main/tests/operator_active_case_fixture.cjs'
       - 'beintaskbot-main/tests/test_case_consultations_unified.py'
       - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
       - 'beintaskbot-main/tests/test_manual_case_saved_media.py'
@@ -72,6 +81,7 @@ on:
       - 'beintaskbot-main/tests/test_support_ticket_modal_browser.cjs'
       - 'beintaskbot-main/tests/test_case_card_tabs_browser.cjs'
       - 'beintaskbot-main/tests/test_case_history*'
+      - 'beintaskbot-main/tests/test_case_lifecycle_creation*'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
       - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_dialog_audio*.py'
@@ -248,6 +258,45 @@ jobs:
       - name: Verify consultation range changes in Chromium
         run: |
           node tests/test_consultation_range_browser.cjs
+      - name: Verify scoped developer chat and media layouts
+        run: |
+          node tests/test_case_developer_chat_ui.cjs
+          node tests/test_case_chat_media_ui.cjs
+          node tests/test_case_developer_chat_browser.cjs
+          node tests/test_case_chat_media_browser.cjs
+          node tests/test_operator_active_case_ui.cjs
+          node tests/test_operator_active_case_browser.cjs
+
+      - name: Preserve developer chat visual checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: developer-chat-layouts
+          path: |
+            /tmp/developer-chat-*.png
+            /tmp/case-chat-media-*.png
+            /tmp/operator-active-case-*.png
+
+      - name: Require native case chat concurrency checks
+        run: |
+          python -m pytest -q -rs tests/test_consultation_chat_postgres.py tests/test_consultation_chat_media.py tests/test_chat_send_schema_preflight.py --junitxml=/tmp/consultation-chat-races.xml
+          python - <<'PYTEST_GUARD'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('/tmp/consultation-chat-races.xml').getroot().findall('.//testcase')
+          assert len(cases) >= 3, 'All case-chat race checks must run'
+          assert all(case.find('skipped') is None for case in cases), 'Case-chat races must not skip'
+          PYTEST_GUARD
+
+      - name: Require native accepted-case creation races
+        run: |
+          python -m pytest -q -rs tests/test_case_lifecycle_creation_postgres.py --junitxml=/tmp/case-creation-races.xml
+          python - <<'PYTEST_GUARD'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('/tmp/case-creation-races.xml').getroot().findall('.//testcase')
+          assert len(cases) == 3, 'All accepted-case creation races must run'
+          assert all(case.find('skipped') is None for case in cases), 'Creation races must not skip'
+          PYTEST_GUARD
+
       - name: Exercise independent consultations and real PostgreSQL races
         env:
           PYTHONPATH: tests/isolated_database_guard:.:tests
@@ -256,6 +305,9 @@ jobs:
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_case_history_accepted_interval.py \
+            tests/test_case_lifecycle_creation.py \
+            tests/test_consultation_chat.py \
             tests/test_consultation_twenty_messages.py \
             tests/test_public_consultation_header.py \
             tests/test_public_dialog_snapshot.py \
@@ -339,6 +391,16 @@ jobs:
             tests/test_group_consultation_receipt.py \
             tests/test_tenant_web_routes.py \
             tests/test_tenant_job_runner.py
+      - name: Verify browser and DOM regressions independently
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+          NODE_PATH: .support-test-deps/node_modules
+          SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+        run: |
+          set +e
+          failed=0
+          trap 'failed=1' ERR
           node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
           python -m pytest -q tests/test_group_participants.py
@@ -394,3 +456,17 @@ jobs:
           node tests/test_visible_audio_autoload_browser.cjs
           node tests/test_message_footer_browser.cjs
 
+          exit "$failed"
+
+      - name: Save developer chat visual checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: developer-chat-visuals
+          path: |
+            /tmp/developer-chat-*.png
+            /tmp/case-chat-media-*.png
+            /tmp/operator-active-case-*.png
+            /tmp/case-consultation-clarity-*.png
+            beintaskbot-main/output/case-card-tabs/
+          if-no-files-found: ignore

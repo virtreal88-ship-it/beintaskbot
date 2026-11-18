@@ -39,6 +39,7 @@ def create_schema(conn):
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_scope TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_agent_binding TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_scope_hash TEXT NOT NULL DEFAULT ''")
+        create_episode_schema(conn)
         create_sla_schema(conn)
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_channel_id UUID NULL')
         cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_conversation_id TEXT NULL')
@@ -114,3 +115,11 @@ def create_sla_schema(conn):
           updated_by BIGINT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_support_attention_idx ON saas_support_tickets(tenant_id,status,priority,response_due_at)')
+
+
+def create_episode_schema(conn):
+    """Additive, no backfill and no lifecycle transition of historical cases."""
+    with conn.cursor() as cur:
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS dialog_episode_id UUID NULL')
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_started_at TIMESTAMPTZ NULL')
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_frozen_at TIMESTAMPTZ NULL')

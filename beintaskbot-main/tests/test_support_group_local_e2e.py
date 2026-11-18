@@ -56,6 +56,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')", (image, A, 'connect:'+str(uuid.uuid4()), 'connect:'+CA))
     with db.cursor() as cur:
         tickets.record_case_selected_message_ids(cur, A, case, [image], 'local-browser-selected-photo')
+    db.execute('UPDATE saas_support_tickets SET created_at=clock_timestamp() WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))
     cipher=Fernet(Fernet.generate_key())
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",
       (A,cipher.encrypt(json.dumps({'api_key':'synthetic','webhook_secret':'synthetic-secret'}).encode())))
@@ -133,7 +134,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
                 'id': 'e2e-reply-'+index, 'channelId': CA, 'conversationId': GROUP, 'isGroup': True, 'fromMe': False,
                 'type': 'text', 'quotedExternalMessageId': 'PROVIDER_'+index, 'participantName': 'Developer',
                 'participantJid':'15550001111@s.whatsapp.net',
-                'text': 'CONSULT:'+delivery['consultation_id']+' We are investigating'}}
+                'text': 'We are investigating'}}
             accepted = await asyncio.to_thread(signed, event)
             thread = await asyncio.to_thread(consultations.inbox, PROFILE, case_id=case)
             return web.json_response({'accepted': accepted, 'linked_replies': len(thread['replies'])})
@@ -162,7 +163,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
         for suffix, resource, methods in [('support-tickets', 'tickets', ('GET',)), ('support-tickets/{ticket_id}', 'ticket', ('GET',)), ('support-tickets/{ticket_id}/messages', 'ticket_messages', ('GET', 'POST'))]:
             for method in methods:
                 app.router.add_route(method, '/api/platform/ai/'+suffix, handler(member, origin, logging.getLogger(__name__), resource))
-        for suffix, resource, methods in [('preview', 'preview', ('POST',)), ('destinations', 'destinations', ('GET',)), ('replies', 'replies', ('GET',)), ('', 'prepare', ('POST',)), ('{id}/dispatch', 'dispatch', ('POST',)), ('replies/{id}/draft', 'draft', ('POST',))]:
+        for suffix, resource, methods in [('preview', 'preview', ('POST',)), ('destinations', 'destinations', ('GET',)), ('replies', 'replies', ('GET',)), ('', 'prepare', ('POST',)), ('{id}/dispatch', 'dispatch', ('POST',)), ('{id}/messages', 'messages', ('POST',)), ('replies/{id}/draft', 'draft', ('POST',))]:
             for method in methods:
                 app.router.add_route(method, '/api/platform/ai/dialog-consultations'+('/'+suffix if suffix else ''), consultation_handler(member, origin, logging.getLogger(__name__), resource))
         runner = web.AppRunner(app); await runner.setup(); await web.SockSite(runner, sock).start()
@@ -182,7 +183,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
                 cur.execute('SELECT state,provider_message_id FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid ORDER BY created_at', (A,))
                 assert [(row['state'], row['provider_message_id']) for row in cur.fetchall()] == [('sent', 'PROVIDER_1'), ('sent', 'PROVIDER_2')]
                 cur.execute('SELECT selected_media_ids FROM saas_public_case_shares WHERE tenant_id=%s::uuid ORDER BY created_at,id', (A,))
-                assert [row['selected_media_ids'] for row in cur.fetchall()] == [[image], [image2]]
+                assert [row['selected_media_ids'] for row in cur.fetchall()] == [[image]]
         first = consultations.inbox(PROFILE, case_id=case)['replies'][-1]
         assert first['draft'] == 'We are checking.' and first['body'].endswith('We are investigating')
         assert draft_generation.call_count == 1
@@ -193,11 +194,12 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
         assert {item['id'] for item in worker.pending()}=={replies[0]['id']}
         assert replies[0]['draft_state']=='pending' and replies[-1]['draft_state']=='completed'
         assert not provider_http.called and not media_download.called and not unexpected
-        for item in sends:
+        for item in sends[:1]:
             token = re.search(r'/public/case/([A-Za-z0-9_-]+)', item['body']).group(1)
             snapshot = public.read(token)
             assert len(snapshot['selected_media_ids']) == 1
-            assert [message['id'] for message in snapshot['public_messages']] == snapshot['selected_media_ids']
+            assert set(snapshot['selected_media_ids']) <= {message['id'] for message in snapshot['public_messages']}
+            assert image2 not in {message['id'] for message in snapshot['public_messages']}
     finally:
         asyncio.run_coroutine_threadsafe(state['runner'].cleanup(), loop).result(10)
         loop.call_soon_threadsafe(loop.stop); thread.join(timeout=10); loop.close()

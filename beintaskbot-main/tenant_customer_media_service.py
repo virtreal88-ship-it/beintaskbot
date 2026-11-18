@@ -80,6 +80,12 @@ def own_receipt(session, lead_id, request_id):
         raise TenantLinearError('Sorğu düzgün deyil.', 400) from None
     with _connect() as conn:
         with conn.cursor() as cur:
+            # Case/source locks precede target-dialog locks, matching dispatch.
+            cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND lead_id=%s',(session['tenant_id'],session['telegram_id'],request_id,lead_id))
+            prior=(cur.fetchone() or {}).get('route') or {}
+            if prior.get('consultation_id'):
+                from tenant_consultation_chat_media import authorize as case_authorize
+                case_authorize(cur,session,{'consultation_id':prior['consultation_id'],'lead_id':lead_id},sending=False)
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled
             options={'lifecycle_status':request_id} if lifecycle_enabled(cur, session['tenant_id']) else {}
             profile, connection, integration = authority(cur, session, lead_id,**options)
@@ -90,6 +96,9 @@ def own_receipt(session, lead_id, request_id):
             if not row:
                 raise TenantLinearError('Fayl sorğusu tapılmadı.', 404)
             route = row.get('route') if isinstance(row.get('route'), dict) else {}
+            if route.get('consultation_id'):
+                from tenant_consultation_chat_media import authorize as case_authorize
+                case_authorize(cur,session,{'consultation_id':route['consultation_id'],'lead_id':lead_id},sending=False)
             if (connection[0] != 'connect' or route.get('media_protocol') is not True
                     or [route.get('channel_id'), route.get('conversation_id')] != connection[1:]):
                 raise TenantLinearError('Fayl sorğusunun dialoqu dəyişib.', 409)
@@ -194,6 +203,8 @@ def record_acceptance(session, item, receipt):
                 cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'chat_message_accepted','lead',%s,%s::jsonb)''',
                             (uuid.uuid4(),tenant,actor,str(item['lead_id']),_json({'message_id':receipt['message_id'],'type':kind})))
+            from tenant_consultation_chat_media import reconcile as reconcile_case_media
+            reconcile_case_media(cur,tenant,actor,request_id,route,receipt)
             cur.execute('''UPDATE saas_chat_send_receipts SET state='accepted',message_id=%s,updated_at=now()
               WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''', (receipt['message_id'], tenant, actor, request_id))
         conn.commit()

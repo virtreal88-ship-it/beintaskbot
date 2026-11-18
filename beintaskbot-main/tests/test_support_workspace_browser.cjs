@@ -25,7 +25,7 @@ const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
     testSupport.calls.push({path:u.pathname,query:u.search,method});
     if(method!=='GET')testSupport.writes.push({path:u.pathname,method,body:JSON.parse(options.body||'{}')});
     if(u.pathname==='/api/platform/ai/support-tickets')return ok({tickets:u.searchParams.get('search')==='absent'?[]:tickets,members:[{telegram_id:11,display_name:'Сотрудник поддержки'}],channels:[{id:'channel-a',name:'Техническая поддержка'}],next_offset:null,unresolved_count:3,attention_count:1,sla_policy:testSupport.readOnly?null:{urgent:1,high:4,normal:24,low:72}});
-    if(u.pathname.startsWith('/api/platform/ai/support-tickets/')){const ticket=tickets.find(t=>t.id===u.pathname.split('/').at(-1));if(!ticket)throw Error('Unexpected ticket route');if(method==='PATCH')Object.assign(ticket,JSON.parse(options.body));return ok({ticket,capabilities:{update:!testSupport.readOnly},messages:[],next_before:null});}
+    if(u.pathname.startsWith('/api/platform/ai/support-tickets/')){const ticket=tickets.find(t=>t.id===u.pathname.split('/').at(-1));if(!ticket)throw Error('Unexpected ticket route');if(method==='PATCH')Object.assign(ticket,JSON.parse(options.body));return ok({ticket,capabilities:{update:!testSupport.readOnly},history_context:{boundary_status:'accepted_interval',accepted_at:'2026-11-17T08:00:00Z',created_at:'2026-11-17T08:15:00Z'},messages:[{id:'message-1',direction:'incoming',message_type:'text',body:'После замены принтера чек не печатается.',happened_at:'2026-11-17T08:01:00Z'},{id:'message-2',direction:'outgoing',message_type:'text',body:'Проверим подключение и тестовую печать.',happened_at:'2026-11-17T08:02:00Z'}],next_before:null});}
     if(u.pathname==='/api/platform/ai/dialogs/history'){const ticket=tickets.find(t=>String(t.lead_id)===u.searchParams.get('lead_id'));return ok({dialog:{provider:'connect',lead_id:ticket.lead_id,channel_id:ticket.channel_id,conversation_id:ticket.conversation_id},messages:[{id:'message-1',body:'Учебное сообщение клиента'}],next_before:null});}
     if(u.pathname.endsWith('/destinations'))return ok({destinations:[]});
     if(u.pathname.endsWith('/replies'))return ok({consultations:[],replies:[]});
@@ -55,17 +55,16 @@ const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
   await page.locator('#supportSearch').focus();await page.locator('#supportSearch').fill('absent');await page.locator('#supportSearch').press('Enter');await page.locator('.support-empty').waitFor();assert.equal(new URL(page.url()).searchParams.get('view'),'support');
   await page.locator('#supportSearch').focus();await page.locator('#supportSearch').fill('');await page.locator('[data-support-id]').first().waitFor();
   await page.locator('[data-support-id]').first().click();await page.locator('#supportTicketTitle').waitFor();
-  assert(await page.locator('#supportTake').isVisible());assert(await page.locator('#supportResolve').isVisible());assert.equal(await page.locator('#supportTakeover').isVisible(),false);
-  await page.locator('#supportMoreActions>summary').click();assert(await page.locator('#supportTakeover').isVisible());await page.locator('#supportMoreActions>summary').click();
-  await page.locator('#supportTab-details').click();assert(await page.locator('#supportEditStatus').isVisible());assert.equal(await page.locator('#supportSummaryText').isVisible(),false);
+  assert(await page.locator('#supportTake').isVisible());assert.equal(await page.locator('#supportHistory .support-message').count(),2);await screenshot('history');assert(await page.locator('#supportResolve').isVisible());assert.equal(await page.locator('#supportTakeover').count(),0);
+  await page.locator('#supportTab-details').click();assert(await page.locator('#supportEditStatus').isVisible());assert.equal(await page.locator('#supportSummaryText').count(),0);
   assert(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),'card fits viewport');
   await page.locator('#supportDescription').fill('Несохранённое описание');await page.locator('#supportTab-history').click();await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Несохранённое описание');
-  await screenshot('card');await page.locator('#supportCaseContext>summary').click();assert(await page.locator('#supportSummaryText').isVisible());
+  await screenshot('card');assert.equal(await page.locator('#supportCaseContext').count(),0);assert.equal(await page.locator('#supportCaseMaterials').count(),0);
   await page.locator('#supportTake').click();await page.waitForFunction(()=>testSupport.writes.length===1);assert.equal(await page.evaluate(()=>testSupport.writes[0].body.status),'in_progress');
   await page.locator('#supportClose').click();await page.locator('#supportDetail').waitFor({state:'hidden'});
   assert(await page.locator('[data-support-id]').first().evaluate(n=>n===document.activeElement));
-  // A running AI warning remains visible even with contextual metadata collapsed.
-  await page.locator('[data-support-id]').nth(1).click();await page.locator('#supportTicketTitle').waitFor();assert(await page.locator('.support-card-header .support-ai-state[role="status"]').isVisible());await page.locator('#supportClose').click();
+  // Removed AI diagnostics are not mounted even for a historically active AI.
+  await page.locator('[data-support-id]').nth(1).click();await page.locator('#supportTicketTitle').waitFor();assert.equal(await page.locator('.support-card-header .support-ai-state[role="status"]').count(),0);await page.locator('#supportClose').click();
   await page.evaluate(()=>testSupport.readOnly=true);await page.locator('[data-support-id]').first().click();await page.locator('#supportTicketTitle').waitFor();assert(await page.locator('#supportTake').isDisabled());await page.locator('#supportTab-details').click();assert(await page.locator('#supportSave').isDisabled());assert(await page.locator('#supportEditStatus').isDisabled());
   // Permission loss removes list, modal, and previously shown counts.
   await page.evaluate(()=>{testSupport.allowed=false;document.dispatchEvent(new CustomEvent('tenant-profile',{detail:{...taskFlowFixture.profile,capabilities:{modules:{support:false}},member:{...taskFlowFixture.profile.member,active:false}}}));});

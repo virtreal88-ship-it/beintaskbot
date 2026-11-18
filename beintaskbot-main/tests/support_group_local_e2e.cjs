@@ -12,12 +12,12 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   async function sendImage(id,summary){
    await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();const form=page.locator('#caseDeveloperForm');await form.waitFor();assert.equal(await form.locator('#consultRecipient').count(),1);
    assert.equal(await form.locator('#consultReason').inputValue(),'','a follow-up never reuses an earlier remote access code');
-   await form.locator('#consultReason').fill(summary);await form.locator('.case-consult-materials > summary').click();await form.locator('#caseConsultFirst').selectOption(id);await form.locator('#caseConsultLast').selectOption(id);assert.equal(await form.locator('[data-case-media-check]').count(),0,'attachments follow the selected fragment automatically');
+   await form.locator('#consultReason').fill(summary);await form.locator('.case-consult-materials > summary').click();assert.equal(await form.locator('#caseConsultFirst,#caseConsultLast').count(),0);assert.equal(await form.locator('[data-case-media-check]').count(),0,'attachments follow the selected fragment automatically');
    assert.equal(await form.locator('#caseConsultRecipientConfirm').count(),0);assert.equal(await form.locator('#caseConsultSend').isDisabled(),false);
    const dispatchResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname.endsWith('/dispatch'));
    await form.locator('#caseConsultSend').evaluate(button=>{button.click();button.click();});const response=await dispatchResponse,result=await response.json();assert.equal(response.status(),200,JSON.stringify(result));assert.equal(result.result?.state,'pending',JSON.stringify(result));
-   await page.locator('#consultRows').getByText(/принял запрос в очередь/).last().waitFor();assert.equal(await page.locator('#consultCreate').isDisabled(),true,'queue receipt does not claim delivery');
-   return page.locator('[data-consult-id]').filter({has:page.getByText(summary,{exact:true})});
+   await page.locator('#consultRows').getByText(/принял запрос в очередь/).last().waitFor();assert.equal(await page.locator('.developer-chat-composer').count(),0,'queue receipt prevents follow-up until confirmed');
+   return page.locator('[data-consult-id]').filter({has:page.locator('.developer-chat-outgoing p').filter({hasText:summary})});
   }
   const first=await sendImage(image,'50 → 49,9992');
   const earlyReply=await page.request.post(origin+'/simulate/reply');assert.equal(earlyReply.status(),200);assert.equal((await earlyReply.json()).linked_replies,0,'unconfirmed provider receipt cannot bind the reply');
@@ -29,12 +29,12 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   assert.equal((await page.request.post(origin+'/simulate/client-attachment')).status(),200);
   await page.reload();await page.locator('#supportTicketTitle').waitFor();assert.equal(new URL(page.url()).searchParams.get('support_ticket_id'),ticket,'reload restores the exact case');
   await page.getByText('We are checking.',{exact:true}).waitFor();
-  await page.locator('#supportTab-details').click();await page.locator('#supportCaseMaterials>summary').click();await page.locator('#caseMediaLoad').click();const newImage=page.locator('#supportExistingMedia input[value="'+image2+'"]');await newImage.waitFor();await newImage.check();await page.locator('[data-case-media-attach]').click();await page.locator('[data-message-id="'+image2+'"]').waitFor();
-  const second=await sendImage(image2,'Customer provided a new image.');
+  await page.locator('#supportTab-history').click();assert.equal(await page.locator('[data-message-id="'+image2+'"]').count(),0,'new customer attachments do not expand the frozen case');
+  await page.locator('#supportTab-developer').click();const composer=page.locator('.developer-chat-composer');await composer.locator('textarea').fill('Customer provided a new image.');const followupResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname.endsWith('/messages'));await composer.locator('button[type=submit]').click();assert.equal((await followupResponse).status(),200);const second=first;
   const secondEarly=await page.request.post(origin+'/simulate/reply');assert.equal(secondEarly.status(),200);assert.equal((await secondEarly.json()).linked_replies,1,'second pending request cannot bind before its own receipt');
   const secondReceipt=await page.request.post(origin+'/simulate/receipt');assert.equal(secondReceipt.status(),200);assert.equal((await secondReceipt.json()).state,'sent');
-  await page.locator('#supportConsultations .support-heading').getByRole('button',{name:'Обновить',exact:true}).click();await second.getByText(/We are investigating/).waitFor();await page.getByText('We are checking.',{exact:true}).waitFor();
-  assert.equal(writes.filter(path=>path.endsWith('/dispatch')).length,2,'one dispatch per deliberate group request');assert.equal(writes.filter(path=>path.endsWith('/draft')).length,1,'one explicit private AI draft');assert.equal(writes.filter(path=>path==='/api/platform/ai/dialog-consultations').length,2);
+  await page.locator('#supportConsultations .support-heading').getByRole('button',{name:'Обновить',exact:true}).click();await second.getByText(/We are investigating/).last().waitFor();await page.getByText('We are checking.',{exact:true}).waitFor();
+  assert.equal(writes.filter(path=>path.endsWith('/dispatch')).length,1,'one initial dispatch');assert.equal(writes.filter(path=>path.endsWith('/messages')).length,1,'one explicit chat follow-up');assert.equal(writes.filter(path=>path.endsWith('/draft')).length,1,'one explicit private AI draft');assert.equal(writes.filter(path=>path==='/api/platform/ai/dialog-consultations').length,1);
   assert.equal(writes.some(path=>/crm\/chat\/send|dialogs\/send|internal-consultations/.test(path)),false,'no automatic customer send or obsolete transport');
   console.log('PASS: Chromium/local HTTP/SQL: two bounded group queue sends, signed receipts/replies, one explicit unsent draft, fresh follow-up file.');
  }finally{await browser.close();}

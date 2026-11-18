@@ -93,6 +93,8 @@ def receipt_handler(member_from_request, logger):
         headers = {'Cache-Control': 'no-store'}
         try:
             session = read_session(request, member_from_request)
+            from tenant_consultation_chat_media import validate_read
+            await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'),request.query.get('request_id'))
             result = await check(session, request.query.get('lead_id'), request.query.get('request_id'))
             return web.json_response({'success': True, **result}, headers=headers)
         except TenantLinearError as error:
@@ -134,6 +136,8 @@ def capability_handler(member_from_request, logger):
         headers = {'Cache-Control': 'no-store'}
         try:
             session = read_session(request,member_from_request)
+            from tenant_consultation_chat_media import validate_read
+            await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'))
             allowed = await asyncio.to_thread(can_send, session, request.query.get('lead_id'))
             return web.json_response({'success': True, 'enabled': bool(enabled() and allowed),
                                       'recovery_enabled': bool(allowed)}, headers=headers)

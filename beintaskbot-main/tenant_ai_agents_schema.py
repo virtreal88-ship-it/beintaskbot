@@ -209,7 +209,7 @@ _SCHEMA_COLUMNS = {
     'saas_support_tickets': (
         'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
         'channel_id completion_note completion_outcome conversation_id created_at created_by '
-        'description history_scope id knowledge_candidate_requested next_steps reason '
+        'description history_scope dialog_episode_id history_started_at history_frozen_at id knowledge_candidate_requested next_steps reason '
         'risk_assessment reply_draft priority priority_suggestion priority_reason response_due_at response_due_manual '
         'resolved_at source status suggestions summary summary_agent_binding '
         'summary_scope_hash summary_state tenant_id updated_at '
@@ -261,7 +261,7 @@ _SCHEMA_INDEXES = [
 ]
 
 
-def _schema_current(conn, *, include_support_sla=True):
+def _schema_current(conn, *, include_support_sla=True, include_support_episode=True):
     """Certify the selected schema without DDL, locks on business rows or commits."""
     from tenant_schema_preflight import ready
     from tenant_ai_spend_budget import _SCHEMA_COLUMNS as spend_columns, _SCHEMA_INDEXES as spend_indexes
@@ -270,6 +270,9 @@ def _schema_current(conn, *, include_support_sla=True):
     import json
     columns = {**_SCHEMA_COLUMNS, **spend_columns, **connect_columns}
     indexes = [*_SCHEMA_INDEXES, *spend_indexes, *connect_indexes]
+    if not include_support_episode:
+        columns['saas_support_tickets']=[name for name in columns['saas_support_tickets']
+            if name not in {'dialog_episode_id','history_started_at','history_frozen_at'}]
     if not include_support_sla:
         columns.pop('saas_support_sla_policies', None)
         sla_columns={'risk_assessment','reply_draft','priority','priority_suggestion',
@@ -374,6 +377,19 @@ def _ensure_platform_schema(conn):
 def ensure_schema(conn):
     global _ready
     if _schema_current(conn):
+        return
+    if _schema_current(conn, include_support_episode=False):
+        with _lock:
+            from tenant_schema_preflight import lock_schema
+            with conn.cursor() as cur:lock_schema(cur)
+            if _schema_current(conn):return
+            if not _schema_current(conn, include_support_episode=False):
+                raise RuntimeError('Support episode upgrade baseline changed; stop for schema review.')
+            from tenant_support_inbox_schema import create_episode_schema
+            create_episode_schema(conn)
+            if not _schema_current(conn):
+                raise RuntimeError('Support episode upgrade did not certify the expected schema.')
+            conn.commit()
         return
     # An existing ready baseline missing only SLA additions must not replay
     # unrelated compatibility migrations or mutate business rows.

@@ -44,7 +44,7 @@ EXPECTED_ASSETS += ['/assets/tenant-ai-dashboard.css']
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instruction-catalog.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
 EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-alert-detail.css']
-EXPECTED_ASSETS += ['/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
+EXPECTED_ASSETS += ['/assets/tenant-case-chat-media.js','/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-source-members.js','/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js','/assets/tenant-crm-save-receipt.js','/assets/tenant-crm-sync-history.js']
 EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
@@ -61,6 +61,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/question-draft', ('POST',)),
     ('dialog-consultations', ('POST',)),
     ('dialog-consultations/replies', ('GET',)),
+    ('dialog-consultations/{id}/messages', ('GET','POST')),
     ('dialog-consultations/{id}/dispatch', ('POST',)),
     ('dialog-consultations/{id}/revoke', ('POST',)),
     ('dialog-consultations/{id}/manual-reply', ('POST',)),

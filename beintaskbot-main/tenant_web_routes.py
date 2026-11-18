@@ -208,6 +208,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialog-consultations/question-draft', dialog_consultations_handler(member, origin, logger, 'question_draft'), ('POST',)),
         ('dialog-consultations', dialog_consultations_handler(member, origin, logger, 'prepare'), ('POST',)),
         ('dialog-consultations/replies', dialog_consultations_handler(member, origin, logger, 'replies'), ('GET',)),
+        ('dialog-consultations/{id}/messages', dialog_consultations_handler(member, origin, logger, 'messages'), ('GET','POST')),
         ('dialog-consultations/{id}/dispatch', dialog_consultations_handler(member, origin, logger, 'dispatch'), ('POST',)),
         ('dialog-consultations/{id}/revoke', dialog_consultations_handler(member, origin, logger, 'revoke'), ('POST',)),
         ('dialog-consultations/{id}/manual-reply', dialog_consultations_handler(member, origin, logger, 'manual_reply'), ('POST',)),

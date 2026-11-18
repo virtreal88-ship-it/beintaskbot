@@ -110,6 +110,8 @@ def reserve(session, command):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_consultation_chat_media import authorize as case_authorize, reserve as case_reserve
+            case_binding=case_authorize(cur,session,command)
             profile, connection, integration = authority(cur, session, command['lead_id'])
             quote=quote_target(cur,profile['tenant_id'],command,connection)
             key = (profile['tenant_id'], int(profile['telegram_id']), command['request_id'])
@@ -141,7 +143,8 @@ def reserve(session, command):
             from tenant_dialog_rollout import guard
             rollout = guard(cur, profile['tenant_id'])
             generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
-            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps({'lifecycle_generation':generation})))
+            case_reserve(cur,session,command,connection,case_binding)
+            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps({'lifecycle_generation':generation,**({'consultation_id':case_binding['consultation_id']} if case_binding else {})})))
         conn.commit()
     return {'key': key, 'command': command, 'connection': connection, 'profile': profile, 'quote':quote}
 
@@ -156,6 +159,8 @@ def mark_sending(item, route):
         ensure_schema(conn)
         if is_group:conn.commit()
         with conn.cursor() as cur:
+            from tenant_consultation_chat_media import authorize as case_authorize, guard as case_guard, state as case_state
+            case_authorize(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command'])
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
             from tenant_dialog_rollout import guard
             rollout = guard(cur, profile['tenant_id'])
@@ -164,7 +169,8 @@ def mark_sending(item, route):
             prepared = cur.fetchone() or {}
             if (prepared.get('route') or {}).get('lifecycle_generation',0) != generation:
                 raise TenantLinearError('Режим диалога изменился. Подготовьте новую отправку.',409)
-            route = {**route, 'lifecycle_generation':generation}
+            case_guard(cur,item,prepared.get('route') or {})
+            route = {**route, 'lifecycle_generation':generation,**({'consultation_id':item['command']['consultation_id']} if item['command'].get('consultation_id') else {})}
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
             if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
@@ -189,6 +195,7 @@ def mark_sending(item, route):
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',route=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='preparing' RETURNING request_id", (json.dumps(route), *item['key']))
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə artıq işlənir.', 409)
+            case_state(cur,item,'sending')
         conn.commit()
     return profile, credentials
 
@@ -216,6 +223,9 @@ def finish(item, state, message_id=None):
         with conn.cursor() as cur:
             cur.execute("UPDATE saas_chat_send_receipts SET state=%s,message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state IN ('preparing','sending') RETURNING lead_id", (state, message_id, *item['key']))
             row = cur.fetchone()
+            if row and state in {'unknown','blocked'}:
+                from tenant_consultation_chat_media import state as case_state
+                case_state(cur,item,state)
             if row and state == 'accepted':
                 cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'chat_message_accepted','lead',%s,%s::jsonb)''',
@@ -310,6 +320,11 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
     from tenant_scoped_access import scoped_access_enabled
     with _connect() as conn:
         with conn.cursor() as cur:
+            from tenant_consultation_chat_media import authorize as case_authorize, guard as case_guard
+            case_authorize(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item.get('command',{}))
+            if item.get('command',{}).get('consultation_id'):
+                cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',item['key'])
+                case_guard(cur,item,(cur.fetchone() or {}).get('route') or {})
             from tenant_dialog_rollout import guard
             rollout=guard(cur,item['key'][0])
             # Preserve the original unscoped legacy final-dispatch behavior,

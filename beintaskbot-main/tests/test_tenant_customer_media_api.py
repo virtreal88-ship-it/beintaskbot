@@ -19,7 +19,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
    run.assert_not_awaited()
  async def test_disabled_capability_is_false(self):
   with patch('tenant_customer_media_api.require_read_session',return_value={}),patch('tenant_customer_media_api.enabled',return_value=False),patch('tenant_customer_media_api.capability') as capability:
-   response=await read_handler(Mock(),Mock())(Mock())
+   response=await read_handler(Mock(),Mock())(Mock(query={}))
   self.assertEqual(json.loads(response.body)['enabled'],False);capability.assert_not_called()
  async def test_recovery_error_preserves_request(self):
   request=Mock();request.query={'lead_id':'1','request_id':'test'}

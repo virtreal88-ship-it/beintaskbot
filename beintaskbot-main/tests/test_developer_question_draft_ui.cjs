@@ -13,7 +13,7 @@ async function setup(kind,{language='en',versions=true,agent=true,targets=true}=
  w.tenantI18n={language,date:value=>String(value)};w.tenantOperator={member,currentDialog:route,hasRight:()=>true};w.tenantProfileSnapshot={member};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body});
-  if(path===base+'/preview')return ok({public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:state.preview});
+  if(path===base+'/preview')return ok({... (kind==='case'?{case_history_hash:state.historyHash||'c'.repeat(64),scope:{message_count:state.preview.length}}:{}),public_header:{version:1,customer_name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified',company_name:'Synthetic client company',operator_name:'Synthetic operator'},public_header_hash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',messages:state.preview});
   if(path===base+'/destinations')return ok({destinations:!targets?[]:[{channel_id:'dev-channel',conversation_id:'developer-a',customer_name:'Developer A'},{channel_id:'dev-channel',conversation_id:'developer-b',customer_name:'Developer B'}]});
   if(path===base+'/question-draft'){
    if(state.hold)await state.hold;
@@ -48,7 +48,7 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
  const unselected=await setup('dialog'),unselectedForm=await unselected.open();
  unselectedForm.querySelector('textarea').value='Saved question';unselectedForm.querySelector('textarea').dispatchEvent(new unselected.w.Event('input'));
  assert.equal(unselectedForm.querySelector('select').value,'');unselected.closeForm();const reopenedUnselected=await unselected.open();assert.equal(reopenedUnselected.querySelector('select').value,'','dismissal must not silently choose the first recipient');assert.equal(reopenedUnselected.querySelector('button[type=submit]').disabled,true);assertNoSend(unselected);unselected.close();
- for(const kind of ['dialog','case'])for(const language of ['ru','az','en','unsupported',null]){
+ for(const kind of ['dialog'])for(const language of ['ru','az','en','unsupported',null]){
   const expectedLanguage=['ru','az','en'].includes(language)?language:kind==='dialog'?'az':'ru';
   const compact=await setup(kind,{language}),c=controls(compact,await compact.open());fill(compact,c,'Manual question');
   assert.equal(c.form.querySelectorAll('.consultation-recipient,[data-case-send-recipient],#caseConsultSendHint').length,0,'no duplicate recipient or send explanation');
@@ -64,7 +64,7 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   assert.match(c.form.textContent,({ru:/Есть пересечение. Проверьте консультацию или измените фрагмент./,az:/Fraqmentlər kəsişir. Məsləhəti yoxlayın və ya fraqmenti dəyişin./,en:/Overlapping fragment. Review the consultation or change the range./})[expectedLanguage]);
   assert.doesNotMatch(c.form.textContent,/новый вопрос не объединён автоматически/);compact.close();
  }
- for(const kind of ['dialog','case']){
+ for(const kind of ['dialog']){
   // Automatic attachments follow the current exact range, never saved file toggles.
   const media=await setup(kind);
   media.state.preview=['image','audio','video','document','voice','photo','image'].map((message_type,index)=>({id:'media-'+index,message_type,source_version:'media-version-'+index,public_sender_version:'b'.repeat(64),media_shareable:index===3?false:index===4?undefined:true,body:'Synthetic attachment',direction:'incoming'}));
@@ -89,23 +89,23 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   change(range,rf.first,rangeValue(0));
   assert.equal(rf.send.disabled,false,'moving first into older messages should preserve a valid bounded range');
   assert.equal(rf.draft.disabled,false,'a valid new range can generate a new question');
-  assert.equal(rf.first.value,rangeValue(0));assert.equal(rf.last.value,rangeValue(29));
-  assert.match(rf.form.querySelector('[data-range-adjustment]').textContent,/30/);
+  assert.equal(rf.first.value,rangeValue(0));assert.equal(rf.last.value,rangeValue(49));
+  assert.match(rf.form.querySelector('[data-range-adjustment]').textContent,/50/);
   const rangeNotice=rf.form.querySelector('[data-range-adjustment]');assert.match(rangeNotice.textContent,/last message/);
-  change(range,rf.first,rangeValue(10));assert.equal(rf.last.value,rangeValue(29));assert.equal(rangeNotice.hidden,true);
-  change(range,rf.last,rangeValue(79));assert.equal(rf.first.value,rangeValue(50));assert.match(rangeNotice.textContent,/first message/);
+  change(range,rf.first,rangeValue(10));assert.equal(rf.last.value,rangeValue(49));assert.equal(rangeNotice.hidden,true);
+  change(range,rf.last,rangeValue(79));assert.equal(rf.first.value,rangeValue(30));assert.match(rangeNotice.textContent,/first message/);
   change(range,rf.last,rangeValue(1));assert.equal(rf.first.value,rangeValue(1));assert.equal(rf.send.disabled,false);
   change(range,rf.first,rangeValue(79));assert.equal(rf.last.value,rangeValue(79));assert.equal(rf.draft.disabled,false);
-  change(range,rf.first,rangeValue(50));assert.equal(rf.last.value,rangeValue(79));assert.equal(rangeNotice.hidden,true,'exactly 30 needs no automatic adjustment');
+  change(range,rf.first,rangeValue(30));assert.equal(rf.last.value,rangeValue(79));assert.equal(rangeNotice.hidden,true,'exactly 50 needs no automatic adjustment');
   assert.equal(rf.summary.value,'Manually written question');assertNoSend(range);assert.equal(questionCalls(range).length,0);
   change(range,rf.first,rangeValue(60));assert.equal(rf.last.value,rangeValue(79));assert.equal(rf.send.disabled,false);assert.equal(rf.draft.disabled,false);assert.equal(rangeNotice.hidden,true);
   rf.draft.click();await settle();assert.equal(rf.send.disabled,false);assert.equal(questionCalls(range).at(-1).body.message_ids.length,20);
-  change(range,rf.first,rangeValue(0));assert.equal(rf.last.value,rangeValue(29));assert.equal(rf.send.disabled,true,'new range invalidates old AI provenance');assert.equal(rf.draft.disabled,false,'stale AI can be regenerated on the adjusted range');
+  change(range,rf.first,rangeValue(0));assert.equal(rf.last.value,rangeValue(49));assert.equal(rf.send.disabled,true,'new range invalidates old AI provenance');assert.equal(rf.draft.disabled,false,'stale AI can be regenerated on the adjusted range');
   change(range,rf.summary,'Manually edited old AI text','input');assert.equal(rf.send.disabled,true,'manual edits never clear stale source guards');
   rf.draft.click();await settle();assert.equal(rf.send.disabled,false);
-  assert.equal(questionCalls(range).at(-1).body.message_ids.length,30);assert.equal(questionCalls(range).at(-1).body.message_ids[0],'range-0');
+  assert.equal(questionCalls(range).at(-1).body.message_ids.length,50);assert.equal(questionCalls(range).at(-1).body.message_ids[0],'range-0');
   assertNoSend(range);rf.send.click();await settle();const rangePayload=prepareCalls(range)[0].body;
-  assert.deepEqual(rangePayload.message_ids,Array.from({length:30},(_,i)=>'range-'+i));assert.deepEqual(Object.keys(rangePayload.public_header_source_versions),rangePayload.message_ids);
+  assert.deepEqual(rangePayload.message_ids,Array.from({length:50},(_,i)=>'range-'+i));assert.deepEqual(Object.keys(rangePayload.public_header_source_versions),rangePayload.message_ids);
   assert.equal(rangePayload.public_header_hash,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(rangePayload.public_header_version,1);assert.deepEqual(rangePayload.media_ids,[]);range.close();
 
 
@@ -116,7 +116,7 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   change(availability,aform.recipient,'0');assert.match(reason().textContent,/Write a message/);
   change(availability,aform.summary,'   ','input');assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/Write a message/);
   change(availability,aform.summary,'Explicit manual question','input');assert.equal(aform.send.disabled,false);assert.equal(reason().hidden,true);
-  aform.last.value=kind==='dialog'?'0':ids[0];change(availability,aform.summary,'Still manual','input');assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/1 to 30/);
+  aform.last.value=kind==='dialog'?'0':ids[0];change(availability,aform.summary,'Still manual','input');assert.equal(aform.send.disabled,true);assert.match(reason().textContent,/1 to 50/);
   change(availability,aform.first,kind==='dialog'?'0':ids[0]);assert.equal(aform.send.disabled,false);assert.equal(reason().textContent,'');
   assertNoSend(availability);assert.equal(questionCalls(availability).length,0);availability.close();
   const noTargets=await setup(kind,{targets:false}),nt=controls(noTargets,await noTargets.open());assert.equal(nt.send.disabled,true);assert.match(nt.form.querySelector('[data-send-disabled-reason]').textContent,/No accessible Developers|No accessible dialogues/);assertNoSend(noTargets);noTargets.close();
@@ -165,6 +165,6 @@ function assertNoSend(ctx){assert.equal(prepareCalls(ctx).length,0);assert.equal
   assert.match(select.options[0].textContent,new RegExp(fallback));assert.match(select.options[1].textContent,/Verified employee/);assert.match(select.options[2].textContent,new RegExp(fallback));
   assert.doesNotMatch(select.textContent,/Unknown sender/);assertNoSend(names);names.close();
  }
- const noAgent=await setup('case',{agent:false}),c=controls(noAgent,await noAgent.open());assert.equal(c.draft.disabled,true);noAgent.close();
+ for(const language of ['ru','az','en']){const manual=await setup('case',{language,agent:false});try{manual.state.preview=Array.from({length:80},(_,i)=>({...messages[0],id:'case-'+i}));let form=await manual.open();assert.equal(form.querySelector('[data-question-draft]'),null);assert.equal(form.querySelector('#caseConsultFirst,#caseConsultLast'),null);assert.equal(form.querySelectorAll('.case-consult-source-message').length,80);change(manual,form.querySelector('select'),'0');change(manual,form.querySelector('textarea'),'Manual case question','input');manual.closeForm();form=await manual.open();assert.equal(form.querySelector('textarea').value,'Manual case question');assert.equal(questionCalls(manual).length,0);const send=form.querySelector('[type=submit]');assert.equal(send.disabled,false);form.dispatchEvent(new manual.w.SubmitEvent('submit',{cancelable:true,submitter:send}));await settle();const payload=manual.calls.find(c=>c.path===base).body;assert.equal(payload.automatic_case_history,true);assert.equal(payload.case_history_hash,'c'.repeat(64));for(const key of ['message_ids','media_ids','question_draft_request_id','public_sender_versions','public_header_source_versions'])assert.equal(key in payload,false);assert.equal(questionCalls(manual).length,0);}finally{manual.close();}}
  console.log('PASS: dialog/case question drafts, RU/AZ/EN, bounded saved evidence, stale response guards, duplicate clicks, durable retries, close/reopen and separate reviewed send');
 })().catch(error=>{console.error(error);process.exitCode=1;});
