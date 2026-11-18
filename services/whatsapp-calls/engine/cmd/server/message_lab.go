@@ -38,8 +38,9 @@ type messageLabSettings struct {
 	Key          []byte        `json:"key"`
 }
 type messageLab struct {
-	cfg     messageLabSettings
-	journal *unified.Journal
+	cfg         messageLabSettings
+	journal     *unified.Journal
+	diagnostics labDiagnostics
 }
 
 func newMessageLab(ctx context.Context, db *sql.DB, gateway string) (*messageLab, error) {
@@ -111,7 +112,7 @@ func newMessageLab(ctx context.Context, db *sql.DB, gateway string) (*messageLab
 	if err != nil {
 		return nil, err
 	}
-	return &messageLab{cfg, journal}, nil
+	return &messageLab{cfg: cfg, journal: journal}, nil
 }
 
 func (m *messageLab) allows(chat types.JID) bool {
@@ -131,6 +132,7 @@ func (m *messageLab) attach(s *Session) bool {
 		return false
 	}
 	client := s.client
+	client.Log = labProviderLogger{&m.diagnostics}
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
 	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
@@ -173,11 +175,14 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 	var identity any
 	switch event := raw.(type) {
 	case *events.Message:
+		m.diagnostics.add("message_seen")
 		if !m.allows(event.Info.Chat) {
+			m.diagnostics.add("message_chat_denied")
 			return true
 		}
 		// Do not retain view-once or expiring content in this research journal.
 		if event.IsViewOnce || event.IsViewOnceV2 || event.IsViewOnceV2Extension || event.IsEphemeral {
+			m.diagnostics.add("message_expiring_ignored")
 			return true
 		}
 		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event.Message)
@@ -200,7 +205,9 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 		}
 		identity = []any{"message", envelope.Chat, envelope.Sender, envelope.FromMe, envelope.ProviderID, variant}
 	case *events.Receipt:
+		m.diagnostics.add("receipt_seen")
 		if !m.allows(event.Chat) {
+			m.diagnostics.add("receipt_chat_denied")
 			return true
 		}
 		for _, id := range event.MessageIDs {
@@ -212,7 +219,17 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 			}
 		}
 		return true
+	case *events.UndecryptableMessage:
+		m.diagnostics.add("undecryptable_event")
+		return true
+	case *events.Connected:
+		m.diagnostics.add("connected_event")
+		return true
+	case *events.Disconnected:
+		m.diagnostics.add("disconnected_event")
+		return true
 	default:
+		m.diagnostics.add("other_event")
 		return true
 	}
 	return m.append(ctx, identity, envelope)
@@ -225,6 +242,11 @@ func (m *messageLab) append(ctx context.Context, identity any, envelope labEnvel
 		return false
 	}
 	_, err = m.journal.Append(ctx, string(key), data)
+	if err != nil {
+		m.diagnostics.add("journal_append_failed")
+	} else {
+		m.diagnostics.add("journal_append_confirmed")
+	}
 	return err == nil
 }
 
@@ -265,7 +287,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/unified-lab/status", func(w http.ResponseWriter, r *http.Request) {
 		session, ok := s.sessions.Get(m.cfg.SessionID)
 		ready := ok && m.matches(session) && session.client.IsConnected()
-		writeJSON(w, 200, map[string]any{"ready": ready, "chats": m.cfg.AllowedChats, "session_id": m.cfg.SessionID})
+		writeJSON(w, 200, map[string]any{"ready": ready, "chats": m.cfg.AllowedChats, "session_id": m.cfg.SessionID, "diagnostics": m.diagnostics.snapshot()})
 	})
 	mux.HandleFunc("GET /api/unified-lab/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
