@@ -391,6 +391,16 @@ jobs:
             tests/test_group_consultation_receipt.py \
             tests/test_tenant_web_routes.py \
             tests/test_tenant_job_runner.py
+      - name: Verify browser and DOM regressions independently
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+          NODE_PATH: .support-test-deps/node_modules
+          SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+        run: |
+          set +e
+          failed=0
+          trap 'failed=1' ERR
           node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
           python -m pytest -q tests/test_group_participants.py
@@ -445,6 +455,8 @@ jobs:
           node tests/test_visible_photo_autoload_browser.cjs
           node tests/test_visible_audio_autoload_browser.cjs
           node tests/test_message_footer_browser.cjs
+
+          exit "$failed"
 
       - name: Save developer chat visual checks
         if: always()

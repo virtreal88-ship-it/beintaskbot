@@ -47,6 +47,8 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
   await page.locator('[data-consultation-reply="verified-later-reply"]').getByText('Replace the cable',{exact:true}).waitFor();
   assert.match(await page.locator('[data-consultation-reply="verified-later-reply"]').innerText(),/Verified developer/);
   assert.equal(calls.filter(call=>call.method==='POST').length,0,'verified provider reply is read-only, not a fabricated manual write');
+  // Close the actual modal before mounting an independent legacy fixture.
+  await page.locator('#supportClose').click();await page.locator('#supportDetail').waitFor({state:'hidden'});
   // Older internal-only records retain their explicitly labelled manual note workflow.
   await page.evaluate(ticket=>{document.getElementById('operatorSupport').replaceChildren();window.tenantOperator={hasRight:right=>right!=='dialogs'};const host=document.createElement('div');host.id='internalFixture';document.body.append(host);window.internalController=tenantCaseConsultations.mount({host,ticket,member:{tenant_id:'company-a',telegram_id:11,role:'owner'},getMessages:()=>[],isCurrent:()=>true});},ticket);
   const old=page.locator('#internalFixture [data-consult-id="legacy-internal"]');await old.getByText('Saved internal answer',{exact:true}).waitFor();

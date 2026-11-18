@@ -1,11 +1,13 @@
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
-const assert=require('node:assert/strict');
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const appStyles=(fs.readFileSync('docs/tenant-app.html','utf8').match(/<style\b[^>]*>[\s\S]*?<\/style>/gi)||[]).join('\n');
+assert(appStyles.includes('--'),'real application inline styles must be loaded');
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{for(const width of [320,390,1280]){
 const page=await browser.newPage({viewport:{width,height:760}}),calls=[];
 const source=Array.from({length:55},(_,i)=>({id:'m'+i,public_text:'Customer text '+i,public_speaker:'Customer',body:'PRIVATE RAW '+i,source_version:'v'+i,public_sender_version:'b'.repeat(64),message_type:'text',happened_at:'2026-11-18T12:00:00Z'}));
 const a={id:'a',recipient:'Developer A',destination_channel:'dev',destination_conversation:'group-a',state:'sent',can_send:true,reason:'Question A',created_at:'2026-11-18T12:00:00Z',deliveries:[{body:'Exact original text A',state:'sent',created_at:'2026-11-18T12:00:00Z'}]};
 const b={id:'b',recipient:'Developer B',destination_channel:'dev',destination_conversation:'group-b',state:'unknown',can_send:true,reason:'Question B',deliveries:[{body:'Unconfirmed text B',state:'unknown'}]};
-await page.route('https://crm.test/',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:16px Arial;margin:8px;--line:#ddd;--brand:#2855c4;--panel:#f8fafc}button{font:inherit;padding:8px}#host{max-width:800px}small{font-size:12px}</style><div id="host"></div>'}));
+await page.route('https://crm.test/',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">'+appStyles+'</head><body><main><section class="view active"><div id="host"></div></section></main></body></html>'}));
 await page.route('**/api/**',async r=>{const req=r.request(),path=new URL(req.url()).pathname,data=req.postData()?req.postDataJSON():null;calls.push({path,data});let result={};
 if(path.endsWith('/replies'))result={consultations:[a,b],replies:[{id:'ra',consultation_id:'a',body:'Verified reply A',author:'Developer A',happened_at:'2026-11-18T12:03:00Z',source_kind:'provider',draft_state:'completed',handled_at:'2026-11-18T12:04:00Z'}]};
 else if(path.endsWith('/preview'))result={messages:source,public_header:{version:1},public_header_hash:'a'.repeat(64),case_history_hash:'c'.repeat(64)};

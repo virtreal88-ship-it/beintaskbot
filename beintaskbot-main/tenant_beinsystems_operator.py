@@ -12,7 +12,6 @@ import re
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from urllib.parse import urlencode
 
 from cryptography.fernet import InvalidToken
 
@@ -27,10 +26,7 @@ from tenant_policy import TenantPolicy
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
-AUTH_API_BASE_URL = "https://auth-api.beinsystems.az"
-AUTH_LOGIN_PAGE_URL = "https://auth.beinsystems.az/?" + urlencode({
-    "redirect_uri": "https://operator.beinsystems.az/",
-})
+AUTH_LOGIN_URL = "https://api.akul.az/1.0/online/controllers/pos/pos_getlogin.php"
 READ_ENDPOINTS = {
     "me": ("/user/me", set()),
     "accounts": ("/user/accounts", {"search"}),
@@ -160,8 +156,8 @@ def save_token(profile, token, *, verified=False):
     return _public(row)
 
 
-def _authenticate_operator(login, password, *, device_id=None, opener=None):
-    """Use the same HTTPS login endpoint used by the Operator web application.
+def _authenticate_operator(login, password, *, opener=None):
+    """Authenticate against the Operator POS login endpoint.
 
     Only the returned SSO token is persisted by the caller. Passwords and
     authentication response bodies are never logged or stored.
@@ -174,26 +170,13 @@ def _authenticate_operator(login, password, *, device_id=None, opener=None):
             or not secret or len(secret) > 512):
         raise OperatorError("Укажите корректный логин и пароль Operator.")
 
-    # Match the live SSO login page: a bare account name means its admin login;
-    # email, phone, and fully qualified logins are passed through unchanged.
-    phone = re.fullmatch(r"\+?[0-9]{9,15}", re.sub(r"\s+", "", username))
-    if "@" not in username and not phone:
-        username = "admin@" + username
-    payload = {
-        "login": username,
-        "password": secret,
-        "uniqDeviceId": str(device_id or (
-            "device_" + uuid.uuid4().hex + uuid.uuid4().hex[:7])),
-    }
+    payload = {"login": username, "password": secret}
     request = Request(
-        AUTH_API_BASE_URL.rstrip("/") + "/auth/login",
+        AUTH_LOGIN_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         method="POST",
         headers={
             "Content-Type": "application/json", "Accept": "application/json",
-            # Keep the Operator module's redirect context from the Bein ID page.
-            "Origin": "https://auth.beinsystems.az",
-            "Referer": AUTH_LOGIN_PAGE_URL,
         },
     )
     transport = opener or build_opener(_NoRedirect())
@@ -294,10 +277,7 @@ def connect_with_password(profile, login, password):
                 raise OperatorError("Слишком много попыток подключения. Повторите через минуту.", 429)
         conn.commit()
 
-    device_seed = "beintaskbot:" + PROVIDER + ":" + tenant
-    device_id = "device_" + uuid.uuid5(uuid.NAMESPACE_URL, device_seed).hex + \
-        uuid.uuid5(uuid.NAMESPACE_DNS, device_seed).hex[:7]
-    token = _authenticate_operator(login, password, device_id=device_id)
+    token = _authenticate_operator(login, password)
     me = _request_operator("me", {}, token=token, base_url=base_url)
     if (not isinstance(me, dict) or not me
             or (me.get("status") is not None and str(me.get("status")).casefold() != "success")):

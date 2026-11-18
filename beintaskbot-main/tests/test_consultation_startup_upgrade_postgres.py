@@ -444,7 +444,13 @@ def test_exact_pr467_upgrade_runs_real_startup_reconcile_and_notifications(upgra
         'saas_consultation_group_replies'}
     assert {key for key in new.keys() - old.keys() if key[0] in consultation_tables} == {
         ('saas_dialog_consultation_replies', 'followup_requested_at'),
-        ('saas_public_case_shares', 'public_identity')}
+        ('saas_public_case_shares', 'public_identity'),
+        ('saas_consultation_group_deliveries', 'is_chat_followup'),
+        ('saas_consultation_group_deliveries', 'media_metadata')}
+    assert new[('saas_consultation_group_deliveries','is_chat_followup')]['data_type']=='boolean'
+    assert new[('saas_consultation_group_deliveries','media_metadata')]['data_type']=='jsonb'
+    assert all(new[('saas_consultation_group_deliveries',key)]['is_nullable']=='NO'
+        for key in ('is_chat_followup','media_metadata'))
 
 
 def test_exact_pr467_code_reads_and_idempotently_appends_after_upgrade(upgrade_db):
