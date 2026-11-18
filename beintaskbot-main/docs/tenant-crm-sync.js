@@ -4,7 +4,7 @@
   const boxes = {};
   const notified = new Map();
   let scopeKey='', pollBusy=false, pollController, authorized=false;
-  const refreshAt=new Map();
+  const refreshAt=new Map(),nativeReadAt=new Map();
   const fingerprint=data=>JSON.stringify([data.member,data.capabilities,data.role_permissions,(Array.isArray(data.integrations)?data.integrations.map(({updated_at,...binding})=>binding):data.integrations)]);
   const visible=()=>!document.hidden&&!!document.querySelector('#view-deals.active,#view-tasks.active');
   const selected=resource=>document.getElementById(resource==='tasks'?'view-tasks':'view-deals')?.classList.contains('active')&&document.getElementById(resource==='tasks'?'taskFeedSource':'dealFeedSource')?.value==='kommo';
@@ -32,6 +32,12 @@
     if (!authorized || !profile || epoch !== generation || !visible() || pollBusy) return;
     pollBusy=true;const controller=new AbortController();pollController=controller;const timeout=setTimeout(()=>controller.abort(),15000);
     try {
+      const nativeResource=['leads','tasks'].find(resource=>document.getElementById(resource==='tasks'?'view-tasks':'view-deals')?.classList.contains('active')&&document.getElementById(resource==='tasks'?'taskFeedSource':'dealFeedSource')?.value==='native');
+      if(nativeResource){
+        watching=false;display(nativeResource,'');
+        if(Date.now()-(nativeReadAt.get(nativeResource)??-Infinity)>=30000){nativeReadAt.set(nativeResource,Date.now());document.dispatchEvent(new CustomEvent('tenant-crm-cache-refresh',{detail:{resource:nativeResource,tenant_id:profile.tenant_id,expected_user_id:String(profile.telegram_id)}}));}
+        return;
+      }
       const response = await fetch('/api/platform/crm/sync?'+query(), {credentials:'same-origin',cache:'no-store',signal:controller.signal});
       const data = await response.json();
       if (epoch !== generation) return;
@@ -140,8 +146,8 @@
   document.addEventListener('tenant-auth-pending',pause);
   document.addEventListener('tenant-auth-invalid',pause);
   document.addEventListener('tenant-profile',event=>{
-    const next=event.detail.member,key=fingerprint(event.detail),changed=key!==scopeKey;profile=next;const modules=event.detail.capabilities?.modules||{};authorized=profile?.active===true&&!!(modules.tasks||modules.deals||modules.customers);
-    if(changed){generation++;clearTimeout(timer);watching=false;refreshAt.clear();notified.clear();scopeKey=key;syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;for(const resource of Object.keys(boxes))display(resource,'');}
+    const next=event.detail.member,key=fingerprint(event.detail),changed=key!==scopeKey;profile=next;const modules=event.detail.capabilities?.modules||{};authorized=profile?.active===true&&!!(modules.tasks||modules.deals||modules.customers||event.detail.capabilities?.actions?.tasks?.view||event.detail.capabilities?.actions?.deals?.view||(Array.isArray(profile.permissions)&&profile.permissions.includes('tasks:view')));
+    if(changed){generation++;clearTimeout(timer);watching=false;refreshAt.clear();nativeReadAt.clear();notified.clear();scopeKey=key;syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;for(const resource of Object.keys(boxes))display(resource,'');}
     if(authorized)start();
   });
   document.addEventListener('tenant-view',()=>{clearTimeout(timer);if(visible())start();});

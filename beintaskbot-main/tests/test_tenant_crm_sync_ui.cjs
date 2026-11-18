@@ -20,7 +20,7 @@ function setup() {
   let next = 0, responses = [];
   const document = {
     hidden: false,
-    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {value:'native',classList:{contains:()=>id==='view-tasks'},after(box) { boxes.push(box); anchors.push({id,box}); }}; },
+    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {value:'kommo',classList:{contains:()=>id==='view-tasks'},after(box) { boxes.push(box); anchors.push({id,box}); }}; },
     querySelector(selector) { return {append(box){boxes.push(box);anchors.push({id:selector,box})}}; },
     createElement() { return {dataset:{},textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
     addEventListener(name, handler) { listeners[name] = handler; },
@@ -55,7 +55,7 @@ const flush = () => new Promise(resolve=>setImmediate(resolve));
   s.push(s.reply([{resource:'tasks',status:'done',pages_done:3,finished_at:'new'}]));s.context.window.tenantCrmSyncWatch();await flush();assert.equal(s.events.length,2,'new completed run emits again');
   const admin = setup();admin.push(admin.reply([]));admin.profile('company-a','admin');await flush();
   assert.equal(admin.boxes.some(box=>box.type==='button'),false,'admins do not get extra full-sync buttons');
-  assert(admin.requests.every(r=>!r.url.includes('refresh=')&&!r.url.includes('full=')),'unselected native list never enqueues provider work');
+  assert(admin.requests.every(r=>!r.url.includes('refresh=')&&!r.url.includes('full=')),'unproven sync rights never enqueue provider work');
 
   const race = setup();let release;
   race.push(new Promise(resolve=>{release=resolve;}));race.profile('old-company');

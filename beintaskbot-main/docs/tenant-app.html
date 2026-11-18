@@ -670,6 +670,7 @@
   renderNativeTaskForm();
   document.addEventListener('tenant-chakra-ready',()=>{if(state.tasks.length)window.tenantChakraCRM?.renderTasks(state.tasks);renderDealFeeds()});
   function filterDeals(value,target,customer){const q=value.trim().toLocaleLowerCase();const rows=!q?state.deals:state.deals.filter(d=>[d.name,d.contact_name,d.phone,d.stage_name].join(' ').toLocaleLowerCase().includes(q));renderDeals(target,rows,customer)}
+  document.addEventListener('tenant-crm-cache-refresh',event=>{if(event.detail?.resource==='leads'&&event.detail.tenant_id===state.me?.tenant_id&&event.detail.expected_user_id===String(state.me?.telegram_id)&&state.view==='deals'&&dealActive==='native'&&dealFeedAllowed('native'))void loadNativeDeals();});
   document.addEventListener('tenant-crm-sync-complete',e=>{if(e.detail.tenant_id!==state.me?.tenant_id)return;const modules=state.capabilities.modules||{};if(e.detail.resources.includes('leads')&&canLoadKommoDeals())loadDeals(false);if(e.detail.resources.includes('tasks')&&modules.tasks&&!window.tenantTaskFlow)loadTasks(false)});
   let chatRevision=0,chatController,dealChat,chatProfileKey='';
   const chatIdentity=()=>state.me?.tenant_id+':'+state.me?.telegram_id;

@@ -34,6 +34,16 @@ test('ordinary background reload keeps existing filtered nodes mounted until res
   assert.equal(b.f.pending.length,1);b.f.pending.shift()();await refresh;assert.equal(el(b,'taskSearch').value,'PRIVATE');assert.match(el(b,'nativeTasksList').textContent,/PRIVATE task A/);assert.equal(posts(b).length,0);
  }finally{b.w.close();}
 });
+test('native cache-refresh event reads only native tasks and rejects foreign actor or tenant',async()=>{
+ const b=await mount({nativeOnly:true});try{
+  b.f.native[0].text='Fresh cache-only native task';let start=b.f.calls.length;
+  const emit=detail=>b.d.dispatchEvent(new b.w.CustomEvent('tenant-crm-cache-refresh',{detail}));
+  emit({resource:'tasks',tenant_id:b.f.A,expected_user_id:'11'});await settle();
+  assert.match(el(b,'nativeTasksList').textContent,/Fresh cache-only native task/);
+  const reads=b.f.calls.slice(start);assert.equal(reads.length,1);const url=new URL(reads[0].url,'https://fixture.test');assert.equal(url.pathname,'/api/platform/crm/tasks');assert.equal(url.searchParams.get('source'),'native');assert.equal(url.searchParams.get('flow'),'1');assert.equal(url.searchParams.has('refresh'),false);
+  start=b.f.calls.length;emit({resource:'tasks',tenant_id:b.f.A,expected_user_id:'22'});emit({resource:'tasks',tenant_id:b.f.B,expected_user_id:'11'});await settle();assert.equal(b.f.calls.length,start);assert.equal(posts(b).length,0);assert.deepEqual(b.errors,[]);
+ }finally{b.w.close();}
+});
 test('verified isolated reviewer can read both task sources; unsigned synthetic IDs remain blocked',async()=>{
  for(const config of [{reviewerActor:-1234567890,verifiedReviewer:true},{reviewerActor:-1234567890},{reviewerActor:0,verifiedReviewer:true},{reviewerActor:-1234567890,verifiedReviewer:true,manager:true}]){
   const b=await mount(config);try{
