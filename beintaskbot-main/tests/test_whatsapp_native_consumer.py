@@ -57,6 +57,25 @@ def test_same_crm_path_preserves_history_and_duplicate_is_idempotent(ready):
     db.commit()
 
 
+def test_retained_status_does_not_block_next_customer_event(ready):
+    db,reference=ready
+    activate(db)
+    publication=delivery();publication['after']=2
+    publication['event'].update(id='b'*64,sequence=3,payload=message(chat='status@broadcast',message_type='image',media_kind='image'))
+    receipt=store(publication)
+    before=db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n'];db.commit()
+    assert consumer.project_stored(receipt) is False
+    assert consumer.project_stored(receipt) is False
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']==before;db.commit()
+    following=delivery();following['after']=3
+    following['event'].update(id='c'*64,sequence=4,payload=message(provider_id='AFTER_STATUS_MESSAGE',sender_alt=''))
+    following_receipt=store(following)
+    consumer.project_stored(following_receipt)
+    consumer.project_stored(following_receipt)
+    assert len(db.execute("SELECT id FROM saas_crm_messages WHERE raw->>'externalMessageId'='AFTER_STATUS_MESSAGE'"))==1
+    assert len(db.execute('SELECT event_id FROM saas_whatsapp_native_inbox'))==3;db.commit()
+
+
 def test_rechecks_generation_and_encrypted_event_in_commit_transaction(ready):
     db, reference = ready
     activate(db)

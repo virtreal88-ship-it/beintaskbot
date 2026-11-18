@@ -81,6 +81,13 @@ def message_event(scope, event_id, payload, message_id):
     if (not isinstance(payload, dict) or set(payload) - FIELDS or payload.get('kind') != 'message'
             or payload.get('variant') or payload.get('message_type') not in {'text','image','audio','video','document','sticker'}):
         raise _error('native_event_not_projectable')
+    # Status publications and broadcast/newsletter feeds are retained provider
+    # evidence, never CRM conversations or AI turns. A valid non-chat event must
+    # not poison delivery of later customer messages in the same durable inbox.
+    chat_value = payload.get('chat')
+    if isinstance(chat_value, str) and (chat_value == 'status@broadcast' or
+            re.fullmatch(r'[1-9][0-9]{4,29}@(broadcast|newsletter)', chat_value)):
+        raise _error('native_event_not_projectable')
     if (not isinstance(message_id, str) or not PROVIDER_ID.fullmatch(message_id)
             or not isinstance(event_id, str) or not re.fullmatch(r'[0-9a-f]{64}', event_id)
             or type(payload.get('from_me')) is not bool
