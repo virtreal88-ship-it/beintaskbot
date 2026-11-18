@@ -122,7 +122,7 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 			_ = m.store.delete(ctx, row.ID)
 			continue
 		}
-		client := whatsmeow.NewClient(device, m.messageLab.providerLogger(m.waLogger))
+		client := whatsmeow.NewClient(device, m.providerLogger())
 		s := newSession(m, row.ID, row.Name, client)
 		m.register(s)
 		if err := s.connect(ctx); err != nil {
@@ -143,7 +143,7 @@ func (m *SessionManager) createWithID(id, name string) (string, error) {
 		return "", err
 	}
 	device := m.container.NewDevice()
-	client := whatsmeow.NewClient(device, m.messageLab.providerLogger(m.waLogger))
+	client := whatsmeow.NewClient(device, m.providerLogger())
 	s := newSession(m, id, name, client)
 	m.register(s)
 	m.broker.emitSessionList(m.infos())
@@ -187,7 +187,7 @@ func (m *SessionManager) Logout(ctx context.Context, id string) error {
 			m.log.Warn("logout failed", "session", id, "err", err)
 		}
 	}
-	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.messageLab.providerLogger(m.waLogger)))
+	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.providerLogger()))
 	_ = m.store.setJID(ctx, id, "")
 	s.setAuth(AuthSnapshot{State: "logged_out", Paired: false})
 	m.log.Info("session disconnected", "session", id)
@@ -202,7 +202,7 @@ func (m *SessionManager) Pair(id string) error {
 	if s.client.Store.ID != nil {
 		return fmt.Errorf("session already paired")
 	}
-	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.messageLab.providerLogger(m.waLogger)))
+	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.providerLogger()))
 	if err := s.startPairing(m.appCtx); err != nil {
 		return fmt.Errorf("start pairing: %w", err)
 	}
@@ -221,4 +221,12 @@ func (m *SessionManager) disconnectAll() {
 	for _, s := range all {
 		s.shutdown()
 	}
+}
+
+// NewClient snapshots sub-loggers, so instrumentation must precede construction.
+func (m *SessionManager) providerLogger() waLog.Logger {
+	if m.nativeGateway != nil && m.nativeGateway.messages != nil {
+		return labProviderLogger{diagnostics: &m.nativeGateway.providerDiagnostics}
+	}
+	return m.messageLab.providerLogger(m.waLogger)
 }

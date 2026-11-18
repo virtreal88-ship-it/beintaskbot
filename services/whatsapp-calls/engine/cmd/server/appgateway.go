@@ -58,16 +58,17 @@ type appResult struct {
 	NotStarted bool   `json:"not_started,omitempty"`
 }
 type appGateway struct {
-	groups    *managedGroups
-	messages  *unified.Journal
-	server    *server
-	cfg       appGatewayConfig
-	boot      string
-	seq       int64
-	client    *http.Client
-	mu        sync.Mutex
-	retired   []string
-	uploading atomic.Bool
+	providerDiagnostics labDiagnostics
+	groups              *managedGroups
+	messages            *unified.Journal
+	server              *server
+	cfg                 appGatewayConfig
+	boot                string
+	seq                 int64
+	client              *http.Client
+	mu                  sync.Mutex
+	retired             []string
+	uploading           atomic.Bool
 }
 
 func newAppGateway(s *server, path string) (*appGateway, error) {

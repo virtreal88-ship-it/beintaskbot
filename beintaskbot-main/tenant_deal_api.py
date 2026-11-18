@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aiohttp import web
+from tenant_crm_request_context import require_expected_context, CRMContextError
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,17 @@ def _deal_access(context: DealApiContext, profile: dict | None) -> bool:
 
 
 def handlers(context: DealApiContext) -> dict[str, Callable]:
+    def context_error(request, profile):
+        # member() resolves the current server session and fresh membership.
+        # Intent is optional for legacy clients, but an incomplete/mismatched
+        # pair must never enqueue a read for a newly switched account.
+        try:
+            require_expected_context(request, profile)
+        except CRMContextError as exc:
+            return web.json_response({'success': False, 'error': exc.code},
+                                     status=exc.status, headers={'Cache-Control': 'no-store'})
+        return None
+
     async def sync_status(request: web.Request) -> web.Response:
         profile = context.member(request)
         policy = context.policy(profile or {})
@@ -36,6 +48,9 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
             resources.append("tasks")
         if not profile or not resources:
             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+        denied = context_error(request, profile)
+        if denied is not None:
+            return denied
         try:
             jobs = await asyncio.to_thread(context.sync_status, str(profile["tenant_id"]), resources)
             return web.json_response({"success": True, "jobs": jobs})
@@ -47,6 +62,9 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
         profile = context.member(request)
         if not _deal_access(context, profile):
             return web.json_response({"success": False, "error": "Sövdələşmələr üçün icazəniz yoxdur."}, status=403)
+        denied = context_error(request, profile)
+        if denied is not None:
+            return denied
         should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
         sync_error = ""
         if should_refresh:
