@@ -172,6 +172,22 @@ def test_mark_all_read_covers_every_page_and_keeps_post_snapshot_arrivals_unread
     assert dialogs.listing({'tenant_id':B,'telegram_id':22})['unread_count']==0
     assert dialogs.listing(PROFILE)['unread_count']==2,'tenant B bulk read leaves tenant A unread'
 
+def test_mark_all_read_uses_insertion_cursor_when_provider_timestamps_are_out_of_order(channels):
+    f=channels;db=f['db']
+    f['incoming'](CA,'baseline');dialogs.listing(PROFILE)
+    f['incoming'](CA,'provider-newest')
+    f['incoming'](CA,'late-import')
+    db.execute("UPDATE saas_crm_messages SET happened_at=clock_timestamp()-interval '1 day' WHERE tenant_id=%s::uuid AND body='late-import'",(A,));db.commit()
+    visible=dialogs.listing(PROFILE,channel='connect:'+CA)
+    item=visible['dialogs'][0]
+    assert item['unread_count']==2
+    assert item['last_message_text']=='provider-newest'
+    assert 'read_through_message_id' not in item,'the internal bulk-read cursor is not exposed in normal dialog listings'
+    result=dialogs.mark_all_read(PROFILE)
+    assert result['updated_dialogs']==1
+    refreshed=dialogs.listing(PROFILE,channel='connect:'+CA)
+    assert refreshed['unread_count']==0
+
 def test_avatar_endpoint_is_tenant_scoped_and_claims_only_once(channels,monkeypatch):
     f=channels;db=f['db'];f['incoming'](CA)
     monkeypatch.setattr(avatars,'_connect',lambda:db)

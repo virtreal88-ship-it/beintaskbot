@@ -479,6 +479,7 @@ def projection(cur, policy):
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
+        lrc.read_through_message_id,
         ticket.assigned_to,tm.display_name AS assignee_name,
         NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id) AS unambiguous,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected,
@@ -500,6 +501,11 @@ def projection(cur, policy):
           SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
             AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
+      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m
+        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL
+          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
+            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
+        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE
       LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE ('''+ticket_filter+''') AND st.tenant_id=c.tenant_id
         AND st.channel_id=c.connect_channel_id AND st.status<>'resolved'
         AND (st.conversation_id=c.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
@@ -527,6 +533,7 @@ def projection(cur, policy):
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,s.auto_send_enabled,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
+        lrc.read_through_message_id,
         cs.assigned_to,tm.display_name,TRUE,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
@@ -536,6 +543,9 @@ def projection(cur, policy):
         FROM saas_crm_messages m
         WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
+      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m
+        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
+        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
         AND j0.lead_id=d.kommo_lead_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
@@ -901,7 +911,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active"):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1016,6 +1026,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
             rows=_fold_group_routes(rows)
+            if not include_read_cursors:
+                for row in rows:
+                    row.pop('read_through_message_id',None)
+                    for source in row.get('group_sources',[]):source.pop('read_through_message_id',None)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
     return {**({'completion_preview':True} if completion_preview else {}),
@@ -1075,14 +1089,14 @@ def mark_all_read(profile, payload=None):
     # accepts no operation-specific fields or client-selected dialog IDs.
     if payload not in (None, {}):
         raise TenantLinearError('Некорректный запрос.')
-    snapshot=listing(profile,all_rows=True)
+    snapshot=listing(profile,all_rows=True,include_read_cursors=True)
     targets=[row for card in snapshot.get('dialogs',[]) for row in card.get('group_sources',[card])
-             if int(row.get('unread_count') or 0)>0 and row.get('last_message_id')]
+             if int(row.get('unread_count') or 0)>0 and row.get('read_through_message_id')]
     updated=0
     for row in targets:
         mark_read(profile,{'provider':row.get('provider'),'lead_id':row.get('lead_id'),
                            'channel_id':row.get('channel_id'),'conversation_id':row.get('conversation_id'),
-                           'message_id':row.get('last_message_id')})
+                           'message_id':row.get('read_through_message_id')})
         updated+=1
     return {'updated_dialogs':updated,'captured_dialogs':len(snapshot.get('dialogs',[])),
             'unread_before':int(snapshot.get('unread_count') or 0)}
