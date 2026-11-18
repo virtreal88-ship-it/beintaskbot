@@ -305,3 +305,19 @@ def test_native_group_metadata_preserves_local_name_and_order_without_messages(r
         apply_metadata(cur,{**value['scope'],'source':CB},payload)
     assert db.execute('SELECT display_name FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s',(A,CA,group))[0]['display_name']=='Provider group'
     db.commit()
+
+
+def test_invalid_group_snapshot_cannot_erase_name_or_create_conversation(ready):
+    from tenant_whatsapp_native_groups import apply_metadata
+    db,reference=ready;activate(db)
+    scope=delivery()['scope'];group='120363123456789@g.us'
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,display_name) VALUES(%s,%s,%s,'Keep this name')",(A,CA,group))
+    db.commit()
+    base={'kind':'group_metadata','chat':group,'snapshot':{'status':'available','observedAt':'2026-11-18T12:00:00Z','group_name':'Provider group','phones':[],'total':1,'unresolved':1}}
+    with db.cursor() as cur:
+        for changes in ({'status':'unavailable'},{'group_name':''},{'phones':['+123@lid']},{'observedAt':'2099-01-01T00:00:00Z'}):
+            assert apply_metadata(cur,scope,{**base,'snapshot':{**base['snapshot'],**changes}}) is False
+        apply_metadata(cur,scope,{**base,'chat':'120363999999999@g.us'})
+    assert db.execute('SELECT display_name FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s',(A,CA,group))[0]['display_name']=='Keep this name'
+    assert not db.execute('SELECT 1 FROM saas_connect_conversations WHERE conversation_id=%s',('120363999999999@g.us',))
+    db.commit()
