@@ -33,16 +33,19 @@ var messageLabConfig = flag.String("unified-lab-config", "", "private isolated t
 var messageLabHTML string
 
 type messageLabSettings struct {
+	CallTests    bool          `json:"call_tests"`
 	Scope        unified.Scope `json:"scope"`
 	SessionID    string        `json:"session_id"`
 	AllowedChats []string      `json:"allowed_chats"`
 	Key          []byte        `json:"key"`
 }
 type messageLab struct {
+	calls       *appGateway
 	cfg         messageLabSettings
 	journal     *unified.Journal
 	diagnostics labDiagnostics
 	pairMu      sync.Mutex
+	callMu      sync.Mutex // serialize admission and journal checks, including unknown starts
 }
 
 func newMessageLab(ctx context.Context, db *sql.DB, gateway string) (*messageLab, error) {
@@ -289,6 +292,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	}
 	m := s.sessions.messageLab
 	s.registerLabMedia(mux, m)
+	s.registerLabCallTests(mux, m)
 	s.registerLabReceiveProbe(mux, m)
 	mux.HandleFunc("POST /api/unified-lab/pair", func(w http.ResponseWriter, r *http.Request) { s.handleLabPair(w, r, m) })
 	mux.HandleFunc("GET /unified-lab", func(w http.ResponseWriter, r *http.Request) {
@@ -297,8 +301,12 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/unified-lab/status", func(w http.ResponseWriter, r *http.Request) {
 		session, ok := s.sessions.Get(m.cfg.SessionID)
-		ready := ok && m.matches(session) && session.client.IsConnected()
+		ready := ok && m.matches(session) && session.transportReady()
 		out := map[string]any{"ready": ready, "chats": m.cfg.AllowedChats, "session_id": m.cfg.SessionID, "diagnostics": m.diagnostics.snapshot()}
+		if m.calls != nil {
+			out["call_test_peer"] = m.callPeer()
+			out["call_test_max_seconds"] = s.recordings.maxSeconds()
+		}
 		if ok {
 			out["call_diagnostics"] = session.diagnostics()
 		}
@@ -356,7 +364,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 			return
 		}
 		session, ok := s.sessions.Get(m.cfg.SessionID)
-		if !ok || !m.matches(session) || !session.client.IsConnected() {
+		if !ok || !m.matches(session) || !session.transportReady() {
 			writeJSON(w, 409, map[string]string{"error": "test_session_unavailable"})
 			return
 		}

@@ -94,6 +94,10 @@ func main() {
 		log.Error("startup failed")
 		os.Exit(1)
 	}
+	if err := srv.sessions.messageLab.prepareCallTests(srv); err != nil {
+		log.Error("test_call_configuration_invalid")
+		os.Exit(1)
+	}
 
 	if err := srv.sessions.Restore(ctx); err != nil {
 		log.Error("session restore failed", "err", err)

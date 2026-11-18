@@ -19,6 +19,7 @@ import (
 const Rate = 16000
 const MaxSeconds = 120
 const ManagedMaxSeconds = 900
+const ExtendedTestMaxSeconds = 240
 const MaxSamples = Rate * MaxSeconds
 
 type Manifest struct {
@@ -55,6 +56,12 @@ type Capture struct {
 
 func New(session, call, account, peer string, start time.Time) *Capture {
 	return newCapture(session, call, account, peer, start, 24*time.Hour, MaxSeconds)
+}
+
+// NewExtendedTest is used only by the explicit unifiedlab call-test profile.
+// It does not extend retention or the legacy Worker's recording import policy.
+func NewExtendedTest(session, call, account, peer string, start time.Time) *Capture {
+	return newCapture(session, call, account, peer, start, 24*time.Hour, ExtendedTestMaxSeconds)
 }
 
 // NewManaged keeps the signed business recording for the owner-approved 30 days.

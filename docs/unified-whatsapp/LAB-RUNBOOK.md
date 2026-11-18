@@ -225,3 +225,26 @@ new handoff primitives have not been deployed to that client or production.
 
 Do not switch working sources or remove Connect/Evolution until every gate in
 AUDIT-AND-ROLLOUT.md and LICENSES.md is closed.
+
+### Explicit outbound lab profile
+
+The private unifiedlab configuration can opt into `call_tests: true` only for
+one pre-approved PN peer and its retained LID alias. Account and recording scope
+must match, and a managed source is refused. The lab endpoint uses the existing
+appGateway command journal and WebRTC/recording path with a server-selected lab
+owner. Concurrent starts serialize; an unresolved journal entry prevents a new
+operation from routing around an unknown start. The legacy arbitrary dial route
+remains denied; the lab route and opt-in flag are absent from production builds.
+
+The explicit profile allows a four-minute capture with the same 24-hour test
+retention. Legacy imports remain limited to 120 seconds and managed calls retain
+their existing 900-second/30-day policy. Long lab recordings are local acceptance
+artifacts, not production import bundles.
+
+`lab-client-outbound.patch` preserves the exact isolated client change (local
+WaCalls commit `1c5adb30bc874819419f95191d437bc0c12eb064`). It reuses capture/playback
+and asks for the microphone before submitting one start operation. Only the
+configured peer appears, and an unknown result leaves the control blocked for
+inspection. It is not the `/app` SaaS integration. The client builds with
+`npm run build`; Go server/recording/journal tests pass with and without the lab
+tag, including scope, replay, unknown concurrent starts and production absence.

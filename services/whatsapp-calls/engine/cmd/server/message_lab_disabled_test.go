@@ -23,4 +23,9 @@ func TestProductionBuildDoesNotExposeUnifiedExperiment(t *testing.T) {
 			t.Fatal("lab route in production binary")
 		}
 	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "http://127.0.0.1/api/unified-lab/calls", nil))
+	if w.Code != 404 {
+		t.Fatal("outbound test route in production binary")
+	}
 }

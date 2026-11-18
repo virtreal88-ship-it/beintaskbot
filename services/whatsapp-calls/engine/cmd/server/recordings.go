@@ -38,6 +38,7 @@ var directPeerPattern = regexp.MustCompile(`^[1-9][0-9]{5,21}@(s\.whatsapp\.net|
 func directPeer(peer string) bool { return directPeerPattern.MatchString(peer) }
 
 type recordingStore struct {
+	extendedLab bool // set before Restore, only by a unifiedlab private profile
 	db          *sql.DB
 	mu          sync.Mutex
 	cfg         recordingConfig
@@ -181,11 +182,24 @@ func (s *recordingStore) begin(session, call, account, peer string) (*recordingH
 		return nil, errors.New("recording_reservation_failed")
 	}
 	capture := recording.New(session, call, account, peer, now)
+	if s.extendedLab && !s.cfg.Managed {
+		capture = recording.NewExtendedTest(session, call, account, peer, now)
+	}
 	if s.cfg.Managed {
 		capture = recording.NewManaged(session, call, account, peer, now)
 	}
 	reserved = true
 	return &recordingHandle{id: id, capture: capture, store: s, slot: slot}, nil
+}
+
+func (s *recordingStore) maxSeconds() int {
+	if s != nil && s.cfg.Managed {
+		return recording.ManagedMaxSeconds
+	}
+	if s != nil && s.extendedLab {
+		return recording.ExtendedTestMaxSeconds
+	}
+	return recording.MaxSeconds
 }
 func (h *recordingHandle) finish(graceful bool) {
 	if h == nil {

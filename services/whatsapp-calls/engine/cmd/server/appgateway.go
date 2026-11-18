@@ -279,6 +279,12 @@ func (g *appGateway) bundle(provider string) ([]byte, error) {
 	return store.aead.Open(nil, encrypted[:n], encrypted[n:], []byte(id))
 }
 func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand) appResult {
+	return g.executeOwned(ctx, sess, cmd, "app:"+cmd.CallID)
+}
+
+// Ownership is selected by the authenticated server entry point, never by a
+// browser payload. The isolated lab reuses this same immutable command journal.
+func (g *appGateway) executeOwned(ctx context.Context, sess *Session, cmd appCommand, owner string) appResult {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	failed := appResult{ID: cmd.ID, Error: "scope_denied", NotStarted: cmd.Op == "start"}
@@ -288,6 +294,9 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	canonical := cmd
 	canonical.Cancelled = false
 	request, _ := json.Marshal(canonical)
+	if owner != "app:"+cmd.CallID {
+		request = append([]byte(owner+"\x00"), request...)
+	}
 	digest := sha256.Sum256(request)
 	fingerprint := hex.EncodeToString(digest[:])
 	var prior string
@@ -307,7 +316,7 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	if _, err = g.server.sessions.store.db.Exec("INSERT INTO app_commands(id,request,state) VALUES(?,?,'executing')", cmd.ID, fingerprint); err != nil {
 		return appResult{ID: cmd.ID, Error: "command_uncertain"}
 	}
-	out := g.perform(ctx, sess, cmd)
+	out := g.performOwned(ctx, sess, cmd, owner)
 	encoded, _ := json.Marshal(out)
 	if _, err = g.server.sessions.store.db.Exec("UPDATE app_commands SET state='done',result=? WHERE id=? AND state='executing'", encoded, cmd.ID); err != nil {
 		return appResult{ID: cmd.ID, Error: "command_uncertain", ProviderID: out.ProviderID}
@@ -315,13 +324,16 @@ func (g *appGateway) execute(ctx context.Context, sess *Session, cmd appCommand)
 	return out
 }
 func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand) appResult {
+	return g.performOwned(ctx, sess, cmd, "app:"+cmd.CallID)
+}
+
+func (g *appGateway) performOwned(ctx context.Context, sess *Session, cmd appCommand, owner string) appResult {
 	out := appResult{ID: cmd.ID, ProviderID: cmd.ProviderID}
 	if cmd.Cancelled && cmd.Op == "start" {
 		out.Error = "call_ended"
 		out.NotStarted = true
 		return out
 	}
-	owner := "app:" + cmd.CallID
 	if cmd.Op == "end" || cmd.Op == "reject" || cmd.Cancelled {
 		if cmd.ProviderID == "" {
 			out.OK = true

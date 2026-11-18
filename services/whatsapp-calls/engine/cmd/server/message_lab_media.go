@@ -93,7 +93,7 @@ func labMediaFacts(message *waE2E.Message) (kind, mime string, size uint64, name
 
 func (s *server) labReady(m *messageLab) (*Session, bool) {
 	session, ok := s.sessions.Get(m.cfg.SessionID)
-	return session, ok && m.matches(session) && session.client.IsConnected()
+	return session, ok && m.matches(session) && session.transportReady()
 }
 
 func (s *server) registerLabMedia(mux *http.ServeMux, m *messageLab) {

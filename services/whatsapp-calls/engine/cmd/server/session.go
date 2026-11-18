@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"wacalls/internal/recording"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
@@ -57,10 +56,7 @@ func (s *Session) createCall(callID string) *call.CallManager {
 	if !s.reg.addBounded(callID, ac, s.mgr.maxCalls) {
 		return nil
 	}
-	seconds := recording.MaxSeconds
-	if s.mgr.recordings != nil && s.mgr.recordings.cfg.Managed {
-		seconds = recording.ManagedMaxSeconds
-	}
+	seconds := s.mgr.recordings.maxSeconds()
 	ac.timer.Store(time.AfterFunc(time.Duration(seconds)*time.Second, func() {
 		if current, ok := s.reg.get(callID); ok && current == ac {
 			ac.markEnd("duration_limit")
