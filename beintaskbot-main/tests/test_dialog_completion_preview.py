@@ -25,14 +25,54 @@ def active(fixture, monkeypatch):
     return fixture
 
 
-def message(d, n, *, tenant=A, channel=CA, lead=41, direction='incoming'):
+def message(d, n, *, tenant=A, channel=CA, lead=41, direction='incoming', message_type='text'):
     mid=str(uuid.UUID(int=800000+n))
     d.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
-      channel,direction,body,created_at) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,
-      'Synthetic','2099-01-01T00:00:00Z')''',
-      (mid,tenant,lead,'preview-'+str(n),'connect:'+channel,direction))
+      channel,direction,body,message_type,created_at) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,
+      'Synthetic',%s,'2099-01-01T00:00:00Z')''',
+      (mid,tenant,lead,'preview-'+str(n),'connect:'+channel,direction,message_type))
     d.commit()
     return mid
+
+
+def test_missed_call_is_unread_and_opening_its_chat_marks_only_missed_call_read(active):
+    baseline=message(active,500)
+    first=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    row=next(r for r in first['dialogs'] if r['lead_id']==41)
+    assert row['unread_count']==0, 'the first visible snapshot establishes an exact message cursor'
+
+    missed=message(active,501,direction='system',message_type='call_missed')
+    rejected=message(active,502,direction='system',message_type='call_rejected')
+    listing=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    row=next(r for r in listing['dialogs'] if r['lead_id']==41)
+    assert row['unread_count']==1 and listing['unread_count']==1
+
+    page=dialogs.history(PROFILE,'connect',41,CA,'client')
+    assert {m['id'] for m in page['messages']} >= {missed,rejected,baseline}
+    assert page['read_through_message_id']==missed, 'open-chat read-through includes call_missed, but excludes other system events'
+
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+        conversation_id='client',message_id=page['read_through_message_id']))
+    after=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    assert next(r for r in after['dialogs'] if r['lead_id']==41)['unread_count']==0
+    with pytest.raises(TenantLinearError,match='Сообщение не найдено'):
+        dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+            conversation_id='client',message_id=rejected))
+
+    active.execute('''INSERT INTO saas_connect_conversations
+      (tenant_id,connect_channel_id,conversation_id,lead_id,contact_name)
+      VALUES(%s::uuid,%s::uuid,'missed-only',44,'Missed call only')''',(A,CA))
+    active.commit()
+    call_only=message(active,503,lead=44,direction='system',message_type='call_missed')
+    first_view=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    only_row=next(r for r in first_view['dialogs'] if r['lead_id']==44)
+    assert only_row['unread_count']==1, 'a newly visible call-only dialogue starts with an unread missed call'
+    only_page=dialogs.history(PROFILE,'connect',44,CA,'missed-only')
+    assert only_page['read_through_message_id']==call_only
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=44,channel_id=CA,
+        conversation_id='missed-only',message_id=call_only))
+    after_first_open=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    assert next(r for r in after_first_open['dialogs'] if r['lead_id']==44)['unread_count']==0
 
 
 def test_preview_exact_inbound_token_and_no_read_or_lifecycle_writes(active, monkeypatch):

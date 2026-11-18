@@ -560,7 +560,7 @@ def projection(cur, policy, *, include_read_cursors=False):
           "        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL\n"
           "          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id\n"
           "            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text\n"
-          "          AND m.direction IN ('incoming','outgoing')\n"
+          "          AND (m.direction IN ('incoming','outgoing') OR (m.direction='system' AND m.message_type='call_missed'))\n"
           "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*")
         sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*',
           ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
@@ -734,7 +734,7 @@ def apply_group_view(cur,tenant,dialog,*,snapshot=None):
 
 
 def _unread_counts(cur,tenant,telegram_id,rows):
-    """Initialize per-route read cursors from the first visible snapshot, then count later inbound messages."""
+    """Initialize at the latest ordinary message, then count inbound messages and Connect missed calls."""
     routes=[]
     for row in rows:
         try:
@@ -765,8 +765,12 @@ def _unread_counts(cur,tenant,telegram_id,rows):
         SELECT * FROM unnest(%s::text[],%s::text[],%s::text[],%s::bigint[]))
       INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id)
       SELECT %s::uuid,%s,r.provider,r.channel_id,r.conversation_id,r.lead_id,
-          GREATEST(COALESCE((SELECT max(m.created_at) FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=r.lead_id
-            AND m.channel=CASE WHEN r.provider='connect' THEN 'connect:'||r.channel_id ELSE r.channel_id END),'-infinity'::timestamptz),clock_timestamp()),NULL FROM routes r
+          COALESCE(read_base.created_at,'-infinity'::timestamptz),read_base.id FROM routes r
+      LEFT JOIN LATERAL(SELECT m.created_at,m.id FROM saas_crm_messages m
+        WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=r.lead_id
+          AND m.channel=CASE WHEN r.provider='connect' THEN 'connect:'||r.channel_id ELSE r.channel_id END
+          AND m.direction IN ('incoming','outgoing')
+        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) read_base ON TRUE
       ON CONFLICT(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id) DO NOTHING''',
       ([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],[r[3] for r in routes],tenant,telegram_id,tenant))
     cur.execute('''WITH routes(provider,channel_id,conversation_id,lead_id) AS (
@@ -776,7 +780,7 @@ def _unread_counts(cur,tenant,telegram_id,rows):
           AND rc.provider=r.provider AND rc.channel_id=r.channel_id AND rc.conversation_id=r.conversation_id AND rc.lead_id=r.lead_id
         LEFT JOIN saas_crm_messages m ON m.tenant_id=%s::uuid AND m.kommo_lead_id=r.lead_id
           AND m.channel=CASE WHEN r.provider='connect' THEN 'connect:'||r.channel_id ELSE r.channel_id END
-          AND m.direction='incoming'
+          AND (m.direction='incoming' OR (r.provider='connect' AND m.direction='system' AND m.message_type='call_missed'))
           AND (m.created_at,m.id)>(rc.last_read_at,COALESCE(rc.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))
         GROUP BY r.provider,r.channel_id,r.conversation_id,r.lead_id)
       SELECT provider,channel_id,conversation_id,lead_id,unread_count FROM counts''',
@@ -1061,15 +1065,18 @@ def mark_read(profile,payload):
                 from tenant_connect_dialog_equivalence import members as read_members
                 members=read_members(cur,tenant,channel,conversation)
             history_channel='connect:'+channel if provider=='connect' else str(route.get('history_channel') or channel)
-            cur.execute("""SELECT id,created_at AS at FROM saas_crm_messages
+            readable_direction="direction IN ('incoming','outgoing')"
+            if provider=='connect':
+                readable_direction+=" OR (direction='system' AND message_type='call_missed')"
+            cur.execute(f"""SELECT id,created_at AS at FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid
-                AND direction IN ('incoming','outgoing')""",(tenant,list(members.values()),history_channel,message_id))
+                AND ({readable_direction})""",(tenant,list(members.values()),history_channel,message_id))
             message=cur.fetchone()
             if not message:raise TenantLinearError('Сообщение не найдено в этом диалоге.',404)
             for identity,lead in members.items():
-                cur.execute("""SELECT id,created_at AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                cur.execute(f"""SELECT id,created_at AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid
                   AND kommo_lead_id=%s AND channel=%s AND (created_at,id)<=(%s,%s::uuid)
-                  AND direction IN ('incoming','outgoing') ORDER BY created_at DESC,id DESC LIMIT 1""",
+                  AND ({readable_direction}) ORDER BY created_at DESC,id DESC LIMIT 1""",
                   (tenant,lead,history_channel,message['at'],str(message['id'])))
                 last=cur.fetchone()
                 if not last: continue
@@ -1282,7 +1289,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.
-    eligible=[m for m in messages[:50] if m.get('direction') in ('incoming','outgoing')
+    eligible=[m for m in messages[:50] if (m.get('direction') in ('incoming','outgoing')
+              or (provider=='connect' and m.get('direction')=='system' and m.get('message_type')=='call_missed'))
               and m.get('created_at') and str(m.get('channel') or '')==str(row['history_channel'])
               and int(m.get('source_lead_id') or 0) in history_leads]
     eligible.extend(captured_group)

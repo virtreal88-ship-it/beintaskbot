@@ -23,6 +23,14 @@ settings. Code deployment by itself does not prove events are flowing, and
 historical missed calls are not backfilled. Test with synthetic events; no real
 calls are placed by this change.
 
+For operators, a confirmed `call_missed` timeline item contributes one unread
+count, like an incoming message. Opening its conversation advances the normal
+route read cursor through that item. Other system call events (rejected,
+observed or corrected) remain informational and do not add unread counts or
+become read-cursor targets. A first-visible conversation uses its latest
+ordinary incoming/outgoing message as the baseline, so a newer missed call
+remains unread even when it is the conversation's first displayed call event.
+
 ## Rejected incoming calls
 
 `call.rejected` uses the same signed source-local envelope, with

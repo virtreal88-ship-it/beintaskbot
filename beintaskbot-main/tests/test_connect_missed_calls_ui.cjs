@@ -77,3 +77,34 @@ context.i18n.language='ru';
 recorded.call_recording.expires_at='2000-01-01T00:00:00Z';
 const expired=context.messageMarkup([recorded]);assert(expired.includes('Срок хранения записи истёк'));assert(!expired.includes('<audio'));
 console.log('compact RU/AZ/EN recording directions, private playback, incomplete status and expiry passed');
+
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const readFile=p=>fs.readFileSync(p,'utf8');
+const settle=async()=>{for(let i=0;i<30;i++)await new Promise(resolve=>setImmediate(resolve));};
+(async()=>{
+ const dom=new JSDOM(readFile('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only',pretendToBeVisual:true});
+ const w=dom.window,d=w.document,member={tenant_id:'tenant',telegram_id:11,role:'owner',active:true};
+ w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+ w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true}}};
+ const missedId='80000000-0000-0000-0000-000000000501';
+ const route={provider:'connect',channel_id:'channel',conversation_id:'customer',lead_id:41,
+   customer_name:'Customer',display_state:'manual',state:'human',can_send:false,available_actions:[],unread_count:1};
+ const calls=[];let readId=null;
+ w.fetch=async(url,options={})=>{
+  const parsed=new URL(url,w.location),path=parsed.pathname;calls.push({path,method:options.method||'GET',body:options.body});let result={};
+  if(path.endsWith('/platform/me'))result=w.tenantProfileSnapshot;
+  else if(path.endsWith('/dialogs/history'))result={dialog:route,messages:[{id:missedId,external_id:'connect:call:501',source:'connect',source_channel_id:'channel',source_lead_id:41,channel:'connect:channel',direction:'system',message_type:'call_missed',body:'',call_is_video:false,happened_at:'2026-11-18T10:00:00Z'}],read_through_message_id:missedId,next_before:null};
+  else if(path.endsWith('/dialogs/read')&&options.method==='POST'){readId=JSON.parse(options.body).message_id;result={updated:true,read_through_message_id:readId};}
+  else if(path.endsWith('/dialogs'))result={dialogs:[{...route,unread_count:readId?0:1}],channels:[],agents:[],attention_count:0,unread_count:readId?0:1,total_count:1,next_offset:null};
+  return{ok:true,status:200,json:async()=>({success:true,result})};
+ };
+ w.eval(readFile('docs/tenant-operator-i18n.js'));w.eval(readFile('docs/tenant-operator-dialogs.js'));
+ await settle();d.getElementById('view-dialogs')?.classList.add('active');await w.tenantOperator.refresh();await settle();await w.tenantOperator.openDialog(route);await settle();
+ assert(d.querySelector('[data-message-id="'+missedId+'"] [data-missed-call]'),'the missed call remains a visible timeline item when the chat opens');
+ assert.equal(readId,missedId,'opening the chat sends its missed-call message ID to the normal read endpoint');
+ assert.deepEqual(JSON.parse(calls.find(c=>c.path.endsWith('/dialogs/read')).body),{
+   provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'customer',message_id:missedId,
+   expected_tenant_id:'tenant',expected_user_id:11
+ });
+ dom.window.close();console.log('PASS opening a chat automatically marks the missed-call timeline item read');
+})().catch(error=>{console.error(error);process.exitCode=1;});
