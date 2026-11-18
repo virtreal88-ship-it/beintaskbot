@@ -42,11 +42,25 @@ func (s *Socket) SendNode(ctx context.Context, node waBinary.Node) error {
 // the device address, substitutes creator for route and only awaits a write.
 // A correlated server ACK is required here; it still is not a peer UI receipt.
 func (s *Socket) RejectIncomingCall(ctx context.Context, peer, creator types.JID, callID string) error {
-	if s.OwnPN().IsEmpty() {
+	own := s.OwnPN()
+	if own.IsEmpty() {
 		return errors.New("transport_unconfirmed")
 	}
-	node := signaling.BuildRejectStanza(peer, callID, creator)
+	node := buildRejectRequest(own, peer, creator, callID, s.cli.GenerateMessageID())
 	return rejectWithAcknowledgement(ctx, s.Query, node)
+}
+
+func buildRejectRequest(own, peer, creator types.JID, callID, requestID string) waBinary.Node {
+	// Match upstream 592721a (fixes whatsmeow #1182 for our exact SDK pin):
+	// sender + count=0, with NO tctoken child. Retain the offered destination
+	// and creator separately, plus our bounded correlated-ACK requirement.
+	node := signaling.BuildRejectStanza(peer, callID, creator)
+	node.Attrs["from"] = own.ToNonAD()
+	node.Attrs["id"] = requestID
+	children := node.GetChildren()
+	children[0].Attrs["count"] = "0"
+	node.Content = children
+	return node
 }
 
 func rejectWithAcknowledgement(ctx context.Context, query func(context.Context, waBinary.Node) (*waBinary.Node, error), node waBinary.Node) error {

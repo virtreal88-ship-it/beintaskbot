@@ -62,3 +62,20 @@ func TestMinimalRejectPreservesOfferedRouteAndCreator(t *testing.T) {
 		t.Fatal("reject lost routing or added unverified attributes/children")
 	}
 }
+
+func TestRejectRequestMatchesUpstreamFixWithoutPrivacyToken(t *testing.T) {
+	own := types.JID{User: "102", Server: types.DefaultUserServer, Device: 26}
+	for _, server := range []string{types.DefaultUserServer, types.HiddenUserServer} {
+		peer := types.JID{User: "100", Server: server, Device: 4}
+		creator := types.JID{User: "101", Server: server}
+		n := buildRejectRequest(own, peer, creator, "call", "request")
+		children := n.GetChildren()
+		if n.Tag != "call" || len(n.Attrs) != 3 || n.Attrs["from"] != own.ToNonAD() || n.Attrs["to"] != peer || n.Attrs["id"] != "request" || len(children) != 1 {
+			t.Fatal("reject request lost sender or exact offered route")
+		}
+		reject := children[0]
+		if reject.Tag != "reject" || len(reject.Attrs) != 3 || reject.Attrs["call-id"] != "call" || reject.Attrs["call-creator"] != creator || reject.Attrs["count"] != "0" || reject.Content != nil {
+			t.Fatal("reject reintroduced token or changed upstream-compatible shape")
+		}
+	}
+}

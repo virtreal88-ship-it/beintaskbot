@@ -351,6 +351,27 @@ These counters send no extra protocol messages and do not equate authentication
 or activation with successful delivery. No logout, session deletion, new QR or
 working-source change is a recovery step in this experiment.
 
+The diagnostic binary at commit `4c012161` confirmed a matching activation IQ
+result on the same linked device. The owner reported sending direct control 29,
+but no incoming frame/event arrived. A single outgoing control 30 received a
+message ACK; that confirms provider acceptance, not recipient delivery. Primary
+phone receipt and recipient delivery are still being checked. This is a receive
+path blocker distinct from the reject request format; no additional calls are
+requested until it is understood.
+
+Upstream investigation found a concrete fixed defect on our exact pinned
+whatsmeow revision `5f04eac6dbbb`:
+[issue #1182](https://github.com/tulir/whatsmeow/issues/1182), fixed by
+[592721a](https://github.com/tulir/whatsmeow/commit/592721a00b51a92d4a428aedc003387d81160012),
+removes the `tctoken` child from Reject while retaining the account sender and
+`count=0`. The adapter now uses that shape and the SDK-generated request ID,
+retains exact offered route/creator and still requires a matching ACK. No broad
+SDK update or invented protocol request is needed. PN/LID routing and absence of
+the token are regression-tested. This corrects a known library defect; its
+effect on this live account is not yet accepted, and it does not prove a fix for
+the missing incoming stream. The candidate is prepared, not deployed to a
+working source.
+
 ### CRM projection foundation (not wired to production)
 
 The common Go envelope retains stable event identity, participant/direction,
