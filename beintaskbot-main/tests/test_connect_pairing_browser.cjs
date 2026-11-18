@@ -11,7 +11,7 @@ function contrast(a,b){const lum=v=>{const c=v.match(/[\d.]+/g).slice(0,3).map(N
 for(const mode of ['app','legacy'])for(const width of [320,390,1440])for(const theme of ['light','dark'])for(const zoom of width===1440?[1,1.25]:[1]){
  const viewportWidth=Math.round(width/zoom),viewportHeight=Math.round(900/zoom);const page=await browser.newPage({viewport:{width:viewportWidth,height:viewportHeight},deviceScaleFactor:zoom});const name=`${mode}-${width}-${theme}-${zoom}`;
  try{
- await page.route('https://pairing.test/**',route=>route.fulfill({status:200,contentType:'text/html',body:`${doctype}<html data-app-theme="${theme}"><head><style>${baseCSS}</style></head><body ${mode==='app'?'data-app-ui="kwid"':''}><main style="padding:32px"><h1>Интеграции</h1><p>WhatsApp</p><button id="add">Добавить номер</button></main></body></html>`}));await page.goto('https://pairing.test/');
+ await page.route('https://pairing.test/**',route=>route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:`${doctype}<html data-app-theme="${theme}"><head><meta charset="utf-8"><style>${baseCSS}</style></head><body ${mode==='app'?'data-app-ui="kwid"':''}><main style="padding:32px"><h1>Интеграции</h1><p>WhatsApp</p><button id="add">Добавить номер</button></main></body></html>`}));await page.goto('https://pairing.test/');
  if(mode==='app')await page.addStyleTag({content:fs.readFileSync(path.join(root,'ui/src/app-theme.css'),'utf8')});
  assert.equal(await page.evaluate(()=>document.compatMode),'CSS1Compat');
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),name+' baseline fixture overflow before modal');
