@@ -338,12 +338,16 @@ func (g *appGateway) perform(ctx context.Context, sess *Session, cmd appCommand)
 		}
 		if cmd.Op == "reject" {
 			if ac, exists := sess.reg.get(cmd.ProviderID); exists {
+				ac.markEnd("command_reject")
 				if err := ac.cm.RejectCall(ctx, cmd.ProviderID, core.EndCallReasonDeclined); err != nil {
 					out.Error = "call_ended"
 					return out
 				}
 			}
 		} else {
+			if ac, exists := sess.reg.get(cmd.ProviderID); exists {
+				ac.markEnd("command_end")
+			}
 			sess.terminateCall(cmd.ProviderID, core.EndCallReasonUserEnded)
 		}
 		out.OK = true
@@ -540,11 +544,13 @@ func (g *appGateway) makeBridge(sess *Session, id, owner, sdp string) (string, e
 				g.mu.Lock()
 				defer g.mu.Unlock()
 				if current, ok := sess.reg.get(id); ok && current == ac {
+					ac.markEnd("audio_transport")
 					ac.interrupted.Store(true)
 					sess.terminateCall(id, core.EndCallReasonUserEnded)
 				}
 			}()
 		})
+		bridge.stream.onDiagnosis = func(d streamEndDiagnostic) { sess.diag.lastStream.Store(&d) }
 		sess.setBridge(id, bridge)
 		return "", nil
 	}

@@ -14,11 +14,14 @@ type activeCall struct {
 	prepared    atomic.Bool
 	recording   atomic.Pointer[recordingHandle]
 	interrupted atomic.Bool
+	endOrigin   atomic.Pointer[string]
 	cm          *call.CallManager
 	bridge      atomic.Pointer[Bridge]
 	setupMu     sync.Mutex
 	timer       atomic.Pointer[time.Timer]
 }
+
+func (a *activeCall) markEnd(origin string) { a.endOrigin.CompareAndSwap(nil, &origin) }
 
 func (r *callRegistry) attachRecording(id string, expected *activeCall, h *recordingHandle) bool {
 	r.mu.Lock()

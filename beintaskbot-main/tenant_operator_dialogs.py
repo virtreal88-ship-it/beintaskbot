@@ -313,7 +313,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     if value.get('message_type')=='call_recording' and direction=='system' and isinstance(raw,dict):
         try:
             value['call_recording']={'id':str(uuid.UUID(str(raw['recording_id']))),
-                'duration_ms':max(0,min(120000,int(raw.get('duration_ms',0)))),
+                'duration_ms':max(0,min(900000 if raw.get('test_recording') is False else 120000,int(raw.get('duration_ms',0)))),
                 'complete':raw.get('complete') is True,'expires_at':str(raw.get('expires_at','')),
                 'test_recording':raw.get('test_recording',True) is not False,
                 'account_number':str(raw.get('call_account_number','')) if re.fullmatch(r'[0-9]{5,22}',str(raw.get('call_account_number',''))) else '',

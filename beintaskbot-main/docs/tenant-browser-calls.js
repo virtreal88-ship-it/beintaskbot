@@ -60,7 +60,17 @@
     try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
     if(hide)closeModal();void poll();
   }
-  function closeModal(){stopRing();if(modal){modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
+  function closeModal(){stopRing();if(modal){clearInterval(modal.clockTimer);modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
+  function updateDuration(m){
+    const call=session?.call||m.call;
+    if(m.clockCall!==call?.id){clearInterval(m.clockTimer);m.clockTimer=null;m.clockStart=null;m.clockEnd=null;m.clockCall=call?.id;}
+    if(call?.state==='connected'&&m.clockStart===null)m.clockStart=performance.now();
+    if(m.clockStart!==null&&terminal(call)&&m.clockEnd===null)m.clockEnd=performance.now();
+    m.duration.hidden=m.clockStart===null;
+    if(m.clockStart!==null){const seconds=Math.max(0,Math.floor(((m.clockEnd??performance.now())-m.clockStart)/1000));m.duration.textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');}
+    if(m.clockStart!==null&&m.clockEnd===null&&!m.clockTimer)m.clockTimer=setInterval(()=>{if(modal===m)updateDuration(m);},1000);
+    if(m.clockEnd!==null){clearInterval(m.clockTimer);m.clockTimer=null;}
+  }
   function show(route,call=null){
     if(busy()&&modal){draw();if(!modal.node.open)modal.node.show();return;}
     if(busy()){route=session.route;call=session.call;}
@@ -71,8 +81,9 @@
     for(const button of [start,reject,end,mute,close])button.type='button';actions.append(start,mute,reject,end);
     const info=make('small');const result=make('div','','browser-call-result');
     const sound=make('button','Включить звук звонка','browser-call-sound');sound.type='button';sound.hidden=true;sound.onclick=()=>void unlockRing();
-    node.append(close,kicker,title,state,avatar,error,actions,sound,info,result);document.body.append(node);
-    modal={node,title,state,error,start,reject,end,mute,kicker,avatar,result,info,sound,name:contactName(route,call),route:routeOf(route),call};
+    const duration=make('div','','browser-call-duration');duration.hidden=true;duration.setAttribute('role','timer');duration.setAttribute('aria-label','Длительность разговора');duration.setAttribute('aria-live','off');duration.style.cssText='font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:8px';
+    node.append(close,kicker,title,state,duration,avatar,error,actions,sound,info,result);document.body.append(node);
+    modal={node,title,state,duration,clockCall:null,clockStart:null,clockEnd:null,clockTimer:null,error,start,reject,end,mute,kicker,avatar,result,info,sound,name:contactName(route,call),route:routeOf(route),call};
     close.onclick=()=>{if(busy())void stop(session,true);else if(modal?.call&&!terminal(modal.call))void rejectCall();else closeModal();};
     node.addEventListener('cancel',event=>{event.preventDefault();close.click();});
     start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();mute.onclick=()=>{const s=session;if(!s?.media||s.stopping)return;s.muted=!s.muted;s.media.setMuted(s.muted);draw();};
@@ -81,7 +92,7 @@
   async function rejectCall(){const m=modal;if(!m?.call)return;try{await api({...m.route,op:'reject',call_id:m.call.id,request_id:crypto.randomUUID()});closeModal();void poll();}catch(e){if(modal===m)m.error.textContent=e.message;}}
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
-    updateRing(call);m.sound.hidden=call?.state!=='incoming'||busy()||ringContext?.state==='running';
+    updateRing(call);updateDuration(m);m.sound.hidden=call?.state!=='incoming'||busy()||ringContext?.state==='running';
     m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=call?.display_name?contactName(m.route,call):m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
     const source=sourceOf(m.route);
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
@@ -175,7 +186,7 @@
   document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-chat-attachments-ready',mount);
   document.addEventListener('tenant-calls-updated',event=>{enabled=true;const route=window.tenantOperator?.currentDialog;if(route&&String(route.channel_id)===String(event.detail?.channel_id)&&!String(route.conversation_id).endsWith('@g.us'))route.browser_call_available=true;mount();void poll();});
   document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';sources=[];enabled=false;closeModal();});
-  window.addEventListener('pagehide',()=>{stopRing();clearTimeout(timer);if(busy())void stop(session);release(session);});
+  window.addEventListener('pagehide',()=>{stopRing();clearTimeout(timer);clearInterval(modal?.clockTimer);if(busy())void stop(session);release(session);});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
   changed();
 })();

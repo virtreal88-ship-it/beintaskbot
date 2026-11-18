@@ -61,6 +61,7 @@ func (s *Session) createCall(callID string) *call.CallManager {
 	}
 	ac.timer.Store(time.AfterFunc(time.Duration(seconds)*time.Second, func() {
 		if current, ok := s.reg.get(callID); ok && current == ac {
+			ac.markEnd("duration_limit")
 			ac.interrupted.Store(true)
 			s.terminateCall(callID, core.EndCallReasonUserEnded)
 		}
@@ -110,6 +111,13 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		s.mgr.broker.upsertCall(rec)
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
+		if ac, ok := s.reg.get(c.CallID); ok && ac.cm == cm {
+			origin := "unknown"
+			if value := ac.endOrigin.Load(); value != nil {
+				origin = *value
+			}
+			s.diag.lastEnd.Store(&callEndDiagnostic{origin, safeEndCode(string(c.StateData.EndReason)), time.Now().UnixMilli()})
+		}
 		s.removeCall(c.CallID, c.StateData.EndReason == core.EndCallReasonUserEnded)
 		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
 	}
@@ -213,10 +221,12 @@ func (s *Session) handleEvent(rawEvt any) {
 		}
 	case *events.CallTerminate:
 		if ac, ok := s.callForEvent(evt.From, evt.Data); ok {
+			ac.markEnd("whatsapp_terminate")
 			ac.cm.HandleCallTerminate(wrapCall(evt.From, evt.Data))
 		}
 	case *events.CallReject:
 		if ac, ok := s.callForEvent(evt.From, evt.Data); ok {
+			ac.markEnd("whatsapp_reject")
 			ac.cm.HandleCallTerminate(wrapCall(evt.From, evt.Data))
 		}
 	}
@@ -324,6 +334,7 @@ func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
 	if !ok {
 		return
 	}
+	ac.markEnd("server_end")
 	ac.launchMu.Lock()
 	defer ac.launchMu.Unlock()
 	if ac.prepared.Load() && ac.cm.CurrentCall() == nil {

@@ -15,6 +15,30 @@ type callDiagnostics struct {
 	unknownEvents    atomic.Uint64
 	lastOffer        atomic.Int64
 	capacityRejected atomic.Uint64
+	lastEnd          atomic.Pointer[callEndDiagnostic]
+	lastStream       atomic.Pointer[streamEndDiagnostic]
+}
+
+type callEndDiagnostic struct {
+	Origin string `json:"origin"`
+	Code   string `json:"code"`
+	AtMS   int64  `json:"at_ms"`
+}
+
+type streamEndDiagnostic struct {
+	Code         string `json:"code"`
+	InputFrames  uint64 `json:"input_frames"`
+	OutputFrames uint64 `json:"output_frames"`
+	AtMS         int64  `json:"at_ms"`
+}
+
+func safeEndCode(reason string) string {
+	switch reason {
+	case "user_ended", "declined", "timeout", "busy", "cancelled", "failed", "do_not_disturb":
+		return reason
+	default:
+		return "unknown"
+	}
 }
 
 type recordingQuality struct {
@@ -60,6 +84,8 @@ func (s *Session) diagnostics() map[string]any {
 	out["provider_start_requested"] = started
 	out["input_frames"] = input
 	out["output_frames"] = output
+	out["last_call_end"] = s.diag.lastEnd.Load()
+	out["last_stream_end"] = s.diag.lastStream.Load()
 	if s.mgr.recordings != nil {
 		out["last_recording_quality"] = s.mgr.recordings.lastQuality.Load()
 	}
