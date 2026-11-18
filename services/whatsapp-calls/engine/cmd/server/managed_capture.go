@@ -4,7 +4,6 @@ import (
 	"context"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
 	"time"
 	"wacalls/internal/unified"
 )
@@ -14,7 +13,7 @@ func (g *appGateway) attachMessages(s *Session) bool {
 		return false
 	}
 	client := s.client
-	client.Log = waLog.Noop
+	client.Log = labProviderLogger{diagnostics: &g.providerDiagnostics}
 	client.PrePairCallback = func(jid types.JID, _, _ string) bool { return jid.ToNonAD().String() == g.cfg.Account }
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
@@ -27,7 +26,13 @@ func (g *appGateway) attachMessages(s *Session) bool {
 			go client.Disconnect()
 			return false
 		}
+		g.observeProviderEvent(event)
 		stored := g.messages.Capture(s.mgr.appCtx, event)
+		if stored {
+			g.providerDiagnostics.add("capture_handler_succeeded")
+		} else {
+			g.providerDiagnostics.add("capture_failed")
+		}
 		if stored && g.groups != nil {
 			var chat types.JID
 			switch e := event.(type) {
@@ -68,4 +73,30 @@ func (g *appGateway) deliverMessages(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// Counters are local to this source process. No payload or identifier is retained.
+func (g *appGateway) observeProviderEvent(event any) {
+	code := "event_other"
+	switch event.(type) {
+	case *events.Message:
+		code = "event_message"
+	case *events.Receipt:
+		code = "event_receipt"
+	case *events.UndecryptableMessage:
+		code = "event_undecryptable"
+	case *events.Connected:
+		code = "event_connected"
+	case *events.Disconnected:
+		code = "event_disconnected"
+	case *events.LoggedOut:
+		code = "event_logged_out"
+	case *events.StreamReplaced:
+		code = "event_stream_replaced"
+	case *events.OfflineSyncPreview:
+		code = "event_offline_preview"
+	case *events.OfflineSyncCompleted:
+		code = "event_offline_completed"
+	}
+	g.providerDiagnostics.add(code)
 }

@@ -20,52 +20,50 @@ function setup() {
   let next = 0, responses = [];
   const document = {
     hidden: false,
-    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {after(box) { boxes.push(box); anchors.push({id,box}); }}; },
+    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {value:'kommo',classList:{contains:()=>id==='view-tasks'},after(box) { boxes.push(box); anchors.push({id,box}); }}; },
     querySelector(selector) { return {append(box){boxes.push(box);anchors.push({id:selector,box})}}; },
     createElement() { return {dataset:{},textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
     addEventListener(name, handler) { listeners[name] = handler; },
     dispatchEvent(event) { events.push(event); }
   };
   const requests = [];
-  const context = {document, window:{addEventListener(name,handler){listeners[name]=handler;}}, CustomEvent:class { constructor(type, options) {this.type=type;this.detail=options.detail;} },
+  const context = {document,URLSearchParams,AbortController,Date, window:{addEventListener(name,handler){listeners[name]=handler;}}, CustomEvent:class { constructor(type, options) {this.type=type;this.detail=options.detail;} },
     fetch: async (url, options) => {requests.push({url, options}); const value=responses.shift();return await value;},
     setTimeout:fn=>{timers.set(++next,fn);return next;}, clearTimeout:id=>timers.delete(id)};
   vm.runInNewContext(source, context);
   const reply = jobs => ({ok:true,json:async()=>({success:true,jobs})});
   return {context, document, requests, listeners, events, boxes, anchors, timers, reply,
     push(value) {responses.push(value);},
-    profile(tenant,role='worker') {listeners['tenant-profile']({detail:{member:{tenant_id:tenant,role},capabilities:{modules:{tasks:true}}}});}}
+    profile(tenant,role='worker') {listeners['tenant-profile']({detail:{member:{tenant_id:tenant,telegram_id:11,active:true,role},capabilities:{modules:{tasks:true}}}});}}
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 (async()=>{
   const s = setup();
-  assert(s.anchors.some(row=>row.id==='tasksRefresh'));assert(s.anchors.some(row=>row.id==='dealsRefresh'));assert.equal(s.anchors.some(row=>row.id==='customersRefresh'||row.id==='customersNotice'),false,'contacts own their selected-source reload and must not inherit deal synchronization controls/status');
+  assert(s.anchors.some(row=>row.id==='#view-tasks .top>div'));assert(s.anchors.some(row=>row.id==='#view-deals .top>div'));assert.equal(s.boxes.some(box=>box.type==='button'),false,'no extra full-sync buttons');assert.equal(s.anchors.some(row=>row.id==='customersRefresh'||row.id==='customersNotice'),false,'contacts own their selected-source reload and must not inherit deal synchronization controls/status');
   s.push(s.reply([{resource:'tasks',status:'queued',pages_done:2}]));s.profile('company-a');await flush();
   assert(s.boxes.some(box=>box.textContent.includes('2 səhifə')));
   assert.equal(s.timers.size,1);
   const fn = [...s.timers.values()][0];s.timers.clear();
   s.push(s.reply([{resource:'tasks',status:'done',pages_done:3}]));await fn();await flush();
-  assert.equal(s.timers.size,0);assert.equal(s.events.length,1);assert(s.boxes.filter(box=>box.dataset?.crmSyncStatus).every(box=>box.hidden),'completed sync leaves no warning banner');
+  assert.equal(s.timers.size,1,'visible idle status polling continues');assert.equal(s.events.length,1);assert(s.boxes.filter(box=>box.dataset?.crmSyncStatus).every(box=>box.hidden),'completed sync leaves no warning banner');
   assert.equal(s.events[0].detail.tenant_id,'company-a');
   assert.equal(s.events[0].detail.resources[0],'tasks');
-  assert(s.requests.every(r=>r.url==='/api/platform/crm/sync' && !r.options.method));
+  assert(s.requests.every(r=>{const u=new URL(r.url,'https://fixture.invalid');return u.pathname==='/api/platform/crm/sync'&&u.searchParams.get('expected_tenant_id')==='company-a'&&u.searchParams.get('expected_user_id')==='11'&&!u.searchParams.has('refresh')&&!r.options.method;}));
   assert(s.boxes.filter(box=>box.type==='button').every(button=>button.hidden));
 
   s.push(s.reply([{resource:'tasks',status:'done',pages_done:3}]));s.context.window.tenantCrmSyncWatch();await flush();assert.equal(s.events.length,1,'same completed snapshot emits once');
   s.push(s.reply([{resource:'tasks',status:'done',pages_done:3,finished_at:'new'}]));s.context.window.tenantCrmSyncWatch();await flush();assert.equal(s.events.length,2,'new completed run emits again');
   const admin = setup();admin.push(admin.reply([]));admin.profile('company-a','admin');await flush();
-  const full = admin.boxes.find(box=>box.type==='button');assert(full&&!full.hidden);
-  admin.push(admin.reply([]));admin.push(admin.reply([{resource:'tasks',status:'queued'}]));
-  await full.onclick();await flush();
-  assert(admin.requests.some(r=>r.url==='/api/platform/crm/tasks?refresh=1&full=1'));
-  assert(!full.disabled);
+  assert.equal(admin.boxes.some(box=>box.type==='button'),false,'admins do not get extra full-sync buttons');
+  assert(admin.requests.every(r=>!r.url.includes('refresh=')&&!r.url.includes('full=')),'unproven sync rights never enqueue provider work');
 
   const race = setup();let release;
   race.push(new Promise(resolve=>{release=resolve;}));race.profile('old-company');
   race.push(race.reply([{resource:'tasks',status:'failed'}]));race.profile('new-company');await flush();
   release(race.reply([{resource:'tasks',status:'done'}]));await flush();
-  assert.equal(race.events.length,0);assert(race.boxes.some(b=>b.textContent.includes('dayandı')));
-  assert.equal(race.timers.size,0);
+  assert.equal(race.events.length,0,'old tenant response cannot emit completion');
+  race.context.window.tenantCrmSyncWatch();await flush();assert(race.boxes.some(b=>b.textContent.includes('dayandı')));
+  assert.equal(race.timers.size,1);race.listeners.pagehide();assert.equal(race.timers.size,0,'pagehide cancels future polling');
 
   const hidden = setup();hidden.document.hidden=true;hidden.profile('company-a');await flush();
   assert.equal(hidden.requests.length,0);

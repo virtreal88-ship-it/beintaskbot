@@ -50,6 +50,7 @@ func managedHandler(s *server, host, token string) http.Handler {
 			}
 			out := map[string]any{"connected": false, "account_jid": "", "qr": ""}
 			if s.appGateway != nil && s.appGateway.messages != nil {
+				out["provider_diagnostics"] = s.appGateway.providerDiagnostics.snapshot()
 				if counts, err := s.appGateway.messages.Maintenance(r.Context()); err == nil {
 					out["messaging_diagnostics"] = counts
 				}
