@@ -6,26 +6,39 @@
 <p>Изолированный эксперимент. Только тестовый номер и согласованные участники. В production этот экран отсутствует.</p>
 <p><a href="/" target="_blank" rel="noopener">Открыть существующий экран QR и звонков</a> — используйте ту же сессию, дополнительный номер не создавайте.</p>
 <section><p id="status" role="status">Проверяю тестовую сессию…</p><form id="send"><label>Тестовый чат <select id="peer"></select></label><label><small>Тестовая фраза</small><textarea id="text" required maxlength="4096"></textarea></label><button id="button" disabled>Отправить один раз</button></form><p id="result" role="status"></p></section>
-<section><h2>Подтверждённо сохранённые события</h2><p>Это лабораторный журнал. «accepted» подтверждает принятие сервером, а delivered/read приходят отдельными событиями. Вложения пока сохраняются только как зашифрованные протокольные данные.</p><ol id="events"></ol></section>
+<section><form id="media"><h2>Тестовое вложение</h2><p>Только специально подготовленный файл до 64 КБ, без клиентских данных. Получатель выбран выше.</p><select id="kind"><option value="image">PNG/JPEG</option><option value="document">TXT/PDF</option><option value="voice">Голосовое Ogg Opus</option></select><input id="file" type="file" required><button id="media-button" disabled>Отправить один раз</button></form><button id="group-button" type="button" disabled>Прочитать сведения тестовой группы</button><pre id="group-result"></pre></section>
+<section><h2>Подтверждённо сохранённые события</h2><p>«accepted» подтверждает принятие сервером, а delivered/read приходят отдельными событиями. Скачивание вложений доступно только для разрешённого тестового чата.</p><ol id="events"></ol></section>
 <script>
 const statusNode=document.querySelector('#status'),peer=document.querySelector('#peer'),input=document.querySelector('#text'),button=document.querySelector('#button'),result=document.querySelector('#result'),list=document.querySelector('#events');
 let cursor=0,stopped=false,busy=false,ready=false,timer,pending=null;
+const mediaButton=document.querySelector('#media-button'),fileInput=document.querySelector('#file'),kindInput=document.querySelector('#kind'),groupButton=document.querySelector('#group-button');
+function controls(){button.disabled=!ready||busy||(pending&&pending.path!=='text');mediaButton.disabled=!ready||busy||(pending&&pending.path!=='media');peer.disabled=!!pending||busy;input.disabled=!!pending||busy;fileInput.disabled=!!pending||busy;kindInput.disabled=!!pending||busy;groupButton.disabled=!ready||busy||!peer.value.endsWith('@g.us')}
+peer.addEventListener('change',controls);
 async function poll(){
  try{
   const response=await fetch('/api/unified-lab/status',{cache:'no-store'});if(!response.ok)throw Error();const state=await response.json();ready=state.ready===true;
   if(!peer.options.length)for(const chat of state.chats){const option=document.createElement('option');option.value=chat;option.textContent=chat;peer.append(option)}
-  statusNode.textContent=ready?'Тестовая сессия подключена. Для текста и звонков используется один client.':'Точная тестовая сессия не подключена. Отправка заблокирована.';button.disabled=!ready||busy;
+  statusNode.textContent=ready?'Тестовая сессия подключена. Для текста и звонков используется один client.':'Точная тестовая сессия не подключена. Отправка заблокирована.';controls();
   const events=await fetch('/api/unified-lab/events?after='+cursor,{cache:'no-store'});if(!events.ok)throw Error();const data=await events.json();
-  for(const event of data.events){const p=event.payload,item=document.createElement('li');item.textContent=new Date(p.timestamp).toLocaleTimeString()+' · '+p.kind+' · '+(p.from_me?'исходящее':'входящее')+' · '+(p.text||p.status||'нет текстовой части');list.append(item);cursor=event.sequence;while(list.children.length>100)list.firstChild.remove()}
- }catch{statusNode.textContent='Нет подтверждения состояния. Отправка приостановлена.';ready=false;button.disabled=true}
+  for(const event of data.events){const p=event.payload,item=document.createElement('li');item.textContent=new Date(p.timestamp).toLocaleTimeString()+' · '+p.kind+' · '+(p.from_me?'исходящее':'входящее')+' · '+(p.text||p.status||p.media_kind||'нет текстовой части');if(p.media_kind&&p.media_size){const link=document.createElement('a');link.href='/api/unified-lab/media/'+encodeURIComponent(event.id);link.textContent=' Скачать тестовое вложение';link.download='';item.append(link)}list.append(item);cursor=event.sequence;while(list.children.length>100)list.firstChild.remove()}
+ }catch{statusNode.textContent='Нет подтверждения состояния. Отправка приостановлена.';ready=false;controls()}
  finally{if(!stopped)timer=setTimeout(poll,2500)}
 }
-document.querySelector('#send').addEventListener('submit',async e=>{
- e.preventDefault();if(busy||!ready||!input.value.trim())return;busy=true;button.disabled=true;peer.disabled=true;input.disabled=true;
- const payload=pending||{operation:crypto.randomUUID(),chat:peer.value,text:input.value};pending=payload;
- try{const response=await fetch('/api/unified-lab/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(response.ok&&data.confirmed){result.textContent='Сервер принял сообщение. Ожидаем отдельный статус доставки.';input.value='';pending=null;button.textContent='Отправить один раз'}else{result.textContent='Результат не подтверждён. Кнопка повторит проверку той же операции, без нового отправления. Проверьте статус на тестовом телефоне.';button.textContent='Проверить ту же операцию';ready=false}}
+async function sendOnce(path,payload){
+ if(busy||!ready||(pending&&pending.path!==path))return;busy=true;pending=pending||{path,payload};controls();
+ const activeButton=path==='media'?mediaButton:button;
+ try{const response=await fetch('/api/unified-lab/'+pending.path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.payload)});const data=await response.json();if(response.ok&&data.confirmed){result.textContent='Сервер принял сообщение. Ожидаем отдельный статус доставки.';input.value='';fileInput.value='';pending=null;activeButton.textContent='Отправить один раз'}else{result.textContent='Результат не подтверждён. Кнопка повторит проверку той же операции, без нового отправления. Проверьте статус на тестовом телефоне.';activeButton.textContent='Проверить ту же операцию';ready=false}}
  catch{result.textContent='Связь потеряна; результат неизвестен. Не отправляйте ту же фразу повторно до проверки телефона.';ready=false}
- finally{busy=false;button.disabled=!ready;peer.disabled=!!pending;input.disabled=!!pending}
+ finally{busy=false;controls()}
+}
+document.querySelector('#send').addEventListener('submit',async e=>{e.preventDefault();if(!input.value.trim()&&!pending)return;await sendOnce('text',{operation:crypto.randomUUID(),chat:peer.value,text:input.value})});
+document.querySelector('#media').addEventListener('submit',async e=>{
+ e.preventDefault();if(pending){await sendOnce('media',null);return}if(busy||!ready)return;
+ const file=fileInput.files[0],chat=peer.value,kind=kindInput.value;if(!file||file.size>65536){result.textContent='Нужен тестовый файл до 64 КБ.';return}
+ busy=true;controls();let payload;
+ try{const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);const mime=kind==='voice'?'audio/ogg':file.type;payload={operation:crypto.randomUUID(),chat,kind,mime,name:file.name,data:btoa(binary)}}catch{result.textContent='Не удалось прочитать тестовый файл.'}finally{busy=false;controls()}
+ if(payload&&!stopped)await sendOnce('media',payload);
 });
+groupButton.addEventListener('click',async()=>{const target=peer.value;try{const r=await fetch('/api/unified-lab/groups/'+encodeURIComponent(target),{cache:'no-store'});if(!r.ok)throw Error();const data=await r.json();if(peer.value===target)document.querySelector('#group-result').textContent=JSON.stringify(data,null,2)}catch{document.querySelector('#group-result').textContent='Сведения группы не подтверждены.'}});
 window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(timer)});poll();
 </script></html>

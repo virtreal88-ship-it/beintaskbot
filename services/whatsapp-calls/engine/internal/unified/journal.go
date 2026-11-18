@@ -198,6 +198,26 @@ func (j *Journal) Events(ctx context.Context, after int64, limit int) ([]Event, 
 	return out, rows.Err()
 }
 
+func (j *Journal) Event(ctx context.Context, id string) (Event, error) {
+	if len(id) != 64 {
+		return Event{}, sql.ErrNoRows
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return Event{}, sql.ErrNoRows
+	}
+	var event Event
+	var body []byte
+	err := j.db.QueryRowContext(ctx, `SELECT sequence,event_id,body FROM unified_events WHERE scope=? AND event_id=?`, j.scope, id).Scan(&event.Sequence, &event.ID, &body)
+	if err != nil {
+		return Event{}, err
+	}
+	event.Payload, err = j.open("event:"+event.ID, body)
+	if err != nil {
+		return Event{}, ErrConfiguration
+	}
+	return event, nil
+}
+
 // Send reserves the operation BEFORE invoking the transport exactly once. An
 // error/crash/timeout never makes it retryable. Reconciliation can be added only
 // with a matching provider receipt, not an elapsed timer or a text match.

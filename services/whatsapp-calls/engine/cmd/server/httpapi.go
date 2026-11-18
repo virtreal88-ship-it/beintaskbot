@@ -46,7 +46,7 @@ func (s *server) routes() http.Handler {
 			mux.Handle("/", http.FileServer(http.Dir(s.staticDir)))
 		}
 	}
-	return mux
+	return s.guardMessageLab(mux)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

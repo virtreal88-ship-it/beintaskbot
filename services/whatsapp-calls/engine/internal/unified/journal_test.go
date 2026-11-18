@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,42 @@ func TestIsolationEncryptedEventsPaginationAndReplay(t *testing.T) {
 	}
 	if _, err := b.Events(ctx, 0, 1); err == nil {
 		t.Fatal("cross-scope ciphertext accepted")
+	}
+}
+
+func TestEventLookupCannotCrossTenantSourceOrGeneration(t *testing.T) {
+	ctx := context.Background()
+	db := database(t, filepath.Join(t.TempDir(), "lookup.db"))
+	a := journal(t, db, testScope)
+	id, err := a.Append(ctx, "media-identity", []byte(`{"fixture":"private"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := a.Event(ctx, id)
+	if err != nil || string(event.Payload) != `{"fixture":"private"}` {
+		t.Fatal("own lookup failed")
+	}
+	for _, field := range []string{"tenant", "source", "account", "generation"} {
+		scope := testScope
+		switch field {
+		case "tenant":
+			scope.Tenant = "tenant-b"
+		case "source":
+			scope.Source = "source-b"
+		case "account":
+			scope.Account = "15550000002@s.whatsapp.net"
+		case "generation":
+			scope.Generation = "next"
+		}
+		b := journal(t, db, scope)
+		if _, err := b.Event(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("event crossed %s", field)
+		}
+	}
+	for _, bad := range []string{"", "../private", strings.Repeat("z", 64)} {
+		if _, err := a.Event(ctx, bad); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("malformed lookup admitted")
+		}
 	}
 }
 

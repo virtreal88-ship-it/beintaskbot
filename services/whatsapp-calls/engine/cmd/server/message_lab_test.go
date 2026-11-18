@@ -136,3 +136,21 @@ func TestLabDisabledWithoutRuntimeConfig(t *testing.T) {
 		t.Fatal("runtime-disabled lab API exposed")
 	}
 }
+
+func TestLabPinsExistingSlotEvenForAuthenticatedCallUI(t *testing.T) {
+	m, s, _ := labFixture(t)
+	handler := s.routes()
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/api/sessions"},
+		{"DELETE", "/api/sessions/" + m.cfg.SessionID},
+		{"POST", "/api/sessions/" + m.cfg.SessionID + "/logout"},
+		{"POST", "/api/sessions/another-slot/pair"},
+		{"GET", "/api/sessions/another-slot/auth"},
+	} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(tc.method, "http://127.0.0.1:8080"+tc.path, nil))
+		if w.Code != 403 {
+			t.Errorf("unverified slot operation %s %s: %d", tc.method, tc.path, w.Code)
+		}
+	}
+}

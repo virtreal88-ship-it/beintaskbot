@@ -1,6 +1,7 @@
 # First laboratory slice — not a production migration
 
-The `unifiedlab` build adds text send, incoming message/edit/receipt journaling,
+The `unifiedlab` build adds text and small fixture media send, bounded media
+download, allowlisted group metadata, incoming message/edit/receipt journaling,
 and a minimal authenticated `/unified-lab` page to the **existing call server**.
 It attaches to the same `whatsmeow.Client` as the existing call handlers. It does
 not create a messaging-only client or copy any Evolution credentials.
@@ -26,6 +27,8 @@ new Railway configuration in this slice. Do not merge as a completed integration
 - The existing DB may contain only the specified test slot/account. Startup
   rejects other sessions before Restore connects them. Use the existing slot's
   QR/re-pair screen; this slice does not replace the application's pairing flow.
+  The legacy call UI's create/delete/logout routes are blocked in this mode;
+  no new slot can bypass the exact test-account guard.
 
 ## Build and launch boundary
 
@@ -47,6 +50,17 @@ After logging into the existing lab page, open `/unified-lab`. Select only a
 configured test chat and send one agreed test phrase. The page displays safe
 message/receipt fields. Protocol bytes and media keys never leave the encrypted
 journal through this endpoint. There is no automatic message generation.
+
+The media form accepts only purpose-built PNG/JPEG, TXT/PDF or small Ogg Opus
+fixtures up to 64 KiB, within the existing lab request cap. Media upload and send
+share one durable operation reservation; retrying an unknown result cannot upload
+or send again. This fixture admission is **not** the production voice/video decoder
+and duration policy. Downloads are limited to 10 MiB, checked before and during
+transfer, and scoped to the allowed chat even after a peer is revoked. Only HTTPS
+WhatsApp/Meta CDN names and public resolved IPs are dialed, without environment
+proxies or redirects. Media keys/URLs stay in the encrypted journal; downloads
+use attachment disposition, no-store and sandbox headers. Test group metadata
+requires the exact allowlisted group JID; names never establish identity.
 
 Keep the existing call page open alongside it. Incoming-call handling still
 uses the existing call path and same client. The legacy isolated lab guard's
@@ -81,13 +95,14 @@ disable that guard as a shortcut.
 
 ## Not yet demonstrated or implemented
 
-No live unified test has run at this stage. Text send acceptance, actual
+The isolated existing test session has connected with the unified build without
+another QR. No live unified conversation test has completed yet. Text send acceptance, actual
 delivery/read, QR plus calls on the same client, audio quality and concurrency
 must be proven with the test number. Existing successful call tests concern the
 old call-only path.
 
 Media messages are retained encrypted as protocol payloads; this slice does not
-yet implement safe upload/download, group metadata/history import, Worker event
+yet implement production media admission, group-change/history import, Worker event
 delivery/ack, durable consumer cursors, permission-checked SaaS APIs or source
 cutover. Receipt/history/undecryptable event acknowledgement behavior requires
 separate failure tests; a message callback test does not prove no-loss behavior

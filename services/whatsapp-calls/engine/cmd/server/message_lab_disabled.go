@@ -14,3 +14,4 @@ type messageLab struct{}
 func newMessageLab(context.Context, *sql.DB, string) (*messageLab, error) { return nil, nil }
 func (*messageLab) attach(*Session) bool                                  { return false }
 func (*server) registerMessageLab(*http.ServeMux)                         {}
+func (*server) guardMessageLab(next http.Handler) http.Handler            { return next }

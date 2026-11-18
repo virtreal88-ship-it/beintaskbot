@@ -133,6 +133,7 @@ func (m *messageLab) attach(s *Session) bool {
 	client := s.client
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
+	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
 	unified.ProtectDevice(client.Store, m.journal, m.cfg.Scope.Account)
 	client.AddEventHandlerWithSuccessStatus(func(raw any) bool {
 		if s.client != client {
@@ -161,6 +162,10 @@ type labEnvelope struct {
 	Text         string `json:"text,omitempty"`
 	Status       string `json:"status,omitempty"`
 	Proto        []byte `json:"proto,omitempty"` // encrypted in SQLite; never returned by HTTP.
+	MediaKind    string `json:"media_kind,omitempty"`
+	MediaMime    string `json:"media_mime,omitempty"`
+	MediaSize    uint64 `json:"media_size,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
 }
 
 func (m *messageLab) capture(ctx context.Context, raw any) bool {
@@ -186,6 +191,7 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 		if envelope.Text == "" {
 			envelope.Text = event.Message.GetExtendedTextMessage().GetText()
 		}
+		envelope.MediaKind, envelope.MediaMime, envelope.MediaSize, envelope.FileName = labMediaFacts(event.Message)
 		// An edit of the same provider ID is a different event; redelivery is not.
 		variant := "original"
 		if event.IsEdit || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil {
@@ -222,11 +228,36 @@ func (m *messageLab) append(ctx context.Context, identity any, envelope labEnvel
 	return err == nil
 }
 
+// The legacy call UI can create/delete arbitrary lab slots. A unified experiment
+// is pinned to the previously verified slot; even authenticated callers must not
+// start a second client outside its account guard. Re-pairing that slot is allowed.
+func (s *server) guardMessageLab(next http.Handler) http.Handler {
+	if s.sessions == nil || s.sessions.messageLab == nil {
+		return next
+	}
+	m := s.sessions.messageLab
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) >= 2 && parts[0] == "api" && parts[1] == "sessions" {
+			denied := len(parts) == 2 && r.Method != http.MethodGet
+			if len(parts) >= 3 {
+				denied = parts[2] != m.cfg.SessionID || (len(parts) == 3 && r.Method == http.MethodDelete) || (len(parts) == 4 && parts[3] == "logout")
+			}
+			if denied {
+				writeJSON(w, 403, map[string]string{"error": "test_session_pinned"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *server) registerMessageLab(mux *http.ServeMux) {
 	if s.sessions == nil || s.sessions.messageLab == nil {
 		return
 	}
 	m := s.sessions.messageLab
+	s.registerLabMedia(mux, m)
 	mux.HandleFunc("GET /unified-lab", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(w, messageLabHTML)
