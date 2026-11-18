@@ -578,7 +578,7 @@
     bindToolsPopover($('operatorToolsMenu'));
     $('operatorBulkAssignment').onclick=()=>openBulkAssignmentPreview();
     $('operatorCompleteAll').onclick=completeAllDialogs;
-    $('operatorMarkAllRead').onclick=async()=>{const button=$('operatorMarkAllRead');if(markAllReadBusy||!hasRight('dialogs'))return;if(!window.confirm(t('markAllReadConfirm')))return;markAllReadBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;try{const result=await api('dialogs/read-all','POST',{});listFlight=null;lastListAt=0;await refresh();notice(t('markAllReadDone').replace('{count}',String(result.updated_dialogs||0)));}catch(error){notice(error.message||t('error'));}finally{markAllReadBusy=false;if(button.isConnected)button.disabled=false;};};
+    $('operatorMarkAllRead').onclick=async()=>{const button=$('operatorMarkAllRead');if(markAllReadBusy||!hasRight('dialogs'))return;if(!window.confirm(t('markAllReadConfirm')))return;markAllReadBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;try{const result=await api('dialogs/read-all','POST',{});listFlight=null;lastListAt=0;const refreshed=await refresh(false,false,{suppressRead:true});const remaining=Number(refreshed?.unread_count);notice(Number.isFinite(remaining)?t('markAllReadDone').replace('{count}',String(result.updated_dialogs||0)).replace('{remaining}',String(remaining)):t('markAllReadProcessed').replace('{count}',String(result.updated_dialogs||0)));}catch(error){notice(error.message||t('error'));}finally{markAllReadBusy=false;if(button.isConnected)button.disabled=false;};};
     // This is an explicit browser permission only; Web Push enrollment remains in profile settings.
     $('operatorNotificationToggle').onclick=requestBrowserNoticePermission;updateBrowserNoticeButton();
     $('operatorSoundToggle').onclick=async()=>{if(!soundEnabled){soundEnabled=true;await unlockMessageSound();}else if(!soundUnlocked){await unlockMessageSound();}else soundEnabled=false;try{localStorage.setItem(soundPrefKey(),soundEnabled?'on':'off');}catch{}updateSoundButton();};
@@ -632,9 +632,9 @@
     if(selected?.last_message_id&&String(selected.last_message_id)!==String(currentPage?.dialog?.last_message_id||''))selectedChanged=true;
     if(!hasInitialDialogSnapshot){hasInitialDialogSnapshot=true;lastDialogSnapshotAt=snapshotTime;}return selectedChanged;
   }
-  function refresh(append=false,reuse=false){
+  function refresh(append=false,reuse=false,options={}){
     if(!hasRight('dialogs'))return Promise.resolve();install();
-    if(!filterPreferencesLoaded){const version=epoch;return loadFilterPreferences().then(()=>{if(version===epoch&&hasRight('dialogs'))return refresh(append,reuse);});}
+    if(!filterPreferencesLoaded){const version=epoch;return loadFilterPreferences().then(()=>{if(version===epoch&&hasRight('dialogs'))return refresh(append,reuse,options);});}
     const key='dialogs?'+new URLSearchParams({search:$('operatorSearch').value,channel:$('operatorChannel').value,agent:$('operatorAgent').value,state:$('operatorState').value,lifecycle:queueMode(),offset:append?nextOffset||0:0});
     if(listFlight?.key===key)return listFlight.promise;
     if(reuse&&!append&&key===lastListKey&&Date.now()-lastListAt<5000){renderRows();return Promise.resolve();}
@@ -644,7 +644,7 @@
       const result=await api(key);if(version!==epoch||revision!==listRevision)return;
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
-      $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');if(currentDialog?.lifecycle_enabled)await openDialog(currentDialog,true);else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog);else if(currentDialog)void markDialogReadIfVisible(currentPage);
+      $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');if(currentDialog?.lifecycle_enabled)await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true});else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);else if(currentDialog&&!options.suppressRead)void markDialogReadIfVisible(currentPage);return result;
     }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
     finally{if(version===epoch&&revision===listRevision){listFlight=null;$('operatorRows').setAttribute('aria-busy','false');}}})();
     listFlight={key,promise};return promise;
@@ -706,7 +706,7 @@
     try{const latest=await api('dialogs/history?'+historyQuery(route));if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog))return;updateDeliveryEvidence(latest,route);updateAudioEvidence(latest,route,sourceIds);updateVisualEvidence(latest,route,sourceIds);}
     catch(error){if(serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog)){const status=$('operatorChatError');if(status)status.textContent=error.message;}}
   }
-  async function appendNewMessages(route){
+  async function appendNewMessages(route,suppressRead=false){
     const chat=$('chatRows'),page=currentPage,version=epoch,serial=++historyUpdateSerial;if(!chat||!page||!sameDialog(route,currentDialog))return;
     try{
       const latest=await api('dialogs/history?'+historyQuery(route));
@@ -716,7 +716,7 @@
       updateVisualEvidence(latest,route);
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
-      if(!added.length){if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      if(!added.length){if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
       const follow=atBottom(chat),oldHeight=chat.scrollHeight,oldTop=chat.scrollTop;
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',messageMarkup(added,route));
@@ -724,7 +724,7 @@
       document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
       const newArticles=[...chat.querySelectorAll('[data-message-id]')].filter(node=>added.some(message=>String(message.id)===node.dataset.messageId));
       newArticles.forEach(node=>{node.classList.add('operator-message-enter');setTimeout(()=>node.classList.remove('operator-message-enter'),180);});
-      if(follow){chat.scrollTop=chat.scrollHeight;void markDialogReadIfVisible(currentPage);}
+      if(follow){chat.scrollTop=chat.scrollHeight;if(!suppressRead)void markDialogReadIfVisible(currentPage);}
       else {chat.scrollTop=oldTop;const button=$('operatorNewMessages');if(button)button.hidden=false;}
       const error=$('operatorChatError');if(error)error.textContent='';
     }catch(error){if(version===epoch&&sameDialog(route,currentDialog)&&lifecycleUnavailable(error,route))return;const status=$('operatorChatError');if(status&&serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog))status.textContent=error.message;}
@@ -888,7 +888,7 @@
     const state={...history.state,view:'dialogs',operatorDialog:dialog,operatorDialogOwner:identity(member),operatorDialogHistoryEntry:history.state?.operatorDialog?history.state.operatorDialogHistoryEntry!==false:mobile};if(state.operatorHelper!==contextKey('helper',route))delete state.operatorHelper;
     if(!mobile||history.state?.operatorDialog)history.replaceState(state,'');else history.pushState(state,'');
   }
-  async function openDialog(route,fromHistory=false,caseLocationKey=''){
+  async function openDialog(route,fromHistory=false,caseLocationKey='',options={}){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     if(typeof route.compose_draft==='string'&&route.compose_draft.trim()){try{sessionStorage.setItem(contextKey('incoming-case-draft',route),route.compose_draft);}catch{notice(manualCaseCopy('storage'));return false;}}
     route={...route};delete route.compose_draft;
@@ -905,7 +905,7 @@
     if(cached){cached.dialog={...cached.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
+    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
     catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
     finally{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
