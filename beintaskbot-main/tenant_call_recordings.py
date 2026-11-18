@@ -147,9 +147,10 @@ def persist(cur,tenant,actor,b,selected,manifest,wav,bundle,*,encoded_audio=None
         if old['bundle_digest']!=bundle_digest or old['conversation_id']!=conversation or old['lead_id']!=lead:
             raise TenantLinearError('Конфликт повторного сохранения записи.',409)
         return {'id':str(old['id']),'duplicate':True}
-    cur.execute("SELECT count(*) AS n FROM saas_test_call_recordings WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(tenant,))
-    if cur.fetchone()['n']>=20:
-        raise TenantLinearError('Достигнут лимит тестовых записей за 24 часа.',429)
+    if not b.get('managed'):
+        cur.execute("SELECT count(*) AS n FROM saas_test_call_recordings WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(tenant,))
+        if cur.fetchone()['n']>=20:
+            raise TenantLinearError('Достигнут лимит тестовых записей за 24 часа.',429)
     record_id=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_test_call_recordings
       (id,tenant_id,channel_id,conversation_id,lead_id,actor_id,call_digest,bundle_digest,

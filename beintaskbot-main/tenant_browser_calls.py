@@ -300,8 +300,9 @@ def action(profile,data):
             if not gateway or not gateway['fresh'] or not gateway['connected']:raise TenantLinearError('Источник звонков не подключён к серверу.',409)
             cur.execute("SELECT 1 FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND state NOT IN ('ended','failed')",(c['tenant_id'],c['gateway_id']))
             if cur.fetchone():raise TenantLinearError('Другой звонок ещё не завершён.',409)
-            cur.execute("SELECT count(*) AS n FROM saas_browser_calls WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(c['tenant_id'],))
-            if cur.fetchone()['n']>=20:raise TenantLinearError('Лимит теста: 20 звонков за 24 часа.',429)
+            if not c.get('managed'):
+                cur.execute("SELECT count(*) AS n FROM saas_browser_calls WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours'",(c['tenant_id'],))
+                if cur.fetchone()['n']>=20:raise TenantLinearError('Лимит теста: 20 звонков за 24 часа.',429)
             cur.execute('''INSERT INTO saas_browser_calls(id,tenant_id,gateway_id,boot_id,channel_id,conversation_id,lead_id,peer_jid,
               actor_id,client_request,direction,state,consent,recording_state) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'outbound','starting',TRUE,'pending') RETURNING *''',
               (uuid.uuid4(),c['tenant_id'],c['gateway_id'],str(gateway['boot_id']),c['channel_id'],target['conversation_id'],target['lead_id'],target['dial_jid'],actor,request))
