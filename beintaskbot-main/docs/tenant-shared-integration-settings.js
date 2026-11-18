@@ -88,7 +88,7 @@
             const key=useKey?(panel.querySelector('[data-key]')?.value||''):'';
             const payload=command(profile,provider,{action:'channels',api_key:key},key?(connected(profile,provider)?'update':'create'):'view');
             const result=await request('/api/platform/integrations/connect',payload);
-            if(current!==epoch||serial!==readSerial)return;channels=result.channels||[];message.textContent='';render();
+            if(current!==epoch||serial!==readSerial)return;channels=(result.channels||[]).filter(channel=>!channel.native);message.textContent='';render();
           }catch(e){if(current===epoch&&serial===readSerial){message.textContent=e.message;retry.hidden=!actions.view;}}
           finally{if(current===epoch&&serial===readSerial){loading=false;list.removeAttribute('aria-busy');}}
         };

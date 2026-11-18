@@ -12,6 +12,7 @@ import {taskColumns, taskBoardLabels} from "./task-columns.js";
 import {dealColumns} from "./deal-columns.js";
 import {DealStageBadge, DealStageSelect} from "./deal-stage-badge.jsx";
 import { AIDashboard } from "./ai-dashboard.jsx";
+import { WhatsAppIntegration } from "./whatsapp-integration.jsx";
 import {
   Badge,
   Box,
@@ -224,6 +225,16 @@ const integrationCatalog = [
     },
   },
   {
+    id: "whatsapp",
+    name: "Ватсапп",
+    mark: "WA", color: "#25D366", section: "whatsapp",
+    copy: {
+      ru: {category: "Каналы сообщений", description: "Переписка и звонки. Один QR для каждого номера."},
+      az: {category: "Mesaj kanalları", description: "Mesajlar və zənglər. Hər nömrə üçün bir QR."},
+      en: {category: "Messaging channels", description: "Messages and calls. One QR per number."},
+    },
+  },
+  {
     id: "connect",
     name: "WhatsApp Connect",
     mark: "WA",
@@ -232,15 +243,15 @@ const integrationCatalog = [
     copy: {
       ru: {
         category: "Каналы сообщений",
-        description: "Каналы WhatsApp, подключение и диагностика webhook.",
+        description: "Резервная интеграция. Номера, которые ещё работают через Connect.",
       },
       az: {
         category: "Mesaj kanalları",
-        description: "WhatsApp kanalları, qoşulma və webhook diaqnostikası.",
+        description: "Ehtiyat inteqrasiya. Connect ilə işləyən nömrələr.",
       },
       en: {
         category: "Messaging channels",
-        description: "WhatsApp channels, connection and webhook diagnostics.",
+        description: "Reserve integration for numbers still using Connect.",
       },
     },
   },
@@ -401,7 +412,7 @@ function IntegrationLogo({ provider, size = "md" }) {
         />
       </svg>
     );
-  else if (provider === "connect")
+  else if (provider === "connect" || provider === "whatsapp")
     logo = (
       <svg {...common}>
         <path
@@ -891,6 +902,13 @@ function LegacyIntegrationMarketplace() {
             capabilities: value.capabilities,
           };
         }
+      }
+      if (me.member?.role === 'owner') {
+        const scope = new URLSearchParams({expected_tenant_id:me.member.tenant_id, expected_user_id:me.member.telegram_id});
+        try {
+          const native = await api('/api/platform/integrations/whatsapp?' + scope);
+          status.whatsapp = {connected:native.result.channels.some(c=>c.messages_ready), channelCount:native.result.channels.length};
+        } catch { status.whatsapp = {connected:false, label:'unavailable'}; }
       }
       setDetails(status);
       return status;
@@ -1477,7 +1495,7 @@ function IntegrationMarketplace() {
   const managementTab = tab === "sync" ? "settings" : tab;
   useEffect(() => {
     if (
-      !selected ||
+      !selected || selected.id === "whatsapp" ||
       (managementTab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
       (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
     )
@@ -1830,7 +1848,7 @@ function IntegrationMarketplace() {
                       </StatusBadge>
                     </Flex>
                   </Dialog.Header>
-                  {selected.id !== "connect" && (
+                  {!["connect","whatsapp"].includes(selected.id) && (
                     <Box px={{ base: "5", md: "6" }} pt="4">
                       <Flex
                         className="app-integration-tabs"
@@ -1860,7 +1878,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
-                    {window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                    {selected.id === "whatsapp" ? <WhatsAppIntegration profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box

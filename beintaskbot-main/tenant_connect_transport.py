@@ -1504,15 +1504,23 @@ def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = Fal
                    WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id
                      AND dl.source_id=c.conversation_id AND dl.active)''')
     cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets FROM saas_connect_conversations c
-      JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
+      LEFT JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id'''+active_gate+'''
-      WHERE c.tenant_id=%s::uuid AND c.lead_id=%s FOR SHARE''', (tenant,lead_id))
+      WHERE c.tenant_id=%s::uuid AND c.lead_id=%s FOR SHARE OF c,ch''', (tenant,lead_id))
     row = cur.fetchone()
     if not row: return None
-    try: secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
-    except Exception as exc: raise TenantPlatformError('Connect açarı oxunmadı.') from exc
     from tenant_whatsapp_native_transport import bind
-    return bind(cur,{'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')})
+    route={'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':''}
+    secret={}
+    if row.get('secrets'):
+        try: secret=json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
+        except Exception:
+            # Native delivery does not require a legacy credential. Keep old
+            # media fallback only when its credential is actually readable.
+            if not bind(cur,route).get('native'):raise TenantPlatformError('Connect açarı oxunmadı.') from None
+    result=bind(cur,{**route,'api_key':str(secret.get('api_key') or '')})
+    if not result.get('native') and not result['api_key']:return None
+    return result
 
 
 QUOTED_ONCE_TENANT='e09a5c24-093f-4141-992d-532052e00c90'
