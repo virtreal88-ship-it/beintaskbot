@@ -47,7 +47,7 @@
     try { state = (await request('/api/platform/integrations/beinsystems-operator')).integration; }
     catch (error) { panel.textContent = error.message; return; }
     if (current !== revision) return;
-    panel.innerHTML = '<h2>'+text.title+'</h2><p>'+text.privacy+'</p><p data-status></p><p data-message role="status"></p><section data-connection></section><hr><h3>'+text.search+'</h3><label>'+text.search+'<input type="search" data-search minlength="4" maxlength="120" autocomplete="off"></label><button type="button" data-search-button>'+text.searchButton+'</button><div data-results></div><button type="button" data-account-info>Показать разрешённые сведения об аккаунте</button><button type="button" data-profile-users>Показать пользователей аккаунта</button><div data-account-data></div><p>'+text.userWarning+'</p><hr><section data-link-controls><h3>Ручная связь с ERP-аккаунтом или пользователем</h3><label>'+text.entityType+'<select data-entity><option value="company">CRM company</option><option value="support_ticket">Support case</option><option value="contact">CRM contact → ERP user</option></select></label><label>'+text.entityId+'<input data-local autocomplete="off"></label><label>'+text.account+'<input data-account autocomplete="off"></label><label>Логин ERP-пользователя (для CRM-контакта)<input data-login autocomplete="off"></label><label>'+text.evidence+'<textarea data-evidence maxlength="500"></textarea></label><button type="button" data-confirm>'+text.confirm+'</button></section><p>'+text.contract+'</p>';
+    panel.innerHTML = '<h2>'+text.title+'</h2><p>'+text.privacy+'</p><p data-status role="status" aria-live="polite" aria-atomic="true"></p><p data-message role="status" aria-live="polite" aria-atomic="true"></p><section data-connection></section><hr><h3>'+text.search+'</h3><label>'+text.search+'<input type="search" data-search minlength="4" maxlength="120" autocomplete="off"></label><button type="button" data-search-button>'+text.searchButton+'</button><div data-results></div><button type="button" data-account-info>Показать разрешённые сведения об аккаунте</button><button type="button" data-profile-users>Показать пользователей аккаунта</button><div data-account-data></div><p>'+text.userWarning+'</p><hr><section data-link-controls><h3>Ручная связь с ERP-аккаунтом или пользователем</h3><label>'+text.entityType+'<select data-entity><option value="company">CRM company</option><option value="support_ticket">Support case</option><option value="contact">CRM contact → ERP user</option></select></label><label>'+text.entityId+'<input data-local autocomplete="off"></label><label>'+text.account+'<input data-account autocomplete="off"></label><label>Логин ERP-пользователя (для CRM-контакта)<input data-login autocomplete="off"></label><label>'+text.evidence+'<textarea data-evidence maxlength="500"></textarea></label><button type="button" data-confirm>'+text.confirm+'</button></section><p>'+text.contract+'</p>';
     const employeeControls = document.createElement('section');
     employeeControls.dataset.employeeControls = '';
     employeeControls.innerHTML = '<hr><h3>Сотрудники Beintaskbot ↔ Operator</h3><p>'+text.employeeLink+'</p><label>Сотрудник Beintaskbot<select data-employee-member><option value="">Выберите сотрудника</option></select></label><label>Operator account<input data-employee-account maxlength="240" autocomplete="off"></label><button type="button" data-load-employee-users>Загрузить список пользователей Operator</button><label>Пользователь Operator (login)<select data-employee-user><option value="">Сначала загрузите список</option></select></label><label>'+text.evidence+'<textarea data-employee-evidence maxlength="500"></textarea></label><button type="button" data-confirm-employee>Подтвердить связь сотрудника</button><div data-employee-links></div>';
@@ -67,7 +67,17 @@
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<label>Логин оператора<input type="text" data-operator-login autocomplete="username"></label><label>Пароль оператора<input type="password" data-operator-password autocomplete="current-password"></label><p>'+text.authPending+'</p><button type="button" data-save>'+text.save+'</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка доступа станет доступна после подтверждения документированного read-only метода Operator.</p>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка доступа станет доступна после подтверждения документированного read-only метода Operator.</p>';
+      const authForm = $(connection, '[data-operator-auth-form]');
+      const authMessage = $(connection, '[data-auth-message]');
+      const saveButton = $(connection, '[data-save]');
+      const showAuthMessage = (value, reveal = false) => {
+        authMessage.textContent = value;
+        if (!reveal) return;
+        authMessage.focus({preventScroll: true});
+        authMessage.scrollIntoView?.({block: 'nearest'});
+      };
+      if (state.pending_auth_received) showAuthMessage(text.tokenPending);
       const run = async (button, fn) => {
         button.disabled = true; message.textContent = text.waiting;
         try { const result = await fn(); if (current !== revision) return;
@@ -77,14 +87,37 @@
         } catch (error) { if (current === revision) message.textContent = error.message; }
         finally { button.disabled = false; }
       };
-      $(panel,'[data-save]').onclick = event => {
-        const login = $(panel,'[data-operator-login]').value.trim();
-        let password = $(panel,'[data-operator-password]').value;
-        $(panel,'[data-operator-password]').value = '';
-        if (!login || !password) { message.textContent = 'Введите логин и пароль оператора.'; password = ''; return; }
-        const pending = run(event.currentTarget, () => request('/api/platform/integrations/beinsystems-operator', {action:'login',login,password}));
-        return pending.finally(() => { password = ''; });
-      };
+      authForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        const login = $(authForm, '[data-operator-login]').value.trim();
+        const passwordInput = $(authForm, '[data-operator-password]');
+        let password = passwordInput.value;
+        passwordInput.value = '';
+        if (!login || !password) {
+          password = '';
+          showAuthMessage('Введите логин и пароль оператора.', true);
+          return;
+        }
+        saveButton.disabled = true;
+        showAuthMessage(text.waiting);
+        try {
+          const pending = request('/api/platform/integrations/beinsystems-operator', {
+            action:'login', login, password
+          });
+          password = '';
+          const result = await pending;
+          if (current !== revision) return;
+          if (result?.integration) { state = result.integration; renderStatus(); }
+          if (result?.integration?.pending_auth_received === true) showAuthMessage(text.tokenPending, true);
+          else showAuthMessage('Сервер не подтвердил получение JWT. Действующее подключение не изменено.', true);
+        } catch (error) {
+          if (current === revision) showAuthMessage(error.message, true);
+        } finally {
+          password = '';
+          passwordInput.value = '';
+          if (current === revision) saveButton.disabled = false;
+        }
+      });
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});
