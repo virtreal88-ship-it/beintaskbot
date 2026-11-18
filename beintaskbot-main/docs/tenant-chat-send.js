@@ -27,6 +27,12 @@
       if(window.MutationObserver){const observer=new MutationObserver(()=>{if(!button.isConnected||!primary.isConnected){observer.disconnect();if(activePrimaryObserver===observer)activePrimaryObserver=null;return;}refreshPrimary();});activePrimaryObserver=observer;observer.observe(button,{attributes:true,childList:true,characterData:true,subtree:true});observer.observe(input,{attributes:true,attributeFilter:['disabled']});}
       refreshPrimary();
     }
+    const showAccepted=text=>{
+      if(!isCurrent()||!input.isConnected)return;
+      let status=document.getElementById('tenantChatSendStatus');
+      if(!status){status=document.createElement('p');status.id='tenantChatSendStatus';status.className='sub';status.setAttribute('role','status');status.setAttribute('aria-live','polite');input.before(status);}
+      status.textContent=text;
+    };
     const key='tenant-chat-send:'+identity+':'+leadId;
     const scoped=provider==='connect'&&String(me.tenant_id)==='e09a5c24-093f-4141-992d-532052e00c90'&&String(channelId)==='96863d75-d272-4c93-a25e-ffb2b16ecae3';
     const readReceipt=requestId=>api('/api/platform/crm/chat/quote-receipt?'+new URLSearchParams({lead_id:String(leadId),expected_tenant_id:String(me.tenant_id),expected_user_id:String(me.telegram_id),...(requestId?{request_id:requestId}:{})}),{method:'GET'});
@@ -63,7 +69,7 @@
         }
         sessionStorage.removeItem(key);onAccepted(pending.text);if(!isCurrent())return;
         if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
-        alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
+        showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
       }catch(e){const discard=e.keepRequest===false&&!pending?.quote_message_id;if(discard){sessionStorage.removeItem(key);if(isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
