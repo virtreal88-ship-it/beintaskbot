@@ -134,7 +134,10 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 }
 
 func (m *SessionManager) Create(name string) (string, error) {
-	id := newSessionID()
+	return m.createWithID(newSessionID(), name)
+}
+
+func (m *SessionManager) createWithID(id, name string) (string, error) {
 	if err := m.store.insert(m.appCtx, id, name); err != nil {
 		return "", err
 	}

@@ -16,7 +16,7 @@ func TestProductionBuildDoesNotExposeUnifiedExperiment(t *testing.T) {
 	mux := http.NewServeMux()
 	s := &server{}
 	s.registerMessageLab(mux)
-	for _, path := range []string{"/api/unified-lab/events", "/api/unified-lab/text", "/api/unified-lab/receive-probe", "/unified-lab"} {
+	for _, path := range []string{"/api/unified-lab/events", "/api/unified-lab/text", "/api/unified-lab/receive-probe", "/api/unified-lab/pair", "/unified-lab"} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1"+path, nil))
 		if w.Code != 404 {

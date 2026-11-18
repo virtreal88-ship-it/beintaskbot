@@ -123,6 +123,20 @@ cleanup uses an independent bounded context. Counters distinguish attempted and
 successful socket writes. Process death still relies on transport disconnection.
 The entire route is absent from production builds.
 
+Fresh-link diagnosis uses a separate private **lab-only** database after the old
+process exits and its calls/unknown sends are confirmed empty. The original DB,
+binary and launch arguments are retained for inspection/rollback. Auth keys are
+not copied into the new running database. No working source is switched. This is
+not the production source migration strategy, which must preserve/deliver all
+durable state and keep the existing source identity.
+
+The lab's explicit pairing dialog opens without generating a QR. Its Generate
+action and the existing call screen's Pair action share one serialized attempt
+for the configured slot, reusing SessionManager and the existing QR/SSE display.
+Repeated clicks reuse pending pairing; a paired slot cannot be reset this way.
+The pre-pair callback rejects every account except the configured test account,
+before persistence. Startup/read-only page loads do not create a slot or QR.
+
 The roster query returned the current local device and primary phone. The owner
 confirmed the earlier reply exists on the primary test phone and the latest
 outgoing control text was delivered. This narrows the missing evidence to the

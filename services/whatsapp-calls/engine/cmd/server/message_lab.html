@@ -5,6 +5,8 @@
 <h1>Переписка и звонки на одной сессии</h1>
 <p>Изолированный эксперимент. Только тестовый номер и согласованные участники. В production этот экран отсутствует.</p>
 <p><a href="/" target="_blank" rel="noopener">Открыть существующий экран QR и звонков</a> — используйте ту же сессию, дополнительный номер не создавайте.</p>
+<button type="button" id="pair-open">Подключить тестовый номер</button>
+<dialog id="pair-dialog"><h2>Только согласованный тестовый номер</h2><p>QR появится в существующем экране звонков. Рабочие номера не сканируйте.</p><button type="button" id="pair-generate">Сгенерировать QR</button><p id="pair-result" role="status"></p><a href="/" target="_blank" rel="noopener">Открыть экран QR</a><button type="button" id="pair-close">Закрыть</button></dialog>
 <section><p id="status" role="status">Проверяю тестовую сессию…</p><form id="send"><label>Тестовый чат <select id="peer"></select></label><label><small>Тестовая фраза</small><textarea id="text" required maxlength="4096"></textarea></label><button id="button" disabled>Отправить один раз</button></form><p id="result" role="status"></p></section>
 <section><form id="media"><h2>Тестовое вложение</h2><p>Только специально подготовленный файл до 64 КБ, без клиентских данных. Получатель выбран выше.</p><select id="kind"><option value="image">PNG/JPEG</option><option value="document">TXT/PDF</option><option value="voice">Голосовое Ogg Opus</option></select><input id="file" type="file" required><button id="media-button" disabled>Отправить один раз</button></form><button id="group-button" type="button" disabled>Прочитать сведения тестовой группы</button><pre id="group-result"></pre></section>
 <section><h2>Подтверждённо сохранённые события</h2><p>«accepted» подтверждает принятие сервером, а delivered/read приходят отдельными событиями. Скачивание вложений доступно только для разрешённого тестового чата.</p><ol id="events"></ol></section>
@@ -12,6 +14,10 @@
 const statusNode=document.querySelector('#status'),peer=document.querySelector('#peer'),input=document.querySelector('#text'),button=document.querySelector('#button'),result=document.querySelector('#result'),list=document.querySelector('#events');
 let cursor=0,stopped=false,busy=false,ready=false,timer,pending=null;
 const mediaButton=document.querySelector('#media-button'),fileInput=document.querySelector('#file'),kindInput=document.querySelector('#kind'),groupButton=document.querySelector('#group-button');
+const pairDialog=document.querySelector('#pair-dialog'),pairGenerate=document.querySelector('#pair-generate'),pairResult=document.querySelector('#pair-result');
+document.querySelector('#pair-open').addEventListener('click',()=>pairDialog.showModal());
+document.querySelector('#pair-close').addEventListener('click',()=>pairDialog.close());
+pairGenerate.addEventListener('click',async()=>{if(pairGenerate.disabled)return;pairGenerate.disabled=true;try{const r=await fetch('/api/unified-lab/pair',{method:'POST'});if(!r.ok)throw Error();const d=await r.json();pairResult.textContent=d.state==='paired'?'Тестовый номер уже подключён. Новый QR не создавался.':'Откройте экран QR и сканируйте только согласованным тестовым номером.'}catch{pairResult.textContent='QR пока не подтверждён. Повторная попытка проверит тот же слот.'}finally{pairGenerate.disabled=false}});
 function controls(){button.disabled=!ready||busy||(pending&&pending.path!=='text');mediaButton.disabled=!ready||busy||(pending&&pending.path!=='media');peer.disabled=!!pending||busy;input.disabled=!!pending||busy;fileInput.disabled=!!pending||busy;kindInput.disabled=!!pending||busy;groupButton.disabled=!ready||busy||!peer.value.endsWith('@g.us')}
 peer.addEventListener('change',controls);
 async function poll(){

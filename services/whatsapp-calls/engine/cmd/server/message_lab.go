@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -41,6 +42,7 @@ type messageLab struct {
 	cfg         messageLabSettings
 	journal     *unified.Journal
 	diagnostics labDiagnostics
+	pairMu      sync.Mutex
 }
 
 func newMessageLab(ctx context.Context, db *sql.DB, gateway string) (*messageLab, error) {
@@ -132,6 +134,9 @@ func (m *messageLab) attach(s *Session) bool {
 		return false
 	}
 	client := s.client
+	client.PrePairCallback = func(jid types.JID, _, _ string) bool {
+		return jid.ToNonAD().String() == m.cfg.Scope.Account
+	}
 	client.Log = labProviderLogger{diagnostics: &m.diagnostics}
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
@@ -269,6 +274,10 @@ func (s *server) guardMessageLab(next http.Handler) http.Handler {
 				writeJSON(w, 403, map[string]string{"error": "test_session_pinned"})
 				return
 			}
+			if len(parts) == 4 && parts[3] == "pair" && r.Method == http.MethodPost {
+				s.handleLabPair(w, r, m)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -281,6 +290,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	m := s.sessions.messageLab
 	s.registerLabMedia(mux, m)
 	s.registerLabReceiveProbe(mux, m)
+	mux.HandleFunc("POST /api/unified-lab/pair", func(w http.ResponseWriter, r *http.Request) { s.handleLabPair(w, r, m) })
 	mux.HandleFunc("GET /unified-lab", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(w, messageLabHTML)
