@@ -60,6 +60,29 @@ def test_only_direct_number_and_uuid_binding_are_accepted():
 
 
 @pytest.mark.asyncio
+async def test_native_send_requires_explicit_binding_and_exact_scope(tmp_path):
+    supervisor,client=await client_for(tmp_path)
+    headers={'Authorization':'Bearer '+TOKEN}
+    try:
+        await client.post('/v1/sources/'+SOURCE,json=BINDING,headers=headers)
+        endpoint='/v1/sources/'+SOURCE+'/messages'
+        assert (await client.post(endpoint,json={},headers=headers)).status==409
+        supervisor.sources[SOURCE]['data']['messaging']={'generation':'g1','key':'a'*64}
+        expected={'tenant':BINDING['tenant_id'],'source':BINDING['channel_id'],'account':BINDING['account_jid'],'generation':'g1'}
+        for key in expected:
+            value={**expected,key:'other'}
+            assert (await client.post(endpoint,json={'scope':value},headers=headers)).status==403
+        for extra in ({'Origin':'https://crm.pro.az'},{'Cookie':'session=synthetic'}):
+            assert (await client.post(endpoint,json={'scope':expected},headers={**headers,**extra})).status==403
+        supervisor.configure(SOURCE)
+        config=json.loads((tmp_path/SOURCE/'gateway.json').read_text())
+        assert config['messaging']['scope']==expected
+        assert config['messaging']['key']
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_audio_proxy_diagnosis_distinguishes_stage_without_error_text():
     import asyncio
     from types import SimpleNamespace
