@@ -10,6 +10,7 @@ from tenant_linear_policy import TenantLinearError
 import tenant_whatsapp_native_rollout as rollout
 import tenant_call_sources as sources
 import tenant_connect_transport as transport
+CONFIRMED_ACCOUNT=sources.confirmed_account
 
 
 @pytest.fixture
@@ -17,6 +18,7 @@ def staged_source(managed,monkeypatch):
     db,_,cfg=managed
     cipher=Fernet(Fernet.generate_key())
     monkeypatch.setattr(rollout,'_connect',lambda:db)
+    monkeypatch.setattr(transport,'_connect',lambda:db)
     monkeypatch.setattr(rollout,'_fernet',lambda:cipher)
     monkeypatch.setattr(sources,'_fernet',lambda:cipher)
     monkeypatch.setattr(transport,'_stored_connect_credentials',lambda _: {'api_key':'synthetic'})
@@ -73,4 +75,20 @@ def test_activate_requires_exact_paired_number_and_retains_other_tenant(staged_s
     assert rollout.activate(PROFILE,CA,'synthetic-g1')['state']=='active'
     assert db.execute('SELECT enabled,projection_enabled FROM saas_whatsapp_capture_generations')[0]=={'enabled':True,'projection_enabled':True}
     assert db.execute('SELECT * FROM saas_connect_channels WHERE tenant_id=%s',(B,))==other;db.commit()
+    monkeypatch.setattr(sources,'remote',remote)
+    legacy.reset_mock()
+    assert CONFIRMED_ACCOUNT(PROFILE,CA)==account
+    legacy.assert_not_called()
     with pytest.raises(TenantLinearError):rollout.stage({'tenant_id':B,'telegram_id':11},CA,account,'synthetic-g1')
+
+
+def test_staged_source_cannot_reenable_legacy_or_use_legacy_disconnect(staged_source):
+    db,account,legacy,remote=staged_source
+    rollout.stage(PROFILE,CA,account,'synthetic-g1')
+    legacy.reset_mock()
+    legacy.return_value={'data':[{'id':CA,'status':'disabled','phone':account.split('@')[0]}]}
+    with pytest.raises(Exception,match='старый движок'):
+        transport._configure_locked({**PROFILE,'role':'owner'},{'channel_ids':[CA]},'https://unused.invalid')
+    with pytest.raises(Exception,match='завершения звонков'):
+        transport._disconnect_channel_locked({**PROFILE,'role':'owner'},CA)
+    assert all(call.args[1]=='GET' for call in legacy.call_args_list)

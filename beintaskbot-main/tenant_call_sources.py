@@ -144,6 +144,8 @@ def source_status(profile,channel):
     channel=str(uuid.UUID(str(channel)))
     with _connect() as conn,conn.cursor() as cur:
         tenant,_=_owner(cur,profile,channel)
+        from tenant_whatsapp_native_rollout import modes
+        native_mode=modes(cur,tenant).get(channel)
         cur.execute('SELECT * FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,channel))
         row=cur.fetchone()
     if not row:return {'channel_id':channel,'state':'not_configured'}
@@ -158,7 +160,8 @@ def source_status(profile,channel):
     if qr is not None and (not isinstance(qr,str) or len(qr)>24000 or not re.fullmatch(r'[A-Za-z0-9+/=]*',qr)):
         raise TenantLinearError('QR подключения недоступен.',503)
     return {'channel_id':channel,'state':state,'phone':row['account_jid'].split('@')[0],'qr':qr,
-            'permanent':True,'retention_hours':30*24}
+            'permanent':True,'retention_hours':30*24,
+            **({'unified':True,'activation_pending':not native_mode['enabled']} if native_mode else {})}
 
 
 def as_config(row):

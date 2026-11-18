@@ -16,7 +16,9 @@ class Cursor:
     def __enter__(self): return self
     def __exit__(self,*_): return False
     def execute(self,sql,params=None): self.calls.append((sql,params))
-    def fetchone(self): return {'secrets':b'encrypted-old'}
+    def fetchone(self):
+        if 'to_regclass' in self.calls[-1][0]:return {'ready':False}
+        return {'secrets':b'encrypted-old'}
     def fetchall(self): return []
 
 

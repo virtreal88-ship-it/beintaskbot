@@ -646,6 +646,13 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
+            from tenant_whatsapp_native_rollout import modes
+            native_modes=modes(cur,tenant)
+            if requested.intersection(native_modes):
+                raise TenantPlatformError('Этот источник уже переводится на единый WhatsApp. Используйте его окно подключения; старый движок повторно не включается.')
+            for source,mode in native_modes.items():
+                if source in remote_by_id:
+                    remote_by_id[source]={**remote_by_id[source],'status':'connected' if mode['enabled'] else 'disconnected'}
             cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected'", (tenant,))
             row = cur.fetchone()
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
@@ -750,10 +757,13 @@ def channels(profile: dict, api_key: str, *, authorization=None) -> list[dict]:
             linked_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
             active_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
+            from tenant_whatsapp_native_rollout import modes
+            native_modes=modes(cur,tenant)
     return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or ''),
              'phone': str(row.get('phone') or ''), 'phoneConflict': bool(row.get('phoneConflict')),
              'duplicateChannelId': str(row.get('duplicateChannelId') or ''),
-             'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids}
+             'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids,
+             **({'native':True,'native_staged':not native_modes[str(row['id'])]['enabled']} if str(row.get('id')) in native_modes else {})}
             for row in rows if isinstance(row, dict) and row.get('id')]
 
 
@@ -796,6 +806,9 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
         with conn.cursor() as cur:
             cur.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
             local = cur.fetchone()
+            from tenant_whatsapp_native_rollout import modes
+            if channel_id in modes(cur,tenant):
+                raise TenantPlatformError('Единый WhatsApp требует подтверждённого завершения звонков перед отключением. Старое подключение не изменено.')
     if not local:
         raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
     if local.get('active'):
@@ -821,6 +834,13 @@ def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
             if not cur.fetchone():
                 raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
+            from tenant_whatsapp_native_rollout import modes
+            native_mode=modes(cur,tenant).get(channel_id)
+    if native_mode:
+        from tenant_call_sources import provision,source_status
+        current=provision(profile,channel_id) if reconnect else source_status(profile,channel_id)
+        return {'id':channel_id,'status':'connected' if current['state']=='ready' and not current.get('activation_pending') else 'connecting' if current['state']=='pairing' or current.get('activation_pending') else 'disconnected',
+            'phone':current.get('phone',''),'native':True,'qr':'data:image/png;base64,'+current['qr'] if current.get('qr') else ''}
     credentials = _stored_connect_credentials(profile)
     if reconnect:
         configure(profile, {**(authorization or {}), 'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)

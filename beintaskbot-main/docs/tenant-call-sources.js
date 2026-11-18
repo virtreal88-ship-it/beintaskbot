@@ -16,12 +16,14 @@
       const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Не удалось проверить подключение');
       if(current!==state||identity(profile())!==state.identity)return;
       const result=payload.result;
+      if(result.unified){state.title.textContent='WhatsApp источника';state.info.textContent='Один QR подключает сообщения и звонки этого номера. История и доступ сотрудников сохраняются.';}
       const labels={not_configured:'Звонки для источника ещё не подключены.',provisioning:'Подготавливаем сервер звонков…',pairing:'Откройте WhatsApp нужного номера → Связанные устройства → Привязать устройство.',ready:'Звонки подключены. Сотрудники с доступом к этому источнику могут звонить из диалога.',offline:'Номер привязан, но соединение с WhatsApp временно потеряно.',identity_mismatch:'Подключён другой номер. Звонки заблокированы: номер должен совпадать с источником.'};
       state.status.textContent=(result.phone?'Номер источника: +'+result.phone+'. ':'')+(labels[result.state]||'Проверяем подключение…');
+      if(result.unified&&result.state==='ready')state.status.textContent=result.activation_pending?'Номер подключён. Отправка будет доступна после проверки переноса источника.':'Сообщения и звонки подключены через единый WhatsApp.';
       state.button.hidden=result.state==='ready';state.button.textContent=result.state==='not_configured'?'Подключить звонки':'Обновить QR';
       if(result.state==='pairing'&&/^[A-Za-z0-9+/=]{16,24000}$/.test(result.qr||'')){state.image.src='data:image/png;base64,'+result.qr;state.image.hidden=false;}
       if(result.state==='ready')document.dispatchEvent(new CustomEvent('tenant-calls-updated',{detail:{channel_id:state.channel}}));
-      else if(result.state!=='not_configured'&&result.state!=='identity_mismatch')state.timer=setTimeout(()=>void update(state),5000);
+      if((result.state!=='ready'||result.activation_pending)&&result.state!=='not_configured'&&result.state!=='identity_mismatch')state.timer=setTimeout(()=>void update(state),5000);
     }catch(error){if(current===state){state.status.textContent=error.name==='AbortError'?'Сервер ещё не ответил. Можно повторить проверку.':error.message;state.timer=setTimeout(()=>void update(state),10000);}}
     finally{clearTimeout(timeout);if(current===state)state.button.disabled=false;}
   }
@@ -33,7 +35,7 @@
     const info=node('p','Номер звонка будет совпадать с источником диалога. Переписки и существующее подключение не меняются. Записи обеих сторон хранятся 30 дней.');
     const button=node('button','Подключить звонки');button.type='button';button.className='primary';
     dialog.append(dismiss,title,status,image,info,button);document.body.append(dialog);
-    current={dialog,status,image,button,channel,owner:{...profile()},identity:identity(profile())};const state=current;
+    current={dialog,title,info,status,image,button,channel,owner:{...profile()},identity:identity(profile())};const state=current;
     button.onclick=()=>void update(state,true);dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.showModal();void update(state);
   }
   document.addEventListener('click',event=>{const button=event.target.closest('[data-connect-calls]');if(button)open(button.dataset.connectCalls);});

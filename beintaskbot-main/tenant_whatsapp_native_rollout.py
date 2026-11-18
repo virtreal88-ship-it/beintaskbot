@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import uuid
+from functools import wraps
 
 from tenant_platform import _connect, _fernet
 from tenant_linear_policy import TenantLinearError
@@ -42,6 +43,16 @@ def legacy_disabled(profile,source,account):
         raise TenantLinearError('native_legacy_not_disabled',409)
 
 
+def serialized(function):
+    @wraps(function)
+    def run(profile,*args,**kwargs):
+        from tenant_connect_transport import _tenant_connect_lock
+        with _tenant_connect_lock(str(uuid.UUID(str(profile['tenant_id'])))):
+            return function(profile,*args,**kwargs)
+    return run
+
+
+@serialized
 def stage(profile,source,account,generation):
     source=str(uuid.UUID(str(source)))
     if (not isinstance(generation,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',generation)
@@ -102,6 +113,18 @@ def staged(cur,tenant,source):
     return bool(cur.fetchone())
 
 
+def modes(cur,tenant):
+    cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
+    if not cur.fetchone()['ready']:return {}
+    cur.execute('''SELECT r.channel_id,r.enabled,s.account_jid FROM saas_whatsapp_native_routes r
+      JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
+      JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
+        AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
+      WHERE r.tenant_id=%s::uuid''',(tenant,))
+    return {str(row['channel_id']):row for row in cur.fetchall()}
+
+
+@serialized
 def activate(profile,source,generation):
     source=str(uuid.UUID(str(source)))
     if any(os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_'+flag)!='1' for flag in ('INBOX','PROJECTION','SEND')):

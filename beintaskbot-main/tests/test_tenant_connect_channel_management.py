@@ -13,6 +13,12 @@ PROFILE = {'tenant_id': TENANT, 'role': 'owner'}
 
 
 class ChannelManagementTests(TestCase):
+    def setUp(self):
+        # This contract suite covers legacy sources; native ownership is covered
+        # by SQL rollout tests, including refusal to reconnect the old engine.
+        self.modes=mock.patch('tenant_whatsapp_native_rollout.modes',return_value={})
+        self.modes.start();self.addCleanup(self.modes.stop)
+
     def test_channel_listing_surfaces_confirmed_phone_and_safe_conflict(self):
         conn = mock.MagicMock()
         cursor = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
