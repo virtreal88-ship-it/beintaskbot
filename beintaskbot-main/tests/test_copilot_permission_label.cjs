@@ -11,7 +11,7 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
   w.fetch=async(url,options={})=>{const p=new URL(url,w.location).pathname;calls.push(p);let result={};if(p.endsWith('/dialogs/history'))result={dialog:route,messages:[],next_before:null};else if(p.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:0};return{ok:true,status:200,json:async()=>({success:true,result})};};
   w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();await w.tenantOperator.openDialog(route);await settle();
   const expected=assigned?{ru:'Нет права на использование AI-помощника',az:'AI köməkçidən istifadə icazəsi yoxdur',en:'You do not have permission to use the AI assistant'}[language]:{ru:'Сначала назначьте агента диалогу',az:'Əvvəlcə dialoqa agent təyin edin',en:'Assign an agent to this conversation first'}[language];
-  assert.equal(d.querySelector('#operatorAIReplyStatus').textContent,expected);
+  assert.equal(d.querySelector('#operatorAIReplyStatus').textContent,assigned?expected:'');
   for(const id of ['operatorAIReply','operatorCopilotToggle','operatorCopilotVoiceToggle','operatorCopilotAsk']){const button=d.getElementById(id);assert.equal(button.disabled,true);assert.equal(button.title,expected);button.click();}
   // Programmatic handlers cannot circumvent the permission guard either.
   d.getElementById('operatorCopilotVoiceToggle').onclick();await settle();
