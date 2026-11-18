@@ -12,7 +12,26 @@ assert(origin&&mode&&actor&&initialTask,'Isolated task fixture is required');
  const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--no-sandbox']});
  const context=await browser.newContext({viewport:{width,height:900},timezoneId:'Asia/Baku'});
  const page=await context.newPage();page.setDefaultTimeout(9000);page.setDefaultNavigationTimeout(18000);
- const errors=[],writes=[],taskReads=[],refreshes=[],bundles=[],assets=[];
+ const errors=[],writes=[],taskReads=[],refreshes=[],refreshProofs=[],bundles=[],assets=[];
+ // Observe authority at dispatch, not later after tenant/source navigation. Real fetch and APIs stay untouched.
+ await page.exposeBinding('__recordTaskRefreshProof',(_source,proof)=>{refreshProofs.push(proof);});
+ await page.addInitScript(()=>{
+  const originalFetch=window.fetch;window.__taskRefreshProofs=[];
+  window.fetch=function(input,init){
+   const url=new URL(input instanceof Request?input.url:String(input),location.href);
+   if(url.pathname.startsWith('/api/platform/crm/')&&(url.searchParams.has('refresh')||url.searchParams.has('full'))){
+    const member=window.tenantProfileSnapshot?.member;
+    window.__taskRefreshProofs.push(window.__recordTaskRefreshProof({
+     url:url.pathname+url.search,method:init?.method||(input instanceof Request?input.method:'GET'),
+     tenant:member?.tenant_id,actor:String(member?.telegram_id),active:member?.active,
+     source:document.getElementById('taskFeedSource')?.value,
+     visible:!document.hidden&&document.getElementById('view-tasks')?.classList.contains('active'),
+     sync:window.tenantTaskFlow?.sourceActions('kommo')?.sync===true
+    }));
+   }
+   return originalFetch.apply(this,arguments);
+  };
+ });
  await context.route(url=>['http:','https:'].includes(url.protocol)&&url.origin!==origin,route=>route.abort());
  page.on('pageerror',error=>{errors.push(error.stack||error.message);console.error('APP ERROR '+(error.stack||error.message).replaceAll(origin,'<isolated-app>'));});
  page.on('request',request=>{const u=new URL(request.url());if(u.pathname.startsWith('/api/platform/crm/tasks')||u.pathname.startsWith('/api/platform/crm/native/tasks'))taskReads.push(request);if(u.pathname.startsWith('/api/platform/crm/')&&(u.searchParams.has('refresh')||u.searchParams.has('full')))refreshes.push(u.pathname+u.search);if(!['GET','HEAD'].includes(request.method())&&u.pathname!=='/api/platform/crm/task-view-preferences')writes.push({path:u.pathname,query:Object.fromEntries(u.searchParams),body:request.postDataJSON()});});
@@ -97,7 +116,22 @@ assert(origin&&mode&&actor&&initialTask,'Isolated task fixture is required');
     await page.locator('#taskFlowCard [data-task-complete]').click();await page.locator('#completeText').fill('Actual completed result');const completed=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/platform/crm/tasks/complete');await page.locator('#completeSubmit').click();const final=await completed;assert.equal(final.status(),200);assert.equal((await final.json()).completed,true);await card('A cached task');await waitStatus('completed');await page.reload();await current(tenantA);await card('A cached task');await waitStatus('completed');
    }
   }
-  assert.deepEqual(refreshes,[],'Ordinary app/task reads never request provider refresh/full sync');assert.deepEqual(errors,[],'Actual app has no uncaught errors');
+  await page.evaluate(()=>Promise.all(window.__taskRefreshProofs||[]));
+  assert.deepEqual(refreshProofs.map(proof=>proof.url).sort(),[...refreshes].sort(),'Every provider enqueue has dispatch-time authority evidence');
+  for(const proof of refreshProofs){
+   const url=new URL(proof.url,origin);
+   assert.equal(url.pathname,'/api/platform/crm/tasks','Only selected task resource may enqueue');
+   assert.equal(proof.method.toUpperCase(),'GET');
+   assert.equal(url.searchParams.get('refresh'),'1','Automatic refresh is incremental');
+   assert.equal(url.searchParams.has('full'),false,'App never requests full synchronization');
+   assert.equal(proof.source,'kommo','Native cache reads never enqueue provider synchronization');
+   assert.equal(proof.visible,true,'Only visible selected task view may enqueue');
+   assert.equal(proof.active,true);assert.equal(proof.sync,true,'Proven source sync authority is required');
+   assert([tenantA,tenantB].includes(proof.tenant));assert.equal(proof.actor,String(actor));
+   assert.equal(url.searchParams.get('expected_tenant_id'),proof.tenant,'Enqueue is bound to current tenant at dispatch');
+   assert.equal(url.searchParams.get('expected_user_id'),proof.actor,'Enqueue is bound to current actor at dispatch');
+  }
+  assert.deepEqual(errors,[],'Actual app has no uncaught errors');
   console.log('PASS actual task HTTP/PG/app '+mode+' '+actor+' '+width+' '+language+' writes='+writes.length);
  }finally{await context.close();await browser.close();}
 })().catch(error=>{console.error(error.stack||error);process.exitCode=1;});
