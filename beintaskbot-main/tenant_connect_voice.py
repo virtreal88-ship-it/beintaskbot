@@ -56,7 +56,7 @@ def download_audio(job, message_id):
     if (not route or route['channel_id'] != channel or
             route['conversation_id'] != str(job['conversation_id'])):
         raise VoiceError('voice_scope_mismatch')
-    if route.get('native'):
+    if route.get('native') or route.get('native_media'):
         from tenant_whatsapp_native_transport import download
         from tenant_platform import TenantPlatformError
         try:
