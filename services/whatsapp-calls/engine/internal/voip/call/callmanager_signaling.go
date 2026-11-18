@@ -80,8 +80,11 @@ func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, 
 	m.initCodec()
 	m.mu.Unlock()
 
-	// Ringing is not acceptance. Keep the reject path before preaccept; emit
-	// preaccept only when the operator explicitly accepts this offered call.
+	preaccept := signaling.BuildPreacceptStanza(peerJid, callID, wanode.MustJID(creator))
+	if err := m.sock.SendNode(ctx, preaccept); err != nil {
+		m.log.Error("send preaccept", "err", err)
+	}
+
 	if m.OnIncoming != nil {
 		m.OnIncoming(call)
 	}

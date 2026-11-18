@@ -46,12 +46,6 @@ func (s *Socket) RejectIncomingCall(ctx context.Context, peer, creator types.JID
 		return errors.New("transport_unconfirmed")
 	}
 	node := signaling.BuildRejectStanza(peer, callID, creator)
-	children := node.GetChildren()
-	children[0].Attrs["count"] = "0"
-	if token, err := s.GetTCToken(ctx, peer); err == nil && len(token) > 0 {
-		children[0].Content = []waBinary.Node{{Tag: "tctoken", Content: token}}
-	}
-	node.Content = children
 	return rejectWithAcknowledgement(ctx, s.Query, node)
 }
 

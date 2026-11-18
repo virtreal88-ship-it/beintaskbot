@@ -151,10 +151,6 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 	relayData := call.RelayData
 	m.mu.Unlock()
 
-	preaccept := signaling.BuildPreacceptStanza(peer, callID, creator)
-	if err := m.sock.SendNode(ctx, preaccept); err != nil {
-		return &CallError{"call_preaccept_unconfirmed"}
-	}
 	if key != nil {
 		acceptNode, err := signaling.BuildAcceptStanza(ctx, m.sock, callID, key, peer, creator, isVideo)
 		if err != nil {

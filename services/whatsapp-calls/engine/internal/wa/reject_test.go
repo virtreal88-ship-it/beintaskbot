@@ -52,3 +52,13 @@ func TestRejectRequiresExactServerAcknowledgement(t *testing.T) {
 		}
 	}
 }
+
+func TestMinimalRejectPreservesOfferedRouteAndCreator(t *testing.T) {
+	peer := types.JID{User: "100", Server: types.HiddenUserServer, Device: 4}
+	creator := peer.ToNonAD()
+	n := signaling.BuildRejectStanza(peer, "call", creator)
+	children := n.GetChildren()
+	if n.Tag != "call" || n.Attrs["to"] != peer || n.Attrs["id"] == "" || len(children) != 1 || children[0].Tag != "reject" || len(children[0].Attrs) != 2 || children[0].Attrs["call-id"] != "call" || children[0].Attrs["call-creator"] != creator || children[0].Content != nil {
+		t.Fatal("reject lost routing or added unverified attributes/children")
+	}
+}

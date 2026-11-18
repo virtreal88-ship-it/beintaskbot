@@ -310,17 +310,27 @@ recording. Private `reject-ack-evidence.json` retains safe counters/times only.
 An earlier diagnostic incorrectly attributed that later terminate to the
 attempted browser reject; the code now marks local rejection only on ACK.
 
-A further candidate defers preaccept until explicit Accept. The prior code sent
-it immediately while ringing. The reverse-engineered [reject flow](https://wacrg.org/spec/signalling/flow-call-rejected/)
-describes rejection before preaccept; this is a testable hypothesis, not a
-confirmed provider cause. Local tests cover offer/accept/reject ordering, timeout,
+Deferring preaccept until explicit Accept did not fix rejection: the user again
+confirmed continued ringing, `ack_timeout` preceded a remote terminate after
+46.599 seconds. Adding a separately correlated offer receipt only in the lab
+also returned `ack_timeout` and remote terminate after 45.763 seconds. Both
+experiments were removed; the previously working incoming acceptance sequence
+is retained. These are falsified explanations for this test, not fixes.
+
+The next candidate uses the original minimal reject builder (no extra count or
+privacy-token child), with bounded cancellation-safe I/O and correlated ACK
+validation. The [reverse-engineered reject description](https://wacrg.org/spec/signalling/call-reject/)
+is research evidence, not an official Meta contract. Acceptance is still open.
+Local tests cover routing, minimal wire shape, timeout,
 wrong/late ACK, explicit NACK, request cancellation, duplicate decisions and
-remote termination races. `lab-client-reject.patch`, applied after the outbound
-patch, also stops swallowing HTTP failures and clearing a newer incoming call.
+remote termination races. `lab-client-reject.patch`, applied with `git apply
+--unidiff-zero` after the outbound patch, also stops swallowing HTTP failures
+and clearing a newer incoming call.
 The lab client builds successfully; its failure message does not claim closure.
 
-These changes are not a production rollout. Remote rejection and incoming
-acceptance must both be verified before promoting the changed sequence.
+These changes are not a production rollout. Remote rejection must be verified
+before promoting the candidate. The test client now visibly retains the
+failure state; it closes after the later actual remote termination.
 
 ### CRM projection foundation (not wired to production)
 
