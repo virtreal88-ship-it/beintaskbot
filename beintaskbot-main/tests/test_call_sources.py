@@ -55,6 +55,26 @@ def test_actual_connect_account_must_match_before_dial(managed,monkeypatch):
     assert db.execute('SELECT id FROM saas_browser_calls')==[];db.commit()
 
 
+def test_permanent_source_can_start_and_store_twenty_first_call(managed):
+    db,key,cfg=managed
+    for n in range(21):
+        cmd=command(media='websocket');call=calls.action(PROFILE,cmd)
+        assert calls.action(PROFILE,cmd)['id']==call['id']
+        with pytest.raises(TenantLinearError) as busy:calls.action(PROFILE,command(media='websocket'))
+        assert busy.value.status==409
+        work=calls.sync(cfg,snapshot(2+n*2))['commands'][0]
+        provider_id=f'permanent-call-{n}'
+        calls.sync(cfg,snapshot(3+n*2,results=[{'id':work['id'],'ok':True,'provider_id':provider_id}],
+            ended=[provider('ended',CONVERSATION,'outbound',provider_id)]))
+        raw,wav=bundle(key,call_id=provider_id,peer_jid=CONVERSATION)
+        saved=calls.save_recording(cfg,call['id'],raw)
+        assert calls.save_recording(cfg,call['id'],raw)['id']==saved['id']
+    assert db.execute('SELECT count(*) AS n FROM saas_browser_calls')[0]['n']==21
+    assert db.execute('SELECT count(*) AS n FROM saas_test_call_recordings')[0]['n']==21
+    assert db.execute("SELECT count(*) AS n FROM saas_browser_calls WHERE state NOT IN ('ended','failed')")[0]['n']==0
+    db.commit()
+
+
 def test_managed_audio_nonce_actor_source_and_closure_checks(managed):
     db,key,cfg=managed;cmd=command(media='websocket');started=calls.action(PROFILE,cmd)
     work=calls.sync(cfg,snapshot(2))['commands'][0]

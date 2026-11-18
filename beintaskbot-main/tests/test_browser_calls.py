@@ -48,6 +48,18 @@ def test_start_idempotency_busy_and_explicit_termination(gateway):
     assert calls.status(PROFILE)['calls'][0]['state']=='ended'
     assert calls.action(PROFILE,command())['id']!=one['id']
 
+
+def test_legacy_pilot_still_enforces_twenty_call_daily_limit(gateway):
+    db,key,cfg=gateway
+    db.execute('''INSERT INTO saas_browser_calls
+      (id,tenant_id,gateway_id,boot_id,channel_id,conversation_id,lead_id,peer_jid,direction,state)
+      SELECT gen_random_uuid(),%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,41,%s,'outbound','ended'
+      FROM generate_series(1,20)''',(A,GATEWAY,BOOT,CA,CONVERSATION,CONVERSATION));db.commit()
+    with pytest.raises(TenantLinearError) as limited:calls.action(PROFILE,command())
+    assert limited.value.status==429 and '20' in str(limited.value)
+    assert db.execute('SELECT count(*) AS n FROM saas_browser_calls')[0]['n']==20
+    assert not db.execute('SELECT id FROM saas_browser_call_commands');db.commit()
+
 def test_incoming_claim_recording_exact_route_and_replay(gateway):
     db,key,cfg=gateway
     calls.sync(cfg,snapshot(2,active=[provider()]))

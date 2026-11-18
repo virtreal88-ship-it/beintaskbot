@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -128,4 +129,50 @@ func TestRecordingStorageBoundDoesNotBlockUpload(t *testing.T) {
 		t.Fatal("cannot drain a full spool")
 	}
 	releaseWork(slot)
+}
+
+func TestManagedDeliveredRecordingsDoNotExhaustLabQuota(t *testing.T) {
+	s := testRecordingStore(t)
+	s.cfg.Managed = true
+	s.cfg.CapacityDir = t.TempDir()
+	g := &appGateway{cfg: appGatewayConfig{Managed: true, Session: "current"}, server: &server{recordings: s}}
+	for i := 0; i < 21; i++ {
+		provider := "delivered-" + strconv.Itoa(i)
+		h, err := s.begin("current", provider, s.cfg.Account, s.cfg.Peers[0])
+		if err != nil {
+			t.Fatal("delivered tombstones blocked next capture", i, err)
+		}
+		h.capture.Add(0, []float32{.2}, time.Now())
+		h.finish(false)
+		g.acknowledgeRecording(provider)
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT count(*) FROM recordings WHERE state='delivered' AND encrypted IS NULL").Scan(&count); err != nil || count != 21 {
+		t.Fatal("acknowledged records lost or retained audio", count, err)
+	}
+	if _, err := s.begin("current", "delivered-0", s.cfg.Account, s.cfg.Peers[0]); err == nil {
+		t.Fatal("delivered call replay created a second capture")
+	}
+}
+
+func TestPendingAndLegacyRecordingsKeepCountBound(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(strconv.FormatBool(managed), func(t *testing.T) {
+			s := testRecordingStore(t)
+			s.cfg.Managed = managed
+			s.cfg.CapacityDir = t.TempDir()
+			for i := 0; i < 20; i++ {
+				h, err := s.begin("pending", "provider-"+strconv.Itoa(i), s.cfg.Account, s.cfg.Peers[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				h.capture.Add(0, []float32{.2}, time.Now())
+				h.finish(false)
+			}
+			if h, err := s.begin("pending", "over-limit", s.cfg.Account, s.cfg.Peers[0]); err == nil {
+				h.finish(false)
+				t.Fatal("unacknowledged recordings exceeded count bound")
+			}
+		})
+	}
 }

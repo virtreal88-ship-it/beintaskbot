@@ -151,7 +151,14 @@ func (s *recordingStore) begin(session, call, account, peer string) (*recordingH
 		return nil, e
 	}
 	var count int
-	if e := s.db.QueryRowContext(ctx, "SELECT count(*) FROM recordings").Scan(&count); e != nil {
+	countQuery := "SELECT count(*) FROM recordings"
+	if s.cfg.Managed {
+		// Only an authenticated storage acknowledgement releases this slot.
+		// Delivered tombstones retain replay protection without exhausting the
+		// legacy lab's lifetime count. Pending audio and disk/work limits remain.
+		countQuery += " WHERE state<>'delivered' OR encrypted IS NOT NULL"
+	}
+	if e := s.db.QueryRowContext(ctx, countQuery).Scan(&count); e != nil {
 		return nil, e
 	}
 	if count >= 20 {
