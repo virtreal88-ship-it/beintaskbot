@@ -70,6 +70,8 @@ func TestManagedStreamRejectsMalformedPCM(t *testing.T) {
 	for _, kind := range []websocket.MessageType{websocket.MessageText, websocket.MessageBinary} {
 		got := atomic.Int32{}
 		bridge := newStreamBridge(func([]float32) { got.Add(1) }, nil)
+		diagnostic := make(chan streamEndDiagnostic, 1)
+		bridge.stream.onDiagnosis = func(d streamEndDiagnostic) { diagnostic <- d }
 		server := httptest.NewServer(http.HandlerFunc(bridge.stream.serve))
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		socket, _, err := websocket.Dial(ctx, server.URL, nil)
@@ -81,9 +83,31 @@ func TestManagedStreamRejectsMalformedPCM(t *testing.T) {
 		if err == nil || got.Load() != 0 {
 			t.Fatal("invalid audio accepted")
 		}
+		if d := <-diagnostic; d.Code != "input_invalid_pcm" {
+			t.Fatal("wrong closure stage", d)
+		}
 		socket.CloseNow()
 		cancel()
 		server.Close()
+	}
+}
+
+func TestManagedStreamDiagnosisKeepsFirstFailure(t *testing.T) {
+	bridge := newStreamBridge(nil, nil)
+	diagnostic := make(chan streamEndDiagnostic, 1)
+	bridge.stream.onDiagnosis = func(d streamEndDiagnostic) { diagnostic <- d }
+	for i := 0; i < 65; i++ {
+		_ = bridge.WritePCM([]float32{.1, .2})
+	}
+	bridge.Close()
+	d := <-diagnostic
+	if d.Code != "output_backpressure" || d.OutputFrames != 64 {
+		t.Fatal(d)
+	}
+	select {
+	case d := <-diagnostic:
+		t.Fatal("duplicate close", d)
+	default:
 	}
 }
 

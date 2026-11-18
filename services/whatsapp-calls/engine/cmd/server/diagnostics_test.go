@@ -44,3 +44,15 @@ func TestRecordingDiagnosticsNeverExposeIdentifiersOrAudio(t *testing.T) {
 		t.Fatal("missing quality evidence")
 	}
 }
+
+func TestEndReasonIsAllowlistedAndOriginIsFirstWriter(t *testing.T) {
+	if safeEndCode("private upstream data") != "unknown" || safeEndCode("user_ended") != "user_ended" {
+		t.Fatal("unsafe provider end reason")
+	}
+	ac := &activeCall{}
+	ac.markEnd("whatsapp_terminate")
+	ac.markEnd("audio_transport")
+	if *ac.endOrigin.Load() != "whatsapp_terminate" {
+		t.Fatal("cleanup overwrote initiating event")
+	}
+}

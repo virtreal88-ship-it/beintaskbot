@@ -208,6 +208,15 @@ def test_storage_limit_and_internal_history_projection(pilot,monkeypatch):
     assert db.execute('SELECT count(*) AS n FROM saas_test_call_recordings')[0]['n']==20;db.commit()
 
 
+def test_managed_recording_history_preserves_duration_above_two_minutes():
+    import uuid
+    from tenant_operator_dialogs import _message
+    base={'direction':'system','message_type':'call_recording','raw':{'recording_id':str(uuid.uuid4()),'duration_ms':216645,'test_recording':False}}
+    assert _message(base)['call_recording']['duration_ms']==216645
+    assert _message({**base,'raw':{**base['raw'],'duration_ms':999999}})['call_recording']['duration_ms']==900000
+    assert _message({**base,'raw':{**base['raw'],'test_recording':True}})['call_recording']['duration_ms']==120000
+
+
 def test_route_changed_after_authorization_is_not_silently_rebound(pilot,monkeypatch):
     db,key,public,cfg,send=pilot
     original=store.assert_route
