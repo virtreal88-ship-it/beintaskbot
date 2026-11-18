@@ -21,18 +21,20 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"sync/atomic"
 	"wacalls/internal/recording"
+	"wacalls/internal/unified"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
 	"wacalls/internal/wa"
 )
 
 type appGatewayConfig struct {
-	Managed  bool     `json:"managed"`
-	Endpoint string   `json:"endpoint"`
-	Token    string   `json:"token"`
-	Session  string   `json:"session_id"`
-	Account  string   `json:"account_jid"`
-	Peers    []string `json:"allowed_peers"`
+	Messaging *managedMessagingConfig `json:"messaging,omitempty"`
+	Managed   bool                    `json:"managed"`
+	Endpoint  string                  `json:"endpoint"`
+	Token     string                  `json:"token"`
+	Session   string                  `json:"session_id"`
+	Account   string                  `json:"account_jid"`
+	Peers     []string                `json:"allowed_peers"`
 }
 type appCommand struct {
 	ID         string `json:"id"`
@@ -56,6 +58,7 @@ type appResult struct {
 	NotStarted bool   `json:"not_started,omitempty"`
 }
 type appGateway struct {
+	messages  *unified.Journal
 	server    *server
 	cfg       appGatewayConfig
 	boot      string
@@ -98,6 +101,15 @@ func newAppGateway(s *server, path string) (*appGateway, error) {
 		return nil, err
 	}
 	g := &appGateway{server: s, cfg: c, boot: randomUUID(), client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("gateway_redirect_denied") }}}
+	if c.Messaging != nil {
+		if !c.Managed || c.Messaging.Scope.Account != c.Account {
+			return nil, unified.ErrConfiguration
+		}
+		g.messages, err = unified.New(context.Background(), s.sessions.store.db, c.Messaging.Scope, c.Messaging.Key)
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
+	}
 	if c.Managed {
 		if !s.runtimeExclusive {
 			return nil, errors.New("runtime_fence_required")

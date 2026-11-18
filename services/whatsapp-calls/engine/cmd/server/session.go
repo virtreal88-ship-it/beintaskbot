@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"wacalls/internal/unified"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
@@ -34,6 +35,7 @@ type Session struct {
 }
 
 func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) *Session {
+	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
 	s := &Session{
 		id:     id,
 		name:   name,
@@ -376,6 +378,7 @@ func (s *Session) teardownAllCalls() {
 }
 
 func (s *Session) replaceClient(client *whatsmeow.Client) {
+	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
 	s.teardownAllCalls()
 	s.client.Disconnect()
 	s.client = client
