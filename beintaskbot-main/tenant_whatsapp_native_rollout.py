@@ -109,7 +109,7 @@ def staged(cur,tenant,source):
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
       WHERE r.tenant_id=%s::uuid AND r.channel_id=%s::uuid AND NOT r.enabled AND NOT g.enabled
-        AND s.enabled''',(tenant,source))
+        AND s.enabled AND NOT r.legacy_fallback''',(tenant,source))
     return bool(cur.fetchone())
 
 
@@ -121,7 +121,7 @@ def modes(cur,tenant):
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
       JOIN saas_connect_channels c ON c.tenant_id=r.tenant_id AND c.connect_channel_id=r.channel_id
-      WHERE r.tenant_id=%s::uuid''',(tenant,))
+      WHERE r.tenant_id=%s::uuid AND NOT r.legacy_fallback''',(tenant,))
     return {str(row['channel_id']):row for row in cur.fetchall()}
 
 

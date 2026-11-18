@@ -28,6 +28,10 @@ def migrate(cur):
       PRIMARY KEY(tenant_id,channel_id),
       FOREIGN KEY(tenant_id,channel_id,generation)
         REFERENCES saas_whatsapp_capture_generations(tenant_id,channel_id,generation))''')
+    cur.execute('ALTER TABLE saas_whatsapp_native_routes ADD COLUMN IF NOT EXISTS legacy_fallback BOOLEAN NOT NULL DEFAULT FALSE')
+    cur.execute('''DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='native_route_single_sender') THEN
+      ALTER TABLE saas_whatsapp_native_routes ADD CONSTRAINT native_route_single_sender CHECK(NOT(enabled AND legacy_fallback));
+      END IF; END $$''')
     from tenant_whatsapp_native_status import migrate as status_migrate
     status_migrate(cur)
 
@@ -40,7 +44,7 @@ def bind(cur, route):
     cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
     if not cur.fetchone()['ready']:
         return _legacy(route)
-    cur.execute('''SELECT r.enabled,r.generation,g.account_jid,s.gateway_id,
+    cur.execute('''SELECT r.enabled,r.legacy_fallback,r.generation,g.account_jid,s.gateway_id,
        g.enabled AS capture_enabled,s.enabled AS gateway_enabled,c.active
       FROM saas_whatsapp_native_routes r
       JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
@@ -55,6 +59,11 @@ def bind(cur, route):
         cur.execute('SELECT 1 FROM saas_whatsapp_native_routes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',
           (route['tenant_id'],route['channel_id']))
         if cur.fetchone():raise TenantPlatformError('native_source_unavailable')
+        return _legacy(route)
+    # Only an explicit, audited operator rollback can set this. A disabled or
+    # failed native route never becomes legacy automatically; stale native
+    # requests are still rejected by _legacy rather than sent a second time.
+    if row['legacy_fallback'] and not row['enabled'] and row['gateway_enabled'] and row['active']:
         return _legacy(route)
     if (os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_SEND')!='1' or
             not all(row[x] for x in ('enabled','capture_enabled','gateway_enabled','active'))):
