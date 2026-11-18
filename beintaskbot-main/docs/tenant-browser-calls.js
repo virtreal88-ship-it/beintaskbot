@@ -128,13 +128,13 @@
     const managed=s.transport==='websocket',pc=managed?null:new RTCPeerConnection({iceServers:[]});
     let dc=pc?.createDataChannel('pcm',{ordered:true})||null,closed=false;
     const ctx=new AudioContext({sampleRate:16000});if(dc)dc.binaryType='arraybuffer';
-    const handle={pc,setMuted(muted){stream.getAudioTracks().forEach(track=>{track.enabled=!muted;});},close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close();pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
+    const handle={pc,setMuted(muted){stream.getAudioTracks().forEach(track=>{track.enabled=!muted;});},close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close(s.mediaCloseCode||1000);pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
     try{
       await ctx.audioWorklet.addModule('/assets/browser-call-audio.js');await ctx.resume();
       const capture=new AudioWorkletNode(ctx,'bein-call-capture'),playback=new AudioWorkletNode(ctx,'bein-call-playback');
       capture.port.postMessage('bounded');
       ctx.createMediaStreamSource(stream).connect(capture);capture.connect(ctx.destination);playback.connect(ctx.destination);
-      capture.port.onmessage=e=>{try{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);s.pcmSent=true;}finally{capture.port.postMessage('consumed');}};
+      capture.port.onmessage=e=>{try{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){s.mediaCloseCode=4001;void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);s.pcmSent=true;}finally{capture.port.postMessage('consumed');}};
       const onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
       if(managed){
         handle.connect=()=>new Promise((resolve,reject)=>{

@@ -11,7 +11,7 @@ import tenant_call_sources as store
 def close_evidence(socket):
     """Fixed transport enums only; never log exception text or peer payloads."""
     code=getattr(socket,'close_code',None)
-    code=code if code in {1000,1001,1002,1003,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015} else 0
+    code=code if code in {1000,1001,1002,1003,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015,4001} else 0
     error=socket.exception()
     kind='timeout' if isinstance(error,asyncio.TimeoutError) else 'connection_lost' if isinstance(error,ConnectionError) else 'transport_error' if error is not None else 'none'
     return code,kind

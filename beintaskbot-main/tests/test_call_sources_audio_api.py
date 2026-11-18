@@ -84,6 +84,7 @@ def test_close_evidence_never_exposes_exception_or_unknown_peer_code():
         (1006,asyncio.TimeoutError('secret upstream detail'),(1006,'timeout')),
         (1006,ConnectionResetError('secret'),(1006,'connection_lost')),
         (1000,None,(1000,'none')),
+        (4001,None,(4001,'none')),  # bounded client transport buffer overflow
         (4123,RuntimeError('secret'),(0,'transport_error')),
         (None,None,(0,'none')),
     ]:
