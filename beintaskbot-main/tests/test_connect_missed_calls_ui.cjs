@@ -45,10 +45,14 @@ for(const [language,audio,video] of [['ru','Входящий звонок · р�
 console.log('unknown incoming call presentation RU/AZ/EN passed');
 context.member={tenant_id:'tenant-one',telegram_id:11};context.URLSearchParams=URLSearchParams;
 context.i18n.language='ru';
-const recorded={id:'recording-message',source:'connect',direction:'system',message_type:'call_recording',
+const recorded={happened_at:'2026-11-18T00:54:08Z',created_at:'2026-11-18T01:00:00Z',id:'recording-message',source:'connect',direction:'system',message_type:'call_recording',
  call_recording:{account_number:'994123456789',id:'a'.repeat(32),duration_ms:27183,complete:false,expires_at:new Date(Date.now()+60000).toISOString(),archived_owner_binding:true}};
 const recordingMarkup=context.messageMarkup([recorded]);
 assert(recordingMarkup.includes('Возможны пропуски аудио'));
+assert(recordingMarkup.includes('<time datetime="2026-11-18T00:54:08.000Z">2026-11-18T00:54:08Z</time>'));
+assert(!recordingMarkup.includes(recorded.created_at),'call start, not import time');
+assert(!context.messageMarkup([{...recorded,happened_at:'invalid',created_at:null}]).includes('<time'),'no invented timestamp');
+assert(context.messageMarkup([{...recorded,happened_at:null}]).includes(recorded.created_at),'legacy timestamp fallback');
 assert(recordingMarkup.includes('<strong>Звонок WhatsApp</strong>'));
 assert(recordingMarkup.includes('Источник +994123456789'));
 assert(recordingMarkup.includes('Привязано владельцем к архивному диалогу'));
