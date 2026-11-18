@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.fernet import InvalidToken
 
 from tenant_beinsystems_operator_access import (
+    OPERATOR_API_BASE_URL, OPERATOR_WEB_ORIGIN,
     PROVIDER, api_base_url, is_operator_workspace,
 )
 from tenant_platform_core import (
@@ -26,9 +27,8 @@ from tenant_policy import TenantPolicy
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
-AUTH_LOGIN_URL = "https://api.akul.az/1.0/online/controllers/pos/pos_getlogin.php"
+AUTH_LOGIN_URL = "https://auth.beinsystems.az/auth/login"
 READ_ENDPOINTS = {
-    "me": ("/user/me", set()),
     "accounts": ("/user/accounts", {"search"}),
     "account_info": ("/user/info", {"account"}),
     "profile_users": ("/user/profileUsers", {"account"}),
@@ -81,7 +81,7 @@ def _operator_row(cur, tenant, *, lock=False):
     return cur.fetchone()
 
 
-def _public(row):
+def _public(row, *, pending_auth_received=False, pending_auth_received_at=None):
     row = row or {}
     return {
         "provider": PROVIDER,
@@ -91,6 +91,13 @@ def _public(row):
         "connected_at": row.get("connected_at").isoformat() if row.get("connected_at") else None,
         "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
         "api_ready": bool(api_base_url()),
+        "pending_auth_received": bool(pending_auth_received),
+        "pending_auth_access_confirmed": False if pending_auth_received else None,
+        "pending_auth_received_at": (
+            pending_auth_received_at.isoformat()
+            if hasattr(pending_auth_received_at, "isoformat")
+            else (str(pending_auth_received_at) if pending_auth_received_at else None)
+        ),
         "capabilities": {
             "account_search": True, "account_info": True, "profile_users": True,
             "task_list": False, "task_create": False, "public_links": False,
@@ -107,9 +114,19 @@ def status(profile):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            _authorize(cur, profile, "view")
+            _, actor, current = _authorize(cur, profile, "view")
             row = _operator_row(cur, tenant)
-    return _public(row)
+            pending = None
+            if current.get("role") == "owner":
+                cur.execute("""SELECT received_at
+                  FROM saas_beinsystems_operator_pending_auth
+                  WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
+                pending = cur.fetchone()
+    return _public(
+        row,
+        pending_auth_received=bool(pending),
+        pending_auth_received_at=(pending or {}).get("received_at"),
+    )
 
 
 def save_token(profile, token, *, verified=False):
@@ -120,6 +137,9 @@ def save_token(profile, token, *, verified=False):
         raise OperatorError("Нет доступа.") from None
     if profile.get("role") != "owner" or profile.get("active") is False:
         raise OperatorError("Настроить Operator может только владелец BeinSystems.")
+    if verified is not True:
+        raise OperatorError(
+            "Непроверенный токен хранится отдельно до подтверждения доступа Operator.", 409)
     if not api_base_url():
         raise OperatorError("Адрес Operator API не задан в серверной конфигурации.")
     clean = str(token or "").strip()
@@ -127,7 +147,6 @@ def save_token(profile, token, *, verified=False):
         raise OperatorError("Проверьте служебный токен Operator.")
     instance_id = str(uuid.uuid4())
     generation = str(uuid.uuid4())
-    status_value = "connected" if verified else "configured"
     encrypted = _fernet().encrypt(_json({
         "tenant_id": tenant, "provider": PROVIDER, "token": clean,
         "connection_instance_id": instance_id,
@@ -142,26 +161,59 @@ def save_token(profile, token, *, verified=False):
             cur.execute(
                 """INSERT INTO saas_tenant_integrations
                   (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
-                VALUES (%s::uuid,%s,%s,%s,%s::jsonb,%s,
-                  CASE WHEN %s THEN now() ELSE NULL END,now())
+                VALUES (%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
                 ON CONFLICT (tenant_id,provider) DO UPDATE SET
                   account_domain=EXCLUDED.account_domain,
                   metadata=EXCLUDED.metadata,secrets=EXCLUDED.secrets,
                   status=EXCLUDED.status,connected_at=EXCLUDED.connected_at,updated_at=now()
                 RETURNING status,metadata,connected_at,updated_at""",
-                (tenant, PROVIDER, status_value, api_base_url(), _json(metadata), encrypted, verified),
+                (tenant, PROVIDER, api_base_url(), _json(metadata), encrypted),
             )
             row = cur.fetchone()
+            cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
         conn.commit()
     return _public(row)
 
 
-def _authenticate_operator(login, password, *, opener=None):
-    """Authenticate against the Operator POS login endpoint.
+def stage_auth_token(profile, token):
+    """Encrypt a received JWT separately until a documented verifier exists."""
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+    clean = str(token or "").strip()
+    if not clean or len(clean) > 8192 or any(ord(char) < 32 for char in clean):
+        raise OperatorError("Проверьте служебный токен Operator.")
+    encrypted = _fernet().encrypt(_json({
+        "tenant_id": tenant, "provider": PROVIDER,
+        "owner_telegram_id": actor, "purpose": "pending_auth_verification",
+        "token": clean,
+    }).encode("utf-8"))
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+            cur.execute("""INSERT INTO saas_beinsystems_operator_pending_auth
+              (tenant_id,owner_telegram_id,token_ciphertext,received_at)
+              VALUES(%s::uuid,%s,%s,now())
+              ON CONFLICT(tenant_id,owner_telegram_id) DO UPDATE SET
+                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now()
+              RETURNING received_at""", (tenant, actor, encrypted))
+            pending = cur.fetchone() or {}
+            row = _operator_row(cur, tenant)
+        conn.commit()
+    return _public(row, pending_auth_received=True,
+                   pending_auth_received_at=pending.get("received_at"))
 
-    Only the returned SSO token is persisted by the caller. Passwords and
-    authentication response bodies are never logged or stored.
-    """
+
+def _authenticate_operator(login, password, *, opener=None):
+    """Exchange credentials for a token without retaining the password."""
     username = str(login or "").strip()
     original_username = username
     secret = str(password or "")
@@ -177,6 +229,7 @@ def _authenticate_operator(login, password, *, opener=None):
         method="POST",
         headers={
             "Content-Type": "application/json", "Accept": "application/json",
+            "Origin": OPERATOR_WEB_ORIGIN, "Referer": OPERATOR_WEB_ORIGIN + "/",
         },
     )
     transport = opener or build_opener(_NoRedirect())
@@ -204,8 +257,14 @@ def _authenticate_operator(login, password, *, opener=None):
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise OperatorError("Сервис авторизации Operator вернул неизвестный ответ.", 502) from None
     data = result.get("data") if isinstance(result, dict) else None
-    token = data.get("token") if isinstance(data, dict) else None
-    if (not isinstance(result, dict) or result.get("success") is not True
+    candidates = (
+        result.get("token") if isinstance(result, dict) else None,
+        result.get("access_token") if isinstance(result, dict) else None,
+        data.get("token") if isinstance(data, dict) else None,
+    )
+    token = next((value for value in candidates
+                  if isinstance(value, str) and value.strip()), None)
+    if (not isinstance(result, dict) or result.get("success") is False
             or not isinstance(token, str) or not token.strip()
             or len(token) > 8192 or any(ord(char) < 32 for char in token)):
         detail = _auth_error_detail(result, original_username, username, secret)
@@ -228,14 +287,22 @@ def _read_auth_error(error):
 
 
 def _auth_error_detail(payload, *secrets):
-    """Expose only the provider's short message/error, with submitted secrets removed."""
+    """Expose a short provider error after removing submitted and returned secrets."""
     if not isinstance(payload, dict):
         return ""
     detail = next((payload.get(key) for key in ("message", "error")
                    if isinstance(payload.get(key), str) and payload.get(key).strip()), "")
     detail = re.sub(r"[\x00-\x1f\x7f]+", " ", detail)
     detail = " ".join(detail.split())
-    for secret in sorted({str(value or "") for value in secrets}, key=len, reverse=True):
+    response_tokens = [
+        payload.get("token"), payload.get("access_token"),
+    ]
+    data = payload.get("data")
+    if isinstance(data, dict):
+        response_tokens.append(data.get("token"))
+    for secret in sorted(
+            {str(value or "") for value in (*secrets, *response_tokens)},
+            key=len, reverse=True):
         if secret:
             detail = re.sub(re.escape(secret), "[скрыто]", detail, flags=re.IGNORECASE)
     detail = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [скрыто]", detail)
@@ -247,7 +314,7 @@ def _auth_error_detail(payload, *secrets):
 
 
 def connect_with_password(profile, login, password):
-    """Authenticate against Operator SSO, validate the JWT, then store it."""
+    """Receive and encrypt an Operator JWT without activating an unverified token."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -255,12 +322,8 @@ def connect_with_password(profile, login, password):
         raise OperatorError("Нет доступа.") from None
     if profile.get("role") != "owner" or profile.get("active") is False:
         raise OperatorError("Подключить Operator может только владелец BeinSystems.")
-    base_url = api_base_url()
-    if not base_url:
-        raise OperatorError("Адрес Operator API не задан в серверной конфигурации.")
 
-    # Bound authentication attempts per owner and minute. No login or password
-    # is written to this rate-limit record.
+    # Rate-limit attempts per owner and minute. Credentials are never recorded.
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -278,13 +341,9 @@ def connect_with_password(profile, login, password):
         conn.commit()
 
     token = _authenticate_operator(login, password)
-    me = _request_operator("me", {}, token=token, base_url=base_url)
-    if (not isinstance(me, dict) or not me
-            or (me.get("status") is not None and str(me.get("status")).casefold() != "success")):
-        raise OperatorError("Полученный токен не прошёл проверку в Operator API.", 401)
-    # Re-check owner/workspace after remote calls, then encrypt and store only
-    # the validated SSO token.
-    return save_token(profile, token, verified=True)
+    # No API call is made with the new token until Operator documents a
+    # read-only access check. The active connection remains untouched.
+    return stage_auth_token(profile, token)
 
 
 def disconnect(profile):
@@ -302,6 +361,8 @@ def disconnect(profile):
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Отключить Operator может только владелец BeinSystems.")
+            cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
             cur.execute(
                 """UPDATE saas_tenant_integrations SET status='not_connected',account_domain=%s,
                   metadata=%s::jsonb,secrets=NULL,connected_at=NULL,updated_at=now()
@@ -369,12 +430,13 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
             raise OperatorError("Идентификатор аккаунта Operator некорректен.")
         payload = {"account": account}
     base = str(base_url or api_base_url()).rstrip("/")
-    if not base.startswith("https://"):
+    if base != OPERATOR_API_BASE_URL or base != api_base_url():
         raise OperatorError("Адрес Operator API не настроен.")
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = Request(base + path, data=body, method="POST", headers={
         "Authorization": "Bearer " + str(token),
         "Content-Type": "application/json", "Accept": "application/json",
+        "Origin": OPERATOR_WEB_ORIGIN, "Referer": OPERATOR_WEB_ORIGIN + "/",
     })
     transport = opener or build_opener(_NoRedirect())
     try:
@@ -398,6 +460,7 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
 
 
 def verify_connection(profile):
+    """Fail closed until Operator publishes a documented read-only verifier."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -409,24 +472,9 @@ def verify_connection(profile):
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Проверить Operator может только владелец BeinSystems.")
-    credentials = _credentials(tenant, allow_configured=True)
-    read(profile, "me", {}, allow_configured=True)
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute("""UPDATE saas_tenant_integrations SET status='connected',
-              connected_at=COALESCE(connected_at,now()),updated_at=now()
-              WHERE tenant_id=%s::uuid AND provider=%s AND metadata->>'generation'=%s
-              RETURNING status,metadata,connected_at,updated_at""",
-              (tenant, PROVIDER, credentials["generation"]))
-            row = cur.fetchone()
-            current = _current_profile(cur, tenant, actor)
-            if current.get("role") != "owner":
-                raise OperatorError("Проверить Operator может только владелец BeinSystems.")
-        conn.commit()
-    if not row:
-        raise OperatorError("Подключение Operator изменилось во время проверки.")
-    return _public(row)
+    raise OperatorError(
+        "Доступ к Operator нельзя подтвердить без документированного read-only метода. "
+        "Подключение не изменено.", 409)
 
 
 def read(profile, endpoint, payload, *, allow_configured=False):
@@ -439,7 +487,7 @@ def read(profile, endpoint, payload, *, allow_configured=False):
         _ensure_schema(conn)
         with conn.cursor() as cur:
             _, actor, _ = _authorize(cur, profile, "view")
-            limits = {"me": 30, "accounts": 12, "account_info": 30,
+            limits = {"accounts": 12, "account_info": 30,
                       "profile_users": 20, "task_list": 20}
             cur.execute("""INSERT INTO saas_beinsystems_operator_rate_limits
               (tenant_id,actor_telegram_id,endpoint,bucket_start,request_count)

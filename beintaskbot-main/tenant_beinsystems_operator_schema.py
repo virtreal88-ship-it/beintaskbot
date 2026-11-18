@@ -90,6 +90,15 @@ def migrate_operator_identity_links(cur) -> None:
           CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login'));
       END IF;
     END $$''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_pending_auth (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      owner_telegram_id BIGINT NOT NULL CHECK(owner_telegram_id>0),
+      token_ciphertext BYTEA NOT NULL CHECK(octet_length(token_ciphertext)>0),
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,owner_telegram_id),
+      FOREIGN KEY(tenant_id,owner_telegram_id)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
+    )''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_employee_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL,

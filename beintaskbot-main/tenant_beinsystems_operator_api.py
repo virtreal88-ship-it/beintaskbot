@@ -86,8 +86,6 @@ def integration_handler(member: Callable, origin: str, logger):
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
-            elif action == "connect" and set(data) == {"action", "token"}:
-                value = await asyncio.to_thread(operator.save_token, profile, data["token"])
             elif action == "test" and set(data) == {"action"}:
                 value = await asyncio.to_thread(operator.verify_connection, profile)
             elif action == "disconnect" and set(data) == {"action"}:
