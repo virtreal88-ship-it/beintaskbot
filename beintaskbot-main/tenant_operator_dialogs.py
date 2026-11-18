@@ -258,6 +258,27 @@ def _attach_saved_visual_status(cur, tenant, rows):
             'coverage':receipt.get('coverage') or {},'has_visual_result':has_visual_result(receipt.get('result'))}
 
 
+# Apply before LIMIT/cursor pagination. Keep the original Connect event in storage:
+# only a persisted recording in this exact physical route can replace its neutral
+# observation. Missed/rejected calls, missing recordings and ambiguous peers remain.
+_RECORDED_CALL_OBSERVATION_FILTER = ''' AND NOT EXISTS (
+  SELECT 1 FROM saas_browser_calls c
+  JOIN saas_test_call_recordings r ON r.id=c.recording_id AND r.browser_call_id=c.id
+    AND r.tenant_id=c.tenant_id AND r.channel_id=c.channel_id
+    AND r.conversation_id=c.conversation_id AND r.lead_id=c.lead_id
+  JOIN saas_crm_messages recorded ON recorded.tenant_id=r.tenant_id
+    AND recorded.kommo_lead_id=r.lead_id AND recorded.channel='connect:'||r.channel_id::text
+    AND recorded.external_id='internal:call-recording:'||r.id::text
+    AND recorded.message_type='call_recording' AND recorded.direction='system'
+    AND recorded.raw->>'recording_id'=r.id::text
+    AND recorded.raw->>'conversationId'=r.conversation_id
+  WHERE m.message_type='call_observed' AND m.direction='system'
+    AND m.external_id LIKE 'connect:call:%%' AND m.raw->'isVideo'='false'::jsonb
+    AND c.tenant_id=m.tenant_id AND m.channel='connect:'||c.channel_id::text
+    AND c.lead_id=m.kommo_lead_id AND c.conversation_id=m.raw->>'conversationId'
+    AND c.provider_id=m.raw->>'externalCallId')'''
+
+
 def _attach_call_recording_directions(cur, tenant, rows):
     """Enrich only authorized history rows from their exact stored call binding."""
     candidates=[]
@@ -1177,8 +1198,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid)'''
                     args += [tenant,history_leads,row['history_channel'],identifier(before)]
-                cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw,kommo_lead_id AS source_lead_id FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s'''+clause+'''
+                call_filter=_RECORDED_CALL_OBSERVATION_FILTER if provider=='connect' else ''
+                cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw,kommo_lead_id AS source_lead_id FROM saas_crm_messages m
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s'''+clause+call_filter+'''
                   ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
                 messages=cur.fetchall()
                 if provider=='connect':
