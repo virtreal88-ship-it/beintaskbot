@@ -93,7 +93,7 @@ disable that guard as a shortcut.
 - The lab caps its journal at 10,000 events and payloads at 1 MiB; backpressure
   returns failure. It never evicts unprocessed data to claim success.
 
-## Not yet demonstrated or implemented
+## Live results and remaining gates
 
 The isolated existing test session has connected with the unified build without
 another QR and survived graceful process replacement. One agreed text and one
@@ -160,18 +160,68 @@ message/call stimulus during its window has not been confirmed. No automatic
 initialization fix is claimed. Read-only production process inventory found no
 running engine containing this lab account/device.
 
-No live unified call/message conversation test has completed. Calls on the same
-client, audio quality and concurrency must still be proven. Existing successful
-call tests concern the old call-only path. The legacy lab duration limit is still
-120 seconds; the planned three-minute acceptance cannot be claimed under it.
+On 18 November the fresh test link completed two incoming browser calls using
+the same whatsmeow client as messaging (runtime source `fa6d3cce`, binary SHA-256
+`34cebc99300a5deb8d97611aefebea59fe247f2ef904ef0a5be98b15ec5382d0`).
+The first connected conversation was 17.928 seconds and ended from the phone.
+The second was 42.452 seconds. During its connected interval, one test text and
+one small TXT document were accepted, each with one durable send row and a read
+receipt; a new participant text was journaled during that same call. The
+participant confirmed both-way audio and receipt of the text and file.
+
+The second call ended through the user's browser cross, as explicitly confirmed
+by the owner. The legacy HTTP close path reported `user_ended` with origin
+`unknown`; this is not evidence of an automatic drop. The owner listened to the
+42-second saved recording to its end and confirmed both sides with no missing
+words. Its metadata remains `incomplete/audio_gaps`: 84 packet arrival gaps over
+200 ms were recorded on the remote track. Listening does not disprove those
+intervals or establish their cause (silence/DTX versus transport loss), so the
+warning was not removed. No three-minute or outgoing unified call is claimed;
+the current lab limit is still 120 seconds.
+
+The initial fresh-link call attempts produced call frames without a usable
+browser offer. After a graceful restart with subtype-only diagnostics, actual
+offers were accepted. No causal fix to WhatsApp signaling is established by
+that diagnostic-only change. The original linked device's missing inbound path
+also remains unexplained; re-pairing is a lab diagnostic, not a silent production
+reset strategy.
+
+Next, one participant voice message and one small document were received once
+each (journal sequences 14 and 15) and downloaded through the authenticated
+media route. Both returned HTTP 200, exact declared lengths (7,541 and 90 bytes),
+`no-store` and `nosniff`. The voice payload has Ogg/Opus headers. This verifies
+receipt/decryption/download, not a listening or ASR quality test. Payloads, media
+keys, filenames, phone numbers and live event IDs are not included in this report.
 
 Media messages are retained encrypted as protocol payloads; this slice does not
-yet implement production media admission, group-change/history import, Worker event
-delivery/ack, durable consumer cursors, permission-checked SaaS APIs or source
-cutover. Receipt/history/undecryptable event acknowledgement behavior requires
+yet implement production media admission, group-change/history import, live Worker
+event dispatch/projection, permission-checked SaaS APIs or source cutover.
+Receipt/history/undecryptable event acknowledgement behavior requires
 separate failure tests; a message callback test does not prove no-loss behavior
 for every event type. Distributed ownership across copied volumes is not solved
 by the existing local file lock.
+
+### Durable Worker handoff foundation (not enabled)
+
+`internal/unified/delivery.go` adds one generation-scoped consumer cursor. Reading
+the next event does not acknowledge it. A matching post-commit `stored` receipt
+advances with compare-and-set; an opaque HMAC proof binds source, generation,
+cursor, event and payload. Timeout, restart, a delayed old receipt, interleaved
+source sequences and a failed cursor write cannot skip or delete retained events.
+The proof does not replace authenticated transport.
+
+`tenant_whatsapp_native_inbox.py` reuses managed gateway authentication and
+rechecks the existing source/token inside the storage transaction. Only an
+explicitly registered capture generation is admitted; duplicates are compared
+against sequence and content, encrypted before storage, and acknowledged after
+commit. It has no HTTP route, startup migration, source activation, CRM mutation,
+AI dispatch or send path. Its feature flag defaults off. Capture registration is
+not a protocol ownership lease and must never authorize a second WhatsApp owner.
+
+Synthetic tests cover encryption, tenant/source/generation boundaries, revoked
+credentials, replay conflicts, lost commit responses, rollback and independent
+PostgreSQL connections. The live test client continues to run `fa6d3cce`; these
+new handoff primitives have not been deployed to that client or production.
 
 Do not switch working sources or remove Connect/Evolution until every gate in
 AUDIT-AND-ROLLOUT.md and LICENSES.md is closed.

@@ -32,6 +32,7 @@ type Scope struct {
 
 type Journal struct {
 	db             *sql.DB
+	binding        Scope
 	aead           cipher.AEAD
 	key            []byte
 	scope          string
@@ -77,7 +78,7 @@ func New(ctx context.Context, db *sql.DB, scope Scope, key []byte) (*Journal, er
 	if err != nil {
 		return nil, err
 	}
-	j := &Journal{db: db, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:]), operationScope: hex.EncodeToString(stableHash[:])}
+	j := &Journal{db: db, binding: scope, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:]), operationScope: hex.EncodeToString(stableHash[:])}
 	_, err = db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS unified_bindings(scope TEXT PRIMARY KEY, key_check TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS unified_events(
@@ -86,7 +87,10 @@ CREATE TABLE IF NOT EXISTS unified_events(
 CREATE TABLE IF NOT EXISTS unified_sends(
  scope TEXT NOT NULL, operation TEXT NOT NULL, fingerprint TEXT NOT NULL,
  provider_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('unknown','accepted')),
- PRIMARY KEY(scope,operation), UNIQUE(scope,provider_id));`)
+ PRIMARY KEY(scope,operation), UNIQUE(scope,provider_id));
+CREATE TABLE IF NOT EXISTS unified_consumers(
+ scope TEXT NOT NULL, consumer TEXT NOT NULL, sequence INTEGER NOT NULL DEFAULT 0 CHECK(sequence>=0),
+ PRIMARY KEY(scope,consumer));`)
 	if err != nil {
 		return nil, err
 	}
