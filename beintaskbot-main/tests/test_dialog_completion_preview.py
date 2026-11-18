@@ -279,3 +279,46 @@ def test_mark_all_read_clears_unread_messages_in_closed_dialogs(active):
     after=dialogs.listing(PROFILE, lifecycle='completed')
     assert after['unread_count']==0
     assert after['dialogs'][0]['unread_count']==0
+
+
+def test_old_target_paginates_and_bulk_read_skips_newer_system_events(active):
+    dialogs.listing(PROFILE, lifecycle='all')  # establish the employee's initial cursor
+    active.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
+      channel,direction,body,created_at,happened_at)
+      SELECT lpad(to_hex(1000000+n),32,'0')::uuid,%s::uuid,41,'page-'||n::text,
+        'connect:'||%s::text,'incoming','Synthetic paginated inbound',
+        '2099-01-01T00:00:00Z'::timestamptz+n*interval '1 minute',
+        '2099-01-01T00:00:00Z'::timestamptz+n*interval '1 minute'
+      FROM generate_series(1,150) n''',(A,CA))
+    active.commit()
+    target=str(uuid.UUID(int=1000075))
+    system_event=str(uuid.UUID(int=2000000))
+    active.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
+      channel,direction,body,created_at,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'call-after-history','connect:'||%s::text,'system',
+        'Synthetic call event','2100-01-01T00:00:00Z','2100-01-01T00:00:00Z')''',
+      (system_event,A,CA))
+    active.commit()
+
+    anchor_page=dialogs.history(PROFILE,'connect',41,CA,'client',anchor=target)
+    anchor_ids={str(row['id']) for row in anchor_page['messages']}
+    assert target in anchor_ids
+    assert anchor_page['anchor_message_id']==target
+    assert anchor_page['read_through_message_id']==target
+    assert len(anchor_page['messages'])==50
+    assert anchor_page['next_before']
+    older_page=dialogs.history(PROFILE,'connect',41,CA,'client',before=anchor_page['next_before'])
+    older_ids={str(row['id']) for row in older_page['messages']}
+    assert older_ids and not older_ids.intersection(anchor_ids)
+    assert target not in older_ids
+
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+                                   conversation_id='client',message_id=target))
+    after_target=dialogs.listing(PROFILE,lifecycle='all')
+    assert after_target['unread_count']==75
+
+    result=dialogs.mark_all_read(PROFILE)
+    assert result['updated_dialogs']==1
+    after_all=dialogs.listing(PROFILE,lifecycle='all')
+    assert after_all['unread_count']==0
+    assert after_all['dialogs'][0]['unread_count']==0
