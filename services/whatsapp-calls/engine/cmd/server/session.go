@@ -171,6 +171,13 @@ func (s *Session) callForEvent(from types.JID, data *waBinary.Node) (*activeCall
 }
 
 func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
+	// Offline catch-up includes historical offers. Provider time, not local
+	// arrival time, determines whether this can ring as a new incoming call.
+	// This does not close an admitted call or infer provider termination.
+	if historicalOffer(evt.Timestamp, time.Now()) {
+		s.diag.historicalOffers.Add(1)
+		return
+	}
 	s.diag.offers.Add(1)
 	s.diag.lastOffer.Store(time.Now().UnixMilli())
 	node := wrapCall(evt.From, evt.Data)
@@ -191,6 +198,10 @@ func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
 		return
 	}
 	cm.HandleCallOffer(ctx, node, evt.From)
+}
+
+func historicalOffer(offered, now time.Time) bool {
+	return !offered.IsZero() && now.Sub(offered) > 2*time.Minute
 }
 
 func (s *Session) rejectOffer(ctx context.Context, node *waBinary.Node, from types.JID) {

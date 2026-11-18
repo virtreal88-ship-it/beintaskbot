@@ -15,6 +15,7 @@ from tenant_linear_policy import TenantLinearError
 from tenant_platform import _fernet
 
 DIRECT = re.compile(r'^[1-9][0-9]{5,22}@(s\.whatsapp\.net|lid)$')
+DEVICE = re.compile(r'^([1-9][0-9]{5,22})(?:\.([0-9]{1,3}))?:([0-9]{1,5})@(s\.whatsapp\.net|lid)$')
 GROUP = re.compile(r'^[0-9]{5,30}(?:-[0-9]{5,20})?@g\.us$')
 PROVIDER_ID = re.compile(r'^[A-Za-z0-9_-]{5,200}$')
 FIELDS = {'kind','chat','sender','sender_alt','recipient_alt','provider_id','from_me','timestamp',
@@ -49,9 +50,16 @@ def open_stored(row, scope):
     return payload
 
 
-def _jid(value, *, group=False, optional=False):
+def _jid(value, *, group=False, optional=False, participant=False):
     if optional and not value:
         return ''
+    # Provider-authenticated participant device addresses identify the same
+    # account (whatsmeow ToNonAD semantics). Never rewrite conversation IDs,
+    # persisted evidence, source bindings or arbitrary browser-supplied values.
+    if participant and isinstance(value, str):
+        device = DEVICE.fullmatch(value)
+        if device and int(device[2] or 0) <= 255 and int(device[3]) <= 65535:
+            value = device[1] + '@' + device[4]
     if not isinstance(value, str) or not (DIRECT.fullmatch(value) or group and GROUP.fullmatch(value)):
         raise _error()
     return value
@@ -73,18 +81,25 @@ def message_event(scope, event_id, payload, message_id):
     if (not isinstance(payload, dict) or set(payload) - FIELDS or payload.get('kind') != 'message'
             or payload.get('variant') or payload.get('message_type') not in {'text','image','audio','video','document','sticker'}):
         raise _error('native_event_not_projectable')
+    # Status publications and broadcast/newsletter feeds are retained provider
+    # evidence, never CRM conversations or AI turns. A valid non-chat event must
+    # not poison delivery of later customer messages in the same durable inbox.
+    chat_value = payload.get('chat')
+    if isinstance(chat_value, str) and (chat_value == 'status@broadcast' or
+            re.fullmatch(r'[1-9][0-9]{4,29}@(broadcast|newsletter)', chat_value)):
+        raise _error('native_event_not_projectable')
     if (not isinstance(message_id, str) or not PROVIDER_ID.fullmatch(message_id)
             or not isinstance(event_id, str) or not re.fullmatch(r'[0-9a-f]{64}', event_id)
             or type(payload.get('from_me')) is not bool
             or type(payload.get('timestamp')) is not int):
         raise _error()
     chat = _jid(payload.get('chat'), group=True)
-    sender = _jid(payload.get('sender'))
+    sender = _jid(payload.get('sender'), participant=True)
     app_dispatch=payload.get('app_dispatch',False)
     if type(app_dispatch) is not bool or (app_dispatch and (not payload['from_me'] or sender!=scope['account'])):
         raise _error()
-    sender_alt = _jid(payload.get('sender_alt'), optional=True)
-    recipient_alt = _jid(payload.get('recipient_alt'), optional=True)
+    sender_alt = _jid(payload.get('sender_alt'), optional=True, participant=True)
+    recipient_alt = _jid(payload.get('recipient_alt'), optional=True, participant=True)
     provider = payload.get('provider_id')
     if not isinstance(provider, str) or not PROVIDER_ID.fullmatch(provider):
         raise _error()

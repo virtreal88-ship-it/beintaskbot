@@ -18,8 +18,12 @@ func (g *appGateway) attachMessages(s *Session) bool {
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
 	unified.ProtectDevice(client.Store, g.messages, g.cfg.Account)
+	catchup := g.newOfflineCatchup(s)
 	client.AddEventHandlerWithSuccessStatus(func(event any) bool {
 		if s.client != client {
+			if catchup != nil {
+				catchup.stop(false)
+			}
 			return true
 		}
 		if client.Store.ID != nil && client.Store.ID.ToNonAD().String() != g.cfg.Account {
@@ -28,6 +32,7 @@ func (g *appGateway) attachMessages(s *Session) bool {
 		}
 		g.observeProviderEvent(event)
 		stored := g.messages.Capture(s.mgr.appCtx, event)
+		catchup.observe(s.mgr.appCtx, event, stored)
 		if stored {
 			g.providerDiagnostics.add("capture_handler_succeeded")
 		} else {

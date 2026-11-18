@@ -130,6 +130,7 @@ def activate(profile,source,generation):
         capture=cur.fetchone()
         if not capture or capture['stored_sequence']<1:
             raise TenantLinearError('native_transition_capture_unconfirmed',409)
+        require_inbound_evidence(cur,tenant,source,generation,row['account_jid'])
         legacy_disabled(profile,source,row['account_jid'])
         cur.execute('UPDATE saas_whatsapp_capture_generations SET projection_enabled=TRUE WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s',(tenant,source,generation))
         cur.execute('UPDATE saas_whatsapp_native_routes SET enabled=TRUE,legacy_fallback=FALSE WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s',(tenant,source,generation))
@@ -199,3 +200,22 @@ def restore_legacy(profile,source,generation):
           WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND NOT enabled RETURNING generation''',(tenant,source,generation))
         if not cur.fetchone():raise TenantLinearError('native_transition_changed',409)
     return {'source':source,'generation':generation,'state':'legacy_restored'}
+
+
+def require_inbound_evidence(cur,tenant,source,generation,account):
+    # A group metadata read or our own send does not prove inbound reception.
+    # Reuse authenticated, source-bound journal evidence; never trust a counter.
+    from tenant_whatsapp_native_projection import open_stored, message_event
+    scope={'tenant':tenant,'source':source,'generation':generation,'account':account}
+    cur.execute('SELECT * FROM saas_whatsapp_native_inbox WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s ORDER BY sequence DESC LIMIT 100',(tenant,source,generation))
+    for event in cur.fetchall():
+        payload=open_stored(event,scope)
+        if payload.get('kind')=='message' and payload.get('from_me') is False:
+            try:
+                message_event(scope,event['event_id'],payload,str(uuid.uuid5(uuid.NAMESPACE_URL,event['event_id'])))
+            except TenantLinearError as error:
+                if str(error)=='native_event_not_projectable':
+                    continue # Retained control/status is not inbound chat proof.
+                raise
+            return
+    raise TenantLinearError('native_transition_inbound_unconfirmed',409)

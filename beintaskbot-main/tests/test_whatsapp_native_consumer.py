@@ -13,7 +13,7 @@ import tenant_connect_transport as transport
 
 
 @pytest.fixture
-def ready(capture, monkeypatch):
+def ready(capture, monkeypatch, request):
     db, cipher, cfg = capture
     monkeypatch.setattr(projection, '_fernet', lambda: cipher)
     monkeypatch.setattr(consumer, '_connect', lambda: db)
@@ -23,6 +23,8 @@ def ready(capture, monkeypatch):
         consumer.migrate(cur)
     value = delivery()
     value['event']['payload'] = message(sender_alt='')
+    if getattr(request,'param',None)=='device':
+        value['event']['payload']['sender']='15550000002:34@s.whatsapp.net'
     store(value)
     reference = (A, CA, value['scope']['generation'], value['event']['id'])
     yield db, reference
@@ -40,6 +42,7 @@ def test_capture_is_not_projection_authority(ready):
     db.rollback()
 
 
+@pytest.mark.parametrize('ready',['canonical','device'],indirect=True)
 def test_same_crm_path_preserves_history_and_duplicate_is_idempotent(ready):
     db, reference = ready
     activate(db)
@@ -52,6 +55,25 @@ def test_same_crm_path_preserves_history_and_duplicate_is_idempotent(ready):
     assert second == first
     assert db.execute("SELECT 1 FROM saas_crm_messages WHERE external_id='m1' AND tenant_id=%s", (A,))
     db.commit()
+
+
+def test_retained_status_does_not_block_next_customer_event(ready):
+    db,reference=ready
+    activate(db)
+    publication=delivery();publication['after']=2
+    publication['event'].update(id='b'*64,sequence=3,payload=message(chat='status@broadcast',message_type='image',media_kind='image'))
+    receipt=store(publication)
+    before=db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n'];db.commit()
+    assert consumer.project_stored(receipt) is False
+    assert consumer.project_stored(receipt) is False
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']==before;db.commit()
+    following=delivery();following['after']=3
+    following['event'].update(id='c'*64,sequence=4,payload=message(provider_id='AFTER_STATUS_MESSAGE',sender_alt=''))
+    following_receipt=store(following)
+    consumer.project_stored(following_receipt)
+    consumer.project_stored(following_receipt)
+    assert len(db.execute("SELECT id FROM saas_crm_messages WHERE raw->>'externalMessageId'='AFTER_STATUS_MESSAGE'"))==1
+    assert len(db.execute('SELECT event_id FROM saas_whatsapp_native_inbox'))==3;db.commit()
 
 
 def test_rechecks_generation_and_encrypted_event_in_commit_transaction(ready):
