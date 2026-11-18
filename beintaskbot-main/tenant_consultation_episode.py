@@ -35,7 +35,7 @@ def implicit_case(cur, tenant, channel, conversation, selected):
     return proven[0]['id']
 
 
-def existing(cur, tenant, channel, conversation, selected, case_id, destination, dest_conversation, summary, media, include_identity, versions, auto=None, reuse_allowed=False, public_header=None, public_header_hash=None):
+def existing(cur, tenant, channel, conversation, selected, case_id, destination, dest_conversation, summary, media, include_identity, versions, auto=None, reuse_allowed=False, public_header=None, public_header_hash=None, allow_multiple_targets=False):
     # JSON message IDs are the immutable, explicitly selected source evidence.
     # A shared dialogue alone never merges two questions. Unknown stays fenced
     # even if an unrelated developer message changed the consultation status.
@@ -48,6 +48,7 @@ def existing(cur, tenant, channel, conversation, selected, case_id, destination,
       LEFT JOIN saas_public_case_shares ps ON ps.tenant_id=c.tenant_id AND ps.consultation_id=c.id
       LEFT JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
       WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s
+        AND d.is_chat_followup=FALSE
         AND ((c.case_id IS NULL OR (c.case_id=%s::uuid AND t.status<>'resolved'))
           OR d.state IN ('sending','pending','unknown'))
         AND (c.evidence->'message_ids') ?| %s::text[]
@@ -68,6 +69,11 @@ def existing(cur, tenant, channel, conversation, selected, case_id, destination,
           (tenant,case_id,auto['event_key'],auto['request_id'],destination,dest_conversation))
         siblings={row['consultation_id'] for row in cur.fetchall()}
         rows=[row for row in rows if row['id'] not in siblings]
+    if allow_multiple_targets and case_id:
+        # Explicit case UI fanout is independent per recipient. Keep every
+        # same-route record and all other-case ambiguity/unknown fences intact.
+        rows=[row for row in rows if row.get('case_id')!=case_id
+              or (row['destination_channel']==destination and row['destination_conversation']==dest_conversation)]
     if len(rows)>1:
         raise TenantLinearError('Найдено несколько консультаций этого фрагмента. Проверьте существующие запросы; новая отправка отключена.',409)
     if not rows:return None
@@ -88,12 +94,13 @@ def existing(cur, tenant, channel, conversation, selected, case_id, destination,
     return row
 
 
-def queued(cur, tenant, case_id, request, selected, auto=None):
+def queued(cur, tenant, case_id, request, selected, auto=None, destination=None, dest_conversation=None):
     if not case_id or auto:return False
     cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
     if not (cur.fetchone() or {}).get('ready'):return False
     cur.execute('''SELECT 1 FROM saas_ai_case_developer_dispatches x
       WHERE x.tenant_id=%s::uuid AND x.case_id=%s::uuid AND x.request_id<>%s::uuid
+        AND (%s::uuid IS NULL OR (x.channel_id=%s::uuid AND x.conversation_id=%s))
         AND x.state IN ('queued','preparing','pending','unknown','sent')
         AND (x.state<>'sent' OR x.consultation_id IS NULL OR EXISTS(
           SELECT 1 FROM saas_internal_consultations c WHERE c.tenant_id=x.tenant_id
@@ -101,7 +108,7 @@ def queued(cur, tenant, case_id, request, selected, auto=None):
         AND EXISTS(SELECT 1 FROM saas_support_ticket_messages cm
           WHERE cm.tenant_id=x.tenant_id AND cm.ticket_id=x.case_id
             AND cm.event_key='handoff:'||x.event_key AND cm.message_id=ANY(%s::uuid[])) LIMIT 1''',
-                (tenant,case_id,request,selected))
+                (tenant,case_id,request,destination,destination,dest_conversation,selected))
     return bool(cur.fetchone())
 
 

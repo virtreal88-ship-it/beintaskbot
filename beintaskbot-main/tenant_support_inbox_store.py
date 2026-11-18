@@ -142,13 +142,22 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
     if result_id == ticket_id and not bounded_episode:
         from tenant_support_case_context import SNAPSHOT_LIMIT, _selection
         if message_ids is None:
-            # Pin a bounded local snapshot once. Later attachment/share actions
-            # cannot narrow it, and future unrelated incidents do not leak in.
-            cur.execute('''SELECT id FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
-                AND direction IN ('incoming','outgoing')
-              ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT %s''',
-              (tenant, selected['lead_id'], 'connect:' + channel, SNAPSHOT_LIMIT))
+            # Freeze the recorded acceptance interval for new cases. Legacy
+            # sources without acceptance proof retain the bounded fallback.
+            from tenant_support_case_context import load_scope, history_projection, predicate as case_predicate
+            captured = history_projection(cur, load_scope(cur, tenant, ticket_id))
+            if captured['history_context']['boundary_status'] == 'accepted_interval':
+                # This is a new ticket in this transaction, not a widening
+                # of a historical ticket's explicitly saved membership.
+                where, args = case_predicate({**captured, 'kind': 'conversation'})
+                cur.execute('SELECT m.id FROM saas_crm_messages m WHERE ' + where,
+                            tuple(args))
+            else:
+                cur.execute('''SELECT id FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+                    AND direction IN ('incoming','outgoing')
+                  ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT %s''',
+                  (tenant, selected['lead_id'], 'connect:' + channel, SNAPSHOT_LIMIT))
             snapshot_ids = [str(row['id']) for row in cur.fetchall()]
         else:
             selection_scope = {'tenant_id': tenant, 'lead_id': int(selected['lead_id']),
@@ -456,10 +465,12 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             ticket['summary_hash'] = summary_fingerprint(ticket)
             applied_summary = applied_version(cur,tenant,ticket_id,ticket['summary_hash'])
             ticket['summary_language'] = applied_summary.get('language') if applied_summary else None
-            from tenant_support_case_context import load_scope, messages, metadata
+            from tenant_support_case_context import load_scope, messages, metadata, history_projection
             material_scope = load_scope(cur, tenant, ticket_id)
-            scope_metadata = metadata(cur, material_scope)
-            rows = list(reversed(messages(cur, material_scope, limit=51, before=before)))
+            display_scope = history_projection(cur, material_scope)
+            history_context = display_scope['history_context']
+            scope_metadata = metadata(cur, display_scope)
+            rows = list(reversed(messages(cur, display_scope, limit=51, before=before)))
             # Keep internal raw/URLs out of the case browser projection.
             fields = ('id','external_id','direction','author_name','body','message_type','happened_at','created_at')
             rows = [{key: row.get(key) for key in fields} for row in rows]
@@ -553,7 +564,7 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
                     if key not in {'run_id','agent_binding'}} for item in summary_history]
     result={'expert_results':expert_results,'ticket':_ticket_public(ticket,policy),'summary_history':summary_history,
             'summary_pending_request':summary_pending_request,'messages':[public(row) for row in reversed(rows[:50])],
-            'attached_media':attached_media,'scope':scope_metadata,
+            'attached_media':attached_media,'scope':scope_metadata,'history_context':history_context,
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
     if policy.has_scoped_access('support'):result['capabilities']={'update':can_update}

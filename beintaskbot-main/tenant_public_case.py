@@ -255,7 +255,7 @@ def _public_text(value):
 
 
 def _valid_ids(value, *, required=False):
-    if not isinstance(value,list) or len(value)>30 or (required and not value):
+    if not isinstance(value,list) or len(value)>50 or (required and not value):
         raise TenantLinearError('Выберите сообщения обращения.',400)
     result=[]
     for item in value:

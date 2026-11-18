@@ -7,6 +7,8 @@ on:
       - 'railway.toml'
       - 'start.sh'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
+      - 'beintaskbot-main/tenant_consultation_chat.py'
+      - 'beintaskbot-main/tests/test_consultation_chat*.py'
       - 'beintaskbot-main/tenant_developer_question_draft.py'
       - 'beintaskbot-main/tests/test_developer_question_draft*'
       - 'beintaskbot-main/tests/test_developer_question_clarity_browser.cjs'
@@ -256,6 +258,8 @@ jobs:
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_case_history_accepted_interval.py \
+            tests/test_consultation_chat.py \
             tests/test_consultation_twenty_messages.py \
             tests/test_public_consultation_header.py \
             tests/test_public_dialog_snapshot.py \
@@ -351,6 +355,8 @@ jobs:
           node tests/test_developer_question_draft_browser.cjs
           node tests/test_developer_question_clarity_browser.cjs
           node tests/test_case_consultation_clarity_browser.cjs
+          node tests/test_case_developer_chat_browser.cjs
+          node tests/test_case_developer_chat_ui.cjs
           node tests/test_public_header_ui.cjs
           node tests/test_tenant_notification_center_ui.cjs
           node tests/test_tenant_notification_bell_ux_browser.cjs
@@ -394,3 +400,22 @@ jobs:
           node tests/test_visible_audio_autoload_browser.cjs
           node tests/test_message_footer_browser.cjs
 
+      - name: Save developer chat visual checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: developer-chat-visuals
+          path: |
+            /tmp/developer-chat-*.png
+            /tmp/case-consultation-clarity-*.png
+          if-no-files-found: ignore
+
+      - name: Require native case chat concurrency checks
+        run: |
+          python -m pytest -q -rs tests/test_consultation_chat_postgres.py --junitxml=/tmp/consultation-chat-races.xml
+          python - <<'PYTEST_GUARD'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('/tmp/consultation-chat-races.xml').getroot().findall('.//testcase')
+          assert len(cases) >= 3, 'All case-chat race checks must run'
+          assert all(case.find('skipped') is None for case in cases), 'Case-chat races must not skip'
+          PYTEST_GUARD

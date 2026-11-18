@@ -15,7 +15,10 @@ def handler(member,origin,logger,resource):
             if request.method=='GET':
                 if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:
                     _expected({'expected_tenant_id':request.headers.get('X-Tenant-Id'),'expected_user_id':request.headers.get('X-User-Id')},profile)
-                if resource=='customer_replies':result=await asyncio.to_thread(flow.customer_replies,profile,request.match_info['id'])
+                if resource=='messages':
+                    from tenant_consultation_chat import read
+                    result=await asyncio.to_thread(read,profile,request.match_info['id'],request.query.get('before',''))
+                elif resource=='customer_replies':result=await asyncio.to_thread(flow.customer_replies,profile,request.match_info['id'])
                 elif resource=='destinations':result=await asyncio.to_thread(flow.destinations,profile)
                 else:result=await asyncio.to_thread(flow.inbox,profile,request.query.get('channel_id',''),request.query.get('conversation_id',''),request.query.get('case_id',''))
             else:
@@ -35,6 +38,9 @@ def handler(member,origin,logger,resource):
                     result=await asyncio.to_thread(question,profile,payload)
                 elif resource=='prepare':result=await asyncio.to_thread(flow.prepare,profile,payload,origin)
                 elif resource=='preview':result=await asyncio.to_thread(flow.preview,profile,payload)
+                elif resource=='messages':
+                    from tenant_consultation_chat import send
+                    result=await asyncio.to_thread(send,profile,key,payload)
                 elif resource=='dispatch':
                     if set(payload)!={'request_id'}:raise TenantLinearError('Некорректный запрос.',400)
                     result=await asyncio.to_thread(flow.dispatch,profile,key,payload['request_id'])

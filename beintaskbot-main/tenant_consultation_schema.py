@@ -22,6 +22,7 @@ _UNIFIED={**_GROUP,**_PUBLIC,
  'saas_dialog_consultation_replies':'tenant_id id consultation_id channel_id conversation_id message_id author body happened_at created_at handled_at handled_by draft draft_state draft_request_id draft_retry_after linked_customer_message_id draft_binding draft_agent_id source_kind source_actor message_type source_external_id followup_requested_at'.split(),
  'saas_dialog_consultation_reads':'tenant_id reply_id actor_id read_at'.split(),
 }
+_UNIFIED['saas_consultation_group_deliveries']=[*_GROUP['saas_consultation_group_deliveries'],'is_chat_followup']
 _UNIFIED['saas_public_case_shares']=[*_PUBLIC['saas_public_case_shares'],'consultation_id','source_versions']
 _INDEXES={
  'internal':{'saas_internal_consultations_case_idx':'saas_internal_consultations'},
@@ -31,9 +32,11 @@ _INDEXES={
 _INDEXES['unified']={**_INDEXES['group'],**_INDEXES['public'],'saas_dialog_consultation_pending_idx':'saas_dialog_consultation_replies'}
 
 
-def schema_ready(cur,layer='unified',*,include_followup=True,include_public_identity=True):
+def schema_ready(cur,layer='unified',*,include_followup=True,include_public_identity=True,include_chat_followup=True):
     """Never inherit another database, search_path, or uncommitted cache hint."""
     columns={'internal':_INTERNAL,'group':_GROUP,'public':_PUBLIC,'unified':_UNIFIED}[layer]
+    if layer=='unified' and not include_chat_followup:
+        columns={**columns,'saas_consultation_group_deliveries':[name for name in columns['saas_consultation_group_deliveries'] if name!='is_chat_followup']}
     if layer=='unified' and not include_followup:
         columns={**columns,'saas_dialog_consultation_replies':[name for name in columns['saas_dialog_consultation_replies'] if name!='followup_requested_at']}
     if not include_public_identity and 'saas_public_case_shares' in columns:

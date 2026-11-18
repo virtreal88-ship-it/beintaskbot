@@ -25,13 +25,10 @@ const base='/api/platform/ai/dialog-consultations';
   assert.equal(await page.locator('[data-case-media-check]').count(),0);
   assert.equal(await page.locator('.case-consult-preview').count(),0);
   assert.match(await page.locator('[data-public-scope]').textContent(),/conversation, files, names, company and phone.*anyone with the link.*7 days/);
-  await page.locator('.case-consult-materials summary').click();await page.locator('#caseConsultFirst').selectOption('message-0');
+  await page.locator('.case-consult-materials summary').click();assert.equal(await page.locator('#caseConsultFirst,#caseConsultLast').count(),0);assert.equal(await page.locator('.case-consult-source-message').count(),4);
   await page.locator('#caseQuestionDraft').click();await page.waitForFunction(()=>document.querySelector('#consultReason').value==='Please check this audio report.');
   await page.waitForFunction(()=>!document.querySelector('#caseConsultSend').disabled);
   assert.equal(calls.filter(c=>c.path===base||c.path.endsWith('/dispatch')).length,0,'AI and editing never send');
-  await page.locator('#caseConsultLast').selectOption('message-2');
-  assert.equal(await page.locator('#caseConsultSend').isDisabled(),true,'changed source invalidates AI draft');
-  await page.locator('#caseQuestionDraft').click();await page.waitForFunction(()=>!document.querySelector('#caseConsultSend').disabled);
   await page.evaluate(()=>document.querySelector('.case-consult-body').scrollTop=10000);
   await page.locator('#caseConsultSend').scrollIntoViewIfNeeded();
   const layout=await page.evaluate(()=>{const send=document.querySelector('#caseConsultSend').getBoundingClientRect(),body=document.querySelector('.case-consult-body'),footer=document.querySelector('.case-consult-footer').getBoundingClientRect();return{send:{top:send.top,bottom:send.bottom,height:send.height},footerBottom:footer.bottom,overflow:document.documentElement.scrollWidth>innerWidth,scrolls:body.scrollHeight>body.clientHeight};});
@@ -39,11 +36,11 @@ const base='/api/platform/ai/dialog-consultations';
   if(width===320){await page.setViewportSize({width,height:480});await page.locator('#caseConsultSend').scrollIntoViewIfNeeded();const compact=await page.locator('#caseConsultSend').boundingBox();assert.ok(compact.y>=0&&compact.y+compact.height<=480,'send remains reachable with reduced viewport');await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'case-consultation-clarity-320.png')});await page.setViewportSize({width,height:700});}
   await page.locator('.case-consult-footer button').filter({hasText:'Close'}).click();
   await page.locator('#consultCreate').click();await page.locator('#consultReason').waitFor();
-  assert.equal(await page.locator('#caseConsultFirst').inputValue(),'message-0');assert.equal(await page.locator('#caseConsultLast').inputValue(),'message-2');
+  assert.equal(await page.locator('.case-consult-source-message').count(),4);
   await page.evaluate(()=>document.querySelector('#caseDeveloperForm').dispatchEvent(new Event('submit',{cancelable:true})));
   assert.equal(calls.filter(c=>c.path===base).length,0,'implicit submit is inert');
   await page.locator('#caseConsultSend').click();await page.waitForFunction(()=>!document.querySelector('#caseDeveloperForm'));
-  const sent=calls.find(c=>c.path===base).body;assert.deepEqual(sent.media_ids,['message-1']);assert.equal(sent.include_customer_identity,false);assert.equal(sent.public_header_version,1);assert.equal(sent.public_header_hash,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.deepEqual(Object.keys(sent.public_header_source_versions),sent.message_ids);assert.equal(sent.confirm,true);assert.equal(calls.filter(c=>c.path.endsWith('/dispatch')).length,1);
+  const sent=calls.find(c=>c.path===base).body;assert.deepEqual(sent.media_ids,['message-1','message-3']);assert.deepEqual(sent.message_ids,['message-0','message-1','message-2','message-3']);assert.equal(sent.include_customer_identity,false);assert.equal(sent.public_header_version,1);assert.equal(sent.public_header_hash,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.deepEqual(Object.keys(sent.public_header_source_versions),sent.message_ids);assert.equal(sent.confirm,true);assert.equal(calls.filter(c=>c.path.endsWith('/dispatch')).length,1);
   await page.close();console.log('PASS: case form preview, bounded media, explicit Send, mobile footer '+width);
  }}finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

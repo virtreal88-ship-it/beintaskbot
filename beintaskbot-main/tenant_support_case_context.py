@@ -40,10 +40,46 @@ def load_scope(cur, tenant, ticket_id, channel_id=None, conversation_id=None):
             'lead_id': int(row['lead_id']), 'kind': kind, 'status': row['status']}
 
 
+def history_projection(cur, scope):
+    """Read-only UI/share interval; never infer a missing acceptance timestamp.
+
+    Older tickets keep their saved evidence when no recorded acceptance exists.
+    A source timestamp alone is insufficient: rows admitted after ticket creation
+    are excluded too, preventing a later sync from expanding the frozen interval.
+    """
+    cur.execute('SELECT created_at FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                (scope['tenant_id'], scope['ticket_id']))
+    created_at = cur.fetchone()['created_at']
+    accepted_at = None
+    cur.execute("SELECT to_regclass('saas_dialog_episodes') AS ready")
+    if (cur.fetchone() or {}).get('ready'):
+        cur.execute('''SELECT accepted_at FROM saas_dialog_episodes
+          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+            AND accepted_at<=%s::timestamptz
+            AND (closed_at IS NULL OR closed_at>=%s::timestamptz)
+          ORDER BY accepted_at DESC,id DESC LIMIT 2''',
+          (scope['tenant_id'], scope['channel_id'], scope['conversation_id'], created_at, created_at))
+        candidates = cur.fetchall()
+        if len(candidates) == 1:
+            accepted_at = candidates[0]['accepted_at']
+    context = {'boundary_status': 'accepted_interval' if accepted_at else 'boundary_unknown',
+               'accepted_at': str(accepted_at) if accepted_at else None,
+               'created_at': str(created_at), 'fallback': None if accepted_at else 'saved_materials'}
+    return {**scope,
+            'history_start': accepted_at, 'history_end': created_at,
+            'history_context': context}
+
+
 def predicate(scope):
     sql = '''m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
       AND m.direction IN ('incoming','outgoing')'''
     args = [scope['tenant_id'], scope['lead_id'], 'connect:' + scope['channel_id']]
+    if scope.get('history_start'):
+        sql += ' AND COALESCE(m.happened_at,m.created_at)>=%s::timestamptz'
+        args.append(scope['history_start'])
+    if scope.get('history_end'):
+        sql += ' AND COALESCE(m.happened_at,m.created_at)<=%s::timestamptz AND m.created_at<=%s::timestamptz'
+        args.extend([scope['history_end'], scope['history_end']])
     if scope['kind'] != 'conversation':
         sql += ''' AND EXISTS(SELECT 1 FROM saas_support_ticket_messages cm
           WHERE cm.tenant_id=m.tenant_id AND cm.ticket_id=%s::uuid AND cm.message_id=m.id)'''
@@ -108,7 +144,8 @@ def metadata(cur, scope):
             'first_message_id': str(first['id']) if first else None,
             'last_message_id': str(last['id']) if last else None,
             'initial_limit': SNAPSHOT_LIMIT if scope['kind'] == 'snapshot' else None,
-            'has_earlier_source': earlier}
+            'has_earlier_source': earlier,
+            **({'history_context': scope['history_context']} if scope.get('history_context') else {})}
 
 
 def summary_messages(cur, scope):
@@ -141,9 +178,9 @@ def fingerprint(cur, scope, rows=None):
 
 
 def selection(cur, tenant, ticket_id, channel_id, conversation_id, message_ids):
-    """Validate a contiguous <=30-message subset of an authorized case route."""
+    """Validate a contiguous <=50-message subset of an authorized case route."""
     scope = load_scope(cur, tenant, ticket_id, channel_id, conversation_id)
-    return _selection(cur, scope, message_ids, 30)
+    return _selection(cur, history_projection(cur, scope), message_ids, 50)
 
 
 def _selection(cur, scope, message_ids, maximum):
