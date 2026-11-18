@@ -53,7 +53,11 @@ def handler(member,origin,logger,resource='browser'):
             return web.json_response({'error':str(error)},status=error.status,headers=HEADERS)
         except (ValueError,TypeError,KeyError):
             return web.json_response({'error':'call_request_invalid'},status=400,headers=HEADERS)
-        except Exception:
-            logger.warning('browser_call_request_failed')
+        except Exception as error:
+            # Allowlisted database category only; never SQL, values or raw errors.
+            code={'40P01':'db_deadlock','40001':'db_serialization','55P03':'db_lock_timeout',
+                  '57014':'db_query_cancelled'}.get(getattr(error,'sqlstate',None),'internal')
+            stage='status' if resource=='browser' and request.method=='GET' else resource
+            logger.warning('browser_call_request_failed stage=%s code=%s',stage,code)
             return web.json_response({'error':'Не удалось подтвердить действие звонка.'},status=503,headers=HEADERS)
     return handle

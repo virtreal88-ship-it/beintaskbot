@@ -185,7 +185,7 @@ def route(cur,c,*,conversation=None,lead=None,peer=None,create_incoming=False):
 
 
 def audio_authority(profile,call_id,request_id):
-    from tenant_browser_calls import authorize, source_config
+    from tenant_browser_calls import authorize, source_config, _lock
     try:call_id=str(uuid.UUID(str(call_id)));request_id=str(uuid.UUID(str(request_id)))
     except (TypeError,ValueError):raise TenantLinearError('call_identity_invalid',400) from None
     with _connect() as conn,conn.cursor() as cur:
@@ -195,6 +195,9 @@ def audio_authority(profile,call_id,request_id):
     if not row:raise TenantLinearError('call_audio_denied',403)
     c=source_config(profile,str(row['channel_id']))
     with _connect() as conn,conn.cursor() as cur:
+        # Match status/sync/action before acquiring call-row and dialog locks.
+        # This remains a fresh, fenced authorization on every audio check.
+        _lock(cur,c)
         # Re-read after resolving config. Final authority cannot use the earlier
         # call snapshot after a close, transfer or account switch.
         cur.execute('SELECT * FROM saas_browser_calls WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,call_id))
