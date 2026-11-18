@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import sqlite3
 import uuid
 from urllib.parse import urlsplit
 
@@ -79,7 +80,60 @@ class Supervisor:
             self.sources[folder.name]={'data':metadata,'process':None,'task':None,'failures':0}
         ports=[x['data']['port'] for x in self.sources.values()]
         if len(ports)!=len(set(ports)) or len(ports)>MAX_SOURCES:raise ValueError('source_storage_invalid')
+        self.apply_messaging_transitions(os.environ.get('CALLS_NATIVE_MESSAGING_TRANSITIONS',''))
         for source in self.sources:self.launch(source)
+
+    def apply_messaging_transitions(self,raw):
+        """Operator manifest, applied only while the volume is exclusively held.
+
+        Never called by a public/provision endpoint or against a running engine.
+        The Worker admission fence must be prepared before this deployment.
+        Device databases and all existing credentials remain in place.
+        """
+        if not raw:return
+        if self.volume_lock is None or any(e.get('process') or e.get('task') for e in self.sources.values()):
+            raise ValueError('native_transition_requires_exclusive_startup')
+        try:items=json.loads(raw)
+        except (ValueError,TypeError):raise ValueError('native_transition_manifest_invalid') from None
+        # One source per maintenance deployment; never partially switch a batch.
+        if not isinstance(items,list) or len(items)!=1:raise ValueError('native_transition_manifest_invalid')
+        changes=[];seen=set()
+        for item in items:
+            if not isinstance(item,dict) or set(item)!={'gateway_id','tenant_id','channel_id','account_jid','public_key','generation'}:
+                raise ValueError('native_transition_manifest_invalid')
+            source=safe_uuid(item['gateway_id'])
+            if source in seen or source not in self.sources:raise ValueError('native_transition_source_changed')
+            seen.add(source);data=self.sources[source]['data'];b=data['binding']
+            public=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data['signing_seed'])).public_key().public_bytes(Encoding.Raw,PublicFormat.Raw).hex()
+            if any(item[k]!=b[k] for k in ('tenant_id','channel_id','account_jid')) or item['public_key']!=public:
+                raise ValueError('native_transition_source_changed')
+            generation=item['generation']
+            if not isinstance(generation,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',generation):raise ValueError('native_transition_manifest_invalid')
+            if data.get('messaging'):
+                if data['messaging']['generation']!=generation:raise ValueError('native_transition_generation_changed')
+                continue
+            changes.append((source,data,{**data,'messaging':{'generation':generation,'key':secrets.token_hex(32)}}))
+        # Validate every requested binding before modifying any source.
+        for source,previous,next_data in changes:
+            database=self.root/source/'session.db'
+            if database.is_symlink() or not database.is_file():raise ValueError('native_transition_device_missing')
+            # Call-only engines did not enable encrypted message buffering.
+            # Never interpret existing unencrypted retry data with the new key,
+            # discard it or quietly let provider decryption fail after rollout.
+            with sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) as db:
+                for table in ('whatsmeow_event_buffer','whatsmeow_retry_buffer'):
+                    if db.execute('SELECT 1 FROM sqlite_master WHERE type=? AND name=?',('table',table)).fetchone():
+                        if db.execute('SELECT 1 FROM '+table+' WHERE plaintext IS NOT NULL LIMIT 1').fetchone():
+                            raise ValueError('native_transition_buffer_migration_required')
+            backup=self.root/source/'source.before-native.json'
+            if backup.exists():
+                if backup.is_symlink() or json.loads(backup.read_text())!=previous:raise ValueError('native_transition_backup_changed')
+            else:
+                fd=os.open(backup,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,'w') as target:
+                    json.dump(previous,target,separators=(',',':'));target.flush();os.fsync(target.fileno())
+            atomic_json(self.root/source/'source.json',next_data)
+            self.sources[source]['data']=next_data
 
     def validate_saved(self,source,data):
         safe_uuid(source);binding(data['binding'])
@@ -225,6 +279,7 @@ class Supervisor:
     async def status(self,request):
         source,entry=self.entry(request)
         result=await self.engine(source,'/internal/status')
+        result['messaging_generation']=entry['data'].get('messaging',{}).get('generation')
         return web.json_response(result,headers={'Cache-Control':'no-store'})
 
     async def messages(self,request):

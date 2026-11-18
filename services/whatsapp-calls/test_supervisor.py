@@ -79,6 +79,48 @@ async def test_unified_pairing_generation_is_immutable_and_keeps_keys_private(tm
 
 
 @pytest.mark.asyncio
+async def test_call_only_transition_requires_exact_stopped_device_and_is_idempotent(tmp_path):
+    import sqlite3
+    supervisor,client=await client_for(tmp_path)
+    try:
+        response=await client.post('/v1/sources/'+SOURCE,json=BINDING,headers={'Authorization':'Bearer '+TOKEN})
+        public=(await response.json())['public_key']
+        saved=(tmp_path/SOURCE/'source.json').read_bytes()
+        db=sqlite3.connect(tmp_path/SOURCE/'session.db')
+        db.execute('CREATE TABLE whatsmeow_event_buffer(plaintext BLOB)');db.commit();db.close()
+        device=(tmp_path/SOURCE/'session.db').read_bytes()
+        item={k:v for k,v in BINDING.items() if k!='gateway_token'}
+        item.update(gateway_id=SOURCE,public_key=public,generation='transition-g1')
+        manifest=json.dumps([item])
+        with pytest.raises(ValueError,match='exclusive_startup'):supervisor.apply_messaging_transitions(manifest)
+        supervisor.volume_lock=object()
+        for field in ('tenant_id','channel_id','account_jid','public_key','gateway_id'):
+            with pytest.raises(Exception):supervisor.apply_messaging_transitions(json.dumps([{**item,field:'other'}]))
+            assert (tmp_path/SOURCE/'source.json').read_bytes()==saved
+        supervisor.sources[SOURCE]['task']=object()
+        with pytest.raises(ValueError,match='exclusive_startup'):supervisor.apply_messaging_transitions(manifest)
+        supervisor.sources[SOURCE]['task']=None
+        db=sqlite3.connect(tmp_path/SOURCE/'session.db');db.execute('INSERT INTO whatsmeow_event_buffer VALUES(?)',(b'pending',));db.commit();db.close()
+        with pytest.raises(ValueError,match='buffer_migration_required'):supervisor.apply_messaging_transitions(manifest)
+        assert (tmp_path/SOURCE/'source.json').read_bytes()==saved
+        # Synthetic pending buffer only; production is never erased by transition.
+        db=sqlite3.connect(tmp_path/SOURCE/'session.db');db.execute('DELETE FROM whatsmeow_event_buffer');db.commit();db.close()
+        before_device=(tmp_path/SOURCE/'session.db').read_bytes()
+        supervisor.apply_messaging_transitions(manifest)
+        after=json.loads((tmp_path/SOURCE/'source.json').read_text())
+        assert after['messaging']['generation']=='transition-g1'
+        assert {k:v for k,v in after.items() if k!='messaging'}==json.loads(saved)
+        assert json.loads((tmp_path/SOURCE/'source.before-native.json').read_text())==json.loads(saved)
+        assert (tmp_path/SOURCE/'session.db').read_bytes()==before_device
+        supervisor.apply_messaging_transitions(manifest)
+        assert json.loads((tmp_path/SOURCE/'source.json').read_text())==after
+        with pytest.raises(ValueError,match='generation_changed'):
+            supervisor.apply_messaging_transitions(json.dumps([{**item,'generation':'transition-g2'}]))
+        with pytest.raises(ValueError,match='manifest_invalid'):supervisor.apply_messaging_transitions(json.dumps([item,item]))
+    finally:await client.close()
+
+
+@pytest.mark.asyncio
 async def test_native_send_requires_explicit_binding_and_exact_scope(tmp_path):
     supervisor,client=await client_for(tmp_path)
     headers={'Authorization':'Bearer '+TOKEN}

@@ -49,6 +49,11 @@ func managedHandler(s *server, host, token string) http.Handler {
 				infos = s.sessions.infos()
 			}
 			out := map[string]any{"connected": false, "account_jid": "", "qr": ""}
+			if s.appGateway != nil && s.appGateway.messages != nil {
+				if counts, err := s.appGateway.messages.Maintenance(r.Context()); err == nil {
+					out["messaging_diagnostics"] = counts
+				}
+			}
 			if len(infos) == 1 {
 				sess, _ := s.sessions.Get(infos[0].ID)
 				sess.mu.Lock()
