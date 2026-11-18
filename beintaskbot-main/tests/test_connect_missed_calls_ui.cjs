@@ -49,12 +49,27 @@ const recorded={id:'recording-message',source:'connect',direction:'system',messa
  call_recording:{account_number:'994123456789',id:'a'.repeat(32),duration_ms:27183,complete:false,expires_at:new Date(Date.now()+60000).toISOString(),archived_owner_binding:true}};
 const recordingMarkup=context.messageMarkup([recorded]);
 assert(recordingMarkup.includes('Возможны пропуски аудио'));
-assert(recordingMarkup.includes('WhatsApp звонка: +994123456789'));
+assert(recordingMarkup.includes('<strong>Звонок WhatsApp</strong>'));
+assert(recordingMarkup.includes('Источник +994123456789'));
 assert(recordingMarkup.includes('Привязано владельцем к архивному диалогу'));
 assert(recordingMarkup.includes('expected_tenant_id=tenant-one'));
 assert(recordingMarkup.includes('expected_user_id=11'));
 assert(recordingMarkup.includes('preload="none"'));
 for(const forbidden of ['data-media-open','data-reply-message','data-media-download'])assert(!recordingMarkup.includes(forbidden));
+for(const forbidden of ['27 сек.','28 сек.','Удаление аудио','Запись звонка','Внутренняя запись','клиенту не отправляется'])assert(!recordingMarkup.includes(forbidden));
+for(const [language,inbound,outbound,unknown] of [
+ ['ru','Входящий звонок WhatsApp','Исходящий звонок WhatsApp','Звонок WhatsApp'],
+ ['az','Daxil olan WhatsApp zəngi','Gedən WhatsApp zəngi','WhatsApp zəngi'],
+ ['en','Incoming WhatsApp call','Outgoing WhatsApp call','WhatsApp call']]){
+ context.i18n.language=language;
+ for(const [direction,label] of [['inbound',inbound],['outbound',outbound],['unknown',unknown],[undefined,unknown],['incoming',unknown]]){
+  const markup=context.messageMarkup([{...recorded,call_recording:{...recorded.call_recording,direction,complete:true,archived_owner_binding:false}}]);
+  assert(markup.includes(`<strong>${label}</strong>`));assert(markup.includes('<audio'));
+  assert(!markup.includes('<p>'));assert(!markup.includes('<small>'));
+  assert(!markup.includes('994123456789'));assert(!markup.includes(recorded.call_recording.expires_at));
+ }
+}
+context.i18n.language='ru';
 recorded.call_recording.expires_at='2000-01-01T00:00:00Z';
 const expired=context.messageMarkup([recorded]);assert(expired.includes('Срок хранения записи истёк'));assert(!expired.includes('<audio'));
-console.log('private recording identity, incomplete status and expiry presentation passed');
+console.log('compact RU/AZ/EN recording directions, private playback, incomplete status and expiry passed');

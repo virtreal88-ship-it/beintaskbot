@@ -76,6 +76,42 @@ def test_tenant_source_member_consent_and_signature_boundaries(gateway):
     with pytest.raises(TenantLinearError):calls.gateway_auth('Bearer '+'b'*40)
     assert calls.gateway_auth('Bearer '+'a'*40)['gateway_id']==GATEWAY
 
+
+@pytest.mark.parametrize('direction',['inbound','outbound'])
+def test_recording_history_direction_requires_exact_stored_binding(gateway,monkeypatch,direction):
+    import tenant_operator_dialogs as dialogs
+    db,key,cfg=gateway
+    monkeypatch.setattr(dialogs,'_connect',lambda:db)
+    if direction=='inbound':
+        calls.sync(cfg,snapshot(2,active=[provider()]))
+        call=calls.status(PROFILE)['calls'][0]
+        calls.action(PROFILE,command('accept',call_id=call['id']))
+    else:
+        call=calls.action(PROFILE,command())
+    work=calls.sync(cfg,snapshot(3))['commands'][0]
+    peer=PEER if direction=='inbound' else CONVERSATION
+    calls.sync(cfg,snapshot(4,ended=[provider('ended',peer,direction)],
+        results=[{'id':work['id'],'ok':True,'provider_id':'provider-test-1','sdp_answer':SDP}]))
+    calls.save_recording(cfg,call['id'],bundle(key,call_id='provider-test-1',peer_jid=peer)[0])
+    page=dialogs.history(PROFILE,'connect',41,CA,CONVERSATION)
+    message=next(m for m in page['messages'] if m['message_type']=='call_recording')
+    assert message['call_recording']['direction']==direction
+    assert message['direction']=='system' and '_call_recording_direction' not in message
+    # Existing recordings need no data rewrite, and provider metadata cannot
+    # supply a direction or redirect a recording to another physical route.
+    row=db.execute("SELECT * FROM saas_crm_messages WHERE message_type='call_recording'")[0]
+    db.commit();row.update(source_lead_id=41,source_conversation_id=CONVERSATION)
+    assert dialogs._message({**row,'raw':{**row['raw'],'direction':direction}})['call_recording']['direction']=='unknown'
+    for tenant,change in [(B,{}),(A,{'source_lead_id':42}),(A,{'channel':'connect:'+CB}),
+            (A,{'source_conversation_id':'another@s.whatsapp.net'}),(A,{'external_id':'provider-spoof'})]:
+        candidate={**row,**change,'_call_recording_direction':direction}
+        with db.cursor() as cur:dialogs._attach_call_recording_directions(cur,tenant,[candidate])
+        db.commit()
+        assert dialogs._message(candidate)['call_recording']['direction']=='unknown'
+    db.execute('UPDATE saas_browser_calls SET recording_id=NULL WHERE id=%s::uuid',(call['id'],));db.commit()
+    with db.cursor() as cur:dialogs._attach_call_recording_directions(cur,A,[row])
+    db.commit();assert dialogs._message(row)['call_recording']['direction']=='unknown'
+
 def test_late_events_boot_restart_and_browser_loss_fail_closed(gateway):
     db,key,cfg=gateway;call=calls.action(PROFILE,command())
     work=calls.sync(cfg,snapshot(2))['commands'][0]

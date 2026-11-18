@@ -258,8 +258,38 @@ def _attach_saved_visual_status(cur, tenant, rows):
             'coverage':receipt.get('coverage') or {},'has_visual_result':has_visual_result(receipt.get('result'))}
 
 
+def _attach_call_recording_directions(cur, tenant, rows):
+    """Enrich only authorized history rows from their exact stored call binding."""
+    candidates=[]
+    for row in rows:
+        row.pop('_call_recording_direction',None)
+        raw=row.get('raw')
+        if row.get('message_type')!='call_recording' or row.get('direction')!='system' or not isinstance(raw,dict):
+            continue
+        try:record_id=str(uuid.UUID(str(raw['recording_id'])))
+        except (KeyError,ValueError,TypeError):continue
+        if row.get('external_id')=='internal:call-recording:'+record_id:
+            candidates.append((row,record_id))
+    if not candidates:return
+    cur.execute('''SELECT r.id,r.channel_id,r.conversation_id,r.lead_id,c.direction
+      FROM saas_test_call_recordings r JOIN saas_browser_calls c
+        ON c.id=r.browser_call_id AND c.recording_id=r.id AND c.tenant_id=r.tenant_id
+        AND c.channel_id=r.channel_id AND c.conversation_id=r.conversation_id AND c.lead_id=r.lead_id
+      WHERE r.tenant_id=%s::uuid AND r.id=ANY(%s::uuid[])''',
+      (tenant,list({record_id for _,record_id in candidates})))
+    bindings={str(row['id']):row for row in cur.fetchall()}
+    for row,record_id in candidates:
+        binding=bindings.get(record_id)
+        if (binding and row.get('channel')=='connect:'+str(binding['channel_id'])
+                and str(row.get('source_lead_id'))==str(binding['lead_id'])
+                and row.get('source_conversation_id')==binding['conversation_id']
+                and binding['direction'] in {'inbound','outbound'}):
+            row['_call_recording_direction']=binding['direction']
+
+
 def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
+    call_direction=value.pop('_call_recording_direction',None)
     media_evidence=value.pop('media_evidence',{}) or {}
     value.pop('media_evidence_context',None)
     saved_audio_transcript=value.pop('_saved_audio_transcript',None)
@@ -313,6 +343,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     if value.get('message_type')=='call_recording' and direction=='system' and isinstance(raw,dict):
         try:
             value['call_recording']={'id':str(uuid.UUID(str(raw['recording_id']))),
+                'direction':call_direction if call_direction in {'inbound','outbound'} else 'unknown',
                 'duration_ms':max(0,min(900000 if raw.get('test_recording') is False else 120000,int(raw.get('duration_ms',0)))),
                 'complete':raw.get('complete') is True,'expires_at':str(raw.get('expires_at','')),
                 'test_recording':raw.get('test_recording',True) is not False,
@@ -1158,6 +1189,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if provider=='connect':
                 _attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
                 _attach_saved_visual_status(cur,tenant,messages[:50])
+                _attach_call_recording_directions(cur,tenant,messages[:50])
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
