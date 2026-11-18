@@ -304,6 +304,10 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
         conversation_id='client',lead_id=41,action='dismiss',expected_revision=0,
         message_id=str(uuid.UUID(int=1000150)),request_id=str(uuid.uuid4())))
     assert dismissed['lifecycle']['state']=='dismissed'
+    no_reply_view=dialogs.listing(PROFILE,lifecycle='completed')
+    assert no_reply_view['unread_count']==150
+    assert no_reply_view['dialogs'][0]['lifecycle']['state']=='dismissed'
+    assert dialogs.listing(PROFILE,lifecycle='active')['dialogs']==[]
 
     anchor_page=dialogs.history(PROFILE,'connect',41,CA,'client',anchor=target)
     anchor_ids={str(row['id']) for row in anchor_page['messages']}
@@ -347,3 +351,9 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
     assert reloaded['unread_count']==1
     assert reloaded['dialogs'][0]['unread_count']==1
     assert reloaded['dialogs'][0]['lifecycle']['state']=='dismissed'
+    repeated=dialogs.mark_all_read(PROFILE)
+    assert repeated['updated_dialogs']==1
+    after_repeat=dialogs.listing(PROFILE,lifecycle='all')
+    assert after_repeat['unread_count']==0
+    assert after_repeat['dialogs'][0]['unread_count']==0
+    assert after_repeat['dialogs'][0]['lifecycle']['state']=='dismissed'
