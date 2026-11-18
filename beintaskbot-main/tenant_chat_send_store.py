@@ -321,8 +321,8 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
     with _connect() as conn:
         with conn.cursor() as cur:
             from tenant_consultation_chat_media import authorize as case_authorize, guard as case_guard
-            case_authorize(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command'])
-            if item['command'].get('consultation_id'):
+            case_authorize(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item.get('command',{}))
+            if item.get('command',{}).get('consultation_id'):
                 cur.execute('SELECT route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',item['key'])
                 case_guard(cur,item,(cur.fetchone() or {}).get('route') or {})
             from tenant_dialog_rollout import guard

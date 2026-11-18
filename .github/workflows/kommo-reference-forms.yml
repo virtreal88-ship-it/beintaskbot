@@ -100,3 +100,4 @@ jobs:
             beintaskbot-main/tests/artifacts/kommo-*.png
             beintaskbot-main/tests/artifacts/deal-first-page/
             beintaskbot-main/output/support-workspace/
+            beintaskbot-main/output/case-card-tabs/

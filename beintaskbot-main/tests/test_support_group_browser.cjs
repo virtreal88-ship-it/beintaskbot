@@ -11,6 +11,7 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
   const page=await browser.newPage({viewport:{width:390,height:844}}),calls=[];
   const consultations=[{id:consultId,case_id:ticketId,reason:'50 → 49,9992',state:'sent',recipient:'Synthetic group',destination_channel:'channel-1',destination_conversation:'developers@g.us',legacy_delivery:true,needs_public_snapshot:true,can_dispatch:false,can_manual_reply:true,response:'Historical phone answer',created_at:'2026-10-16T00:00:00Z'},
    {id:'64862110-f942-4d28-96fa-1e810a7ce643',case_id:ticketId,reason:'Unsent old request',state:'ready',legacy_delivery:true,needs_public_snapshot:true,can_dispatch:false,can_manual_reply:false,created_at:'2026-10-15T00:00:00Z'}];
+  const internal=[{id:'legacy-internal',case_id:ticketId,reason:'Saved internal request',recipient:'Internal colleague',response:'Saved internal answer'}];
   const replies=[{id:'historical-provider-reply',consultation_id:consultId,body:'We are investigating',author:'Original developer',source_kind:'provider',happened_at:'2026-10-16T01:00:00Z',draft_state:'completed',historical_draft:'Unsent customer draft retained',can_draft:false,handled_at:'2026-10-16T02:00:00Z'}];
   await page.route('https://crm.test/**',async route=>{
    const req=route.request(),url=new URL(req.url()),method=req.method(),body=req.postDataJSON()||{};calls.push({path:url.pathname,method,body});
@@ -20,10 +21,8 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
    if(url.pathname==='/api/platform/ai/support-tickets')result={tickets:[ticket],members:[{telegram_id:11,display_name:'Owner'}],next_offset:null};
    else if(url.pathname==='/api/platform/ai/support-tickets/'+ticketId)result={ticket,messages:[{id:messageId,message_type:'image',direction:'incoming',happened_at:'2026-10-16T00:00:00Z'}],expert_results:[],next_before:null};
    else if(url.pathname==='/api/platform/ai/dialog-consultations/replies')result={consultations,replies};
-   else if(url.pathname==='/api/platform/ai/dialog-consultations/'+consultId+'/manual-reply'&&method==='POST'){
-    replies.push({id:'recorded-phone-reply',consultation_id:consultId,body:body.response,author:'Owner',source_kind:'manual',draft_state:'not_requested',can_draft:false,happened_at:'2026-11-01T14:00:00Z'});
-    result={id:'recorded-phone-reply'};
-   }else return route.fulfill({status:400,json:{success:false,error:'Unexpected synthetic request: '+url.pathname}});
+   else if(url.pathname==='/api/platform/ai/internal-consultations')result={consultations:internal,replies:[]};
+   else if(url.pathname==='/api/platform/ai/internal-consultations/legacy-internal/reply'&&method==='POST'){internal[0].response=body.response;result={id:'legacy-internal'};}else return route.fulfill({status:400,json:{success:false,error:'Unexpected synthetic request: '+url.pathname}});
    return route.fulfill({status:200,json:{success:true,result}});
   });
   await page.goto('https://crm.test/app');
@@ -42,14 +41,18 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
   assert.equal(await page.getByRole('button',{name:'Отправить подготовленный запрос',exact:true}).count(),0,'an old CRM-only ready request cannot replay its old body');
   assert.equal(await page.locator('#consultCreate').isEnabled(),true,'old CRM-only preparation does not block a new explicit bounded request');
   assert.equal(calls.filter(call=>call.method==='POST').length,0,'opening history never dispatches or starts AI');
-  await row.getByRole('button',{name:'Добавить ответ вручную',exact:true}).click();
-  await row.locator('textarea[data-consult-answer]').fill('Developer called: replace the cable');
-  await row.getByRole('button',{name:'Сохранить ответ',exact:true}).click();
-  await page.getByText('Developer called: replace the cable',{exact:true}).waitFor();
-  assert.match(await page.locator('[data-consultation-reply="recorded-phone-reply"]').innerText(),/Ответ записан сотрудником/);
-  assert.equal(calls.filter(call=>call.method==='POST').length,1,'the only write is the explicit manual record');
-  assert.ok(calls.filter(call=>call.method==='POST').every(call=>call.path.endsWith('/manual-reply')));
-  assert.equal(calls.some(call=>/\/group$|\/dispatch$|\/draft$|\/dialogs\/send/.test(call.path)),false,'history and manual records never resend group/customer messages or start AI');
-  console.log('PASS: Chromium preserves legacy CASE/group answers and private drafts, blocks old-body replay, and records an explicit manual answer without sends.');
+  assert.equal(await row.getByRole('button',{name:'Добавить ответ вручную',exact:true}).count(),0,'external provider replies cannot be invented manually');
+  replies.push({id:'verified-later-reply',consultation_id:consultId,body:'Replace the cable',author:'Verified developer',source_kind:'provider',draft_state:'completed',can_draft:false,happened_at:'2026-11-01T14:00:00Z'});
+  await page.locator('#supportConsultations .support-heading').getByRole('button',{name:'Обновить',exact:true}).click();
+  await page.locator('[data-consultation-reply="verified-later-reply"]').getByText('Replace the cable',{exact:true}).waitFor();
+  assert.match(await page.locator('[data-consultation-reply="verified-later-reply"]').innerText(),/Verified developer/);
+  assert.equal(calls.filter(call=>call.method==='POST').length,0,'verified provider reply is read-only, not a fabricated manual write');
+  // Older internal-only records retain their explicitly labelled manual note workflow.
+  await page.evaluate(ticket=>{document.getElementById('operatorSupport').replaceChildren();window.tenantOperator={hasRight:right=>right!=='dialogs'};const host=document.createElement('div');host.id='internalFixture';document.body.append(host);window.internalController=tenantCaseConsultations.mount({host,ticket,member:{tenant_id:'company-a',telegram_id:11,role:'owner'},getMessages:()=>[],isCurrent:()=>true});},ticket);
+  const old=page.locator('#internalFixture [data-consult-id="legacy-internal"]');await old.getByText('Saved internal answer',{exact:true}).waitFor();
+  await old.getByRole('button',{name:'Добавить ответ вручную',exact:true}).click();await old.locator('textarea[data-consult-answer]').fill('Employee recorded internal follow-up');await old.getByRole('button',{name:'Сохранить ответ',exact:true}).click();await old.getByText('Employee recorded internal follow-up',{exact:true}).waitFor();
+  const writes=calls.filter(call=>call.method==='POST');assert.equal(writes.length,1);assert.equal(writes[0].path,'/api/platform/ai/internal-consultations/legacy-internal/reply');
+  assert.equal(calls.some(call=>/\/group$|\/dispatch$|\/draft$|\/dialogs\/send|\/manual-reply$/.test(call.path)),false,'no external manual replies, resends or AI');
+  console.log('PASS legacy group history/private drafts, read-only verified provider reply, no external manual action, separate internal legacy note');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

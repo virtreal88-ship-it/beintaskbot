@@ -460,6 +460,8 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     with _connect() as conn:
         require_schema(conn)
         with conn.cursor() as cur:
+            from tenant_consultation_chat_lock import lock_route
+            lock_route(cur,profile.get('tenant_id'),case_id,dest,data['destination_conversation_id'])
             tenant,actor,policy,source=_scope(cur,profile,channel,data['conversation_id'],manual=True,case_id=case_id,sending=True)
             if data.get('question_draft_request_id'):
                 from tenant_developer_question_draft import validate_for_prepare
@@ -675,6 +677,8 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     with _connect() as conn:
         require_schema(conn)
         with conn.cursor() as cur:
+            from tenant_consultation_chat_lock import lock_consultation
+            lock_consultation(cur,profile,key)
             question_guard=_question_dispatch_route_peek(cur,profile,key,request)
             cur.execute('SELECT is_chat_followup FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid', (identifier(profile.get('tenant_id')),identifier(key),request))
             followup=bool((cur.fetchone() or {}).get('is_chat_followup'))
@@ -684,6 +688,12 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
             if delivery['state'] in {'sent','pending'}:return {'state':delivery['state'],'message_id':delivery['connect_message_id']}
             if delivery['state']!='ready':raise TenantLinearError('Результат отправки неизвестен. Повтор отключён.',409)
+            if item.get('case_id'):
+                cur.execute("""SELECT 1 FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid
+                  AND case_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND request_id<>%s::uuid
+                  AND state IN ('sending','pending','unknown') LIMIT 1""",
+                  (tenant,item['case_id'],delivery['channel_id'],delivery['conversation_id'],request))
+                if cur.fetchone():raise TenantLinearError('Дождитесь проверки предыдущей отправки.',409)
             developer_target(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
             cur.execute("UPDATE saas_consultation_group_deliveries SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(tenant,request))
         conn.commit()
@@ -691,6 +701,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
+                lock_consultation(cur,profile,key)
                 question_bound=question_guard is not None
                 # Preserve existing automatic/fanout admission order. Only the
                 # new question-bound path needs source locks before its reads.

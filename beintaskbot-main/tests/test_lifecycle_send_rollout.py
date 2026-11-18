@@ -8,7 +8,8 @@ import tenant_chat_send_store as sends
 
 
 @pytest.mark.parametrize('mode',['legacy','shadow'])
-def test_legacy_unscoped_dispatch_retains_shared_barrier(monkeypatch,mode):
+@pytest.mark.parametrize('command',[None,{}])
+def test_legacy_unscoped_dispatch_retains_shared_barrier(monkeypatch,mode,command):
     events=[]
     class Connection:
         @contextmanager
@@ -32,6 +33,7 @@ def test_legacy_unscoped_dispatch_retains_shared_barrier(monkeypatch,mode):
         assert events==['enter','guard','source_guard']
         events.append('dispatch');return 'synthetic'
     item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog']}
+    if command is not None:item['command']=command
     assert sends.dispatch_guarded(item,{},callback)=='synthetic'
     assert events==['enter','guard','source_guard','dispatch','leave']
     authority.assert_not_called()
@@ -53,3 +55,21 @@ def test_active_or_scoped_send_never_uses_legacy_fastpath(monkeypatch,active,sco
     item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog'],'command':{'lead_id':41}}
     with pytest.raises(TenantLinearError):sends.dispatch_guarded(item,{},callback)
     authority.assert_called_once();callback.assert_not_called()
+
+
+def test_case_scope_guard_precedes_legacy_fastpath(monkeypatch):
+    class Connection:
+        @contextmanager
+        def cursor(self):yield object()
+    @contextmanager
+    def connect():yield Connection()
+    monkeypatch.setattr(sends,'_connect',connect)
+    def deny(*args,**kwargs):raise TenantLinearError('Case denied',403)
+    monkeypatch.setattr('tenant_consultation_chat_media.authorize',deny)
+    rollout=Mock(side_effect=AssertionError('must not reach legacy dispatch'))
+    monkeypatch.setattr('tenant_dialog_rollout.guard',rollout)
+    callback=Mock()
+    item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog'],
+          'command':{'lead_id':41,'consultation_id':'case-consultation'}}
+    with pytest.raises(TenantLinearError,match='Case denied'):sends.dispatch_guarded(item,{},callback)
+    callback.assert_not_called();rollout.assert_not_called()

@@ -588,8 +588,13 @@ def test_actual_tasks_app_reads_and_saves_through_cookie_postgres(task_flow, mod
     if mode == 'approval_pending':
         with f['factory']() as conn:
             conn.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'task_approval','{\"creation_requires_admin\":true,\"self_created_exempt\":false}',11)", (A,))
+    # Automatic visible Kommo refresh can create this otherwise lazy schema.
+    # Snapshot it up front so only proven queue rows, never new tables, are exempted.
+    with f['factory']() as conn:
+        sync_store.ensure_sync_schema(conn)
     before = _state(f)
     state = {'hold': False, 'pending': 0, 'released': 0, 'held_paths': [], 'read_paths': [],
+             'sync_refreshes': [],
              'write_fault': None, 'fault_count': 0, 'changed': False, 'fail_native': mode == 'states'}
     sock = socket.socket()
     sock.bind(('127.0.0.1', 0))
@@ -603,7 +608,41 @@ def test_actual_tasks_app_reads_and_saves_through_cookie_postgres(task_flow, mod
         @web.middleware
         async def transport_observer(request, handler):
             task_path = request.path.startswith('/api/platform/crm/native/tasks') or request.path == '/api/platform/crm/tasks'
+            refresh = request.path.startswith('/api/platform/crm/') and ('refresh' in request.query or 'full' in request.query)
+            refresh_profile = f['session'].profile(request) if refresh else None
             response = await handler(request)
+            if refresh:
+                assert request.method == 'GET' and request.path == '/api/platform/crm/tasks'
+                assert request.query.get('refresh') == '1' and 'full' not in request.query
+                assert 'flow' not in request.query and request.query.get('source') != 'native'
+                assert refresh_profile and refresh_profile.get('active') is True
+                tenant, refresh_actor = str(refresh_profile['tenant_id']), str(refresh_profile['telegram_id'])
+                assert tenant in (A, B) and refresh_actor == str(actor)
+                assert request.query.get('expected_tenant_id') == tenant
+                assert request.query.get('expected_user_id') == refresh_actor
+                policy = TenantPolicy(refresh_profile)
+                assert policy.allows('tasks'), 'Automatic task enqueue requires actual task sync authority'
+                payload = json.loads(response.body)
+                assert response.status == 200 and payload.get('success') is True
+                assert not payload.get('stale') and not payload.get('warning'), payload
+                resources = ['tasks']
+                # Existing production compatibility entry also queues leads when
+                # the same actor has that authority. No worker/provider runs here.
+                if policy.allows('deals') or policy.allows('customers') or policy.task_scope().get('kind') == 'pipelines':
+                    resources.append('leads')
+                with f['factory']() as conn:
+                    jobs = conn.execute('SELECT to_jsonb(j) AS value FROM saas_crm_sync_jobs j WHERE tenant_id=%s::uuid AND resource=ANY(%s)', (tenant, resources)).fetchall()
+                    with conn.cursor() as cur:
+                        connection = sync_store.connection_id(cur, tenant)
+                assert {row['value']['resource'] for row in jobs} == set(resources)
+                for item in jobs:
+                    job = item['value']
+                    assert job['tenant_id'] == tenant and job['connection_id'] == connection
+                    assert job['status'] == 'queued' and job['phase'] == 'active'
+                    assert job['next_page'] == 1 and job['finished_at'] is None
+                    assert all(job[key] == 0 for key in ('pages_done', 'records_saved', 'attempts', 'last_record_id'))
+                state['sync_refreshes'].append({'tenant': tenant, 'actor': refresh_actor, 'resources': resources,
+                                                'jobs': [item['value'] for item in jobs]})
             if state['write_fault'] == 'after' and request.method == 'POST' and request.path == '/api/platform/crm/native/tasks' and response.status == 200:
                 state['write_fault'] = None
                 state['fault_count'] += 1
@@ -709,9 +748,22 @@ def test_actual_tasks_app_reads_and_saves_through_cookie_postgres(task_flow, mod
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=75)
         assert result.returncode == 0, result.stdout + '\n' + result.stderr
         assert not f['blocked']
-        # Ordinary task/app reads cannot enqueue sync or mutate business rows.
+        # Cache reads remain side-effect free. Only successfully authorized
+        # automatic refreshes may account for exact durable read-job bookkeeping.
         after = _state(f)
         _assert_preference_delta(before, after, f['preference_posts'])
+        queue_table = 'saas_crm_sync_jobs'
+        expected_jobs = {(row['tenant_id'], row['resource']): row
+                         for row in map(json.loads, before[queue_table])}
+        for refresh in state['sync_refreshes']:
+            for job in refresh['jobs']:
+                expected_jobs[(job['tenant_id'], job['resource'])] = job
+        actual_jobs = {(row['tenant_id'], row['resource']): row
+                       for row in map(json.loads, after[queue_table])}
+        assert actual_jobs == expected_jobs, 'Unproven tenant/resource sync job mutation'
+        # Exclude this one table only after exact row equality with the ledger.
+        after[queue_table] = before[queue_table]
+        assert after.keys() == before.keys(), 'Browser unexpectedly created a table'
         changed = {key for key in after if before[key] != after[key]}
         if mode == 'tenant_late':
             assert changed == set() and f['posts'] == [], changed

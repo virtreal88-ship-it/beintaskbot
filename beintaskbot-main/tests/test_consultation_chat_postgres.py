@@ -68,7 +68,8 @@ def test_same_request_concurrent_has_one_submission(case_chat):
     assert len(db.execute('SELECT * FROM test_external_sends'))==1
 
 
-def test_sibling_consultation_cannot_overtake_pending(case_chat):
+@pytest.mark.parametrize('kinds',[('text','text'),('media','media'),('media','text')])
+def test_sibling_consultation_cannot_overtake_pending(case_chat,kinds):
     db,key,original,case=case_chat;sibling=str(uuid.uuid4());sibling_original=str(uuid.uuid4())
     db.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,created_by)
       SELECT tenant_id,%s::uuid,case_id,channel_id,conversation_id,'historical-sibling','Historical',evidence,status,created_by
@@ -77,7 +78,7 @@ def test_sibling_consultation_cannot_overtake_pending(case_chat):
       (tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by,connect_message_id,provider_message_id)
       SELECT tenant_id,%s::uuid,%s::uuid,case_id,channel_id,conversation_id,body,body_hash,'sent',created_by,'sibling-original','SIBLING_PROVIDER'
       FROM saas_consultation_group_deliveries WHERE request_id=%s::uuid''',(sibling,sibling_original,original));db.commit()
-    values=race(db,[(key,str(uuid.uuid4()),PROFILE),(sibling,str(uuid.uuid4()),PROFILE)])
+    values=race(db,[(key,str(uuid.uuid4()),PROFILE,kinds[0]),(sibling,str(uuid.uuid4()),PROFILE,kinds[1])])
     assert sum(v[0]=='ok' and v[1]['state']=='pending' for v in values)==1,values
     assert sum(v[0]=='error' and v[1]=='TenantLinearError' for v in values)==1,values
     assert len(db.execute('SELECT * FROM test_external_sends'))==1

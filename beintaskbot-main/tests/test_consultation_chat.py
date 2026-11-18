@@ -124,3 +124,17 @@ def test_unknown_sibling_same_case_recipient_fences_new_send(case_ready):
       FROM saas_consultation_group_deliveries WHERE request_id=%s::uuid''',(sibling,request,data['request_id']));local.commit()
     with pytest.raises(TenantLinearError):chat.send(PROFILE,key,{'request_id':str(uuid.uuid4()),'text':'Do not overtake'})
     assert sender.call_count==1
+
+
+def test_prepared_original_cannot_overtake_unknown_sibling(case_ready):
+    local,data,sender,key=start(case_ready)
+    request=str(uuid.uuid4())
+    # A historical prepared send can coexist with a newer unknown operation.
+    local.execute('''INSERT INTO saas_consultation_group_deliveries
+      (tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by,is_chat_followup)
+      SELECT tenant_id,consultation_id,%s::uuid,case_id,channel_id,conversation_id,'Uncertain','hash','unknown',created_by,TRUE
+      FROM saas_consultation_group_deliveries WHERE request_id=%s::uuid''',(request,data['request_id']))
+    local.execute("UPDATE saas_consultation_group_deliveries SET state='ready' WHERE request_id=%s::uuid",(data['request_id'],));local.commit()
+    with pytest.raises(TenantLinearError,match='предыдущей отправки'):
+        flow.dispatch(PROFILE,key,data['request_id'])
+    assert sender.call_count==1

@@ -11,6 +11,39 @@ const el=(b,id)=>b.d.getElementById(id),posts=b=>b.f.calls.filter(row=>row.metho
 async function create(b,source){el(b,'nativeTaskCreate').click();await settle();b.d.querySelector('[data-task-create-source="'+source+'"]').click();await settle();}
 async function refreshProfile(b,change){change(b.f);b.w.tenantRequestCoordinator.reset();await b.w.tenantReloadProfile();await settle();}
 const tests=[];function test(name,fn){tests.push([name,fn]);}
+test('integration refresh timestamps retain task nodes, source, filters and open card; binding changes conceal',async()=>{
+ const b=await mount();try{
+  await refreshProfile(b,f=>{f.profile.integrations=[{provider:'kommo',status:'connected',account_domain:'fixture',connected_at:'2026-01-01',updated_at:'first',metadata:{account_id:'one'}}];});
+  el(b,'taskSearch').value='PRIVATE';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));
+  await b.w.tenantTaskFlow.open('native',b.f.task);
+  const node=el(b,'nativeTasksList').firstChild,card=el(b,'taskFlowCardBody').firstChild,count=b.f.calls.filter(c=>c.url.includes('flow=1')).length,source=el(b,'taskFeedSource').value;
+  await refreshProfile(b,f=>{f.profile.integrations[0].updated_at='later';});
+  assert.equal(el(b,'nativeTasksList').firstChild,node);assert.equal(el(b,'taskFlowCardBody').firstChild,card);
+  assert.equal(el(b,'taskSearch').value,'PRIVATE');assert.equal(el(b,'taskFeedSource').value,source);
+  assert.equal(b.f.calls.filter(c=>c.url.includes('flow=1')).length,count,'timestamp-only profile never reloads task sources');
+  b.f.profile.integrations[0].connected_at='new-generation';b.w.document.dispatchEvent(new b.w.CustomEvent('tenant-profile',{detail:JSON.parse(JSON.stringify(b.f.profile))}));
+  assert.equal(node.isConnected,false);assert.equal(card.isConnected,false,'connection change conceals old card synchronously');
+  await settle();assert.equal(posts(b).length,0);assert.deepEqual(b.errors,[]);
+ }finally{b.w.close();}
+});
+test('ordinary background reload keeps existing filtered nodes mounted until response',async()=>{
+ const b=await mount();try{
+  el(b,'taskSearch').value='PRIVATE';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));
+  const node=el(b,'nativeTasksList').firstChild;b.f.hold=url=>url.searchParams.get('flow')==='1'&&url.searchParams.get('source')==='native';
+  const refresh=b.w.tenantTaskFlow.refreshSource('native');await settle();assert.equal(el(b,'nativeTasksList').firstChild,node);
+  assert.equal(b.f.pending.length,1);b.f.pending.shift()();await refresh;assert.equal(el(b,'taskSearch').value,'PRIVATE');assert.match(el(b,'nativeTasksList').textContent,/PRIVATE task A/);assert.equal(posts(b).length,0);
+ }finally{b.w.close();}
+});
+test('native cache-refresh event reads only native tasks and rejects foreign actor or tenant',async()=>{
+ const b=await mount({nativeOnly:true});try{
+  b.f.native[0].text='Fresh cache-only native task';let start=b.f.calls.length;
+  const emit=detail=>b.d.dispatchEvent(new b.w.CustomEvent('tenant-crm-cache-refresh',{detail}));
+  emit({resource:'tasks',tenant_id:b.f.A,expected_user_id:'11'});await settle();
+  assert.match(el(b,'nativeTasksList').textContent,/Fresh cache-only native task/);
+  const reads=b.f.calls.slice(start);assert.equal(reads.length,1);const url=new URL(reads[0].url,'https://fixture.test');assert.equal(url.pathname,'/api/platform/crm/tasks');assert.equal(url.searchParams.get('source'),'native');assert.equal(url.searchParams.get('flow'),'1');assert.equal(url.searchParams.has('refresh'),false);
+  start=b.f.calls.length;emit({resource:'tasks',tenant_id:b.f.A,expected_user_id:'22'});emit({resource:'tasks',tenant_id:b.f.B,expected_user_id:'11'});await settle();assert.equal(b.f.calls.length,start);assert.equal(posts(b).length,0);assert.deepEqual(b.errors,[]);
+ }finally{b.w.close();}
+});
 test('verified isolated reviewer can read both task sources; unsigned synthetic IDs remain blocked',async()=>{
  for(const config of [{reviewerActor:-1234567890,verifiedReviewer:true},{reviewerActor:-1234567890},{reviewerActor:0,verifiedReviewer:true},{reviewerActor:-1234567890,verifiedReviewer:true,manager:true}]){
   const b=await mount(config);try{

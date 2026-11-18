@@ -19,6 +19,9 @@ def authorize(cur,session,command,*,sending=True):
     if sending and not enabled():raise TenantLinearError('Вложения в чате обращения пока недоступны.',409)
     import tenant_dialog_consultations as flow
     if not flow.schema_ready(cur):raise TenantLinearError('Требуется обновление схемы консультаций.',503)
+    if sending:
+        from tenant_consultation_chat_lock import lock_consultation
+        lock_consultation(cur,session,key)
     tenant,actor,policy,item,_=flow._consult(cur,session,identifier(key),sending=sending,validate_draft=False)
     if not item.get('case_id'):raise TenantLinearError('Вложения доступны только в обращении.',409)
     cur.execute('''SELECT channel_id::text,conversation_id,state FROM saas_consultation_group_deliveries

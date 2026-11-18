@@ -19,6 +19,8 @@ def send(profile, key, data):
     with flow._connect() as conn:
         flow.require_schema(conn)
         with conn.cursor() as cur:
+            from tenant_consultation_chat_lock import lock_consultation
+            lock_consultation(cur,profile,key)
             tenant, actor, policy, item, _ = flow._consult(cur, profile, key, sending=True, validate_draft=False)
             if not item.get('case_id'):
                 raise TenantLinearError('Чат доступен только для обращения.', 409)
