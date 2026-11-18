@@ -511,7 +511,8 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             if named_dialog:
                 snapshot_header_hash=hashlib.sha256((snapshot_header_hash+json.dumps({row['id']:public_sender_version(row) for row in rows} if automatic else data['public_sender_versions'],sort_keys=True)).encode()).hexdigest()
             auto=auto_intent(cur,tenant,case_id,request,auto_dispatch_id,dest,data['destination_conversation_id'])
-            admitted_media=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
+            media_set=set(media)
+            admitted_media=[row['id'] for row in rows if row['id'] in media_set and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
             pending=existing(cur,tenant,channel,data['conversation_id'],selected,case_id,dest,data['destination_conversation_id'],
                 summary.strip(),admitted_media,include_identity,{row['id']:version(row) for row in rows},auto,reuse_allowed=data.get('reuse_existing') is True,public_header=identity,public_header_hash=snapshot_header_hash,allow_multiple_targets=bool(data.get('case_id')) and not auto)
             if pending:
@@ -521,7 +522,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                     destination=dest if data.get('case_id') else None,
                     dest_conversation=data['destination_conversation_id'] if data.get('case_id') else None):
                 raise TenantLinearError('Для этого обращения уже есть автоматический запрос разработчику. Откройте обращение; повторная отправка отключена.',409)
-            if any(row['id'] in media and row['message_type'] not in _MEDIA_TYPES for row in rows):
+            if any(row['id'] in media_set and row['message_type'] not in _MEDIA_TYPES for row in rows):
                 raise TenantLinearError('Выберите только сообщения с файлами.',400)
             if ai_summary is not None:
                 if not case_id:raise TenantLinearError('Нет точного обращения для AI-сводки.',409)
@@ -535,7 +536,8 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 unchanged_fallback=ai_summary.get('state')=='unavailable' and same_source and summary==ai_summary.get('text')
                 if not unchanged_fallback and (current_summary!=ai_summary or summary!=current_summary['text']):
                     raise TenantLinearError('Сводка обращения изменилась до подготовки консультации.',409)
-            allowed=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
+            allowed=admitted_media
+            allowed_set=set(allowed)
             # Identity follows actual send/share semantics, not JSON spelling or
             # ignored/withheld media flags. Fresh UUIDs cannot bypass uncertainty.
             scope={**normalized,'media_ids':sorted(allowed)}
@@ -564,9 +566,9 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 if cur.fetchone():raise TenantLinearError('Код запроса уже использован для отправки сообщения.',409)
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
-              'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
+              'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed_set else 'text','at':str(r['happened_at'])} for r in rows]
             if named_dialog:
-                public=[public_dialog_message(row,source,identity or {},allowed) for row in rows]
+                public=[public_dialog_message(row,source,identity or {},allowed_set) for row in rows]
             identity=identity or {}
             if include_identity:
                 name=_human_preview_name(source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),source.get('conversation_id'))
@@ -595,7 +597,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,
               group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial,public_identity)
               VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s,%s::jsonb)''',
-              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),(len(allowed)!=len(media) or (named_dialog and any(row['message_type'] in _MEDIA_TYPES and row['id'] not in allowed for row in rows))),_json(identity)))
+              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),(len(allowed)!=len(media) or (named_dialog and any(row['message_type'] in _MEDIA_TYPES and row['id'] not in allowed_set for row in rows))),_json(identity)))
             cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s)''',
               (tenant,ident,request,case_id,dest,target['conversation_id'],body,hashlib.sha256(body.encode()).hexdigest(),actor))

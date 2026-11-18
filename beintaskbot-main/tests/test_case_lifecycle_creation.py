@@ -77,3 +77,28 @@ def test_old_open_case_is_not_reused_for_new_cycle(episodes):
         store.create(PROFILE,create_data(second['id'],3))
     assert store.detail(PROFILE,case)['ticket']['dialog_episode_id']==first['id']
     assert state(episodes)['state']=='accepted'
+
+
+def test_binding_schema_upgrade_is_additive_and_reads_fail_closed(db,monkeypatch):
+    import tenant_ai_agents_schema as schema
+    from tenant_support_case_context import load_scope
+    with db.cursor() as cur:
+        made=store.create_in_transaction(cur,A,CA,'client','Old case','legacy-upgrade',actor=11,source='manual')
+    db.commit()
+    before=db.execute('SELECT id::text,history_scope,created_at FROM saas_support_tickets');db.commit()
+    for name in ('dialog_episode_id','history_started_at','history_frozen_at'):
+        db.execute('ALTER TABLE saas_support_tickets DROP COLUMN '+name)
+    db.commit()
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError) as blocked:load_scope(cur,A,made['id'])
+        assert blocked.value.status==503
+    db.commit()
+    monkeypatch.setattr(schema,'_ensure_platform_schema',Mock(side_effect=AssertionError('Full bootstrap must not run')))
+    schema.ensure_schema(db)
+    after=db.execute('SELECT id::text,history_scope,created_at FROM saas_support_tickets')
+    assert after==before
+    assert db.execute('SELECT dialog_episode_id,history_started_at,history_frozen_at FROM saas_support_tickets')[0]=={
+        'dialog_episode_id':None,'history_started_at':None,'history_frozen_at':None}
+    db.commit()
+    schema.ensure_schema(db)
+    assert not schema._ensure_platform_schema.called
