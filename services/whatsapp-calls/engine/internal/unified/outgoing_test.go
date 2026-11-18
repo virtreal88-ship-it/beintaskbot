@@ -63,6 +63,62 @@ func TestOutgoingUnknownCannotResend(t *testing.T) {
 	if client.sends != 1 {
 		t.Fatal("unknown operation sent again")
 	}
+	items, err := j.Events(context.Background(), 0, 50)
+	if err != nil || len(items) != 0 {
+		t.Fatal("unconfirmed send became a confirmed history event", err)
+	}
+}
+
+func TestOutgoingMediaEvidenceSurvivesRestartWithoutResending(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "media.db")
+	db := database(t, path)
+	j := journal(t, db, testScope)
+	c := &outgoingClient{}
+	req := Outgoing{Scope: testScope, Operation: "media", Chat: "15550000002@s.whatsapp.net", Kind: "image", MIME: "image/png", Data: []byte("synthetic image"), Text: "caption"}
+	if _, err := j.Deliver(ctx, c, req); err != nil {
+		t.Fatal(err)
+	}
+	items, err := j.Events(ctx, 0, 50)
+	if err != nil || len(items) != 1 {
+		t.Fatal("missing media evidence", err)
+	}
+	var e Envelope
+	if json.Unmarshal(items[0].Payload, &e) != nil || e.Chat != req.Chat || e.Sender != testScope.Account || !e.FromMe || e.MediaMime != req.MIME || e.MediaSize != uint64(len(req.Data)) || e.Text != req.Text {
+		t.Fatal("wrong scoped media evidence")
+	}
+	var m waE2E.Message
+	if proto.Unmarshal(e.Proto, &m) != nil || m.GetImageMessage().GetCaption() != req.Text {
+		t.Fatal("retained protobuf lost")
+	}
+	db.Close()
+	j = journal(t, database(t, path), testScope)
+	if _, err = j.Deliver(ctx, c, req); err != nil {
+		t.Fatal(err)
+	}
+	again, err := j.Events(ctx, 0, 50)
+	if err != nil || len(again) != 1 || again[0].ID != items[0].ID || c.sends != 1 || c.uploads != 1 {
+		t.Fatal("restart duplicated media", err)
+	}
+}
+
+func TestMediaEvidenceFailureNeverResendsAcceptedProviderCall(t *testing.T) {
+	ctx := context.Background()
+	db := database(t, filepath.Join(t.TempDir(), "failure.db"))
+	j := journal(t, db, testScope)
+	if _, err := db.Exec(`CREATE TRIGGER fail_media BEFORE INSERT ON unified_events BEGIN SELECT RAISE(FAIL,'synthetic'); END`); err != nil {
+		t.Fatal(err)
+	}
+	c := &outgoingClient{}
+	req := Outgoing{Scope: testScope, Operation: "media", Chat: "15550000002@s.whatsapp.net", Kind: "image", MIME: "image/png", Data: []byte("synthetic")}
+	for i := 0; i < 2; i++ {
+		if _, err := j.Deliver(ctx, c, req); !errors.Is(err, ErrUnknown) {
+			t.Fatal(err)
+		}
+	}
+	if c.sends != 1 || c.uploads != 1 {
+		t.Fatal("evidence failure repeated provider send")
+	}
 }
 func TestOutgoingScopeCannotBeOverridden(t *testing.T) {
 	j := journal(t, database(t, filepath.Join(t.TempDir(), "send.db")), testScope)

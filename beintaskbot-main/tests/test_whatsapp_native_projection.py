@@ -53,6 +53,16 @@ def test_private_protocol_never_enters_crm_and_names_do_not_authorize_identity()
     assert 'pushName' not in outbound and 'ai_authored' not in outbound
 
 
+def test_local_media_ack_does_not_impersonate_employee_or_pause_as_unknown_echo():
+    payload=message(from_me=True,sender=delivery()['scope']['account'],sender_alt='',app_dispatch=True,
+        media_kind='image',media_mime='image/png',media_size=179,message_type='image')
+    data=event(payload)['data']
+    assert data['source']=='unknown' and data['authorshipUncertain'] is False
+    assert 'verified_employee_id' not in data and 'ai_authored' not in data
+    for changes in ({'sender':'188888888@s.whatsapp.net'},{'from_me':False},{'app_dispatch':1}):
+        with pytest.raises(TenantLinearError):event({**payload,**changes})
+
+
 def test_group_author_and_caption_quote_are_explicit_without_merging_by_name():
     p=message(chat='120363123456789@g.us',message_type='image',media_kind='image',media_mime='image/png',media_size=23,
         file_name='image',quote_id='SYNTHETIC_QUOTE',quote_chat='120363123456789@g.us')

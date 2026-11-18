@@ -73,6 +73,10 @@ func managedHandler(s *server, host, token string) http.Handler {
 			s.handleManagedMessageStatus(w, r)
 			return
 		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/group" {
+			s.handleManagedGroup(w, r)
+			return
+		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages" {
 			s.handleManagedMessage(w, r)
 			return

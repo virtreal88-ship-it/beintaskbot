@@ -21,6 +21,7 @@ type Envelope struct {
 	RecipientAlt string `json:"recipient_alt,omitempty"`
 	ProviderID   string `json:"provider_id"`
 	FromMe       bool   `json:"from_me"`
+	AppDispatch  bool   `json:"app_dispatch,omitempty"`
 	Timestamp    int64  `json:"timestamp"`
 	Text         string `json:"text,omitempty"`
 	Status       string `json:"status,omitempty"`

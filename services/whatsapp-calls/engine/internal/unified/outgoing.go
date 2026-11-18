@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -173,7 +175,32 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		if err != nil || response.ID != id {
 			return ErrUnknown
 		}
-		return nil
+		if request.Kind == "text" {
+			return nil
+		}
+		// SendMessage does not emit a Message event for our own device. Retain
+		// the acknowledged protobuf through the same encrypted event path used
+		// by incoming messages; media keys must never enter the public receipt.
+		// If persistence fails, keep the operation unknown, never resend it.
+		stamp := response.Timestamp
+		if stamp.IsZero() {
+			stamp = time.Now()
+		}
+		sender, _ := types.ParseJID(j.binding.Account)
+		identity, envelope, retained, err := MessageEnvelope(&events.Message{
+			Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: sender, IsFromMe: true}, ID: id, Timestamp: stamp},
+			Message: msg,
+		})
+		if err != nil || !retained {
+			return ErrUnknown
+		}
+		envelope.AppDispatch = true
+		payload, err := json.Marshal(envelope)
+		if err != nil {
+			return ErrUnknown
+		}
+		_, err = j.Append(ctx, identity, payload)
+		return err
 	})
 }
 

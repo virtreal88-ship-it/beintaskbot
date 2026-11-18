@@ -47,6 +47,10 @@ def authorized_route(profile, params):
 
 
 async def fetch_cached(route):
+    if route.get('native'):
+        import asyncio
+        from tenant_whatsapp_native_groups import fetch
+        return projection(await asyncio.to_thread(fetch,route))
     origin = urlsplit(CONNECT_URL)
     if (origin.scheme != 'https' or not origin.hostname or origin.username or origin.password
             or origin.query or origin.fragment or origin.path not in {'', '/'} or origin.port not in {None, 443}):
@@ -80,6 +84,6 @@ async def get_participants(profile, params):
     route = await asyncio.to_thread(authorized_route, profile, params)
     result = await fetch_cached(route)
     latest = await asyncio.to_thread(authorized_route, profile, params)
-    if any(latest.get(k) != route.get(k) for k in ('tenant', 'channel_id', 'conversation_id', 'api_key')):
+    if any(latest.get(k) != route.get(k) for k in ('tenant', 'channel_id', 'conversation_id', 'api_key', 'native')):
         raise TenantLinearError('Группа изменилась. Откройте её заново.', 409)
     return result

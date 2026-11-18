@@ -19,7 +19,7 @@ GROUP = re.compile(r'^[0-9]{5,30}(?:-[0-9]{5,20})?@g\.us$')
 PROVIDER_ID = re.compile(r'^[A-Za-z0-9_-]{5,200}$')
 FIELDS = {'kind','chat','sender','sender_alt','recipient_alt','provider_id','from_me','timestamp',
           'text','status','proto','media_kind','media_mime','media_size','file_name','message_type',
-          'push_name','quote_id','quote_chat','quote_sender','variant'}
+          'push_name','quote_id','quote_chat','quote_sender','variant','app_dispatch'}
 
 
 def _error(code='native_projection_invalid'):
@@ -80,6 +80,9 @@ def message_event(scope, event_id, payload, message_id):
         raise _error()
     chat = _jid(payload.get('chat'), group=True)
     sender = _jid(payload.get('sender'))
+    app_dispatch=payload.get('app_dispatch',False)
+    if type(app_dispatch) is not bool or (app_dispatch and (not payload['from_me'] or sender!=scope['account'])):
+        raise _error()
     sender_alt = _jid(payload.get('sender_alt'), optional=True)
     recipient_alt = _jid(payload.get('recipient_alt'), optional=True)
     provider = payload.get('provider_id')
@@ -96,7 +99,7 @@ def message_event(scope, event_id, payload, message_id):
     data = {'id':message_id,'channelId':scope['source'],'conversationId':chat,
             'externalMessageId':provider,'fromMe':payload['from_me'],'type':kind,'text':text,
             'participantJid':sender,'participantAlt':sender_alt,'source':'unknown',
-            'authorshipUncertain':payload['from_me'], 'isGroup':bool(GROUP.fullmatch(chat)),
+            'authorshipUncertain':payload['from_me'] and not app_dispatch, 'isGroup':bool(GROUP.fullmatch(chat)),
             'transport':'beintaskbot_whatsapp','nativeEventId':event_id}
     if not payload['from_me']:
         data['pushName'] = _text(payload.get('push_name', ''), 256)

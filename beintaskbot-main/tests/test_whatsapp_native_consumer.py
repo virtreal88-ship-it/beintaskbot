@@ -233,3 +233,75 @@ def test_non_crm_receipt_is_retained_without_stalling(ready,chat):
     consumer.consume(reference)
     assert db.execute("SELECT 1 FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")
     db.commit()
+
+
+def test_receipt_uses_only_verified_source_scoped_pn_lid_pair(ready):
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    pn='15550000002@s.whatsapp.net';lid='19990000002@lid'
+    receipt_delivery(db,reference,chat=lid)
+    assert db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]['raw'].get('status')!='read'
+    # Registering the exact pair in another tenant/source is not evidence here.
+    db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s,%s,'Other source')",(A,CB))
+    for tenant,channel,lead in ((A,CB,9001),(B,CB,9002)):
+        db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s,%s,%s,%s)",(tenant,channel,pn,lead))
+        db.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s,%s,%s,%s)",(tenant,channel,lid,pn))
+    db.commit()
+    receipt_delivery(db,reference,chat=lid)
+    assert db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]['raw'].get('status')!='read'
+    from tenant_whatsapp_native_status import reconcile
+    db.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s,%s,%s,%s)",(A,CA,lid,pn))
+    db.commit()
+    with db.cursor() as cur:reconcile(cur,A,CA,'SYNTHETIC_MESSAGE_1')
+    assert db.execute("SELECT raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")[0]['raw']['status']=='read'
+    db.commit()
+
+
+def test_receipt_alias_lookup_cannot_cross_scope():
+    from unittest.mock import Mock
+    from tenant_whatsapp_native_status import verified_receipt_chats
+    cur=Mock();cur.fetchall.side_effect=[[],[]]
+    chat='15550000002@s.whatsapp.net'
+    assert verified_receipt_chats(cur,A,CA,chat)=={chat}
+    assert all(call.args[1][:2]==(A,CA) for call in cur.execute.call_args_list)
+
+
+def test_outbound_receipt_first_keeps_media_reference_and_authorship(ready):
+    import json
+    db,reference=ready;activate(db);consumer.consume(reference);outgoing_fixture(db)
+    db.execute("UPDATE saas_crm_messages SET author_name='Known employee',message_type='image',raw=raw||%s::jsonb WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'",(json.dumps({'verified_employee_id':11,'status':'read'}),))
+    before=db.execute("SELECT id FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")
+    db.commit()
+    value=delivery(after=2)
+    value['event']={'sequence':3,'id':'e'*64,'payload':message(from_me=True,sender='123456789@s.whatsapp.net',sender_alt='',media_kind='image',media_mime='image/png',media_size=179,message_type='image')}
+    store(value)
+    consumer.consume((*reference[:3],'e'*64));consumer.consume((*reference[:3],'e'*64))
+    rows=db.execute("SELECT id,author_name,raw FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1'")
+    assert len(rows)==1 and rows[0]['id']==before[0]['id']
+    assert rows[0]['author_name']=='Known employee' and rows[0]['raw']['verified_employee_id']==11
+    assert rows[0]['raw']['status']=='read' and rows[0]['raw']['nativeEventId']=='e'*64
+    assert rows[0]['raw']['_crm_provider_conversation_id']==value['event']['payload']['chat']
+    assert 'PRIVATE_MEDIA_KEY' not in json.dumps(rows[0]['raw'])
+    db.commit()
+
+
+def test_native_group_metadata_preserves_local_name_and_order_without_messages(ready):
+    from tenant_whatsapp_native_groups import apply_metadata
+    db,reference=ready;activate(db)
+    group='120363123456789@g.us'
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,display_name,manual_display_name) VALUES(%s,%s,%s,'Old name','Local label')",(A,CA,group))
+    before=db.execute('SELECT COUNT(*) AS n FROM saas_crm_messages')[0]['n'];db.commit()
+    value=delivery(after=2)
+    payload={'kind':'group_metadata','chat':group,'snapshot':{'status':'available','observedAt':'2026-11-18T12:00:00Z','group_name':'Provider group','phones':['+15550000002'],'total':2,'unresolved':1}}
+    value['event']={'sequence':3,'id':'f'*64,'payload':payload};store(value)
+    consumer.consume((*reference[:3],'f'*64))
+    row=db.execute('SELECT display_name,manual_display_name FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s',(A,CA,group))[0]
+    assert row=={'display_name':'Provider group','manual_display_name':'Local label'}
+    assert db.execute('SELECT COUNT(*) AS n FROM saas_crm_messages')[0]['n']==before
+    db.commit()
+    with db.cursor() as cur:
+        older=copy.deepcopy(payload);older['snapshot'].update(observedAt='2026-11-18T11:00:00Z',group_name='Stale')
+        apply_metadata(cur,value['scope'],older)
+        apply_metadata(cur,{**value['scope'],'tenant':B},payload)
+        apply_metadata(cur,{**value['scope'],'source':CB},payload)
+    assert db.execute('SELECT display_name FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s',(A,CA,group))[0]['display_name']=='Provider group'
+    db.commit()
