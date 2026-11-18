@@ -181,7 +181,7 @@ def retry_after_seconds(value, default=60):
 
 async def _download_media(item, *, max_bytes=None, preview_documents=False):
     route = dict(item['route'])
-    if route.get('native'):
+    if route.get('native') or route.get('native_media'):
         from tenant_whatsapp_native_transport import download
         kind=item['row']['message_type']
         types={'image':IMAGE_TYPES,'audio':AUDIO_TYPES,'voice':AUDIO_TYPES,'video':VIDEO_TYPES,
@@ -199,6 +199,7 @@ async def _download_media(item, *, max_bytes=None, preview_documents=False):
                 raise
             legacy={**route,'api_key':route['legacy_media_key']}
             legacy.pop('native',None)
+            legacy.pop('native_media',None)
             return await _download_media({**item,'route':legacy},max_bytes=max_bytes,preview_documents=preview_documents)
         if kind in {'audio','voice'}:mime=canonical_audio_mime(content,mime)
         return content,mime

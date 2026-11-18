@@ -13,12 +13,15 @@ from contextlib import contextmanager
 from tenant_platform import _connect, TenantPlatformError
 
 NATIVE_KEY = 'native-route-requires-dispatch'
+MEDIA_EVIDENCE_EVENTS = 4096
+MEDIA_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
 def _legacy(route):
     if route.get('native') or route.get('api_key') == NATIVE_KEY:
         raise TenantPlatformError('native_source_changed')
-    return route
+    # Never retain a stale read binding when the current source join is gone.
+    return {k:v for k,v in route.items() if k!='native_media'}
 
 
 def migrate(cur):
@@ -64,7 +67,14 @@ def bind(cur, route):
     # failed native route never becomes legacy automatically; stale native
     # requests are still rejected by _legacy rather than sent a second time.
     if row['legacy_fallback'] and not row['enabled'] and row['gateway_enabled'] and row['active']:
-        return _legacy(route)
+        legacy=_legacy(route)
+        # Rollback changes the sender, not the provenance of retained media.
+        # This separate binding never authorizes a native outgoing operation.
+        if row['capture_enabled']:
+            return {**legacy,'legacy_media_key':legacy['api_key'],'native_media':{'scope':{
+                'tenant':str(route['tenant_id']),'source':str(route['channel_id']),
+                'account':row['account_jid'],'generation':row['generation']},'gateway_id':str(row['gateway_id'])}}
+        return legacy
     if (os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_SEND')!='1' or
             not all(row[x] for x in ('enabled','capture_enabled','gateway_enabled','active'))):
         raise TenantPlatformError('native_source_unavailable')
@@ -198,34 +208,83 @@ def media_receipt(route,request_id,*,kind,mime,name='',caption='',content):
         'externalMessageId':result['external_message_id'],'delivered':False,'retrySafe':False}
 
 
+def retained_media_evidence(cur,scope,facts,conversation,direction,kind):
+    """Read-only recovery for legacy CRM rows predating native capture.
+
+    The old CRM identity wins ingestion dedup and may lack nativeEventId. Never
+    replay ingestion or change that row. Bound the encrypted search to this
+    exact source/generation, 4096 events and 16 MiB (including ciphertext).
+    Ordinary native messages keep the indexed event-ID lookup below.
+    """
+    from tenant_whatsapp_native_projection import open_stored
+    provider=facts.get('externalMessageId')
+    if not isinstance(provider,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider):
+        raise TenantPlatformError('native_media_evidence_missing')
+    if direction not in {'incoming','outgoing'}:
+        raise TenantPlatformError('native_media_scope_denied')
+    cur.execute('''WITH candidates AS MATERIALIZED (
+      SELECT event_id,sequence,octet_length(encrypted_payload) AS bytes
+      FROM saas_whatsapp_native_inbox WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+        AND generation=%s ORDER BY sequence DESC LIMIT %s
+    ), bounded AS (
+      SELECT event_id,SUM(bytes) OVER (ORDER BY sequence DESC) AS bytes FROM candidates
+    ) SELECT i.* FROM saas_whatsapp_native_inbox i JOIN bounded b USING(event_id)
+      WHERE i.tenant_id=%s::uuid AND i.channel_id=%s::uuid AND i.generation=%s
+        AND b.bytes<=%s ORDER BY i.sequence DESC''',
+      (scope['tenant'],scope['source'],scope['generation'],MEDIA_EVIDENCE_EVENTS,
+       scope['tenant'],scope['source'],scope['generation'],MEDIA_EVIDENCE_BYTES))
+    matches=[]
+    for row in cur.fetchall():
+        evidence=open_stored(row,scope)
+        if (evidence.get('kind')=='message' and not evidence.get('variant')
+                and evidence.get('provider_id')==provider
+                and evidence.get('from_me') is (direction=='outgoing')
+                and evidence.get('message_type')==kind
+                and quote_chat_matches(evidence,conversation,facts)):
+            matches.append(row)
+    if len(matches)>1:raise TenantPlatformError('native_media_evidence_ambiguous')
+    if not matches:raise TenantPlatformError('native_media_evidence_missing')
+    return matches[0]
+
+
 def download(route,message_id,*,max_bytes,allowed_types):
     from tenant_call_sources import service
     from tenant_whatsapp_native_projection import open_stored
     url,token=service()
     with _connect() as conn,conn.cursor() as cur:
         current=bind(cur,route)
-        if not current.get('native') or current['native']!=route.get('native'):
+        binding=current.get('native') or current.get('native_media')
+        expected=route.get('native') or route.get('native_media')
+        if not binding or binding!=expected:
             raise TenantPlatformError('native_source_changed')
-        cur.execute('''SELECT m.raw FROM saas_crm_messages m
+        cur.execute('''SELECT m.raw,m.direction,m.message_type FROM saas_crm_messages m
           JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
           WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.external_id=%s
             AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s''',
           (route['tenant_id'],'connect:'+route['channel_id'],'connect:'+message_id,route['channel_id'],route['conversation_id']))
         rows=cur.fetchall()
         if len(rows)!=1:raise TenantPlatformError('native_media_scope_denied')
-        event_id=(rows[0]['raw'] or {}).get('nativeEventId')
-        if not isinstance(event_id,str) or not re.fullmatch(r'[0-9a-f]{64}',event_id):
-            raise TenantPlatformError('native_media_evidence_missing')
-        scope=current['native']['scope']
-        cur.execute('''SELECT * FROM saas_whatsapp_native_inbox
-          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND event_id=%s''',
-          (scope['tenant'],scope['source'],scope['generation'],event_id))
-        row=cur.fetchone()
+        facts=rows[0]['raw'] or {}
+        event_id=facts.get('nativeEventId')
+        scope=binding['scope']
+        if event_id is None:
+            row=retained_media_evidence(cur,scope,facts,route['conversation_id'],rows[0]['direction'],rows[0]['message_type'])
+            event_id=row['event_id']
+        else:
+            if not isinstance(event_id,str) or not re.fullmatch(r'[0-9a-f]{64}',event_id):
+                raise TenantPlatformError('native_media_scope_denied')
+            cur.execute('''SELECT * FROM saas_whatsapp_native_inbox
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND event_id=%s''',
+              (scope['tenant'],scope['source'],scope['generation'],event_id))
+            row=cur.fetchone()
         if not row:raise TenantPlatformError('native_media_evidence_missing')
         evidence=open_stored(row,scope)
-        facts=rows[0]['raw'] or {}
         expected_chat=facts.get('_crm_provider_conversation_id') or facts.get('conversationId') or route['conversation_id']
-        if evidence.get('provider_id')!=facts.get('externalMessageId') or evidence.get('chat')!=expected_chat:
+        if (evidence.get('kind')!='message' or evidence.get('variant')
+                or evidence.get('provider_id')!=facts.get('externalMessageId') or evidence.get('chat')!=expected_chat
+                or rows[0]['direction'] not in {'incoming','outgoing'}
+                or evidence.get('from_me') is not (rows[0]['direction']=='outgoing')
+                or evidence.get('message_type')!=rows[0]['message_type']):
             raise TenantPlatformError('native_media_scope_denied')
         mime=str(evidence.get('media_mime','')).split(';')[0].lower().strip()
         size=evidence.get('media_size',0)
@@ -233,7 +292,7 @@ def download(route,message_id,*,max_bytes,allowed_types):
             raise TenantPlatformError('native_media_restricted')
         payload={'scope':scope,'event_id':event_id,'chat':evidence['chat']}
         try:
-            with requests.post(url+'/v1/sources/'+current['native']['gateway_id']+'/messages/media',
+            with requests.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/media',
                     headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'},json=payload,
                     timeout=(5,40),allow_redirects=False,stream=True) as response:
                 if response.status_code!=200 or response.headers.get('Content-Encoding','identity')!='identity':raise ValueError()

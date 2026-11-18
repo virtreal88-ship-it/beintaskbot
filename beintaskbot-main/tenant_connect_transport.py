@@ -1671,7 +1671,7 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
             or any(ord(char)<33 for char in conversation_id)
             or route.get('conversation_id')!=conversation_id):
         raise TenantPlatformError('Connect əlavəsi düzgün deyil.')
-    if route.get('native'):
+    if route.get('native') or route.get('native_media'):
         from tenant_whatsapp_native_transport import download
         try:
             content,mime=download(route,message_id,max_bytes=limits[expected_type],allowed_types=allowed[expected_type])
