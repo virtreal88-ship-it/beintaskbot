@@ -449,7 +449,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy):
+def projection(cur, policy, *, include_read_cursors=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -479,7 +479,6 @@ def projection(cur, policy):
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
-        lrc.read_through_message_id,
         ticket.assigned_to,tm.display_name AS assignee_name,
         NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id) AS unambiguous,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected,
@@ -501,11 +500,6 @@ def projection(cur, policy):
           SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
             AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m
-        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL
-          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
-            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
-        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE
       LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE ('''+ticket_filter+''') AND st.tenant_id=c.tenant_id
         AND st.channel_id=c.connect_channel_id AND st.status<>'resolved'
         AND (st.conversation_id=c.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
@@ -533,7 +527,6 @@ def projection(cur, policy):
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,s.auto_send_enabled,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
-        lrc.read_through_message_id,
         cs.assigned_to,tm.display_name,TRUE,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
@@ -543,9 +536,6 @@ def projection(cur, policy):
         FROM saas_crm_messages m
         WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m
-        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
-        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
         AND j0.lead_id=d.kommo_lead_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
@@ -562,6 +552,19 @@ def projection(cur, policy):
         OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
         OR NOT COALESCE(connected,FALSE) THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes WHERE '''+dialog_filter+''') '''
+    if include_read_cursors:
+        sql=sql.replace('lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,',
+                        'lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,lrc.read_through_message_id,')
+        sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*',
+          ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
+          "        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL\n"
+          "          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id\n"
+          "            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text\n"
+          "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*")
+        sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*',
+          ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
+          "        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'\n"
+          "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*")
     return sql,params
 
 
@@ -924,7 +927,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
-            sql,scopes=projection(cur, policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1026,10 +1029,6 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
             rows=_fold_group_routes(rows)
-            if not include_read_cursors:
-                for row in rows:
-                    row.pop('read_through_message_id',None)
-                    for source in row.get('group_sources',[]):source.pop('read_through_message_id',None)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
     return {**({'completion_preview':True} if completion_preview else {}),
