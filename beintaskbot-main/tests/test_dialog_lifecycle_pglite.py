@@ -78,6 +78,37 @@ def test_claim_cas_receipts_and_no_automatic_case(episodes):
     assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
 
 
+def test_owner_can_start_new_cycle_from_closed_dialog_without_sending(episodes):
+    command()
+    command('close',1)
+    before_messages=episodes.execute('SELECT id FROM saas_crm_messages ORDER BY id')
+    old_episode=episodes.execute('SELECT id,closed_at FROM saas_dialog_episodes ORDER BY accepted_at')[0]
+    start=payload('start',2)
+    with pytest.raises(TenantLinearError) as other_owner:
+        lifecycle.mutate({'tenant_id':A,'telegram_id':33},start)
+    assert other_owner.value.status==404
+    first=lifecycle.mutate(PROFILE,start)
+    assert first['lifecycle']['state']=='accepted' and first['lifecycle']['revision']==3
+    assert lifecycle.mutate(PROFILE,start)==first
+    assert episodes.execute('SELECT id FROM saas_crm_messages ORDER BY id')==before_messages
+    episodes.commit()
+    workflows=episodes.execute('SELECT state,operator_id,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))
+    assert workflows==[{'state':'accepted','operator_id':11,'revision':3}]
+    history=episodes.execute('SELECT id,closed_at FROM saas_dialog_episodes ORDER BY accepted_at')
+    assert len(history)==2 and history[0]['id']==old_episode['id'] and history[0]['closed_at']
+    assert history[1]['closed_at'] is None
+
+
+def test_owner_can_start_new_cycle_from_dismissed_dialog(episodes):
+    inbound=insert_message(episodes,'for-dismiss-start',created_at='2099-01-01T00:00:00Z')
+    command('dismiss',0,message_id=inbound)
+    start=payload('start',1)
+    result=lifecycle.mutate(PROFILE,start)
+    assert result['lifecycle']['state']=='accepted' and result['lifecycle']['revision']==2
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
+    episodes.commit()
+
+
 def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     command(actor=33)
     with episodes.cursor() as cur:
