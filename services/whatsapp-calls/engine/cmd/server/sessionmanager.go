@@ -13,6 +13,7 @@ import (
 )
 
 type SessionManager struct {
+	messageLab *messageLab
 	recordings *recordingStore
 	appCtx     context.Context
 	container  *sqlstore.Container

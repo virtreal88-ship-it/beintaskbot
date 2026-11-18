@@ -14,6 +14,7 @@ import (
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
+	s.registerMessageLab(mux)
 
 	mux.HandleFunc("GET /api/sessions", s.handleSessionList)
 	mux.HandleFunc("GET /api/sessions/{sid}/auth", func(w http.ResponseWriter, r *http.Request) {

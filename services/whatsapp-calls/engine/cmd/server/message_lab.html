@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Единый WhatsApp — лаборатория</title>
+<style>body{font:16px system-ui;max-width:850px;margin:30px auto;padding:0 20px;color:#16382d;background:#f4f8f6}section{background:white;border:1px solid #d4e1da;border-radius:12px;padding:20px;margin:16px 0}textarea{box-sizing:border-box;width:100%;min-height:90px}button,select{font:inherit;padding:9px;margin:8px 0}button{background:#267960;color:white;border:0;border-radius:8px}li{padding:8px;overflow-wrap:anywhere;white-space:pre-wrap}small{display:block;color:#62716b}</style>
+<h1>Переписка и звонки на одной сессии</h1>
+<p>Изолированный эксперимент. Только тестовый номер и согласованные участники. В production этот экран отсутствует.</p>
+<p><a href="/" target="_blank" rel="noopener">Открыть существующий экран QR и звонков</a> — используйте ту же сессию, дополнительный номер не создавайте.</p>
+<section><p id="status" role="status">Проверяю тестовую сессию…</p><form id="send"><label>Тестовый чат <select id="peer"></select></label><label><small>Тестовая фраза</small><textarea id="text" required maxlength="4096"></textarea></label><button id="button" disabled>Отправить один раз</button></form><p id="result" role="status"></p></section>
+<section><h2>Подтверждённо сохранённые события</h2><p>Это лабораторный журнал. «accepted» подтверждает принятие сервером, а delivered/read приходят отдельными событиями. Вложения пока сохраняются только как зашифрованные протокольные данные.</p><ol id="events"></ol></section>
+<script>
+const statusNode=document.querySelector('#status'),peer=document.querySelector('#peer'),input=document.querySelector('#text'),button=document.querySelector('#button'),result=document.querySelector('#result'),list=document.querySelector('#events');
+let cursor=0,stopped=false,busy=false,ready=false,timer,pending=null;
+async function poll(){
+ try{
+  const response=await fetch('/api/unified-lab/status',{cache:'no-store'});if(!response.ok)throw Error();const state=await response.json();ready=state.ready===true;
+  if(!peer.options.length)for(const chat of state.chats){const option=document.createElement('option');option.value=chat;option.textContent=chat;peer.append(option)}
+  statusNode.textContent=ready?'Тестовая сессия подключена. Для текста и звонков используется один client.':'Точная тестовая сессия не подключена. Отправка заблокирована.';button.disabled=!ready||busy;
+  const events=await fetch('/api/unified-lab/events?after='+cursor,{cache:'no-store'});if(!events.ok)throw Error();const data=await events.json();
+  for(const event of data.events){const p=event.payload,item=document.createElement('li');item.textContent=new Date(p.timestamp).toLocaleTimeString()+' · '+p.kind+' · '+(p.from_me?'исходящее':'входящее')+' · '+(p.text||p.status||'нет текстовой части');list.append(item);cursor=event.sequence;while(list.children.length>100)list.firstChild.remove()}
+ }catch{statusNode.textContent='Нет подтверждения состояния. Отправка приостановлена.';ready=false;button.disabled=true}
+ finally{if(!stopped)timer=setTimeout(poll,2500)}
+}
+document.querySelector('#send').addEventListener('submit',async e=>{
+ e.preventDefault();if(busy||!ready||!input.value.trim())return;busy=true;button.disabled=true;peer.disabled=true;input.disabled=true;
+ const payload=pending||{operation:crypto.randomUUID(),chat:peer.value,text:input.value};pending=payload;
+ try{const response=await fetch('/api/unified-lab/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(response.ok&&data.confirmed){result.textContent='Сервер принял сообщение. Ожидаем отдельный статус доставки.';input.value='';pending=null;button.textContent='Отправить один раз'}else{result.textContent='Результат не подтверждён. Кнопка повторит проверку той же операции, без нового отправления. Проверьте статус на тестовом телефоне.';button.textContent='Проверить ту же операцию';ready=false}}
+ catch{result.textContent='Связь потеряна; результат неизвестен. Не отправляйте ту же фразу повторно до проверки телефона.';ready=false}
+ finally{busy=false;button.disabled=!ready;peer.disabled=!!pending;input.disabled=!!pending}
+});
+window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(timer)});poll();
+</script></html>

@@ -1,0 +1,122 @@
+[
+  {
+    "name": "pip",
+    "version": "25.0.1",
+    "license": "MIT",
+    "requires": null
+  },
+  {
+    "name": "yarl",
+    "version": "1.25.1",
+    "license": "Apache-2.0",
+    "requires": [
+      "idna>=2.0",
+      "multidict>=4.0",
+      "propcache>=0.2.1"
+    ]
+  },
+  {
+    "name": "aiohttp",
+    "version": "3.14.3",
+    "license": "Apache-2.0 AND MIT",
+    "requires": [
+      "aiohappyeyeballs>=2.5.0",
+      "aiosignal>=1.4.0",
+      "async-timeout<6.0,>=4.0; python_version < \"3.11\"",
+      "attrs>=17.3.0",
+      "frozenlist>=1.1.1",
+      "multidict<7.0,>=4.5",
+      "propcache>=0.2.0",
+      "typing_extensions>=4.4; python_version < \"3.13\"",
+      "yarl<2.0,>=1.17.0",
+      "aiodns>=3.3.0; (sys_platform != \"android\" and sys_platform != \"ios\") and extra == \"speedups\"",
+      "Brotli>=1.2; (platform_python_implementation == \"CPython\" and sys_platform != \"android\" and sys_platform != \"ios\") and extra == \"speedups\"",
+      "brotlicffi>=1.2; platform_python_implementation != \"CPython\" and extra == \"speedups\"",
+      "backports.zstd; (platform_python_implementation == \"CPython\" and python_version < \"3.14\" and sys_platform != \"android\" and sys_platform != \"ios\") and extra == \"speedups\""
+    ]
+  },
+  {
+    "name": "aiosignal",
+    "version": "1.4.0",
+    "license": "Apache 2.0",
+    "requires": [
+      "frozenlist>=1.1.0",
+      "typing-extensions>=4.2; python_version < \"3.13\""
+    ]
+  },
+  {
+    "name": "idna",
+    "version": "3.20",
+    "license": "BSD-3-Clause",
+    "requires": [
+      "ruff >= 0.16.0 ; extra == \"all\"",
+      "mypy >= 1.11.2 ; extra == \"all\"",
+      "ty >= 0.0.37 ; extra == \"all\"",
+      "pytest >= 8.3.2 ; extra == \"all\"",
+      "hypothesis >= 6.141.1 ; extra == \"all\"",
+      "coverage >= 7.10.0 ; extra == \"all\""
+    ]
+  },
+  {
+    "name": "pycparser",
+    "version": "3.12",
+    "license": "BSD-3-Clause",
+    "requires": null
+  },
+  {
+    "name": "propcache",
+    "version": "0.5.4",
+    "license": "Apache-2.0",
+    "requires": null
+  },
+  {
+    "name": "aiohappyeyeballs",
+    "version": "2.7.1",
+    "license": "PSF-2.0",
+    "requires": null
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0",
+    "license": "PSF-2.0",
+    "requires": null
+  },
+  {
+    "name": "cryptography",
+    "version": "50.0.1",
+    "license": "Apache-2.0 OR BSD-3-Clause",
+    "requires": [
+      "cffi>=2.0.0 ; platform_python_implementation != 'PyPy'",
+      "typing-extensions>=4.13.2 ; python_full_version < '3.11'",
+      "bcrypt>=3.1.5 ; extra == 'ssh'"
+    ]
+  },
+  {
+    "name": "attrs",
+    "version": "26.1.0",
+    "license": "MIT",
+    "requires": null
+  },
+  {
+    "name": "multidict",
+    "version": "6.9.1",
+    "license": "Apache License 2.0",
+    "requires": [
+      "typing-extensions>=4.1.0; python_version < \"3.11\""
+    ]
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1",
+    "license": "MIT-0",
+    "requires": [
+      "pycparser; implementation_name != \"PyPy\""
+    ]
+  },
+  {
+    "name": "frozenlist",
+    "version": "1.8.0",
+    "license": "Apache-2.0",
+    "requires": null
+  }
+]

@@ -1,0 +1,1457 @@
+[
+  {
+    "module": "filippo.io/edwards25519",
+    "version": "v1.2.0",
+    "sum": "h1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=",
+    "go_mod_sum": "h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q77mc=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+        "retained_notice": "notices/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/DATA-DOG/go-sqlmock",
+    "version": "v1.5.2",
+    "sum": "h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7OputlJIzU=",
+    "go_mod_sum": "h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "e3a6ae97f6eef8ce17e44d5f22adba594c4ea2b592c4be7ee9b387c441ef34d6",
+        "retained_notice": "notices/e3a6ae97f6eef8ce17e44d5f22adba594c4ea2b592c4be7ee9b387c441ef34d6.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/agnivade/levenshtein",
+    "version": "v1.2.1",
+    "sum": "h1:EHBY3UOn1gwdy/VbFwgo4cxecRznFk7fKWN1KOX7eoM=",
+    "go_mod_sum": "h1:QVVI16kDrtSuwcpd0p1+xMC6Z/VfhtCyDIjcwga4/DU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "License.txt",
+        "sha256": "911d0fb30ff3345e4df60da21c2f2340a69bd98c0e3d1e79d27ae6177ebeb617",
+        "retained_notice": "notices/911d0fb30ff3345e4df60da21c2f2340a69bd98c0e3d1e79d27ae6177ebeb617.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/andreyvit/diff",
+    "version": "v0.0.0-20170406064948-c7f18ee00883",
+    "sum": "h1:bvNMNQO63//z+xNgfBlViaCIJKLlCJ6/fmUseuG0wVQ=",
+    "go_mod_sum": "h1:rCTlJbsFo29Kk6CurOXKm700vrz8f0KW0JNfpkRJY/8=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "8d87ff8e94973153bebcb61e4ae96189c5ce44037c0172394ca56ffcb293629a",
+        "retained_notice": "notices/8d87ff8e94973153bebcb61e4ae96189c5ce44037c0172394ca56ffcb293629a.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/beeper/argo-go",
+    "version": "v1.1.2",
+    "sum": "h1:UQI2G8F+NLfGTOmTUI0254pGKx/HUU/etbUGTJv91Fs=",
+    "go_mod_sum": "h1:M+LJAnyowKVQ6Rdj6XYGEn+qcVFkb3R/MUpqkGR0hM4=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "e478e56635d93255534aaee3ebc3a72495dc8ccdf745f425ea157b4424b2fb4a",
+        "retained_notice": "notices/e478e56635d93255534aaee3ebc3a72495dc8ccdf745f425ea157b4424b2fb4a.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/coder/websocket",
+    "version": "v1.8.15",
+    "sum": "h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=",
+    "go_mod_sum": "h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "ISC-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE.txt",
+        "sha256": "cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e",
+        "retained_notice": "notices/cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/coreos/go-systemd/v22",
+    "version": "v22.7.0",
+    "sum": "h1:LAEzFkke61DFROc7zNLX/WA2i5J8gYqe0rSj9KI28KA=",
+    "go_mod_sum": "h1:xNUYtjHu2EDXbsxz1i41wouACIwT7Ybq9o0BQhMwD0w=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "Apache-2.0",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+        "retained_notice": "notices/73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68.txt"
+      },
+      {
+        "path": "NOTICE",
+        "sha256": "572b159624f1898b40e9f09c9e4cfb65a595044960982aa95126bc28f7d1e6c0",
+        "retained_notice": "notices/572b159624f1898b40e9f09c9e4cfb65a595044960982aa95126bc28f7d1e6c0.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/davecgh/go-spew",
+    "version": "v1.1.1",
+    "sum": "h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=",
+    "go_mod_sum": "h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "ISC-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251",
+        "retained_notice": "notices/1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/dustin/go-humanize",
+    "version": "v1.0.1",
+    "sum": "h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=",
+    "go_mod_sum": "h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "a973b4498c13eb74baa2a8e5c351426a6826f2fcdd909916dbe53ee2e755fd71",
+        "retained_notice": "notices/a973b4498c13eb74baa2a8e5c351426a6826f2fcdd909916dbe53ee2e755fd71.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/elliotchance/orderedmap/v3",
+    "version": "v3.1.0",
+    "sum": "h1:j4DJ5ObEmMBt/lcwIecKcoRxIQUEnw0L804lXYDt/pg=",
+    "go_mod_sum": "h1:G+Hc2RwaZvJMcS4JpGCOyViCnGeKf0bTYCGTO4uhjSo=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "45245e9969777b5d9e6e09588087e985b8209117ecbf0e4d04080cfc36762e99",
+        "retained_notice": "notices/45245e9969777b5d9e6e09588087e985b8209117ecbf0e4d04080cfc36762e99.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/golang/protobuf",
+    "version": "v1.5.0",
+    "sum": "h1:LUVKkCeviFUMKqHa4tXIIij/lbhnMbP7Fn5wKdKkRh4=",
+    "go_mod_sum": "h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "8778a9fc1eaffb03ab873caae251df2d224f6b5502be8777d3cd573a4dd43903",
+        "retained_notice": "notices/8778a9fc1eaffb03ab873caae251df2d224f6b5502be8777d3cd573a4dd43903.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/google/go-cmp",
+    "version": "v0.7.0",
+    "sum": "h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=",
+    "go_mod_sum": "h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "17b5d209ba8f9684257ecfcff87df6ceda6194143a8fbd074f29727cff6f0c40",
+        "retained_notice": "notices/17b5d209ba8f9684257ecfcff87df6ceda6194143a8fbd074f29727cff6f0c40.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/google/pprof",
+    "version": "v0.0.0-20250317173921-a4b03ec1a45e",
+    "sum": "h1:ijClszYn+mADRFY17kjQEVQ1XRhq2/JR1M3sGqeJoxs=",
+    "go_mod_sum": "h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "Apache-2.0",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "retained_notice": "notices/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt"
+      },
+      {
+        "path": "third_party/svgpan/LICENSE",
+        "sha256": "154c946c17de61ca71d28e13673d76a5798e6e25995a7397fbae157afc8f62b4",
+        "retained_notice": "notices/154c946c17de61ca71d28e13673d76a5798e6e25995a7397fbae157afc8f62b4.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/google/uuid",
+    "version": "v1.6.0",
+    "sum": "h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=",
+    "go_mod_sum": "h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "0a8d61ed3cbfd5312326e8126c31ce9c627a283adc99131b56896d29ada04b2d",
+        "retained_notice": "notices/0a8d61ed3cbfd5312326e8126c31ce9c627a283adc99131b56896d29ada04b2d.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/hashicorp/golang-lru/v2",
+    "version": "v2.0.7",
+    "sum": "h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=",
+    "go_mod_sum": "h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MPL-2.0; GPL-3.0 (see exact terms)",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6c7088eb877b5d7e6e0e9d27e822ea25fcda2e83f9eba59bb5f1418a656796e0",
+        "retained_notice": "notices/6c7088eb877b5d7e6e0e9d27e822ea25fcda2e83f9eba59bb5f1418a656796e0.txt"
+      },
+      {
+        "path": "simplelru/LICENSE_list",
+        "sha256": "6d462371baa8649492b06f51f154dba9b25d2ac9548369b8b4fdbbbb85f2f75d",
+        "retained_notice": "notices/6d462371baa8649492b06f51f154dba9b25d2ac9548369b8b4fdbbbb85f2f75d.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/kr/pretty",
+    "version": "v0.1.0",
+    "sum": "h1:L/CwN0zerZDmRFUapSPitk6f+Q3+0za1rQkzVuMiMFI=",
+    "go_mod_sum": "h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "License",
+        "sha256": "4e26b8fcc034e2221b016f5a33e6eb741912577c5d0d406e924df1f27d05de79",
+        "retained_notice": "notices/4e26b8fcc034e2221b016f5a33e6eb741912577c5d0d406e924df1f27d05de79.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/kr/text",
+    "version": "v0.2.0",
+    "sum": "h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=",
+    "go_mod_sum": "h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "License",
+        "sha256": "283c28b781bc7487bd7bcaf453cbd811f5ee8d7ce625cfcf8dcacae6ba1f4bb5",
+        "retained_notice": "notices/283c28b781bc7487bd7bcaf453cbd811f5ee8d7ce625cfcf8dcacae6ba1f4bb5.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/mattn/go-colorable",
+    "version": "v0.1.14",
+    "sum": "h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=",
+    "go_mod_sum": "h1:6LmQG8QLFO4G5z1gPvYEzlUgJ2wF+stgPZH1UqBm1s8=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9",
+        "retained_notice": "notices/88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/mattn/go-isatty",
+    "version": "v0.0.20",
+    "sum": "h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=",
+    "go_mod_sum": "h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1",
+        "retained_notice": "notices/08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/mattn/go-sqlite3",
+    "version": "v1.14.45",
+    "sum": "h1:6KA/spDguL3KV8rnybG7ezSaE4SeMR3KC9VbUoAQaIk=",
+    "go_mod_sum": "h1:pjEuOr8IwzLJP2MfGeTb0A35jauH+C2kbHKBr7yXKVQ=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "afa48e5e64dc610298d80b010ae7a3450f61a79500a9f1d1697ff6dcbbfa1f72",
+        "retained_notice": "notices/afa48e5e64dc610298d80b010ae7a3450f61a79500a9f1d1697ff6dcbbfa1f72.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/mdp/qrterminal/v3",
+    "version": "v3.2.1",
+    "sum": "h1:6+yQjiiOsSuXT5n9/m60E54vdgFsw0zhADHhHLrFet4=",
+    "go_mod_sum": "h1:jOTmXvnBsMy5xqLniO0R++Jmjs2sTm9dFSuQ5kpz/SU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "17117a0201bf610e146fdab52b82e4fca8d35032e1facc7a13226c8e1f69878a",
+        "retained_notice": "notices/17117a0201bf610e146fdab52b82e4fca8d35032e1facc7a13226c8e1f69878a.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/ncruces/go-strftime",
+    "version": "v1.0.0",
+    "sum": "h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=",
+    "go_mod_sum": "h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "38ae43959daf953a393a585b2988672cb65a5a541aca0d0be5e72595a0a16883",
+        "retained_notice": "notices/38ae43959daf953a393a585b2988672cb65a5a541aca0d0be5e72595a0a16883.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/onsi/ginkgo",
+    "version": "v1.16.5",
+    "sum": "h1:8xi0RTUf59SOSfEtZMvwTvXYMzG4gV23XVHOZiXNtnE=",
+    "go_mod_sum": "h1:+E8gABHa3K6zRBolWtd+ROzc/U5bkGt0FwiG042wbpU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "3da40f6328f42cbc970672f8129e0ecb6e2cc4f5117a072593ba247276354454",
+        "retained_notice": "notices/3da40f6328f42cbc970672f8129e0ecb6e2cc4f5117a072593ba247276354454.txt"
+      },
+      {
+        "path": "reporters/stenographer/support/go-colorable/LICENSE",
+        "sha256": "88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9",
+        "retained_notice": "notices/88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9.txt"
+      },
+      {
+        "path": "reporters/stenographer/support/go-isatty/LICENSE",
+        "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1",
+        "retained_notice": "notices/08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/onsi/gomega",
+    "version": "v1.17.0",
+    "sum": "h1:9Luw4uT5HTjHTN8+aNcSThgH1vdXnmdJ8xIfZ4wyTRE=",
+    "go_mod_sum": "h1:HnhC7FXeEQY45zxNK3PPoIUhzk/80Xly9PcubAlGdZY=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "3da40f6328f42cbc970672f8129e0ecb6e2cc4f5117a072593ba247276354454",
+        "retained_notice": "notices/3da40f6328f42cbc970672f8129e0ecb6e2cc4f5117a072593ba247276354454.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/petermattis/goid",
+    "version": "v0.0.0-20260330135022-df67b199bc81",
+    "sum": "h1:WDsQxOJDy0N1VRAjXLpi8sCEZRSGarLWQevDxpTBRrM=",
+    "go_mod_sum": "h1:pxMtw7cyUw6B2bRH0ZBANSPg+AoSud1I1iyJHI69jH4=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "Apache-2.0",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+        "retained_notice": "notices/cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/datachannel",
+    "version": "v1.6.0",
+    "sum": "h1:XecBlj+cvsxhAMZWFfFcPyUaDZtd7IJvrXqlXD/53i0=",
+    "go_mod_sum": "h1:ur+wzYF8mWdC+Mkis5Thosk+u/VOL287apDNEbFpsIk=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691",
+        "retained_notice": "notices/87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/dtls/v3",
+    "version": "v3.1.4",
+    "sum": "h1:QhvtMflMfu9Kf0RcDC5BJBle4caPskByrKQR6uuYqpY=",
+    "go_mod_sum": "h1:cr/qotLISUw/9C1m83ZPNZtj9WnXkYLpfCptPqbkInc=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/ice/v4",
+    "version": "v4.2.7",
+    "sum": "h1:zDEbC6MiEdhQpF8TxBOTws+NU6ZgGpveHrQq4Lc1kao=",
+    "go_mod_sum": "h1:9SNPaq0c7El/ki8leJzyCkK10zsskprR3zTNbO3monY=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/interceptor",
+    "version": "v0.1.45",
+    "sum": "h1:6PUo/5829bIfRFIPPJQzuDn8EjxRTSB/CSD7QVCOaqo=",
+    "go_mod_sum": "h1:gNDYM/uFKcLe/B3gS2/7+aw6z+RDiMy2qKTnF1LO31w=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/logging",
+    "version": "v0.2.4",
+    "sum": "h1:tTew+7cmQ+Mc1pTBLKH2puKsOvhm32dROumOZ655zB8=",
+    "go_mod_sum": "h1:DffhXTKYdNZU+KtJ5pyQDjvOAh/GsNSyv1lbkFbe3so=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691",
+        "retained_notice": "notices/87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/mdns/v2",
+    "version": "v2.1.0",
+    "sum": "h1:3IJ9+Xio6tWYjhN6WwuY142P/1jA0D5ERaIqawg/fOY=",
+    "go_mod_sum": "h1:pcez23GdynwcfRU1977qKU0mDxSeucttSHbCSfFOd9A=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "83e4dd21429a91fb7cea67a476032a9641425e5355df2e0f589a738b6ec9fd2c",
+        "retained_notice": "notices/83e4dd21429a91fb7cea67a476032a9641425e5355df2e0f589a738b6ec9fd2c.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/randutil",
+    "version": "v0.1.0",
+    "sum": "h1:CFG1UdESneORglEsnimhUjf33Rwjubwj6xfiOXBa3mA=",
+    "go_mod_sum": "h1:XcJrSMMbbMRhASFVOlj/5hQial/Y8oH/HVo7TBZq+j8=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "badaf9bc72e71d5a70e7604c636b5b7adf79b9cafc188688438105d2b1e54722",
+        "retained_notice": "notices/badaf9bc72e71d5a70e7604c636b5b7adf79b9cafc188688438105d2b1e54722.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/rtcp",
+    "version": "v1.2.16",
+    "sum": "h1:fk1B1dNW4hsI78XUCljZJlC4kZOPk67mNRuQ0fcEkSo=",
+    "go_mod_sum": "h1:/as7VKfYbs5NIb4h6muQ35kQF/J0ZVNz2Z3xKoCBYOo=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691",
+        "retained_notice": "notices/87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/rtp",
+    "version": "v1.10.2",
+    "sum": "h1:l+f6tTDcAH6xwepaAoW791ddhuYsJlqRATOzirO04Mo=",
+    "go_mod_sum": "h1:Au8fc6cEByy8RLTwKTQTEeQqDB/SJDxwL4mZuxYA5Pk=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+        "retained_notice": "notices/b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/sctp",
+    "version": "v1.10.0",
+    "sum": "h1:qeoD6swF/2M5bYRcAGayqSbTKX3m4AW29CiQxG1+Pfg=",
+    "go_mod_sum": "h1:N20Dq6LY+JvJDAh9VVh1JELngb2rQ8dPgds5yBWiPgw=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/sdp/v3",
+    "version": "v3.0.18",
+    "sum": "h1:l0bAXazKHpepazVdp+tPYnrsy9dfh7ZbT8DxesH5ZnI=",
+    "go_mod_sum": "h1:ZREGo6A9ZygQ9XkqAj5xYCQtQpif0i6Pa81HOiAdqQ8=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/srtp/v3",
+    "version": "v3.0.11",
+    "sum": "h1:GiESUr54/K4UuPigfq/CvWUed80JenQAHXn0C2MQQIQ=",
+    "go_mod_sum": "h1:EeZOi/sd6glM1EXapg051gdNWO9yWT1YSsgQ4SlJkns=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/stun/v3",
+    "version": "v3.1.5",
+    "sum": "h1:Y1FHlhaI6+4UoC5i/zQf4F7JvdZtB24/05oyy/GF1x8=",
+    "go_mod_sum": "h1:zRUghXSQU32Lx5orJsz3uYMkIihweXb3mu5gIns02fs=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/transport/v3",
+    "version": "v3.1.1",
+    "sum": "h1:Tr684+fnnKlhPceU+ICdrw6KKkTms+5qHMgw6bIkYOM=",
+    "go_mod_sum": "h1:+c2eewC5WJQHiAA46fkMMzoYZSuGzA/7E2FPrOYHctQ=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691",
+        "retained_notice": "notices/87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/transport/v4",
+    "version": "v4.0.2",
+    "sum": "h1:ifYlPqNwsy6aKQ9y8yzxXlHae5431ZrH2avkD/Rn6Tk=",
+    "go_mod_sum": "h1:06hFI+jCFcok2X2MekVufNZ/uzNZXivGBPfviSVcjgM=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/turn/v5",
+    "version": "v5.0.9",
+    "sum": "h1:zNeBfRyzGn7MPyUTvmvxeltLEjlFdSLPT1tlakoaOXM=",
+    "go_mod_sum": "h1:u3XjBqy2Z4+NhCUpDoOSsNuQDrPLvKStlCGWk6sTQ1E=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pion/webrtc/v4",
+    "version": "v4.2.15",
+    "sum": "h1:Ir/MauNFCfg+kgyBYPQLiGdVWFlzEcLxqtuzAkYkky0=",
+    "go_mod_sum": "h1:CPTcyLfIzC4scOkQ4UY4pj6WvbUGhcNLIpK28cP5h6M=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+        "retained_notice": "notices/6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f.txt"
+      },
+      {
+        "path": "test-wasm/LICENSE",
+        "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+        "retained_notice": "notices/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pkg/errors",
+    "version": "v0.9.1",
+    "sum": "h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=",
+    "go_mod_sum": "h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86",
+        "retained_notice": "notices/8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/pmezard/go-difflib",
+    "version": "v1.0.0",
+    "sum": "h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=",
+    "go_mod_sum": "h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "2eb550be6801c1ea434feba53bf6d12e7c71c90253e0a9de4a4f46cf88b56477",
+        "retained_notice": "notices/2eb550be6801c1ea434feba53bf6d12e7c71c90253e0a9de4a4f46cf88b56477.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/remyoudompheng/bigfft",
+    "version": "v0.0.0-20230129092748-24d4a6f8daec",
+    "sum": "h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=",
+    "go_mod_sum": "h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d",
+        "retained_notice": "notices/dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/rs/xid",
+    "version": "v1.6.0",
+    "sum": "h1:fV591PaemRlL6JfRxGDEPl69wICngIQ3shQtzfy2gxU=",
+    "go_mod_sum": "h1:7XoLgs4eV+QndskICGsho+ADou8ySMSjJKDIan90Nz0=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "c480873f0ff2b7e2c539bdd84fb4da4178d8d02479c94924f7bffeafb7add358",
+        "retained_notice": "notices/c480873f0ff2b7e2c539bdd84fb4da4178d8d02479c94924f7bffeafb7add358.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/rs/zerolog",
+    "version": "v1.35.1",
+    "sum": "h1:m7xQeoiLIiV0BCEY4Hs+j2NG4Gp2o2KPKmhnnLiazKI=",
+    "go_mod_sum": "h1:EjML9kdfa/RMA7h/6z6pYmq1ykOuA8/mjWaEvGI+jcw=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "hlog/internal/mutil/LICENSE",
+        "sha256": "8f1b316d0edb822e6231eb77eda9d4135bd78105b13f834952164a0cfc8393d2",
+        "retained_notice": "notices/8f1b316d0edb822e6231eb77eda9d4135bd78105b13f834952164a0cfc8393d2.txt"
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "1b8f6b05dd66f6eec835515706886cb01bf00358cb9312301ed6ad23d6b2d008",
+        "retained_notice": "notices/1b8f6b05dd66f6eec835515706886cb01bf00358cb9312301ed6ad23d6b2d008.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/sclevine/agouti",
+    "version": "v3.0.0+incompatible",
+    "sum": "h1:8IBJS6PWz3uTlMP3YBIR5f+KAldcGuOeFkFbUWfBgK4=",
+    "go_mod_sum": "h1:b4WX9W9L1sfQKXeJf1mUTLZKJ48R1S7H23Ji7oFO5Bw=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "8ac8dffc32b8f0ccbd17f3596a7b3828f6b5a5ae8c8f2f97130e113df987e544",
+        "retained_notice": "notices/8ac8dffc32b8f0ccbd17f3596a7b3828f6b5a5ae8c8f2f97130e113df987e544.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/sergi/go-diff",
+    "version": "v1.3.1",
+    "sum": "h1:xkr+Oxo4BOQKmkn/B9eMK0g5Kg/983T9DqqPHwYqD+8=",
+    "go_mod_sum": "h1:aMJSSKb2lpPvRNec0+w3fl7LP9IOFzdc9Pa4NFbPK1I=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "27d7f7a027a2ba48083cc7912e5146629de65718ddac8ce006c08eb411508b52",
+        "retained_notice": "notices/27d7f7a027a2ba48083cc7912e5146629de65718ddac8ce006c08eb411508b52.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/stretchr/testify",
+    "version": "v1.11.1",
+    "sum": "h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=",
+    "go_mod_sum": "h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "f8e536c1c7b695810427095dc85f5f80d44ff7c10535e8a9486cf393e2599189",
+        "retained_notice": "notices/f8e536c1c7b695810427095dc85f5f80d44ff7c10535e8a9486cf393e2599189.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/vektah/gqlparser/v2",
+    "version": "v2.5.27",
+    "sum": "h1:RHPD3JOplpk5mP5JGX8RKZkt2/Vwj/PZv0HxTdwFp0s=",
+    "go_mod_sum": "h1:D1/VCZtV3LPnQrcPBeR/q5jkSQIPti0uYCP/RI0gIeo=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "c393f603a90a52d71fccd0df5a6b82049b7b8fdf9c120d8972bf41a6f5fb1213",
+        "retained_notice": "notices/c393f603a90a52d71fccd0df5a6b82049b7b8fdf9c120d8972bf41a6f5fb1213.txt"
+      },
+      {
+        "path": "validator/imported/LICENSE",
+        "sha256": "b7433de1a47cb43a83a1f5f6eb4317a4e119300af943bf1ce28ed271feb1efe2",
+        "retained_notice": "notices/b7433de1a47cb43a83a1f5f6eb4317a4e119300af943bf1ce28ed271feb1efe2.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "github.com/wlynxg/anet",
+    "version": "v0.0.5",
+    "sum": "h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=",
+    "go_mod_sum": "h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6b8970dbe36fe214fd02b438c06daee19897708e435d761ecd18adc9ef7e7a05",
+        "retained_notice": "notices/6b8970dbe36fe214fd02b438c06daee19897708e435d761ecd18adc9ef7e7a05.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "go.mau.fi/libsignal",
+    "version": "v0.2.2",
+    "sum": "h1:QV+XdzQkm3x3aSG7FcqfGSZuFXz83pRZPBFaPygHbOU=",
+    "go_mod_sum": "h1:CRlIQg2J8uYTfDFvNoO8/KcZjs5cey0vbc6oj/bssY0=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "GPL-3.0 (see exact terms)",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "09f9333d941468c9d82ac9e2bf6b0b9085c52b50382b9fbb3806f586d502b719",
+        "retained_notice": "notices/09f9333d941468c9d82ac9e2bf6b0b9085c52b50382b9fbb3806f586d502b719.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "go.mau.fi/util",
+    "version": "v0.9.10",
+    "sum": "h1:wzvz5iDHyqDXB8vgisD4d3SzucLXNM3iNY+1O1RoHtg=",
+    "go_mod_sum": "h1:YQOxySn+ZE3qSYqNxvyX7Yi3suA8YK17PS6QqBREW7A=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MPL-2.0; GPL-3.0 (see exact terms)",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+        "retained_notice": "notices/1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "go.mau.fi/whatsmeow",
+    "version": "v0.0.0-20260622185415-5f04eac6dbbb",
+    "sum": "h1:N2LheAJIBgdohEcpfSK0xAgf9PMzZOmWn0oVWY20zNM=",
+    "go_mod_sum": "h1:9dmNTYZ/1pHjPw/bz+azBsGjAkcrZbqzMrKcvG5bJ8U=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "MPL-2.0; GPL-3.0 (see exact terms)",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "32ee9dbf6196874fc9d406c54a888a6c4cbb9aa4a7f35b46befeaff43a78fe85",
+        "retained_notice": "notices/32ee9dbf6196874fc9d406c54a888a6c4cbb9aa4a7f35b46befeaff43a78fe85.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/crypto",
+    "version": "v0.59.0",
+    "sum": "h1:xS2jhqYbzNrpvkWP2YTDf4TJwBy3ykR03i8vFDxEc7c=",
+    "go_mod_sum": "h1:veDyUwATGs3c+vN3VfTbzViMGXeTBk3WyhBOkn+F/4U=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/exp",
+    "version": "v0.0.0-20260611194520-c48552f49976",
+    "sum": "h1:X8Hz2ImujgbmetVuW+w2YkyZChE3cBpZi2P158rTG9M=",
+    "go_mod_sum": "h1:vnf4pv9iKZXY58sQE1L86zmNWJ4159e1RkcWiLCkeEY=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/mod",
+    "version": "v0.42.0",
+    "sum": "h1:ICeL3t2L30ljSPHHxDnR4fqVcBt/zR2zJAb9juavmQg=",
+    "go_mod_sum": "h1:u5fzIrRInkL8MaO1cbRkUHT64v303YIT5KEqpNr7jRs=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/net",
+    "version": "v0.62.0",
+    "sum": "h1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=",
+    "go_mod_sum": "h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/sync",
+    "version": "v0.25.0",
+    "sum": "h1:dJnifr0nMV8/SBnBvdo4eSGGnrc3O4FFx6IqvtLcmRs=",
+    "go_mod_sum": "h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/sys",
+    "version": "v0.50.0",
+    "sum": "h1:dkKZEFTEKaLr1sjhs0WiKqoi8Jj5nHbS3Njmx1UoMJs=",
+    "go_mod_sum": "h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/term",
+    "version": "v0.48.0",
+    "sum": "h1:G6UU1eiSB8nl3DzeUGt7Mg+2SctI8tPS6Z5/mBt6cOk=",
+    "go_mod_sum": "h1:BRDLHCZr2SUjIeBHHpRyQeC9xzSAVbzY2rvKgafnHf4=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/text",
+    "version": "v0.44.0",
+    "sum": "h1:YItdp/mQNGnsmrgpcdA5yQ3bnRxCfo/Tj/iByGW9GGo=",
+    "go_mod_sum": "h1:S4FR1waQ9LbjQTls97SyRjDaUUVkaM+cXwwuG/G+MwY=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/time",
+    "version": "v0.14.0",
+    "sum": "h1:MRx4UaLrDotUKUdCIqzPC48t1Y9hANFKIRpNx+Te8PI=",
+    "go_mod_sum": "h1:eL/Oa2bBBK0TkX57Fyni+NgnyQQN4LitPmob2Hjnqw4=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/tools",
+    "version": "v0.52.0",
+    "sum": "h1:ryxg4U63oaUYk7uOLTF37n43f4qgtGvqV4Ioit1BaEs=",
+    "go_mod_sum": "h1:ItcP5UNaVGG+Yc4eIYmaFLNJ4soEopkx5Y2d4lcEurs=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/tools/go/expect",
+    "version": "v0.1.1-deprecated",
+    "sum": "h1:jpBZDwmgPhXsKZC6WhL20P4b/wmnpsEAGHaNy0n/rJM=",
+    "go_mod_sum": "h1:eihoPOH+FgIqa3FpoTwguz/bVUSGBlGQU67vpBeOrBY=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "golang.org/x/tools/go/packages/packagestest",
+    "version": "v0.1.1-deprecated",
+    "sum": "h1:1h2MnaIAIXISqTFKdENegdpAgUXz6NrPEsbIeWaBRvM=",
+    "go_mod_sum": "h1:RVAQXBGNv1ib0J382/DPCRS/BPnsGebyM1Gj5VSDpG8=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+        "retained_notice": "notices/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "google.golang.org/protobuf",
+    "version": "v1.36.11",
+    "sum": "h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=",
+    "go_mod_sum": "h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "4835612df0098ca95f8e7d9e3bffcb02358d435dbb38057c844c99d7f725eb20",
+        "retained_notice": "notices/4835612df0098ca95f8e7d9e3bffcb02358d435dbb38057c844c99d7f725eb20.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "gopkg.in/check.v1",
+    "version": "v1.0.0-20190902080502-41f04d3bba15",
+    "sum": "h1:YR8cESwS4TdDjEe65xsg0ogRM/Nc3DYOhEAlW+xobZo=",
+    "go_mod_sum": "h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "69ce77f2b1c9c608d27f2d749b0e7d0c13960ed3b0dc07b973ac940e362e5d9c",
+        "retained_notice": "notices/69ce77f2b1c9c608d27f2d749b0e7d0c13960ed3b0dc07b973ac940e362e5d9c.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "gopkg.in/yaml.v3",
+    "version": "v3.0.1",
+    "sum": "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=",
+    "go_mod_sum": "h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "Apache-2.0; MIT-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b",
+        "retained_notice": "notices/d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b.txt"
+      },
+      {
+        "path": "NOTICE",
+        "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00",
+        "retained_notice": "notices/f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/cc/v4",
+    "version": "v4.28.4",
+    "sum": "h1:Hd/4Es+MBj+/7hSdZaisNyu6bv3V0Dp2MdllyfqaH+c=",
+    "go_mod_sum": "h1:OnovgIhbbMXMu1aISnJ0wvVD1KnW+cAUJkIrAWh+kVI=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "1c77905db36f407e0fdb513f97f1f2a3f2282049ca273637841face982d5d003",
+        "retained_notice": "notices/1c77905db36f407e0fdb513f97f1f2a3f2282049ca273637841face982d5d003.txt"
+      },
+      {
+        "path": "testdata/jhjourdan/LICENSE",
+        "sha256": "f4e673d9ef995ee5da2c7a08e5ad9aea5d899be917618b7367c3a748c53b6c63",
+        "retained_notice": "notices/f4e673d9ef995ee5da2c7a08e5ad9aea5d899be917618b7367c3a748c53b6c63.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/ccgo/v4",
+    "version": "v4.34.4",
+    "sum": "h1:OVnSOWQjVKOYkFxoHYB+qQmSHK5gqMqARM+K9DpR/Ws=",
+    "go_mod_sum": "h1:qdKqE8FNIYyysougB1RX9MxCzp5oJOcQXSobANJ4TuE=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "343748b20da2ceb739c1ab7b85fe16f6fe4b67fad88fea40c5835a08383d8ffe",
+        "retained_notice": "notices/343748b20da2ceb739c1ab7b85fe16f6fe4b67fad88fea40c5835a08383d8ffe.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/fileutil",
+    "version": "v1.4.0",
+    "sum": "h1:j6ZzNTftVS054gi281TyLjHPp6CPHr2KCxEXjEbD6SM=",
+    "go_mod_sum": "h1:EqdKFDxiByqxLk8ozOxObDSfcVOv/54xDs/DUHdvCUU=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "falloc/LICENSE",
+        "sha256": "078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86",
+        "retained_notice": "notices/078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86.txt"
+      },
+      {
+        "path": "hdb/LICENSE",
+        "sha256": "078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86",
+        "retained_notice": "notices/078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86.txt"
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "7dc07397727fc500d5ce768d724e4d555eee8fb7687f421fd40d72249868b0ca",
+        "retained_notice": "notices/7dc07397727fc500d5ce768d724e4d555eee8fb7687f421fd40d72249868b0ca.txt"
+      },
+      {
+        "path": "storage/LICENSE",
+        "sha256": "078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86",
+        "retained_notice": "notices/078134734db24112b59bcfd4ce3462e2d167471e5a11a69911785e881fc92c86.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/gc/v2",
+    "version": "v2.6.5",
+    "sum": "h1:nyqdV8q46KvTpZlsw66kWqwXRHdjIlJOhG6kxiV/9xI=",
+    "go_mod_sum": "h1:YgIahr1ypgfe7chRuJi2gD7DBQiKSLMPgBQe9oIiito=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "4719790df5e9d33b1cef3a67df8264fb1e3e7f54f3ca900c562e84a951de62d9",
+        "retained_notice": "notices/4719790df5e9d33b1cef3a67df8264fb1e3e7f54f3ca900c562e84a951de62d9.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/gc/v3",
+    "version": "v3.1.3",
+    "sum": "h1:6QAplYyVO+KdPW3pGnqmJDUxtkec8ooEWvks/hhU3lc=",
+    "go_mod_sum": "h1:HFK/6AGESC7Ex+EZJhJ2Gni6cTaYpSMmU/cT9RmlfYY=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "4719790df5e9d33b1cef3a67df8264fb1e3e7f54f3ca900c562e84a951de62d9",
+        "retained_notice": "notices/4719790df5e9d33b1cef3a67df8264fb1e3e7f54f3ca900c562e84a951de62d9.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/goabi0",
+    "version": "v0.2.0",
+    "sum": "h1:HvEowk7LxcPd0eq6mVOAEMai46V+i7Jrj13t4AzuNks=",
+    "go_mod_sum": "h1:CEFRnnJhKvWT1c1JTI3Avm+tgOWbkOu5oPA8eH8LnMI=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "6d33428c98f9d7113dfc86e17fca00f81aeaac33e02f79c8a5afafb0a5fd33c6",
+        "retained_notice": "notices/6d33428c98f9d7113dfc86e17fca00f81aeaac33e02f79c8a5afafb0a5fd33c6.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/libc",
+    "version": "v1.73.4",
+    "sum": "h1:+ra4Ui8ngyt8HDcO1FTDPWlkAh6yOdaO2yAoh8MddQA=",
+    "go_mod_sum": "h1:DXZ3eO8qMCNn2SnmTNCiC71nJ9Rcq3PsnpU6Vc4rWK8=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "95ff867eb55a56935fa7492406cfa953fb7c13ca73f4c0a86ae05756b4605600",
+        "retained_notice": "notices/95ff867eb55a56935fa7492406cfa953fb7c13ca73f4c0a86ae05756b4605600.txt"
+      },
+      {
+        "path": "LICENSE-3RD-PARTY.md",
+        "sha256": "f597097efe3d97021f89170746bd3a0fb9a8b6fb26b82043ed68a4e0283bee6c",
+        "retained_notice": "notices/f597097efe3d97021f89170746bd3a0fb9a8b6fb26b82043ed68a4e0283bee6c.txt"
+      },
+      {
+        "path": "testdata/nsz.repo.hu/libc-test/src/math/crlibm/COPYING",
+        "sha256": "dcc100d4161cc0b7177545ab6e47216f84857cda3843847c792a25289852dcaa",
+        "retained_notice": "notices/dcc100d4161cc0b7177545ab6e47216f84857cda3843847c792a25289852dcaa.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/mathutil",
+    "version": "v1.7.1",
+    "sum": "h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=",
+    "go_mod_sum": "h1:4p5IwJITfppl0G4sUEDtCr4DthTaT47/N3aT6MhfgJg=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "bfa9bf72a72ca009fd62a8f84fca3dca67e51d93af96352723646599898b6cf5",
+        "retained_notice": "notices/bfa9bf72a72ca009fd62a8f84fca3dca67e51d93af96352723646599898b6cf5.txt"
+      },
+      {
+        "path": "mersenne/LICENSE",
+        "sha256": "c05630f9ca899ea094620d37daea6ba66f99adbf9268ea5fea9db607e1102bd9",
+        "retained_notice": "notices/c05630f9ca899ea094620d37daea6ba66f99adbf9268ea5fea9db607e1102bd9.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/memory",
+    "version": "v1.11.0",
+    "sum": "h1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=",
+    "go_mod_sum": "h1:/JP4VbVC+K5sU2wZi9bHoq2MAkCnrt2r98UGeSK7Mjw=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "59895e669f48f168b6b858358f6005779cdf40a265f7828813061b56af67b496",
+        "retained_notice": "notices/59895e669f48f168b6b858358f6005779cdf40a265f7828813061b56af67b496.txt"
+      },
+      {
+        "path": "LICENSE-GO",
+        "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+        "retained_notice": "notices/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt"
+      },
+      {
+        "path": "LICENSE-LOGO",
+        "sha256": "5ae5bee3072a841376451b48d8cfcec7188e10543926d5870828d36c8a750dc5",
+        "retained_notice": "notices/5ae5bee3072a841376451b48d8cfcec7188e10543926d5870828d36c8a750dc5.txt"
+      },
+      {
+        "path": "LICENSE-MMAP-GO",
+        "sha256": "c2eba69f20d05414538c3a5df7694dde392e065ff70882e1625e90f5d6659fff",
+        "retained_notice": "notices/c2eba69f20d05414538c3a5df7694dde392e065ff70882e1625e90f5d6659fff.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/opt",
+    "version": "v0.2.0",
+    "sum": "h1:tGyef5ApycA7FSEOMraay9SaTk5zmbx7Tu+cJs4QKZg=",
+    "go_mod_sum": "h1:03fq9lsNfvkYSfxrfUhZCWPk1lm4cq4N+Bh//bEtgns=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "7a0dd90f1d1c8fa80d03c1806bdd8e4dca7285fae9b4a34f2c4a8a2552fdd77c",
+        "retained_notice": "notices/7a0dd90f1d1c8fa80d03c1806bdd8e4dca7285fae9b4a34f2c4a8a2552fdd77c.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/sortutil",
+    "version": "v1.2.1",
+    "sum": "h1:+xyoGf15mM3NMlPDnFqrteY07klSFxLElE2PVuWIJ7w=",
+    "go_mod_sum": "h1:7ZI3a3REbai7gzCLcotuw9AC4VZVpYMjDzETGsSMqJE=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "7bc9df688c16dd8e64463ec0ad66728730a0e1a70a1dbda3dcbcd8a9b45bfaab",
+        "retained_notice": "notices/7bc9df688c16dd8e64463ec0ad66728730a0e1a70a1dbda3dcbcd8a9b45bfaab.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/sqlite",
+    "version": "v1.53.0",
+    "sum": "h1:20WG8N9q4ji/dEqGk4uiI0c6OPjSeLTNYGFCc3+7c1M=",
+    "go_mod_sum": "h1:xoEpOIpGrgT48H5iiyt/YXPCZPEzlfmfFwtk8Lklw8s=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "c6fe05491a60ae13bcd223088d2705e36dede24e5587226231d2459ada5c4822",
+        "retained_notice": "notices/c6fe05491a60ae13bcd223088d2705e36dede24e5587226231d2459ada5c4822.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/strutil",
+    "version": "v1.2.1",
+    "sum": "h1:UneZBkQA+DX2Rp35KcM69cSsNES9ly8mQWD71HKlOA0=",
+    "go_mod_sum": "h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "0f594b710bedb0335b15155204150cb1aac98e76144b52b852b43ce6a65eaaad",
+        "retained_notice": "notices/0f594b710bedb0335b15155204150cb1aac98e76144b52b852b43ce6a65eaaad.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "modernc.org/token",
+    "version": "v1.1.0",
+    "sum": "h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=",
+    "go_mod_sum": "h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=",
+    "used_by_server_build": false,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+        "retained_notice": "notices/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  },
+  {
+    "module": "rsc.io/qr",
+    "version": "v0.2.0",
+    "sum": "h1:6vBLea5/NRMVTz8V66gipeLycZMl/+UlFmk8DvqQ6WY=",
+    "go_mod_sum": "h1:IF+uZjkb9fqyeF/4tlBoynqmQxUoPfWEKh921coOuXs=",
+    "used_by_server_build": true,
+    "primary_notice_family_hint": "BSD-family",
+    "license_evidence": [
+      {
+        "path": "LICENSE",
+        "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+        "retained_notice": "notices/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt"
+      }
+    ],
+    "compatibility_review": "not_determined_by_inventory"
+  }
+]

@@ -44,7 +44,9 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 		auth:   AuthSnapshot{State: "connecting"},
 		reg:    newCallRegistry(),
 	}
-	client.AddEventHandler(s.handleEvent)
+	if mgr.messageLab == nil || !mgr.messageLab.attach(s) {
+		client.AddEventHandler(s.handleEvent)
+	}
 	return s
 }
 
@@ -367,7 +369,9 @@ func (s *Session) replaceClient(client *whatsmeow.Client) {
 	s.teardownAllCalls()
 	s.client.Disconnect()
 	s.client = client
-	client.AddEventHandler(s.handleEvent)
+	if s.mgr.messageLab == nil || !s.mgr.messageLab.attach(s) {
+		client.AddEventHandler(s.handleEvent)
+	}
 }
 
 func (s *Session) shutdown() {

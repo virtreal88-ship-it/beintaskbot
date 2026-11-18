@@ -89,6 +89,11 @@ func main() {
 		os.Exit(1)
 	}
 	srv.sessions.recordings = srv.recordings
+	srv.sessions.messageLab, err = newMessageLab(ctx, srv.sessions.store.db, *appGatewayConfigFile)
+	if err != nil {
+		log.Error("startup failed")
+		os.Exit(1)
+	}
 
 	if err := srv.sessions.Restore(ctx); err != nil {
 		log.Error("session restore failed", "err", err)

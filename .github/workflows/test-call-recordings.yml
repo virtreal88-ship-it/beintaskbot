@@ -62,3 +62,5 @@ jobs:
           cache-dependency-path: services/whatsapp-calls/engine/go.sum
       - run: go test -race ./...
         working-directory: services/whatsapp-calls/engine
+      - run: go test -race -tags unifiedlab ./cmd/server ./internal/unified
+        working-directory: services/whatsapp-calls/engine
