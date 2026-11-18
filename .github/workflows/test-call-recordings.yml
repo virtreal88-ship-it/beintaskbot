@@ -57,6 +57,7 @@ jobs:
       - run: python -m pytest -q tests/test_browser_calls_postgres.py tests/test_whatsapp_native_inbox_postgres.py tests/test_whatsapp_native_transition_postgres.py
         env:
           BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres dbname=postgres
+      - run: node tests/test_browser_calls_audio_worklet.cjs
       - run: node tests/test_browser_calls_ui.cjs
       - run: node tests/test_native_source_pairing_ui.cjs
       - run: node tests/test_browser_calls_ui.cjs

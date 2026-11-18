@@ -1,6 +1,18 @@
 /* Bounded 16 kHz PCM worklets. No audio persistence or network access. */
 class BeinCallCapture extends AudioWorkletProcessor{
-  process(inputs){const data=inputs[0]?.[0];if(data?.length)this.port.postMessage(data.slice());return true;}
+  constructor(){
+    super();this.pending=0;this.bounded=false;
+    this.port.onmessage=e=>{if(e.data==='bounded')this.bounded=true;else if(e.data==='consumed'&&this.pending>0)this.pending--;};
+  }
+  process(inputs){
+    const data=inputs[0]?.[0];
+    // The audio thread keeps running during main-thread stalls (including native
+    // dialogs). Never queue seconds of old speech and flush them as a network
+    // burst on resume. At most 32 render quanta (~256 ms) may await consumption.
+    // Explicit opt-in keeps already-open pre-rollout pages compatible.
+    if(data?.length&&(!this.bounded||this.pending<32)){if(this.bounded)this.pending++;this.port.postMessage(data.slice());}
+    return true;
+  }
 }
 class BeinCallPlayback extends AudioWorkletProcessor{
   constructor(){super();this.ring=new Float32Array(16000);this.read=0;this.write=0;this.available=0;
