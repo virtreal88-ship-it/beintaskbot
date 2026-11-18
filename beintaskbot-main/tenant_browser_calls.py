@@ -257,6 +257,20 @@ def _accept_incoming_dialog(profile,data,c,request):
 
 def action(profile,data):
     c=source_config(profile,data.get('channel_id'))
+    if c.get('managed') and data.get('op') in {'start','accept'}:
+        # Hold source mode from before dialogue acceptance through durable call
+        # command admission. Maintenance cannot claim the source in between and
+        # leave an accepted dialogue without its requested call.
+        with _connect() as conn,conn.cursor() as cur:
+            cur.execute('SELECT pg_advisory_xact_lock_shared(hashtextextended(%s,0))',
+                ('whatsapp-source-mode:'+c['tenant_id']+':'+c['channel_id'],))
+            from tenant_whatsapp_native_transition import admission
+            admission(cur,c['tenant_id'],c['channel_id'])
+            return _action(profile,data,c)
+    return _action(profile,data,c)
+
+
+def _action(profile,data,c):
     op=data.get('op')
     if op not in {'start','accept','reject','end'}:raise TenantLinearError('Действие недоступно.',400)
     try:request=str(uuid.UUID(str(data['request_id'])))
@@ -276,6 +290,9 @@ def action(profile,data):
             tenant,actor,_=access(cur,profile,'dialogs',action='update')
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('browser-call-actor:'+tenant+':'+str(actor),))
         _lock(cur,c)
+        if c.get('managed') and op in {'start','accept'}:
+            from tenant_whatsapp_native_transition import admission
+            admission(cur,c['tenant_id'],c['channel_id'])
         # Cancelling a failed/pending accept must not first require a successful
         # dialog admission. Fresh source grants and exact call ownership below
         # remain mandatory, as for rejecting an unclaimed incoming call.
