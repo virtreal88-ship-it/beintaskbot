@@ -21,6 +21,7 @@ class Query(dict):
 class Request:
     def __init__(self, query=None):
         self.rel_url = SimpleNamespace(query=Query(query or {}))
+        self.query = self.rel_url.query
 
 
 def response_body(response):
@@ -194,3 +195,58 @@ class TenantDealApiTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserIntentTests(TenantDealApiTests):
+    async def test_optional_intent_denies_malformed_or_switched_context_before_any_work(self):
+        tenant = '00000000-0000-0000-0000-000000000065'
+        self.profile['tenant_id'] = tenant
+        for route in ('deals', 'sync_status'):
+            for query, status in [
+                ({'expected_tenant_id': tenant}, 400),
+                ({'expected_user_id': '20'}, 400),
+                ({'expected_tenant_id': [tenant, tenant], 'expected_user_id': '20'}, 400),
+                ({'expected_tenant_id': tenant, 'expected_user_id': ['20', '20']}, 400),
+                ({'expected_tenant_id': tenant, 'expected_user_id': '0'}, 400),
+                ({'expected_tenant_id': tenant, 'expected_user_id': '-123'}, 400),
+                ({'expected_tenant_id': tenant, 'expected_user_id': '21'}, 409),
+                ({'expected_tenant_id': '00000000-0000-0000-0000-000000000066', 'expected_user_id': '20'}, 409),
+            ]:
+                response = await self.api[route](Request({**query, 'refresh': '1'}))
+                self.assertEqual(response.status, status)
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                self.sync.assert_not_awaited(); self.status.assert_not_called(); self.list_deals.assert_not_called()
+
+    async def test_exact_intent_preserves_current_acl_and_queue_scope(self):
+        tenant = '00000000-0000-0000-0000-000000000065'
+        self.profile['tenant_id'] = tenant
+        query = {'expected_tenant_id': tenant, 'expected_user_id': '20', 'refresh': '1'}
+        self.assertEqual((await self.api['deals'](Request(query))).status, 200)
+        self.sync.assert_awaited_once_with(self.profile, include_tasks=False, force_full=False)
+        self.assertEqual(self.list_deals.call_args.kwargs['tenant_id'], tenant)
+        self.assertEqual((await self.api['sync_status'](Request(query))).status, 200)
+        self.status.assert_called_once_with(tenant, ['leads', 'tasks'])
+        self.profile['active'] = False
+        self.sync.reset_mock(); self.status.reset_mock(); self.list_deals.reset_mock()
+        for route in ('deals', 'sync_status'):
+            self.assertEqual((await self.api[route](Request(query))).status, 403)
+        self.sync.assert_not_awaited(); self.status.assert_not_called(); self.list_deals.assert_not_called()
+
+    async def test_verified_reviewer_intent_uses_actual_config_then_rejects_revocation(self):
+        import moderation_demo as demo
+        env = {'MODERATION_DEMO_ENABLED': 'true',
+               'MODERATION_DEMO_TENANT_ID': '00000000-0000-0000-0000-000000000065',
+               'MODERATION_DEMO_USERNAME': 'synthetic', 'MODERATION_DEMO_PASSWORD_HASH': 'unused',
+               'MODERATION_DEMO_EXPIRES_AT': '2099-01-01T00:00:00Z'}
+        with patch.dict('os.environ', env):
+            cfg = demo.config()
+            self.profile.update(tenant_id=cfg.tenant_id, telegram_id=cfg.user_id, role='owner',
+                                onboarding={'moderation_demo': True}, tenant_status='active')
+            query = {'expected_tenant_id': cfg.tenant_id, 'expected_user_id': str(cfg.user_id)}
+            for route in ('deals', 'sync_status'):
+                self.assertEqual((await self.api[route](Request(query))).status, 200)
+            self.sync.reset_mock(); self.status.reset_mock(); self.list_deals.reset_mock()
+            self.profile['onboarding'] = {}
+            for route in ('deals', 'sync_status'):
+                self.assertEqual((await self.api[route](Request({**query, 'refresh': '1'}))).status, 400)
+            self.sync.assert_not_awaited(); self.status.assert_not_called(); self.list_deals.assert_not_called()
