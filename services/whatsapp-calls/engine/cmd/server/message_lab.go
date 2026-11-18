@@ -293,6 +293,7 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 	m := s.sessions.messageLab
 	s.registerLabMedia(mux, m)
 	s.registerLabCallTests(mux, m)
+	s.registerLabGroupDiscovery(mux, m)
 	s.registerLabReceiveProbe(mux, m)
 	mux.HandleFunc("POST /api/unified-lab/pair", func(w http.ResponseWriter, r *http.Request) { s.handleLabPair(w, r, m) })
 	mux.HandleFunc("GET /unified-lab", func(w http.ResponseWriter, r *http.Request) {

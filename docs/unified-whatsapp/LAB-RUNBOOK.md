@@ -214,14 +214,17 @@ The proof does not replace authenticated transport.
 rechecks the existing source/token inside the storage transaction. Only an
 explicitly registered capture generation is admitted; duplicates are compared
 against sequence and content, encrypted before storage, and acknowledged after
-commit. It has no HTTP route, startup migration, source activation, CRM mutation,
-AI dispatch or send path. Its feature flag defaults off. Capture registration is
+commit. Its private HTTP route now exists behind the default-off inbox flag,
+with two independent delivery slots, bounded authenticated JSON and safe errors.
+There is no startup migration, source activation, CRM mutation, AI dispatch or
+send path. Capture registration is
 not a protocol ownership lease and must never authorize a second WhatsApp owner.
 
 Synthetic tests cover encryption, tenant/source/generation boundaries, revoked
 credentials, replay conflicts, lost commit responses, rollback and independent
-PostgreSQL connections. The live test client continues to run `fa6d3cce`; these
-new handoff primitives have not been deployed to that client or production.
+PostgreSQL connections. The HTTP handoff has not been enabled on a live source
+or production. The Go delivery client refuses redirects and malformed receipts;
+failed HTTP responses cannot advance the durable event cursor.
 
 Do not switch working sources or remove Connect/Evolution until every gate in
 AUDIT-AND-ROLLOUT.md and LICENSES.md is closed.
@@ -248,3 +251,20 @@ configured peer appears, and an unknown result leaves the control blocked for
 inspection. It is not the `/app` SaaS integration. The client builds with
 `npm run build`; Go server/recording/journal tests pass with and without the lab
 tag, including scope, replay, unknown concurrent starts and production absence.
+
+On 18 November the explicit profile completed one outbound call with 224,112 ms
+of capture. The user confirmed two-way audio. The same client sent the previously
+received synthetic test voice during that call (provider accepted in 508 ms);
+the user confirmed receipt and playback. The operator ended the call through
+the browser; registry returned to zero, and the user confirmed both sides with
+no audible missing words while reviewing the recording. The automated
+`audio_gaps` warning remains: 493 caller-side arrival gaps do not by themselves
+distinguish silence suppression from missing speech.
+
+The deployed lab binary for that call has SHA-256
+`db94a065f9699b5eb9aa763331003657599b881e99503b85b3c8c4e38a39b238`.
+The later group-discovery binary is
+`e422512edfabce36fd78e8247a456366c91680165d93c5a561d667c1ec8b7c0d`.
+Each replacement followed a fresh zero-active/zero-unknown check, graceful old
+process exit and a retained SQLite/config/binary backup. No new QR or production
+source changes occurred. These are lab results, not `/app` acceptance.

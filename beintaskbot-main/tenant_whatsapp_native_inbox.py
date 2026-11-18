@@ -1,10 +1,10 @@
-"""Experimental durable handoff; no HTTP route, CRM projection or sends yet.
+"""Experimental durable handoff; no CRM projection or sends yet.
 
 The existing managed gateway credential and source binding remain authoritative.
 Capture generations must be provisioned explicitly by a later rollout step. This
 module never creates/activates a source, starts a device, or authorizes an owner.
-It is intentionally unreachable from production startup until cutover fencing
-and projection of existing provider IDs are implemented and verified.
+The HTTP entry point defaults off; migrations and capture registration are not
+run at startup. Cutover fencing and provider ID projection are separate gates.
 """
 import hashlib
 import hmac
