@@ -8,7 +8,7 @@
   const types={photo:'image/jpeg,image/png,image/webp',video:'video/mp4',file:'application/pdf'};
   let active=null,revision=0,lastUser=null;
   const op=()=>window.tenantOperator;
-  function scope(){const m=op()?.member,r=op()?.currentDialog;if(!m?.tenant_id||!m?.telegram_id||r?.provider!=='connect'||!r.lead_id||!r.channel_id||!r.conversation_id)return null;return {tenant:String(m.tenant_id),user:String(m.telegram_id),lead:String(r.lead_id),key:JSON.stringify([String(m.tenant_id),String(m.telegram_id),String(r.lead_id),String(r.channel_id),String(r.conversation_id)]),policy:JSON.stringify([m.role,m.active,m.permissions,window.tenantProfileSnapshot?.capabilities])};}
+  function scope(){const m=op()?.member,r=op()?.currentDialog;if(!m?.tenant_id||!m?.telegram_id||r?.provider!=='connect'||!r.lead_id||!r.channel_id||!r.conversation_id)return null;return {tenant:String(m.tenant_id),user:String(m.telegram_id),lead:String(r.lead_id),key:JSON.stringify([String(m.tenant_id),String(m.telegram_id),String(r.lead_id),String(r.channel_id),String(r.conversation_id)]),policy:JSON.stringify([m.role,m.active,m.permissions,window.tenantProfileSnapshot?.capabilities,r.can_send,r.lifecycle_enabled,r.lifecycle?.id,r.lifecycle?.state,r.lifecycle?.operator_id])};}
   const same=s=>active===s&&scope()?.key===s.scope.key&&scope()?.policy===s.scope.policy&&s.host.isConnected;
   const query=s=>new URLSearchParams({lead_id:s.scope.lead,expected_tenant_id:s.scope.tenant,expected_user_id:s.scope.user});
   const voiceBusy=()=>!!document.querySelector('.operator-customer-voice[data-voice-busy="true"]');

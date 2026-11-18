@@ -58,6 +58,7 @@ type appResult struct {
 	NotStarted bool   `json:"not_started,omitempty"`
 }
 type appGateway struct {
+	groups    *managedGroups
 	messages  *unified.Journal
 	server    *server
 	cfg       appGatewayConfig
@@ -102,6 +103,7 @@ func newAppGateway(s *server, path string) (*appGateway, error) {
 	}
 	g := &appGateway{server: s, cfg: c, boot: randomUUID(), client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("gateway_redirect_denied") }}}
 	if c.Messaging != nil {
+		g.groups = &managedGroups{cache: make(map[string]groupCacheEntry), queue: make(chan types.JID, 64)}
 		if !c.Managed || c.Messaging.Scope.Account != c.Account {
 			return nil, unified.ErrConfiguration
 		}

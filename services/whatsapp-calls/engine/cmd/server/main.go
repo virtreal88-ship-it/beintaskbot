@@ -112,6 +112,7 @@ func main() {
 	guard.appControlled = srv.appGateway != nil
 	go srv.appGateway.run(ctx)
 	go srv.appGateway.deliverMessages(ctx)
+	go srv.appGateway.refreshGroups(ctx)
 
 	var handler http.Handler = guard.wrap(srv.routes())
 	if srv.appGateway != nil && srv.appGateway.cfg.Managed {

@@ -53,16 +53,20 @@ def reconcile(cur,tenant,source,provider):
       WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.direction='outgoing'
         AND m.raw->>'externalMessageId'=%s FOR UPDATE""",(tenant,'connect:'+source,provider))
     messages=cur.fetchall()
+    identities={}
+    def aliases(chat):
+        if chat not in identities:identities[chat]=verified_receipt_chats(cur,tenant,source,chat)
+        return identities[chat]
     for message in messages:
         raw=message['raw'] or {}
         chat=raw.get('_crm_provider_conversation_id') or raw.get('conversationId')
         if not chat:continue
         # Never merge equal provider IDs belonging to different conversations.
-        if sum(1 for m in messages if ((m['raw'] or {}).get('_crm_provider_conversation_id') or (m['raw'] or {}).get('conversationId'))==chat)!=1:
+        if sum(1 for m in messages if aliases((m['raw'] or {}).get('_crm_provider_conversation_id') or (m['raw'] or {}).get('conversationId')) & aliases(chat))!=1:
             continue
         cur.execute("""SELECT sender,MAX(rank) AS rank FROM saas_whatsapp_native_status
-          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND chat=%s AND provider_id=%s
-          GROUP BY sender""",(tenant,source,chat,provider))
+          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND chat=ANY(%s::text[]) AND provider_id=%s
+          GROUP BY sender""",(tenant,source,sorted(aliases(chat)),provider))
         rows=cur.fetchall()
         if not rows:continue
         if chat.endswith('@g.us'):
@@ -84,3 +88,23 @@ def receipt_sender(value):
         if found and int(found[2] or 0)<=255 and int(found[3])<=65535:
             value=found[1]+'@'+found[4]
     return _jid(value)
+
+
+def verified_receipt_chats(cur,tenant,source,chat):
+    """Only an existing verified source-scoped PN/LID binding relates receipts.
+
+    No telephone labels, names, timestamps or new inferred aliases are used.
+    Ambiguous retained bindings leave the exact-chat rule in force.
+    """
+    from tenant_connect_direct_identity import established_canonical_conversation
+    from tenant_whatsapp_native_projection import DIRECT
+    if not isinstance(chat,str) or not DIRECT.fullmatch(chat):return {chat} if chat else set()
+    canonical=established_canonical_conversation(cur,tenant,source,chat) or chat
+    cur.execute("""SELECT identity_key FROM saas_connect_direct_identities
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND canonical_conversation_id=%s""",
+      (tenant,source,canonical))
+    candidates={r['identity_key'] for r in cur.fetchall()}|{canonical}
+    candidates={x for x in candidates if DIRECT.fullmatch(x)}
+    if chat not in candidates or any(sum(x.endswith('@'+kind) for x in candidates)>1 for kind in ('s.whatsapp.net','lid')):
+        return {chat}
+    return candidates

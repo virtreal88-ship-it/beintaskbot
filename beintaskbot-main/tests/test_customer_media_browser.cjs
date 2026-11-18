@@ -20,5 +20,14 @@ const shell=`<!doctype html><meta charset="utf-8"><style>.operator-composer{marg
  await page.reload();await add.waitFor();await page.waitForFunction(()=>!document.getElementById('operatorMediaAdd').disabled);assert.equal(await page.locator('.operator-customer-media').isVisible(),false,'accepted receipt does not return as a permanent banner after reopen');
  // Separate stores prevent file drafts from colliding with customer voice.
  assert.equal(await page.evaluate(async()=>{const voice=window.createTenantVoiceStore();return (await voice.get(JSON.stringify(['tenant','20','7','channel','chat'])))===undefined;}),true);
- enabled=false;await page.reload();await add.waitFor();await page.waitForTimeout(50);assert.equal(await add.isDisabled(),true);assert.deepEqual(errors,[]);await context.close();console.log('PASS media selection, scoped persistence, unknown recovery without resend, namespace and disabled capability');
+ enabled=false;await page.reload();await add.waitFor();await page.waitForTimeout(50);assert.equal(await add.isDisabled(),true);
+ // Acceptance changes server authorization without changing the chat identity.
+ // Recheck capability; keep a draft in its exact tenant/user/chat store.
+ enabled=true;await page.evaluate(()=>{Object.assign(window.tenantOperator.currentDialog,{can_send:true,lifecycle_enabled:true,lifecycle:{id:'episode',state:'accepted',operator_id:20}});document.dispatchEvent(new Event('tenant-chat-attachments-ready'));});
+ await page.waitForFunction(()=>!document.getElementById('operatorMediaAdd').disabled);
+ await add.click();const acceptedChooser=page.waitForEvent('filechooser');await page.locator('.operator-media-menu button').first().click();await(await acceptedChooser).setFiles({name:'kept.png',mimeType:'image/png',buffer:Buffer.from([137,80,78,71,13,10,26,10,1])});
+ await page.waitForFunction(()=>document.querySelector('.operator-customer-media strong')?.textContent==='kept.png');
+ enabled=false;await page.evaluate(()=>{window.tenantOperator.currentDialog.can_send=false;window.tenantOperator.currentDialog.lifecycle.state='closed';document.dispatchEvent(new Event('tenant-chat-attachments-ready'));});
+ await page.waitForFunction(()=>document.querySelector('.operator-customer-media strong')?.textContent==='kept.png'&&document.getElementById('operatorComposerPrimary').disabled);
+ assert.equal(posts,1,'accept/close never dispatches a draft automatically');assert.deepEqual(errors,[]);await context.close();console.log('PASS media selection, scoped persistence, unknown recovery without resend, namespace and disabled capability');
  }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

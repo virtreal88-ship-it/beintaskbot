@@ -35,3 +35,13 @@ def test_route_must_match_exact_authorized_source_and_group():
         authorized.assert_called_once_with(cur,'tenant','policy','connect','1@g.us','a',12)
         cur.execute.assert_not_called()
     with pytest.raises(TenantLinearError):module.authorized_route({}, {**params,'conversation_id':'123@s.whatsapp.net'})
+
+
+def test_native_roster_uses_native_reader_and_rechecks_generation():
+    route={'tenant':'t','channel_id':'a','conversation_id':'1@g.us','api_key':'native','native':{'scope':{'generation':'one'}}}
+    import tenant_whatsapp_native_groups as native
+    with patch.object(native,'fetch',return_value=snapshot(observedAt=datetime.now(timezone.utc).isoformat())) as fetch:
+        assert asyncio.run(module.fetch_cached(route))['total']==2
+        fetch.assert_called_once_with(route)
+    with patch.object(module,'authorized_route',side_effect=[route,{**route,'native':{'scope':{'generation':'two'}}}]),patch.object(module,'fetch_cached',AsyncMock(return_value={'status':'available'})):
+        with pytest.raises(TenantLinearError):asyncio.run(module.get_participants({},{}))

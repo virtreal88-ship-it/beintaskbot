@@ -14,6 +14,7 @@ from tenant_whatsapp_native_projection import open_stored, message_event
 
 
 def migrate(cur):
+    cur.execute('ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS native_group_observed_at TIMESTAMPTZ')
     cur.execute('''ALTER TABLE saas_whatsapp_capture_generations
       ADD COLUMN IF NOT EXISTS projection_enabled BOOLEAN NOT NULL DEFAULT FALSE''')
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_one_projection_generation
@@ -59,6 +60,11 @@ def consume(reference):
         raise TenantLinearError('native_projection_reference_invalid', 400)
     with _connect() as conn, conn.cursor() as cur:
         scope,payload=load_evidence(cur,reference,lock=True)
+        if payload.get('kind')=='group_metadata':
+            from tenant_whatsapp_native_groups import apply_metadata
+            result=apply_metadata(cur,scope,payload)
+            conn.commit()
+            return result
         if payload.get('kind')=='receipt':
             from tenant_whatsapp_native_status import observe
             result=observe(cur,scope,payload)
@@ -72,10 +78,37 @@ def consume(reference):
     if event['data']['fromMe']:
         with _connect() as conn,conn.cursor() as cur:
             scope,payload=load_evidence(cur,reference,lock=True)
+            from tenant_whatsapp_native_status import lock as status_lock
+            status_lock(cur,scope['tenant'],scope['source'],payload['provider_id'])
+            attach_outbound_evidence(cur,scope,payload,reference[3])
             from tenant_whatsapp_native_status import reconcile
             reconcile(cur,scope['tenant'],scope['source'],payload['provider_id'])
             conn.commit()
     return result
+
+
+def attach_outbound_evidence(cur,scope,payload,event_id):
+    """Enrich only the exact existing outgoing row, preserving its authorship.
+
+    Receipt and inbox delivery race. The common ingestion may already have
+    recorded the send (including group control), so its dedup path must not
+    discard the private media reference. Never identify a message by its text.
+    """
+    from tenant_connect_direct_identity import established_canonical_conversation
+    chat=payload['chat']
+    canonical=established_canonical_conversation(cur,scope['tenant'],scope['source'],chat) or chat
+    cur.execute('''SELECT m.id FROM saas_crm_messages m
+      JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.direction='outgoing'
+        AND m.raw->>'externalMessageId'=%s AND m.message_type=%s AND c.connect_channel_id=%s::uuid
+        AND c.conversation_id=%s FOR UPDATE OF m''',
+      (scope['tenant'],'connect:'+scope['source'],payload['provider_id'],payload['message_type'],scope['source'],canonical))
+    rows=cur.fetchall()
+    if len(rows)!=1:
+        raise TenantLinearError('native_outbound_evidence_ambiguous',409)
+    facts={'nativeEventId':event_id,'_crm_provider_conversation_id':chat}
+    cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps(facts),scope['tenant'],str(rows[0]['id'])))
 
 
 def project_stored(receipt):

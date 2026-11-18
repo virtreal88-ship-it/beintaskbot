@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"time"
 	"wacalls/internal/unified"
@@ -27,6 +28,21 @@ func (g *appGateway) attachMessages(s *Session) bool {
 			return false
 		}
 		stored := g.messages.Capture(s.mgr.appCtx, event)
+		if stored && g.groups != nil {
+			var chat types.JID
+			switch e := event.(type) {
+			case *events.Message:
+				chat = e.Info.Chat
+			case *events.GroupInfo:
+				chat = e.JID
+			}
+			if chat.Server == types.GroupServer {
+				select {
+				case g.groups.queue <- chat:
+				default:
+				}
+			}
+		}
 		s.handleEvent(event)
 		return stored
 	})
