@@ -102,3 +102,16 @@ def test_binding_schema_upgrade_is_additive_and_reads_fail_closed(db,monkeypatch
     db.commit()
     schema.ensure_schema(db)
     assert not schema._ensure_platform_schema.called
+
+
+def test_legacy_material_addition_cannot_expand_frozen_lifecycle_snapshot(episodes):
+    accepted=command()['lifecycle'];ids=seed_members(episodes,accepted['id'],2)
+    ticket=store.create(PROFILE,create_data(accepted['id']))['ticket']['id']
+    late=seed_members(episodes,accepted['id'],1)[0]
+    # Even a persisted legacy addition event cannot redefine a new episode.
+    episodes.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'support-material-picker:legacy')''',(A,ticket,late))
+    episodes.commit()
+    detail=store.detail(PROFILE,ticket)
+    assert {row['id'] for row in detail['messages']}==set(ids)
+    assert detail['scope']['message_count']==2

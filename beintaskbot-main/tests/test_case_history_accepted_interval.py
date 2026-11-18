@@ -184,3 +184,17 @@ def test_automatic_case_requires_exact_case_hash_and_disallows_client_range(read
         with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**request,**changed},'https://crm.test')
     with pytest.raises(TenantLinearError):flow.prepare({'tenant_id':B,'telegram_id':22},request,'https://crm.test')
     assert not sender.called
+
+
+def test_unknown_legacy_boundary_uses_local_admission_not_provider_clock(ready):
+    local,data,sender=ready;case,keys=seed_interval(ready,episode=False)
+    local.execute("UPDATE saas_crm_messages SET happened_at='2030-01-01' WHERE id=%s::uuid",(keys[8],))
+    local.commit()
+    detail=store.detail(PROFILE,case)
+    assert keys[8] in {row['id'] for row in detail['messages']}
+    assert not set(keys[53:]) & {row['id'] for row in detail['messages']}
+    request,shown=automatic_request(ready,case)
+    made=flow.prepare(PROFILE,request,'https://crm.test')
+    shared=local.execute('SELECT selected_message_ids FROM saas_public_case_shares WHERE consultation_id=%s::uuid',(made['id'],))[0]
+    assert set(shared['selected_message_ids'])==set(keys[:53])
+    assert not sender.called

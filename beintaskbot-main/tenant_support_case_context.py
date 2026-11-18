@@ -89,16 +89,31 @@ def predicate(scope):
         sql = '''m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
           AND m.direction IN ('incoming','outgoing')'''
         args = [scope['tenant_id'], scope['lead_id'], 'connect:' + scope['channel_id']]
+    interval, interval_args = [], []
     if scope.get('history_start'):
-        sql += ' AND COALESCE(m.happened_at,m.created_at)>=%s::timestamptz'
-        args.append(scope['history_start'])
+        interval.append('COALESCE(m.happened_at,m.created_at)>=%s::timestamptz')
+        interval_args.append(scope['history_start'])
     if scope.get('history_end'):
-        if scope.get('dialog_episode_id'):
-            sql += ' AND m.created_at<=%s::timestamptz'
-            args.append(scope['history_end'])
-        else:
-            sql += ' AND COALESCE(m.happened_at,m.created_at)<=%s::timestamptz AND m.created_at<=%s::timestamptz'
-            args.extend([scope['history_end'], scope['history_end']])
+        # Provider clocks can be ahead of ours. Without a proven acceptance
+        # interval, local admission (not the provider timestamp) freezes history.
+        if not scope.get('dialog_episode_id') and scope.get('history_start'):
+            interval.append('COALESCE(m.happened_at,m.created_at)<=%s::timestamptz')
+            interval_args.append(scope['history_end'])
+        interval.append('m.created_at<=%s::timestamptz')
+        interval_args.append(scope['history_end'])
+    if interval:
+        bounded = ' AND '.join(interval)
+        if not scope.get('dialog_episode_id') and scope['kind'] != 'conversation':
+            # Preserve explicit, authorized legacy material additions. They do
+            # not redefine the initial episode or admit other later messages.
+            # New lifecycle snapshots never use this compatibility exception.
+            bounded = '(' + bounded + """ OR EXISTS(SELECT 1 FROM saas_support_ticket_messages am
+              WHERE am.tenant_id=m.tenant_id AND am.ticket_id=%s::uuid AND am.message_id=m.id
+                AND (am.event_key LIKE 'support-media-picker:%%'
+                     OR am.event_key LIKE 'support-material-picker:%%')))"""
+            interval_args.append(scope['ticket_id'])
+        sql += ' AND (' + bounded + ')'
+        args.extend(interval_args)
     if scope['kind'] != 'conversation' or scope.get('dialog_episode_id'):
         sql += ''' AND EXISTS(SELECT 1 FROM saas_support_ticket_messages cm
           WHERE cm.tenant_id=m.tenant_id AND cm.ticket_id=%s::uuid AND cm.message_id=m.id)'''
