@@ -449,7 +449,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy):
+def projection(cur, policy, *, include_read_cursors=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -552,6 +552,19 @@ def projection(cur, policy):
         OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
         OR NOT COALESCE(connected,FALSE) THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes WHERE '''+dialog_filter+''') '''
+    if include_read_cursors:
+        sql=sql.replace('lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,',
+                        'lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,lrc.read_through_message_id,')
+        sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*',
+          ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
+          "        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL\n"
+          "          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id\n"
+          "            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text\n"
+          "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT st.*")
+        sql=sql.replace(') lm ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*',
+          ") lm ON TRUE\n      LEFT JOIN LATERAL(SELECT m.id::text AS read_through_message_id FROM saas_crm_messages m\n"
+          "        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'\n"
+          "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*")
     return sql,params
 
 
@@ -901,7 +914,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active"):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -914,7 +927,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
-            sql,scopes=projection(cur, policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1075,14 +1088,14 @@ def mark_all_read(profile, payload=None):
     # accepts no operation-specific fields or client-selected dialog IDs.
     if payload not in (None, {}):
         raise TenantLinearError('Некорректный запрос.')
-    snapshot=listing(profile,all_rows=True)
+    snapshot=listing(profile,all_rows=True,include_read_cursors=True)
     targets=[row for card in snapshot.get('dialogs',[]) for row in card.get('group_sources',[card])
-             if int(row.get('unread_count') or 0)>0 and row.get('last_message_id')]
+             if int(row.get('unread_count') or 0)>0 and row.get('read_through_message_id')]
     updated=0
     for row in targets:
         mark_read(profile,{'provider':row.get('provider'),'lead_id':row.get('lead_id'),
                            'channel_id':row.get('channel_id'),'conversation_id':row.get('conversation_id'),
-                           'message_id':row.get('last_message_id')})
+                           'message_id':row.get('read_through_message_id')})
         updated+=1
     return {'updated_dialogs':updated,'captured_dialogs':len(snapshot.get('dialogs',[])),
             'unread_before':int(snapshot.get('unread_count') or 0)}

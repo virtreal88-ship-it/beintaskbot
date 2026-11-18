@@ -6,7 +6,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js','docs/tenant-dialog-consultations.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  for(const id of ['operatorAIReply','operatorCopilotToggle','operatorTraining','operatorCopilotAsk'])assert.equal(await page.locator('#'+id).isDisabled(),true,id);
- assert.match(await page.locator('#operatorAIReplyStatus').innerText(),/agent|агента|təyin/i);assert.equal(await page.locator('#sendChat').isEnabled(),true);assert.equal(await page.locator('#chatText').isEnabled(),true);assert.equal(await page.locator('audio[preload=none]').count(),1);
+ assert.equal(await page.locator('#operatorAIReplyStatus').innerText(),'');assert.match(await page.locator('#operatorAIReply').getAttribute('title'),/agent|агента|təyin/i);assert.equal(await page.locator('#sendChat').isEnabled(),true);assert.equal(await page.locator('#chatText').isEnabled(),true);assert.equal(await page.locator('audio[preload=none]').count(),1);
  await page.evaluate(()=>document.getElementById('operatorAIReply').onclick());
  assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.method==='POST'&&/copilot|extract|knowledge|transcrib|asr|send/.test(r.url)).length),0);
  if(await page.locator('#dialogHelperType').count())assert.equal(await page.locator('#dialogHelperType').isDisabled(),true);
