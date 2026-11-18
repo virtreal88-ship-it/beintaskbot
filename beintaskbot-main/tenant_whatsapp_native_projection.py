@@ -15,6 +15,7 @@ from tenant_linear_policy import TenantLinearError
 from tenant_platform import _fernet
 
 DIRECT = re.compile(r'^[1-9][0-9]{5,22}@(s\.whatsapp\.net|lid)$')
+DEVICE = re.compile(r'^([1-9][0-9]{5,22})(?:\.([0-9]{1,3}))?:([0-9]{1,5})@(s\.whatsapp\.net|lid)$')
 GROUP = re.compile(r'^[0-9]{5,30}(?:-[0-9]{5,20})?@g\.us$')
 PROVIDER_ID = re.compile(r'^[A-Za-z0-9_-]{5,200}$')
 FIELDS = {'kind','chat','sender','sender_alt','recipient_alt','provider_id','from_me','timestamp',
@@ -49,9 +50,16 @@ def open_stored(row, scope):
     return payload
 
 
-def _jid(value, *, group=False, optional=False):
+def _jid(value, *, group=False, optional=False, participant=False):
     if optional and not value:
         return ''
+    # Provider-authenticated participant device addresses identify the same
+    # account (whatsmeow ToNonAD semantics). Never rewrite conversation IDs,
+    # persisted evidence, source bindings or arbitrary browser-supplied values.
+    if participant and isinstance(value, str):
+        device = DEVICE.fullmatch(value)
+        if device and int(device[2] or 0) <= 255 and int(device[3]) <= 65535:
+            value = device[1] + '@' + device[4]
     if not isinstance(value, str) or not (DIRECT.fullmatch(value) or group and GROUP.fullmatch(value)):
         raise _error()
     return value
@@ -79,12 +87,12 @@ def message_event(scope, event_id, payload, message_id):
             or type(payload.get('timestamp')) is not int):
         raise _error()
     chat = _jid(payload.get('chat'), group=True)
-    sender = _jid(payload.get('sender'))
+    sender = _jid(payload.get('sender'), participant=True)
     app_dispatch=payload.get('app_dispatch',False)
     if type(app_dispatch) is not bool or (app_dispatch and (not payload['from_me'] or sender!=scope['account'])):
         raise _error()
-    sender_alt = _jid(payload.get('sender_alt'), optional=True)
-    recipient_alt = _jid(payload.get('recipient_alt'), optional=True)
+    sender_alt = _jid(payload.get('sender_alt'), optional=True, participant=True)
+    recipient_alt = _jid(payload.get('recipient_alt'), optional=True, participant=True)
     provider = payload.get('provider_id')
     if not isinstance(provider, str) or not PROVIDER_ID.fullmatch(provider):
         raise _error()

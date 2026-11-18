@@ -1,5 +1,9 @@
 """Exact-source maintenance with synthetic PostgreSQL data, no live sends."""
 from unittest.mock import Mock
+import json,hashlib
+from cryptography.fernet import Fernet
+import tenant_whatsapp_native_projection as projection
+from test_whatsapp_native_projection import message
 import pytest
 from test_call_sources import managed
 from test_browser_calls import gateway,command
@@ -17,6 +21,8 @@ from tenant_platform import TenantPlatformError
 @pytest.fixture
 def transition_source(managed,monkeypatch):
     db,_,cfg=managed
+    cipher=Fernet(Fernet.generate_key())
+    monkeypatch.setattr(projection,'_fernet',lambda:cipher)
     for module in (transition,rollout,transport):monkeypatch.setattr(module,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_stored_connect_credentials',lambda _: {'api_key':'synthetic'})
     legacy=Mock(return_value={'id':CA,'status':'connected','phone':cfg['account_jid'].split('@')[0]})
@@ -82,8 +88,10 @@ def test_capture_and_activation_require_runtime_generation_durable_event_and_leg
     transition.enable_capture(PROFILE,CA,'live-g1')
     assert db.execute('SELECT enabled,projection_enabled FROM saas_whatsapp_capture_generations')[0]=={'enabled':True,'projection_enabled':False};db.commit()
     with pytest.raises(TenantLinearError,match='capture_unconfirmed'):transition.activate(PROFILE,CA,'live-g1')
-    # Synthetic evidence cursor; production must receive an authenticated event.
+    # A cursor alone is not proof of receiving a customer message.
     db.execute('UPDATE saas_whatsapp_capture_generations SET stored_sequence=1');db.commit()
+    with pytest.raises(TenantLinearError,match='inbound_unconfirmed'):transition.activate(PROFILE,CA,'live-g1')
+    inbound_evidence(db,cfg)
     with pytest.raises(TenantLinearError,match='legacy_not_disabled'):transition.activate(PROFILE,CA,'live-g1')
     legacy.return_value['status']='disabled'
     assert transition.activate(PROFILE,CA,'live-g1')['state']=='active'
@@ -98,6 +106,7 @@ def test_rollback_keeps_history_marker_and_rejects_stale_native_request(transiti
     remote.return_value.update(messaging_generation='live-g1',messaging_diagnostics={'unknown_sends':0,'pending_events':0})
     transition.enable_capture(PROFILE,CA,'live-g1')
     db.execute('UPDATE saas_whatsapp_capture_generations SET stored_sequence=1');db.commit()
+    inbound_evidence(db,cfg)
     legacy.return_value['status']='disabled'
     transition.activate(PROFILE,CA,'live-g1')
     with db.cursor() as cur:
@@ -119,3 +128,25 @@ def test_rollback_keeps_history_marker_and_rejects_stale_native_request(transiti
         transition.admission(cur,A,CA)
     assert len(db.execute('SELECT 1 FROM saas_whatsapp_native_routes'))==1
     assert db.execute('SELECT projection_enabled FROM saas_whatsapp_capture_generations')[0]['projection_enabled'];db.commit()
+
+
+def inbound_evidence(db,cfg,payload=None):
+    payload=message(sender_alt='') if payload is None else payload
+    scope={'tenant':A,'source':CA,'generation':'live-g1','account':cfg['account_jid']}
+    event='a'*64
+    raw=json.dumps(payload,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()
+    sealed=projection._fernet().encrypt(json.dumps({'scope':scope,'event_id':event,'payload':payload}).encode())
+    db.execute("INSERT INTO saas_whatsapp_native_inbox(tenant_id,channel_id,generation,event_id,sequence,after_sequence,payload_sha256,encrypted_payload) VALUES(%s,%s,%s,%s,1,0,%s,%s)",(A,CA,'live-g1',event,hashlib.sha256(raw).hexdigest(),sealed))
+    db.commit()
+
+@pytest.mark.parametrize('payload',[{'kind':'group_metadata'},message(from_me=True)])
+def test_activation_does_not_treat_metadata_or_outbound_as_inbound(transition_source,payload):
+    db,cfg,legacy,remote=transition_source
+    prepare(cfg)
+    remote.return_value['messaging_generation']='live-g1'
+    transition.enable_capture(PROFILE,CA,'live-g1')
+    db.execute('UPDATE saas_whatsapp_capture_generations SET stored_sequence=1');db.commit()
+    inbound_evidence(db,cfg,payload)
+    legacy.return_value['status']='disabled'
+    with pytest.raises(TenantLinearError,match='inbound_unconfirmed'):transition.activate(PROFILE,CA,'live-g1')
+    assert not db.execute('SELECT enabled FROM saas_whatsapp_native_routes')[0]['enabled'];db.commit()
