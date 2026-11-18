@@ -129,7 +129,7 @@ def text(route, value, request_id, *, quoted_message_id=None):
 def resolve_quote(cur,route,provider_id):
     if not isinstance(provider_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider_id):
         raise TenantPlatformError('native_quote_scope_denied')
-    cur.execute("""SELECT m.raw FROM saas_crm_messages m
+    cur.execute("""SELECT m.raw,m.body,m.direction,m.message_type FROM saas_crm_messages m
       JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
       WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.raw->>'externalMessageId'=%s
         AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s""",
@@ -139,7 +139,7 @@ def resolve_quote(cur,route,provider_id):
     facts=rows[0]['raw'] or {}
     event_id=facts.get('nativeEventId')
     if not isinstance(event_id,str) or not re.fullmatch(r'[0-9a-f]{64}',event_id):
-        raise TenantPlatformError('native_quote_evidence_missing')
+        return legacy_quote(rows[0],route,provider_id)
     scope=route['native']['scope']
     cur.execute("""SELECT * FROM saas_whatsapp_native_inbox
       WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s AND event_id=%s""",
@@ -152,6 +152,21 @@ def resolve_quote(cur,route,provider_id):
             evidence.get('provider_id')!=provider_id or not quote_chat_matches(evidence,route['conversation_id'],facts)):
         raise TenantPlatformError('native_quote_scope_denied')
     return {'quote_event':event_id,'quote_id':provider_id}
+
+
+def legacy_quote(row,route,provider_id):
+    # Historical rows were ingested through the old verified source boundary.
+    # Never accept quote text/participant from the browser request.
+    raw=row['raw'] or {}
+    if row.get('message_type')!='text' or row.get('direction') not in {'incoming','outgoing'}:
+        raise TenantPlatformError('native_quote_evidence_missing')
+    chat=route['conversation_id'];account=route['native']['scope']['account']
+    sender=account if row['direction']=='outgoing' else raw.get('participantJid') if chat.endswith('@g.us') else chat
+    from tenant_whatsapp_native_projection import DIRECT
+    body=row.get('body')
+    if not isinstance(sender,str) or not DIRECT.fullmatch(sender) or not isinstance(body,str) or not 0<len(body)<=65536 or '\x00' in body:
+        raise TenantPlatformError('native_quote_evidence_missing')
+    return {'quote_id':provider_id,'legacy_quote':{'chat':chat,'provider_id':provider_id,'sender':sender,'text':body}}
 
 
 def quote_chat_matches(evidence,conversation,facts):

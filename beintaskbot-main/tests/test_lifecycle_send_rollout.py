@@ -22,14 +22,18 @@ def test_legacy_unscoped_dispatch_retains_shared_barrier(monkeypatch,mode):
     monkeypatch.setattr('tenant_scoped_access.scoped_access_enabled',lambda:False)
     def guard(cur,tenant):events.append('guard');return RolloutState(mode,False,False,7)
     monkeypatch.setattr('tenant_dialog_rollout.guard',guard)
+    def source_guard(cur,tenant,expected):
+        assert tenant=='tenant'
+        events.append('source_guard')
+    monkeypatch.setattr('tenant_whatsapp_native_transport.guard_dispatch',source_guard)
     authority=Mock(side_effect=AssertionError('must preserve original legacy fastpath'))
     monkeypatch.setattr(sends,'authority',authority)
     def callback(credentials):
-        assert events==['enter','guard']
+        assert events==['enter','guard','source_guard']
         events.append('dispatch');return 'synthetic'
     item={'key':('tenant',1,'request'),'connection':['connect','channel','dialog']}
     assert sends.dispatch_guarded(item,{},callback)=='synthetic'
-    assert events==['enter','guard','dispatch','leave']
+    assert events==['enter','guard','source_guard','dispatch','leave']
     authority.assert_not_called()
 
 

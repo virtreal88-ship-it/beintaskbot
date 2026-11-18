@@ -462,10 +462,9 @@ entry. Default and unifiedlab Go server tests and unified journal tests passed.
 These are isolated tests, not live `/app` acceptance. Independent Security Review
 confirmed fixes for direct receipt validation and transport cutover races.
 
-**Do not activate production yet:** the journal's permanent 10,000-event ceiling
-still needs archival/retention that preserves deduplication and attachment
-evidence. Quotes, receipt recovery/status projection, complete send consumer
-coverage, explicit cutover tooling and live …103 acceptance remain required.
+**Do not activate production yet:** the permanent journal ceiling described in
+this earlier checkpoint is fixed below. Explicit cutover tooling and live …103
+acceptance remain required; retained encrypted history still needs disk monitoring.
 Neither …103 nor …101 has been switched by this implementation.
 
 
@@ -478,8 +477,9 @@ Neither …103 nor …101 has been switched by this implementation.
   purge: retained disk usage still requires monitoring and an archive policy.
 - Native text quotes resolve an exact CRM provider message in the current
   tenant/source/dialog and its encrypted inbox event. The engine independently
-  checks its retained event, chat, provider ID and original protobuf. Legacy-only
-  quotes without retained evidence fail closed. PN/LID quotes require the original
+  checks its retained event, chat, provider ID and original protobuf. Legacy text
+  quotes use the exact authorized CRM row (body, direction, original participant);
+  legacy media quotes without retained evidence still fail closed. PN/LID quotes require the original
   provider chat plus that event’s exact confirmed counterpart pair;
   no arbitrary browser-supplied quoted text or protobuf is accepted.
 - Remote delivery/read receipts are durable and monotonic, including receipt
@@ -492,6 +492,14 @@ Neither …103 nor …101 has been switched by this implementation.
 - Customer media/voice and quote status adapters use this private operation lookup;
   no sentinel credential is passed to Connect. Existing actor/lifecycle guards
   still run before the adapter. Optional migrations remain explicit.
+- Group replies and consultation text use the same fenced adapter. Browser voice
+  is validated and converted locally to bounded mono Ogg/Opus before dispatch.
+  Case attachments and voice analysis can read old historical media through the
+  retained read-only credential only when native evidence is absent, never after
+  a permission, generation or scope error.
+- A delayed signed Connect event uses the already stored provider identity for
+  that exact tenant/source/dialog/direction after native ingestion. This does not
+  merge similarly named chats or create aliases and is retained for rollback.
 
 Validation here is isolated tests, not a live /app conversation or source cutover.
 Existing lab provider evidence above predates these Worker adapter changes.

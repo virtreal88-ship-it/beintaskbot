@@ -58,8 +58,14 @@ def download_audio(job, message_id):
         raise VoiceError('voice_scope_mismatch')
     if route.get('native'):
         from tenant_whatsapp_native_transport import download
-        content,mime=download(route,message,max_bytes=MAX_BYTES,allowed_types=set(FORMATS))
-        return content,FORMATS[mime],mime
+        from tenant_platform import TenantPlatformError
+        try:
+            content,mime=download(route,message,max_bytes=MAX_BYTES,allowed_types=set(FORMATS))
+            return content,FORMATS[mime],mime
+        except TenantPlatformError as error:
+            if str(error)!='native_media_evidence_missing' or not route.get('legacy_media_key'):
+                raise
+            route={**route,'api_key':route['legacy_media_key']}
     from tenant_connect_direct_identity import direct_identity
     source=direct_identity(raw.get('_crm_provider_conversation_id')) if isinstance(raw,dict) else ''
     if source and raw.get('conversationId')==route['conversation_id']:

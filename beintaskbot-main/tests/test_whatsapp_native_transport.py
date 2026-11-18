@@ -86,6 +86,20 @@ def test_native_credentials_cannot_reach_legacy_connect():
         transport._request(native.NATIVE_KEY,'POST','/v1/channels/test/messages',{})
 
 
+def test_case_attachment_native_read_never_uses_legacy_on_scope_failure(configured,monkeypatch):
+    _,route=configured
+    read=Mock(return_value=(b'synthetic','text/plain'))
+    monkeypatch.setattr(native,'download',read)
+    legacy=Mock(side_effect=AssertionError('legacy called'))
+    monkeypatch.setattr(transport.requests,'get',legacy)
+    result=transport.download_connect_message_media(route,'MESSAGE_123','document',route['conversation_id'])
+    assert result['mimeType']=='text/plain'
+    read.side_effect=TenantPlatformError('native_source_changed')
+    with pytest.raises(TenantPlatformError,match='native_source_changed'):
+        transport.download_connect_message_media(route,'MESSAGE_123','document',route['conversation_id'])
+    legacy.assert_not_called()
+
+
 def test_native_direct_receipt_is_persisted_without_group_forgery(configured,monkeypatch):
     db,route=configured
     db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',
@@ -154,3 +168,27 @@ def test_quote_alias_requires_same_provider_party(original,canonical,from_me):
     assert native.quote_chat_matches(evidence,canonical,facts)
     assert not native.quote_chat_matches(evidence,'15550000003@s.whatsapp.net',facts)
     assert not native.quote_chat_matches(evidence,canonical,{'_crm_provider_conversation_id':'another'})
+
+
+def test_legacy_quote_comes_from_scoped_history_not_caller(configured,monkeypatch):
+    db,route=configured;call=accepted(monkeypatch)
+    db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',(route['conversation_id'],A,CA))
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb,body='historical original',message_type='text',direction='incoming' WHERE tenant_id=%s AND external_id='m1'",(json.dumps({'externalMessageId':'LEGACY_ORIGINAL_1'}),A));db.commit()
+    native.text(route,'new reply',str(uuid.uuid4()),quoted_message_id='LEGACY_ORIGINAL_1')
+    q=call.call_args.kwargs['json']['legacy_quote']
+    assert q=={'chat':route['conversation_id'],'sender':route['conversation_id'],'provider_id':'LEGACY_ORIGINAL_1','text':'historical original'}
+    call.reset_mock()
+    with pytest.raises(TenantPlatformError):
+        native.text({**route,'conversation_id':'15550000003@s.whatsapp.net'},'new reply',str(uuid.uuid4()),quoted_message_id='LEGACY_ORIGINAL_1')
+    call.assert_not_called()
+
+
+def test_native_group_and_consultation_dispatch_do_not_reach_connect(configured,monkeypatch):
+    _,route=configured;call=accepted(monkeypatch)
+    monkeypatch.setattr(transport,'_request',Mock(side_effect=AssertionError('legacy called')))
+    group={**route,'conversation_id':'120363123456789@g.us'}
+    result=transport.send_group_with_receipt(group,'synthetic',str(uuid.uuid4()))
+    assert result['receipt']['_crm_native_send_receipt'] is True
+    result=transport.send_consultation_with_receipt(route,'synthetic',str(uuid.uuid4()))
+    assert result['state']=='sent' and result['external_message_id']=='PROVIDER_12345'
+    assert call.call_count==2

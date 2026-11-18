@@ -1082,6 +1082,10 @@ def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=N
             if _native_reference is not None:
                 from tenant_whatsapp_native_consumer import preserve_identity
                 data = preserve_identity(cur, tenant, channel_id, conversation, data)
+            elif event_type in ('message.inbound.received','message.outbound.observed'):
+                from tenant_whatsapp_native_consumer import preserve_late_legacy_identity
+                data = preserve_late_legacy_identity(cur, tenant, channel_id, conversation, data,
+                    outgoing=event_type=='message.outbound.observed' or data.get('fromMe') is True)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             if call_occurred is not None:
@@ -1563,6 +1567,16 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     try: key=str(uuid.UUID(str(request_id)))
     except (ValueError,TypeError,AttributeError): raise TenantPlatformError('Invalid group request ID.') from None
     if not group_jid(route.get('conversation_id')): raise TenantPlatformError('Group route required.')
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text, submit as native_submit
+        if not media:return native_text(route,text,key,quoted_message_id=quoted_message_id)
+        import base64
+        encoded=media.get('base64','')
+        if not isinstance(encoded,str) or len(encoded)>14*1024*1024:raise TenantPlatformError('native_media_invalid')
+        try:content=base64.b64decode(encoded,validate=True)
+        except ValueError:raise TenantPlatformError('native_media_invalid') from None
+        return native_submit(route,key,text=text,kind=str(media['type']),mime=media.get('mimeType',''),
+          name=media.get('fileName',''),content=content,quoted_message_id=quoted_message_id)
     payload={'conversationId':route['conversation_id'],'type':str(media['type']) if media else 'text',
       'text':text,'clientMessageId':key}
     if quoted_message_id is not None:
@@ -1597,6 +1611,10 @@ def send_consultation_with_receipt(route, text, request_id):
     """Accept Connect's durable queue receipt without claiming provider delivery."""
     from tenant_ai_group_coordination import group_jid
     key=str(uuid.UUID(str(request_id)))
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text
+        result=native_text(route,text,key)
+        return {'state':'sent','message_id':result['message_id'],'external_message_id':result['external_message_id']}
     endpoint='/group-messages' if group_jid(route.get('conversation_id')) else '/messages'
     result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+endpoint,
         {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
@@ -1629,6 +1647,16 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
             or any(ord(char)<33 for char in conversation_id)
             or route.get('conversation_id')!=conversation_id):
         raise TenantPlatformError('Connect əlavəsi düzgün deyil.')
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import download
+        try:
+            content,mime=download(route,message_id,max_bytes=limits[expected_type],allowed_types=allowed[expected_type])
+            return {'type':expected_type,'base64':base64.b64encode(content).decode('ascii'),
+                'mimeType':mime,'fileName':'case-attachment'}
+        except TenantPlatformError as error:
+            if str(error)!='native_media_evidence_missing' or not route.get('legacy_media_key'):
+                raise
+            route={**route,'api_key':route['legacy_media_key']}
     try:
         url=CONNECT_URL+'/v1/channels/'+str(route['channel_id'])+'/messages/'+message_id+'/media?'+urlencode({'conversationId':conversation_id})
         response=requests.get(url,

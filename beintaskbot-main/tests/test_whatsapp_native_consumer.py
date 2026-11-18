@@ -99,6 +99,38 @@ def test_legacy_provider_message_keeps_original_crm_id(ready):
     db.commit()
 
 
+def test_late_signed_legacy_event_keeps_native_crm_identity(ready,monkeypatch):
+    db,reference=ready
+    activate(db)
+    consumer.consume(reference)
+    from tenant_whatsapp_native_transport import migrate
+    with db.cursor() as cur:
+        migrate(cur)
+        _,event=consumer.load(cur,reference)
+    db.execute('''INSERT INTO saas_whatsapp_native_routes(tenant_id,channel_id,generation,enabled)
+      VALUES(%s,%s,%s,TRUE)''', reference[:3])
+    db.commit()
+    first=db.execute("SELECT id,external_id FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1' AND tenant_id=%s",(A,))
+    db.commit()
+    # Signature/credential resolution is separate; exercise the common CRM path
+    # with a distinct legacy event and message UUID after native ingestion.
+    import json,hmac,hashlib
+    from cryptography.fernet import Fernet
+    cipher=Fernet(Fernet.generate_key())
+    monkeypatch.setattr(transport,'_fernet',lambda:cipher)
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s,'connect','connected',%s) ON CONFLICT(tenant_id,provider) DO UPDATE SET status=EXCLUDED.status,secrets=EXCLUDED.secrets",(A,cipher.encrypt(json.dumps({'webhook_secret':'synthetic'}).encode())))
+    db.commit()
+    event=copy.deepcopy(event);event['id']='legacy-event-after-native';event['data']['id']='12345678-1234-4234-8234-123456789012'
+    event['data'].pop('nativeEventId',None)
+    raw=json.dumps(event).encode();signature='sha256='+hmac.new(b'synthetic',raw,hashlib.sha256).hexdigest()
+    try:
+        assert transport.ingest(raw,signature,event)
+        rows=db.execute("SELECT id,external_id FROM saas_crm_messages WHERE raw->>'externalMessageId'='SYNTHETIC_MESSAGE_1' AND tenant_id=%s",(A,))
+        assert rows==first
+    finally:
+        db.rollback();db.execute('DELETE FROM saas_whatsapp_native_routes');db.commit()
+
+
 def test_disabled_source_cannot_project_captured_message(ready):
     db, reference = ready
     activate(db)

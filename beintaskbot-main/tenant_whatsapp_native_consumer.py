@@ -106,3 +106,29 @@ def preserve_identity(cur, tenant, source, conversation, data):
     previous = existing_message_id(cur, tenant=tenant, source=source,
         lead_id=row['lead_id'], provider_id=data['externalMessageId'], outgoing=data['fromMe']) if row else None
     return {**data, 'id': previous or message_id(tenant,source,conversation,data['externalMessageId'],data['fromMe'])}
+
+
+def preserve_late_legacy_identity(cur, tenant, source, conversation, data, *, outgoing):
+    """Deduplicate signed late Connect events only for previously native sources.
+
+    Caller has verified the legacy signature and holds the normal dialogue lock.
+    Keep this after rollback too: the native route marker is deliberately retained.
+    No new identity or authorization is inferred from a name, text or timestamp.
+    """
+    import re
+    from tenant_whatsapp_native_identity import existing_message_id
+    provider=data.get('externalMessageId')
+    if not isinstance(provider,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider):
+        return data
+    cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
+    if not cur.fetchone()['ready']:
+        return data
+    cur.execute('SELECT 1 FROM saas_whatsapp_native_routes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid', (tenant,source))
+    if not cur.fetchone():
+        return data
+    cur.execute('''SELECT lead_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant,source,conversation))
+    row=cur.fetchone()
+    previous=existing_message_id(cur,tenant=tenant,source=source,lead_id=row['lead_id'],
+        provider_id=provider,outgoing=outgoing) if row else None
+    return {**data,'id':previous} if previous else data

@@ -17,16 +17,26 @@ import (
 // Outgoing is private Worker-to-engine data, never a browser authorization.
 // Scope is checked against the process binding before calling Deliver.
 type Outgoing struct {
-	Scope      Scope  `json:"scope"`
-	Operation  string `json:"operation"`
+	Scope       Scope        `json:"scope"`
+	Operation   string       `json:"operation"`
+	Chat        string       `json:"chat"`
+	Kind        string       `json:"kind"`
+	Text        string       `json:"text"`
+	MIME        string       `json:"mime"`
+	Name        string       `json:"name"`
+	Data        []byte       `json:"data"`
+	QuoteEvent  string       `json:"quote_event,omitempty"`
+	QuoteID     string       `json:"quote_id,omitempty"`
+	LegacyQuote *LegacyQuote `json:"legacy_quote,omitempty"`
+}
+
+// LegacyQuote comes only from the authenticated Worker's exact historical row.
+// It carries no media key, URL or caller-selected protobuf.
+type LegacyQuote struct {
 	Chat       string `json:"chat"`
-	Kind       string `json:"kind"`
+	ProviderID string `json:"provider_id"`
+	Sender     string `json:"sender"`
 	Text       string `json:"text"`
-	MIME       string `json:"mime"`
-	Name       string `json:"name"`
-	Data       []byte `json:"data"`
-	QuoteEvent string `json:"quote_event,omitempty"`
-	QuoteID    string `json:"quote_id,omitempty"`
 }
 
 type MessageClient interface {
@@ -42,8 +52,16 @@ func (r Outgoing) Validate(scope Scope) error {
 		!utf8.ValidString(r.Text) || len(r.Text) > 65536 || strings.ContainsRune(r.Text, 0) || len(r.Name) > 200 || strings.ContainsAny(r.Name, "/\\\x00\r\n") {
 		return ErrConfiguration
 	}
-	if (r.QuoteEvent == "") != (r.QuoteID == "") || (r.QuoteEvent != "" && (len(r.QuoteEvent) != 64 || r.Kind != "text")) {
+	if ((r.QuoteEvent == "" && r.LegacyQuote == nil) != (r.QuoteID == "")) || (r.QuoteEvent != "" && (len(r.QuoteEvent) != 64 || r.LegacyQuote != nil)) {
 		return ErrConfiguration
+	}
+	if q := r.LegacyQuote; q != nil {
+		if q.Chat != r.Chat || q.ProviderID != r.QuoteID || len(q.ProviderID) < 5 || len(q.ProviderID) > 200 || !messagePeer.MatchString(q.Sender) || strings.HasSuffix(q.Sender, "@g.us") || !utf8.ValidString(q.Text) || len(q.Text) == 0 || len(q.Text) > 65536 || strings.ContainsRune(q.Text, 0) {
+			return ErrConfiguration
+		}
+		if !strings.HasSuffix(r.Chat, "@g.us") && q.Sender != r.Chat && q.Sender != scope.Account {
+			return ErrConfiguration
+		}
 	}
 	if r.Kind == "text" {
 		if strings.TrimSpace(r.Text) == "" || len(r.Data) != 0 || r.MIME != "" || r.Name != "" {
@@ -83,6 +101,9 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		return Result{}, ErrConfiguration
 	}
 	var quote *waE2E.ContextInfo
+	if q := request.LegacyQuote; q != nil {
+		quote = &waE2E.ContextInfo{StanzaID: &q.ProviderID, Participant: &q.Sender, RemoteJID: &q.Chat, QuotedMessage: &waE2E.Message{Conversation: &q.Text}}
+	}
 	if request.QuoteEvent != "" {
 		event, err := j.Event(ctx, request.QuoteEvent)
 		var evidence Envelope
@@ -132,6 +153,20 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 				msg = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{URL: &upload.URL, DirectPath: &upload.DirectPath, MediaKey: upload.MediaKey, FileSHA256: upload.FileSHA256, FileEncSHA256: upload.FileEncSHA256, FileLength: &upload.FileLength, Mimetype: &request.MIME, Caption: &request.Text}}
 			default:
 				msg = &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{URL: &upload.URL, DirectPath: &upload.DirectPath, MediaKey: upload.MediaKey, FileSHA256: upload.FileSHA256, FileEncSHA256: upload.FileEncSHA256, FileLength: &upload.FileLength, Mimetype: &request.MIME, FileName: &request.Name, Caption: &request.Text}}
+			}
+		}
+		if quote != nil {
+			if m := msg.GetImageMessage(); m != nil {
+				m.ContextInfo = quote
+			}
+			if m := msg.GetAudioMessage(); m != nil {
+				m.ContextInfo = quote
+			}
+			if m := msg.GetVideoMessage(); m != nil {
+				m.ContextInfo = quote
+			}
+			if m := msg.GetDocumentMessage(); m != nil {
+				m.ContextInfo = quote
 			}
 		}
 		response, err := client.SendMessage(ctx, chat, msg, whatsmeow.SendRequestExtra{ID: id})

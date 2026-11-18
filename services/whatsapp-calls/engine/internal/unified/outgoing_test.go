@@ -174,3 +174,28 @@ func TestQuoteOnlyUsesProviderConfirmedPNLIDPair(t *testing.T) {
 		t.Fatal("bad alias sent")
 	}
 }
+
+func TestLegacyQuoteScopeAndIdempotency(t *testing.T) {
+	ctx := context.Background()
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "legacy-quote.db")), testScope)
+	peer := "15550000002@s.whatsapp.net"
+	req := Outgoing{Scope: testScope, Operation: "legacy-quote", Chat: peer, Kind: "text", Text: "reply", QuoteID: "LEGACY_123", LegacyQuote: &LegacyQuote{Chat: peer, ProviderID: "LEGACY_123", Sender: peer, Text: "old original"}}
+	c := &outgoingClient{}
+	bad := req
+	bad.Chat = "15550000003@s.whatsapp.net"
+	if _, err := j.Deliver(ctx, c, bad); !errors.Is(err, ErrConfiguration) {
+		t.Fatal("cross chat historical quote", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := j.Deliver(ctx, c, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.sends != 1 || c.message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage().GetConversation() != "old original" {
+		t.Fatal("historical quote lost or resent")
+	}
+	req.LegacyQuote.Text = "changed"
+	if _, err := j.Deliver(ctx, c, req); !errors.Is(err, ErrConflict) {
+		t.Fatal("changed historical quote replayed")
+	}
+}
