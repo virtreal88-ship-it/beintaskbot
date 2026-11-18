@@ -20,7 +20,7 @@ function installCaseTabsFixture(){
   if(p.endsWith('/consult-one/dispatch')){f.dispatched.push(body);f.consultations[0].state='pending';f.consultations[0].can_dispatch=false;return response({state:'pending'});}
   if(p.endsWith('/chat/attachment')){f.mediaCalls.push(Object.fromEntries(url.searchParams));return new Response(Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII='),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png'}});}
   const result=await base(input,options);
-  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.messages=f.caseMessages||[f.material];data.result.scope={message_count:data.result.messages.length,media_count:data.result.messages.filter(row=>row.message_type!=='text').length,has_earlier_source:true};}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
+  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.messages=url.searchParams.has('before')?[{...f.material,id:'oldest',body:'Oldest accepted-interval message'}]:(f.caseMessages||f.history.filter(row=>row.id!=='outside-case'));data.result.next_before=url.searchParams.has('before')?null:'case-cursor';data.result.history_context={boundary_status:'accepted_interval',accepted_at:'2026-11-02T09:00:00Z',created_at:'2026-11-02T12:00:00Z'};data.result.scope={message_count:data.result.messages.length,media_count:data.result.messages.filter(row=>row.message_type!=='text').length,has_earlier_source:true};}if(f.holdHistory&&url.searchParams.has('before')){f.holdHistory=false;return new Promise(resolve=>f.pendingHistory.push(()=>resolve(response(data.result))))}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
   return result;
  };
 }
@@ -35,125 +35,30 @@ function installCaseTabsFixture(){
   await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installCaseTabsFixture);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view=support&lang=ru'+query);await page.locator('[data-support-id]').first().waitFor();return {context,page,errors};
  }
- async function assertTabOrder(page,selectors,label){
-  await page.locator(selectors[0]).focus();
-  for(const [key,direction] of [['Tab',1],['Shift+Tab',-1]]){
-   for(let step=1;step<=selectors.length;step++){
-    const previous=selectors[(direction*(step-1)+selectors.length)%selectors.length];
-    await page.keyboard.press(key);const selector=selectors[(direction*step+selectors.length)%selectors.length];
-    // Chromium datetime-local exposes multiple native segments on one DOM input.
-    // Traverse only that exact prior control; never skip an unexpected DOM node.
-    if(previous==='#supportResponseDueAt'){
-     let segments=0;
-     while(await page.locator(previous).evaluate(node=>node===document.activeElement)){
-      assert.equal(await page.locator(previous).getAttribute('type'),'datetime-local');
-      assert.equal(await page.locator(previous).isVisible(),true,label+' native segment remains visible');
-      assert.equal(await page.evaluate(()=>!document.querySelector('#supportDetail').hidden&&document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,label+' native segment remains in active modal');
-      assert(++segments<=8,label+' native datetime traversal is bounded');
-      await page.keyboard.press(key);
-     }
-    }
-    const actual=await page.evaluate(()=>document.activeElement.outerHTML.slice(0,240));
-    assert.equal(await page.locator(selector).evaluate(node=>node===document.activeElement),true,label+' '+key+' reaches '+selector+', got '+actual);
-    assert.equal(await page.locator(selector).isVisible(),true,label+' never focuses a hidden control');
-    assert.equal(await page.evaluate(()=>!document.querySelector('#supportDetail').hidden&&document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,label+' keeps focus in the active modal');
-   }
-  }
- }
  try{
-  for(const width of [390,1280]){
-   const focused=await mount(width);try{const {page}=focused;
-    await page.evaluate(()=>{const f=notificationCaseFixture;f.caseMessages=[f.material,...['image','document'].map((kind,index)=>({...f.material,id:'20000000-0000-4000-8000-00000000060'+(index+2),external_id:'connect:case-'+kind,message_type:kind,media_filename:'case.'+(index?'pdf':'png')}))]});
-    await page.locator('[data-support-id]').first().click();await page.locator('#supportDialogueHistory [data-message-id=outside-case]').waitFor();await page.locator('#supportTab-details').click();
-    const summary=page.locator('#supportCaseMaterials>summary'),close=page.locator('#supportClose');
-    assert.equal(await page.locator('#supportHistory [data-ticket-media-open]').count(),2);
-    assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
-    for(const selector of ['#supportRecommendations > button','#supportPriority','#supportResponseDueAt'])assert.equal(await page.locator(selector).isVisible(),true,'new case tool visible: '+selector);
-    assert.equal(await page.locator('#supportRecommendations > button').getAttribute('type'),'button');
-    assert.equal(await page.locator('#supportPriority').evaluate(node=>node.tagName),'SELECT');
-    assert.equal(await page.locator('#supportResponseDueAt').getAttribute('type'),'datetime-local');
-    const beforeMaterials=['#supportClose','#supportTab-details','#supportTake','#supportOpenChat','#supportResolve','#supportMoreActions>summary','#supportPanel-details','#supportEditStatus','#supportEditAssignee','#supportPriority','#supportResponseDueAt','#supportDescription','#supportNextSteps','#supportRecommendations > button','#supportAnalysisFields>summary','#supportSave','#supportCaseMaterials>summary'];
-    const afterMaterials=['#supportCaseContext>summary'];
-    const closed=[...beforeMaterials,...afterMaterials];
-    const photo='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000602"]',documentMessage='#supportHistory [data-message-id="20000000-0000-4000-8000-000000000603"]';
-    const opened=[...beforeMaterials,'#caseMediaLoad',photo+' [data-ticket-media-open]',documentMessage+' [data-ticket-media-open]',...afterMaterials];
-    await assertTabOrder(page,closed,'closed Materials '+width);
-    await page.locator('#supportMoreActions>summary').focus();await page.keyboard.press('Enter');
-    await assertTabOrder(page,closed.flatMap(selector=>selector==='#supportMoreActions>summary'?[selector,'#supportTakeover','#supportCreateTask']:[selector]),'expanded action menu '+width);
-    await page.locator('#supportMoreActions>summary').focus();await page.keyboard.press('Space');
-    await page.locator('#supportAnalysisFields>summary').focus();await page.keyboard.press('Enter');
-    await assertTabOrder(page,closed.flatMap(selector=>selector==='#supportAnalysisFields>summary'?[selector,'#supportSuggestions','#supportRiskAssessment']:[selector]),'expanded additional fields '+width);
-    await page.locator('#supportAnalysisFields>summary').focus();await page.keyboard.press('Space');
-    assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls.length),0,'keyboard traversal never downloads attachments');
-    await summary.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),true);
-    await assertTabOrder(page,opened,'open Materials '+width);
-    await page.locator(photo+' [data-ticket-media-open]').click();await page.locator(photo+' .support-media-preview button').waitFor();
-    await page.locator(documentMessage+' [data-ticket-media-open]').click();await page.locator(documentMessage+' .support-media-preview a[download]').waitFor();
-    const previews=[...beforeMaterials,'#caseMediaLoad',photo+' [data-ticket-media-open]',photo+' .support-media-preview button',documentMessage+' [data-ticket-media-open]',documentMessage+' .support-media-preview a:not([download])',documentMessage+' .support-media-preview a[download]',...afterMaterials];
-    await assertTabOrder(page,previews,'open Materials with nested preview controls '+width);
-    await summary.focus();await page.keyboard.press('Space');assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),false);
-    await assertTabOrder(page,closed,'collapsed loaded Materials '+width);
-    await summary.focus();await page.keyboard.press('Enter');await page.locator(photo+' [data-ticket-media-open]').click();
-    await assertTabOrder(page,previews.filter(selector=>selector!==photo+' .support-media-preview button'),'hidden image preview '+width);
-    await page.locator('#supportTab-details').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'developer');await page.locator('#consultCreate').waitFor();
-    await close.focus();await page.keyboard.press('Shift+Tab');assert.equal(await page.locator('#supportConsultations>details>summary').evaluate(node=>node===document.activeElement),true,'hidden Details controls never become the Developer tab boundary: '+await page.evaluate(()=>document.activeElement.outerHTML));
-    await page.keyboard.press('Tab');assert.equal(await close.evaluate(node=>node===document.activeElement),true);
-    await page.keyboard.press('Tab');assert.equal(await page.locator('#supportTab-developer').evaluate(node=>node===document.activeElement),true,'only the active tab is in sequential focus order');
-    assert.deepEqual(await page.locator('#supportDetail [role=tab]').evaluateAll(tabs=>tabs.map(tab=>[tab.getAttribute('aria-selected'),tab.tabIndex])),[['false',-1],['false',-1],['true',0]]);
-    await page.keyboard.press('Home');assert.equal(await active(page),'history');await page.keyboard.press('ArrowRight');assert.equal(await active(page),'details');
-    assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);assert.equal(await page.locator('#supportCaseMaterials').evaluate(node=>node.open),true,'tab changes preserve Materials expansion');
-    await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});await page.waitForURL(url=>!url.searchParams.has('support_ticket_id'));
-    assert.equal(await page.locator('#supportDetail').evaluate(node=>node.contains(document.activeElement)),false,'Escape never leaves focus in the closed modal');
-    assert.deepEqual(focused.errors,[]);console.log('PASS case focus Chrome '+width+': complete Tab/Shift+Tab cycles, closed/open Materials, nested and hidden previews, hidden tabs, ARIA, summary Enter/Space, Escape');
-   }finally{await focused.context.close();}
-  }
-  for(const width of [320,390,1280]){
-   const {context,page,errors}=await mount(width);
-   try{
-    await page.locator('[data-support-id]').first().click();await page.locator('#supportDialogueHistory [data-message-id=outside-case]').waitFor();
-    assert.equal(await active(page),'history');assert.equal(await page.locator('#supportDetail [role=tab]').count(),3);assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);
-    assert.equal(await page.locator('#supportDialogueHistory [data-reply-message]').count(),0,'read-only display never offers a dead composer action');
-    assert.equal(await page.locator('#supportHistory [data-message-id=outside-case]').count(),0,'whole history never expands case materials');
-    assert.equal(await page.evaluate(()=>notificationCaseFixture.historyCalls.every(q=>q.provider==='connect'&&q.lead_id==='41'&&q.channel_id===notificationCaseFixture.channel&&q.conversation_id===notificationCaseFixture.route.conversation_id)),true);
-    assert.equal(await page.evaluate(()=>{const expected=document.createElement('template');expected.innerHTML=tenantOperator.messageMarkup(notificationCaseFixture.history,notificationCaseFixture.route,{readOnly:true});return expected.content.firstElementChild.outerHTML===document.querySelector('#supportDialogueHistory .operator-message').outerHTML;}),true,'history uses the actual dialogue component');
-    assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls.length),0,'case history does not auto-download media');
-    await page.locator('#supportDialogueHistory [data-message-id=history-photo] [data-media-open]').click();await page.locator('#supportDialogueHistory [data-media-preview=image]').waitFor();
-    assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls[0].conversation_id===notificationCaseFixture.route.conversation_id),true);
-    assert.equal(await page.locator('#supportDialogueHistory [data-message-id=history-audio] [data-media-open]').isVisible(),true,'read-only audio has a working explicit loader');
-    await page.locator('#supportDialogueHistory [data-media-preview=image]').click();await page.locator('.operator-photo-viewer').waitFor();await page.goBack();await page.locator('.operator-photo-viewer').waitFor({state:'detached'});assert.equal(await page.locator('#supportDetail').isVisible(),true,'photo Back does not close or recreate the case');
-    const download=page.waitForEvent('download');await page.locator('#supportDialogueHistory [data-message-id=history-photo] [data-media-download]').click();await download;assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls.at(-1).download),'1','existing guarded download is usable');
-    await page.locator('#supportDialogueEarlier').click();await page.locator('#supportDialogueHistory [data-message-id=oldest]').waitFor();
-    assert.equal(await page.locator('#supportDialogueEarlier').isVisible(),false);
-    for(const tab of ['history','details','developer']){
-     await page.locator('#supportTab-'+tab).click();
-     const geometry=await page.locator('#supportDetailContent').evaluate(card=>({overflow:card.scrollWidth>card.clientWidth+1,tabs:[...card.querySelectorAll('[role=tab]')].map(tab=>{const r=tab.getBoundingClientRect();return {left:r.left,right:r.right,height:r.height,hit:tab.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})}));
-     assert.equal(geometry.overflow,false,tab+' fits '+width);assert(geometry.tabs.every(r=>r.left>=0&&r.right<=width&&r.height>=44&&r.hit));
-     await page.screenshot({path:path.join(artifacts,`${width}-${tab}.png`)});
-    }
-    await page.locator('#supportTab-history').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'details');await page.keyboard.press('End');assert.equal(await active(page),'developer');await page.keyboard.press('Home');assert.equal(await active(page),'history');
-    await page.locator('#supportTab-details').click();await page.locator('#supportDescription').fill('Private unsaved case draft');await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Printer remains offline');
-    assert.equal(await page.locator('#caseConsultRecipientConfirm,#caseConsultIdentityConsent').count(),0);assert.match(await page.locator('#consultRecipient option:checked').textContent(),/Rauf/);
-    assert.deepEqual(await page.locator('#caseConsultFirst option').evaluateAll(nodes=>nodes.map(n=>n.value)),[await page.evaluate(()=>notificationCaseFixture.material.id)]);
-    assert.equal(await page.evaluate(()=>notificationCaseFixture.prepared.length),0);
-    await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Private unsaved case draft');await page.locator('#supportTab-developer').click();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
-    await page.locator('#supportClose').click();await page.locator('#supportDetail').waitFor({state:'hidden'});await page.waitForURL(u=>!u.searchParams.has('support_ticket_id'));await page.locator('[data-support-id]').first().click();await page.locator('#supportTab-developer').waitFor();assert.equal(await active(page),'developer');await page.locator('#consultCreate').click();await page.locator('#consultReason').waitFor();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
-    await page.locator('#caseConsultSend').click();await page.locator('#consultRows').getByText(/принял запрос в очередь/).waitFor();
-    const sends=await page.evaluate(()=>({prepared:notificationCaseFixture.prepared,dispatched:notificationCaseFixture.dispatched}));assert.equal(sends.prepared.length,1);assert.equal(sends.dispatched.length,1);assert.equal(sends.prepared[0].public_dialog_version,1);assert.deepEqual(sends.prepared[0].public_sender_versions,{[await page.evaluate(()=>notificationCaseFixture.material.id)]:'b'.repeat(64)});assert.equal(sends.prepared[0].include_customer_identity,false);assert.equal(sends.prepared[0].confirm,true);assert.equal(sends.prepared[0].request_id,sends.dispatched[0].request_id);
-    await page.locator('#supportTab-details').click();await page.reload();await page.locator('#supportSummaryText').waitFor();assert.equal(await active(page),'details','refresh restores tab in exact case URL');
-    await page.locator('#supportTab-history').click();await page.locator('#supportOpenChat').click();await page.locator('#supportDetail').waitFor({state:'hidden'});assert.equal(new URL(page.url()).searchParams.has('support_ticket_id'),false);
-    assert.deepEqual(errors,[]);console.log('PASS case tabs Chrome '+width+': geometry, shared history/media, scope separation, ARIA, drafts, Send, privacy, reload/navigation');
-   }finally{await context.close();}
-  }
-  const b=await mount(390);try{const {page}=b;
-   await page.evaluate(()=>{const f=notificationCaseFixture;f.consultations=[{id:'consult-one',case_id:f.caseA,state:'sent',recipient:'Rauf'}];f.replies=[{id:'reply-one',case_id:f.caseA,consultation_id:'consult-one',author:'Rauf',body:'Only this case answer',source_kind:'manual',draft_state:'completed'},{id:'other-case-reply',case_id:f.caseB,consultation_id:'consult-other',body:'Different case answer'}]});
-   assert.equal(await page.evaluate(()=>tenantSupportInbox.openNotification({ticketId:notificationCaseFixture.caseA,replyId:'reply-one'})),true);assert.equal(await active(page),'developer');assert.equal(await page.locator('[data-consultation-reply=reply-one]').evaluate(n=>n===document.activeElement),true);assert.doesNotMatch(await page.locator('#consultRows').textContent(),/Different case/);
-   const deep=page.url();assert.equal(new URL(deep).searchParams.get('consultation_reply_id'),'reply-one');
-   await page.locator('#supportClose').click();await page.locator('#supportDetail').waitFor({state:'hidden'});await page.waitForURL(u=>!u.searchParams.has('support_ticket_id'));
-   await page.evaluate(()=>{notificationCaseFixture.holdHistory=true});await page.locator('[data-support-id]').nth(1).click();await page.locator('#supportTab-history').click();await page.waitForFunction(()=>notificationCaseFixture.pendingHistory.length===1);await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});await page.evaluate(()=>notificationCaseFixture.pendingHistory.shift()());assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),0,'late history cannot reappear after close');
-   await page.waitForURL(u=>!u.searchParams.has('support_ticket_id'));await page.locator('[data-support-id]').first().click();await page.locator('#supportTab-history').click();await page.evaluate(()=>{notificationCaseFixture.wrongHistory=true});await page.locator('#supportDialogueRefresh').click();await page.locator('#supportDialogueNotice').filter({hasText:/./}).waitFor();assert.equal(await page.locator('#supportDialogueHistory').textContent().then(x=>x.includes('wrong-client')),false);
-   assert.deepEqual(b.errors,[]);console.log('PASS case tabs: exact reply focus, foreign case exclusion, late response dismissal, route mismatch fail-closed');
-  }finally{await b.context.close();}
-  const deep=await mount(390,'&support_ticket_id=a0000000-0000-4000-8000-00000000b301&consultation_reply_id=reply-one');try{const {page}=deep;await page.locator('[data-consultation-reply=reply-one]').waitFor();assert.equal(await active(page),'developer');assert.equal(await page.locator('[data-consultation-reply=reply-one]').evaluate(n=>n===document.activeElement),true);await page.locator('#supportTab-history').click();assert.equal(new URL(page.url()).searchParams.has('consultation_reply_id'),false);await page.reload();await page.locator('#supportDialogueHistory [data-message-id=outside-case]').waitFor();assert.equal(await active(page),'history');}finally{await deep.context.close();}
-  const stale=await mount(390);try{const {page}=stale;await page.locator('[data-support-id]').first().click();await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Pending request');await page.evaluate(()=>notificationCaseFixture.holdPrepare=true);await page.locator('#caseConsultSend').click();await page.waitForFunction(()=>notificationCaseFixture.pendingPrepare.length===1);await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});await page.evaluate(()=>notificationCaseFixture.pendingPrepare.shift()());assert.equal(await page.evaluate(()=>notificationCaseFixture.dispatched.length),0,'prepare finishing after close never dispatches');await page.waitForURL(u=>!u.searchParams.has('support_ticket_id'));await page.evaluate(()=>notificationCaseFixture.holdHistory=true);await page.locator('[data-support-id]').nth(1).click();await page.waitForFunction(()=>notificationCaseFixture.pendingHistory.length===1);await page.evaluate(async()=>{notificationCaseFixture.profile.capabilities.modules.dialogs=false;tenantRequestCoordinator.reset();await tenantReloadProfile();});await page.evaluate(()=>notificationCaseFixture.pendingHistory.shift()());await page.waitForFunction(()=>!document.querySelector('#supportDialogueHistory [data-message-id=outside-case]'));assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),0,'pending history is discarded when dialogue rights are revoked');assert.deepEqual(stale.errors,[]);console.log('PASS fresh reply deeplink, explicit-tab reload, delayed prepare close, pending history rights revocation');}finally{await stale.context.close();}
+  for(const width of [320,390,1280]){const {context,page,errors}=await mount(width);try{
+   await page.locator('[data-support-id]').first().click();await page.locator('#supportHistory [data-message-id=history-photo]').waitFor();
+   assert.equal(await active(page),'history');assert.equal(await page.locator('#supportDetail [role=tab]').count(),3);
+   assert.equal(await page.locator('#supportHistory [data-message-id=outside-case]').count(),0,'out-of-case messages never expand the history');
+   assert.equal(await page.evaluate(()=>notificationCaseFixture.historyCalls.length),0,'never calls unrestricted dialogue history');
+   assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls.length),0,'no automatic media downloads');
+   assert.equal(await page.locator('#supportSummary,#supportSummaryText,#supportCaseMaterials,#supportCaseContext,#supportAnalysisFields,#supportMoreActions,#supportTakeover,#caseMediaLoad').count(),0);
+   await page.locator('#supportHistory [data-message-id=history-photo] [data-ticket-media-open]').click();await page.locator('#supportHistory .support-media-preview img').waitFor();
+   assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls[0].conversation_id===notificationCaseFixture.route.conversation_id),true,'attachment retains exact conversation guard');
+   await page.locator('#supportEarlier').click();await page.locator('#supportHistory [data-message-id=oldest]').waitFor();assert.equal(await page.locator('#supportEarlier').isVisible(),false);
+   for(const tab of ['history','details','developer']){await page.locator('#supportTab-'+tab).click();assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);assert.equal(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,tab+' fits '+width);
+    await page.locator('#supportClose').focus();for(let step=0;step<18;step++){await page.keyboard.press(step<9?'Tab':'Shift+Tab');assert.equal(await page.evaluate(()=>document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,'focus remains in visible modal controls');}
+    await page.screenshot({path:path.join(artifacts,width+'-'+tab+'.png')});}
+   await page.locator('#supportTab-history').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'details');await page.keyboard.press('End');assert.equal(await active(page),'developer');await page.keyboard.press('Home');assert.equal(await active(page),'history');
+   await page.locator('#supportTab-details').click();await page.locator('#supportDescription').fill('Private unsaved case draft');await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Printer remains offline');
+   assert.equal(await page.locator('#caseConsultFirst,#caseConsultLast,#caseConsultRecipientConfirm,#caseConsultIdentityConsent').count(),0);assert.equal(await page.evaluate(()=>notificationCaseFixture.prepared.length),0);
+   await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Private unsaved case draft');await page.locator('#supportTab-developer').click();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
+   await page.locator('#caseConsultSend').click();await page.waitForFunction(()=>notificationCaseFixture.dispatched.length===1);
+   const sends=await page.evaluate(()=>({prepared:notificationCaseFixture.prepared,dispatched:notificationCaseFixture.dispatched}));assert.equal(sends.prepared.length,1);assert.equal(sends.prepared[0].public_dialog_version,1);assert.equal(sends.prepared[0].include_customer_identity,false);assert.equal(sends.prepared[0].request_id,sends.dispatched[0].request_id);
+   await page.locator('#supportTab-details').click();await page.reload();await page.locator('#supportDescription').waitFor();assert.equal(await active(page),'details','reload restores exact case tab');
+   await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});assert.equal(await page.locator('#supportDetail').evaluate(n=>n.contains(document.activeElement)),false);
+   assert.deepEqual(errors,[]);console.log('PASS scoped case tabs '+width+': history, lazy media, pagination, retired controls, ARIA, focus, drafts, explicit send, reload');
+  }finally{await context.close();}}
+  const stale=await mount(390);try{const {page}=stale;await page.locator('[data-support-id]').first().click();await page.locator('#supportHistory').waitFor();await page.evaluate(()=>notificationCaseFixture.holdHistory=true);await page.locator('#supportEarlier').click();await page.waitForFunction(()=>notificationCaseFixture.pendingHistory.length===1);await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});await page.evaluate(()=>notificationCaseFixture.pendingHistory.shift()());assert.equal(await page.locator('#supportHistory [data-message-id]').count(),0,'late case pagination cannot revive closed modal');assert.deepEqual(stale.errors,[]);}finally{await stale.context.close();}
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});
