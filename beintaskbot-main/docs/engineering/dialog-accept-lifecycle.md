@@ -21,6 +21,12 @@ closed. This revision therefore requires the additive schema before deployment.
   The same episode continues; the previous operator immediately loses access.
 - Close records its end, removes it from the active queue, and keeps a readonly
   detail for the last operator's explicit **Send to cases** action.
+- The last operator may explicitly **Start dialogue** from a closed or dismissed
+  detail when admission is enabled and their existing source update grant still
+  applies. This creates a fresh accepted episode under the same route lock,
+  preserves all prior episodes and sends no customer message. A changed revision,
+  another operator's ownership, or a concurrent inbound event makes the action
+  fail closed; an inbound event that wins first restores the waiting workflow.
 - A newly inserted, verified customer incoming event with a provider timestamp
   later than close returns the route to the waiting queue. Echoes, webhook retries,
   historical events, unknown timestamps and events preceding close do not reopen.
@@ -69,7 +75,8 @@ Required rollout order, after a verified backup/restore plan and explicit approv
    causes 409 with no change, rather than an unbounded wait. Retry only after the
    operation ends. No exclusive ownership is created with admission disabled.
 5. Validate owner and employee views, first-wins claim, transfer, source isolation,
-   incoming reopen, stale tabs, delivery reconciliation, manual cases and budgets.
+   incoming reopen, manual start from closed/dismissed, stale tabs, delivery
+   reconciliation, manual cases and budgets.
    No real customer message or paid AI call is implied by this read-only smoke.
 
 Normal protected operations hold the shared tenant transaction barrier through

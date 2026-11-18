@@ -273,6 +273,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
         'can_accept':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')),
+        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and own and _can_update is True,
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
@@ -318,7 +319,7 @@ def _mutate_once(profile, payload):
     from tenant_dialog_access import require_source
     from tenant_ai_dialog_scope import lock_dialog
     action=payload.get('action')
-    if action not in {'accept','close','transfer','case','dismiss'}: raise TenantLinearError('Неизвестное действие.')
+    if action not in {'accept','start','close','transfer','case','dismiss'}: raise TenantLinearError('Неизвестное действие.')
     request_id=str(uuid.UUID(str(payload.get('request_id'))))
     revision=payload.get('expected_revision')
     if type(revision) is not int or revision<0: raise TenantLinearError('Обновите диалог.',409)
@@ -328,7 +329,7 @@ def _mutate_once(profile, payload):
             tenant = str(uuid.UUID(str(profile.get('tenant_id'))))
             if not enabled(cur, tenant):
                 raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
-            if action in {'accept','dismiss'} and not acceptance_enabled(cur, tenant):
+            if action in {'accept','start','dismiss'} and not acceptance_enabled(cur, tenant):
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
@@ -369,8 +370,16 @@ def _mutate_once(profile, payload):
                   operator_id=EXCLUDED.operator_id,revision=saas_dialog_workflows.revision+1,
                   closed_at=clock_timestamp(),last_inbound_id=EXCLUDED.last_inbound_id,updated_at=clock_timestamp()""",
                   (tenant,channel,conversation,str(uuid.uuid4()),actor,last['id']))
-            elif action=='accept':
-                if row and row['state']!='waiting': raise TenantLinearError('Диалог уже принят или завершён.',409)
+            elif action in {'accept','start'}:
+                if action=='start':
+                    # Starting a closed cycle is available only to the employee
+                    # who owns the visible completed workflow. This preserves
+                    # the same visibility boundary as viewing a closed dialog.
+                    require_access(cur,tenant,actor,'connect',channel,conversation,'view')
+                    if not row or row['state'] not in {'closed','dismissed'} or int(row['operator_id'])!=actor:
+                        raise TenantLinearError('Диалог уже изменился или недоступен.',409)
+                elif row and row['state']!='waiting':
+                    raise TenantLinearError('Диалог уже принят или завершён.',409)
                 episode_id=str(uuid.uuid4())
                 cur.execute('''INSERT INTO saas_dialog_episodes(tenant_id,id,channel_id,conversation_id,lead_id,accepted_by,operator_id)
                   VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s)''',(tenant,episode_id,channel,conversation,route['lead_id'],actor,actor))

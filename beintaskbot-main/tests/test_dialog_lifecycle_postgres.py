@@ -92,6 +92,43 @@ def test_native_same_request_id_retry_has_one_episode_and_one_receipt(episodes):
     episodes.commit()
 
 
+def test_native_simultaneous_start_has_one_new_episode_and_preserves_owner(episodes):
+    import tenant_dialog_lifecycle as lifecycle
+    lifecycle.mutate(PROFILE,payload())
+    lifecycle.mutate(PROFILE,payload('close',1))
+    start_a,start_b=payload('start',2),payload('start',2)
+    values=race(episodes,[(11,start_a,'mutate'),(33,start_b,'mutate')])
+    assert len([value for value in values if value[0]=='ok'])==1
+    assert len([value for value in values if value[0]=='denied'])==1
+    row=episodes.execute('SELECT state,operator_id,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
+    assert row=={'state':'accepted','operator_id':11,'revision':3}
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==2
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid',(A,))[0]['n']==3
+    episodes.commit()
+
+
+def test_native_start_racing_fresh_inbound_never_loses_the_inbound(episodes):
+    import tenant_dialog_lifecycle as lifecycle
+    lifecycle.mutate(PROFILE,payload())
+    lifecycle.mutate(PROFILE,payload('close',1))
+    start=payload('start',2)
+    values=race(episodes,[(11,start,'mutate'),(11,start,'incoming')])
+    incoming=next(value[1]['incoming_id'] for value in values if value[0]=='ok' and 'incoming_id' in value[1])
+    row=episodes.execute('SELECT state,revision,last_inbound_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
+    assert row['state'] in {'waiting','accepted'},values
+    assert row['last_inbound_id']==incoming
+    if row['state']=='accepted':
+        assert any(value[0]=='ok' and value[1].get('lifecycle',{}).get('state')=='accepted' for value in values)
+        assert row['revision']==4
+        assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==2
+    else:
+        assert ('denied',409) in values
+        assert row['revision']==3
+        assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
+    assert episodes.execute('SELECT direction FROM saas_crm_messages WHERE id=%s::uuid',(incoming,))[0]['direction']=='incoming'
+    episodes.commit()
+
+
 def test_native_cross_source_claims_do_not_share_owner(episodes):
     channel=str(uuid.uuid4())
     episodes.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second source')",(A,channel))
