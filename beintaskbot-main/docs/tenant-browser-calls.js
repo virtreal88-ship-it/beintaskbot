@@ -116,7 +116,7 @@
     // Only a phone-number JID is a customer phone; numeric LIDs are opaque IDs.
     const jid=String(m.route.conversation_id||''),number=/^[1-9][0-9]{5,21}@s\.whatsapp\.net$/.test(jid)?'+'+jid.split('@')[0]:'';
     m.phoneLine.textContent=number;m.phoneLine.hidden=!number;
-    m.error.textContent=[s?.error,!terminal(call)&&s?.closeError].filter(Boolean).join(' ');m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
+    m.error.textContent=[s?.error,!terminal(call)&&s?.controlWarning,!terminal(call)&&s?.closeError].filter(Boolean).join(' ');m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
     m.start.disabled=!source.online;m.reject.hidden=!call||call.state!=='incoming'||!!s;
     m.end.hidden=!active&&!pending;m.end.disabled=!!s?.stopping;m.mute.hidden=!s?.media||!active||!!s?.stopping;m.mute.setAttribute('aria-pressed',String(!!s?.muted));buttonIcon(m.mute,s?.muted?'muted':'mic',s?.muted?'Включить микрофон':'Выключить микрофон');
   }
@@ -174,7 +174,7 @@
       const result=await api();if(generation!==revision||key()!==identity)return;
       enabled=result.enabled===true;online=result.online===true;testNumber=/^[0-9]{5,22}$/.test(result.test_number||'')?result.test_number:'';calls=result.calls||[];
       sources=Array.isArray(result.sources)?result.sources:[];
-      const s=session;
+      const s=session;if(s){s.controlBusySince=null;s.controlWarning='';}
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
@@ -186,7 +186,17 @@
       if(incoming&&!busy()&&(!modal||terminal(session?.call||modal.call))){closeModal();session=null;show(incoming,incoming);}
       if(modal?.call&&!session){const fresh=calls.find(c=>c.id===modal.call.id);if(fresh){modal.call=fresh;if(fresh.claimed||terminal(fresh))closeModal();}else closeModal();}
       refreshRecordings();mount();draw();
-    }catch(e){online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;pendingRecordings.clear();closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
+    }catch(e){
+      // Admission backpressure is not evidence that an established audio link
+      // or membership has ended. Retry only this read, for at most six seconds;
+      // the audio relay independently rechecks live authority every 3 seconds.
+      const s=session;
+      if(e.status===429&&s?.call?.id&&s.media&&!s.stopping&&!terminal(s.call)){
+        const now=performance.now();s.controlBusySince??=now;
+        if(now-s.controlBusySince<6000){s.controlWarning='Сервер занят. Проверяем состояние звонка…';draw();return;}
+        s.controlWarning='';s.error='Связь управления не восстановлена. Завершаем звонок.';
+      }
+      online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;pendingRecordings.clear();closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
     finally{polling=false;schedule();}
   }
   function schedule(){clearTimeout(timer);if(identity&&enabled)timer=setTimeout(()=>void poll(),2000);}
