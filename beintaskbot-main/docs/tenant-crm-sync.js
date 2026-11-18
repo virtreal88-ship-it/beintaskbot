@@ -1,51 +1,44 @@
-/* Progress only: CRM lists still use their authorized snapshot endpoints. */
+/* Visible Kommo views enqueue bounded reads; lists retain authorized snapshots until completion. */
 (() => {
   let profile, timer, generation = 0, watching = false;
   const boxes = {};
   const notified = new Map();
-  const fullButtons = [];
-  for (const [id, resource] of [['tasksRefresh','tasks'],['dealsRefresh','deals']]) {
-    const anchor = document.getElementById(id);
-    if (!anchor) continue;
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'outline'; button.textContent = 'Tam yenilə'; button.hidden = true;
-    anchor.after(button); fullButtons.push(button);
-    button.onclick = async () => {
-      const epoch = generation;
-      button.disabled = true;
-      try {
-        const response = await fetch(`/api/platform/crm/${resource}?refresh=1&full=1`, {credentials:'same-origin'});
-        const data = await response.json();
-        if (epoch !== generation) return;
-        if (!response.ok || !data.success || data.warning) throw new Error('full sync unavailable');
-        start();
-      } catch (_) {
-        if (epoch === generation) display(resource === 'tasks' ? 'tasks':'leads', 'Tam sinxronizasiya başlamadı. Kommo bağlantısını yoxlayın.');
-      } finally { button.disabled = false; }
-    };
-  }
+  let scopeKey='', pollBusy=false, pollController, authorized=false;
+  const refreshAt=new Map(),nativeReadAt=new Map();
+  const fingerprint=data=>JSON.stringify([data.member,data.capabilities,data.role_permissions,(Array.isArray(data.integrations)?data.integrations.map(({updated_at,...binding})=>binding):data.integrations)]);
+  const visible=()=>!document.hidden&&!!document.querySelector('#view-deals.active,#view-tasks.active');
+  const selected=resource=>document.getElementById(resource==='tasks'?'view-tasks':'view-deals')?.classList.contains('active')&&document.getElementById(resource==='tasks'?'taskFeedSource':'dealFeedSource')?.value==='kommo';
+  const query=()=>new URLSearchParams({expected_tenant_id:profile.tenant_id,expected_user_id:String(profile.telegram_id)});
   for (const [resource, view] of Object.entries({leads:'view-deals',tasks:'view-tasks'})) {
     const heading=document.querySelector('#'+view+' .top>div');
     if(!heading){boxes[resource]=[];continue;}
     const box=document.createElement('span');box.className='crm-sync-status';box.dataset.crmSyncStatus=resource;box.setAttribute('role','status');box.setAttribute('aria-live','polite');box.hidden=true;heading.append(box);boxes[resource]=[box];
   }
-  function display(resource, text) {
+  const progressText=(key,pages=0)=>({ru:{working:`Kommo обновляется в фоне: страниц ${pages}. Показан сохранённый список.`,failed:'Синхронизация остановилась. Проверьте подключение Kommo; обновление будет повторено автоматически.',error:'Не удалось проверить обновление Kommo. Сохранённый список остаётся на экране; проверка повторится.'},az:{working:`Kommo fonda yenilənir… ${pages} səhifə yükləndi. Saxlanmış siyahı göstərilir.`,failed:'Sinxronizasiya dayandı. Kommo bağlantısını yoxlayın; yeniləmə avtomatik təkrarlanacaq.',error:'Kommo yenilənməsini yoxlamaq olmadı. Saxlanmış siyahı göstərilir; yoxlama təkrarlanacaq.'},en:{working:`Updating Kommo in the background: ${pages} pages. The saved list remains visible.`,failed:'Synchronization stopped. Check the Kommo connection; updating will retry automatically.',error:'Could not check the Kommo update. The saved list remains visible; checking will retry.'}}[window.tenantI18n?.language]||{working:`Kommo fonda yenilənir… ${pages} səhifə yükləndi. Saxlanmış siyahı göstərilir.`,failed:'Sinxronizasiya dayandı. Kommo bağlantısını yoxlayın; yeniləmə avtomatik təkrarlanacaq.',error:'Kommo yenilənməsini yoxlamaq olmadı. Yoxlama təkrarlanacaq.'})[key];
+  function display(resource, text, failed=false) {
     // Completed polling is not a warning banner. Active work and failures remain
     // visible beside the heading; the orange deal counter keeps its own meaning.
     const complete=text==='Kommo məlumatları yeniləndi.';
     for (const box of boxes[resource] || []) {
       box.textContent=complete?'':text;box.hidden=complete||!text;
-      box.dataset.failed=String(!!text&&!complete&&!text.startsWith('Kommo fonda'));
+      box.dataset.failed=String(!!text&&!complete&&failed);
     }
   }
   function schedule(epoch) {
     clearTimeout(timer);
-    if (epoch === generation && watching && !document.hidden) timer = setTimeout(() => poll(epoch), 5000);
+    if (epoch === generation && authorized && profile?.active===true && visible()) timer = setTimeout(() => poll(epoch), watching?5000:15000);
   }
   async function poll(epoch) {
-    if (!profile || epoch !== generation || document.hidden) return;
+    if (!authorized || !profile || epoch !== generation || !visible() || pollBusy) return;
+    pollBusy=true;const controller=new AbortController();pollController=controller;const timeout=setTimeout(()=>controller.abort(),15000);
     try {
-      const response = await fetch('/api/platform/crm/sync', {credentials:'same-origin'});
+      const nativeResource=['leads','tasks'].find(resource=>document.getElementById(resource==='tasks'?'view-tasks':'view-deals')?.classList.contains('active')&&document.getElementById(resource==='tasks'?'taskFeedSource':'dealFeedSource')?.value==='native');
+      if(nativeResource){
+        watching=false;display(nativeResource,'');
+        if(Date.now()-(nativeReadAt.get(nativeResource)??-Infinity)>=30000){nativeReadAt.set(nativeResource,Date.now());document.dispatchEvent(new CustomEvent('tenant-crm-cache-refresh',{detail:{resource:nativeResource,tenant_id:profile.tenant_id,expected_user_id:String(profile.telegram_id)}}));}
+        return;
+      }
+      const response = await fetch('/api/platform/crm/sync?'+query(), {credentials:'same-origin',cache:'no-store',signal:controller.signal});
       const data = await response.json();
       if (epoch !== generation) return;
       if (!response.ok || !data.success) throw new Error('status unavailable');
@@ -54,9 +47,9 @@
       for (const job of data.jobs || []) {
         if (job.status === 'queued' || job.status === 'running') {
           active = true;notified.delete(job.resource);
-          display(job.resource, `Kommo fonda yenilənir… ${job.pages_done || 0} səhifə yükləndi. Saxlanmış siyahı göstərilir.`);
+          display(job.resource, progressText('working',job.pages_done||0));
         } else if (job.status === 'failed') {
-          display(job.resource, 'Sinxronizasiya dayandı. Kommo bağlantısını yoxlayın və Yenilə düyməsini basın.');
+          display(job.resource, progressText('failed'),true);
         } else if (job.status === 'done') {
           display(job.resource, 'Kommo məlumatları yeniləndi.');
           const stamp=JSON.stringify([job.started_at,job.finished_at,job.updated_at]);
@@ -64,22 +57,33 @@
         }
       }
       watching = active;
-      if (!active && completed.length){for(const item of completed)notified.set(item.resource,item.stamp);document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete', {
-        detail: {resources:completed.map(item=>item.resource), tenant_id:profile.tenant_id}
+      if (completed.length){for(const item of completed)notified.set(item.resource,item.stamp);document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete', {
+        detail: {resources:completed.map(item=>item.resource), tenant_id:profile.tenant_id, expected_user_id:String(profile.telegram_id)}
       }));}
+      // Observe completed runs before enqueue can replace their status.
+      for(const resource of ['leads','tasks']){
+        if(epoch!==generation||!authorized||!profile)return;
+        const canSync=resource==='tasks'?window.tenantTaskFlow?.sourceActions('kommo')?.sync===true:!!(window.tenantProfileSnapshot?.capabilities?.modules?.deals||window.tenantProfileSnapshot?.capabilities?.modules?.customers);
+        if(!visible()||!selected(resource)||!canSync||Date.now()-(refreshAt.get(resource)??-Infinity)<60000)continue;
+        refreshAt.set(resource,Date.now());const params=query();params.set('refresh','1');
+        const response=await fetch('/api/platform/crm/'+(resource==='leads'?'deals':'tasks')+'?'+params,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+        const result=await response.json();if(epoch!==generation)return;
+        if(!response.ok||!result.success||result.warning)throw Error('refresh unavailable');
+        watching=true;
+      }
     } catch (_) {
       if (epoch !== generation) return;
       watching = false;
-      for (const resource of Object.keys(boxes)) display(resource, 'Sinxronizasiya vəziyyəti alınmadı. Yenilə düyməsi ilə yoxlayın.');
+      for (const resource of Object.keys(boxes)) display(resource, progressText('error'),true);
     }
-    schedule(epoch);
+    finally {clearTimeout(timeout);if(pollController===controller)pollController=null;pollBusy=false;schedule(generation);}
   }
-  function start() {
-    if (!profile) return;
-    generation++; watching = true; clearTimeout(timer); poll(generation);
+  function start(resource) {
+    if (!authorized || !profile?.active) return;
+    watching=true;clearTimeout(timer);if(!pollBusy)void poll(generation);
   }
   window.tenantCrmSyncWatch = start;
-  window.addEventListener('pagehide',()=>{generation++;watching=false;clearTimeout(timer);});
+  window.addEventListener('pagehide',pause);
   window.addEventListener('pageshow',event=>{if(event.persisted&&profile)start();});
   let syncPanel=null,syncStatus=null,syncSequence=0,syncResult=null,syncSaving=false;
   const syncWords={ru:{heading:'Синхронизация CRM',intro:'Настройте направление обмена контактами и сделками между Beintaskbot и CRM. По умолчанию синхронизация выключена. Старая история автоматически не импортируется.',contact:'Контакты',deal:'Сделки',provider:'CRM-система',direction:'Направление обмена',disabled:'Выключена',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'В обе стороны',save:'Сохранить правила синхронизации',loading:'Загружаем правила синхронизации…',ready:'Готово. Синхронизация начнётся только после включения направления.',saved:'Правила сохранены. Существующие записи CRM не изменены.',loadError:'Не удалось загрузить правила синхронизации.',saveError:'Не удалось сохранить правила синхронизации.',connection:'Подключение',queue:'В очереди',failed:'С ошибкой',conflicts:'Неразрешённые расхождения',empty:'нет',name:'Имя',phone:'Телефон',email:'Email',title:'Название сделки',pipeline_id:'Воронка продаж',stage_id:'Этап',contact_id:'Контакт',description:'Описание'},az:{heading:'CRM məlumatlarının sinxronizasiyası',intro:'Beintaskbot və CRM arasında kontakt və sövdələşmələrin mübadilə istiqamətini seçin. Standart olaraq sinxronizasiya söndürülüb. Köhnə tarixçə avtomatik idxal edilmir.',contact:'Əlaqələr',deal:'Sövdələşmələr',provider:'CRM sistemi',direction:'Məlumatın istiqaməti',disabled:'Söndürülüb',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'İki istiqamətli',save:'Sinxronizasiya qaydalarını saxla',loading:'Sinxronizasiya qaydaları yüklənir…',ready:'Hazırdır. Sinxronizasiya yalnız istiqamət aktiv ediləndə işləyir.',saved:'Qaydalar saxlanıldı. Mövcud CRM yazıları dəyişdirilmədi.',loadError:'Sinxronizasiya qaydalarını yükləmək olmadı.',saveError:'Sinxronizasiya qaydalarını saxlamaq olmadı.',connection:'Bağlantı',queue:'Növbə',failed:'Uğursuz',conflicts:'Həll olunmamış uyğunsuzluqlar',empty:'boş',name:'Ad',phone:'Telefon',email:'Email',title:'Sövdələşmənin adı',pipeline_id:'Satış vərəqi',stage_id:'Mərhələ',contact_id:'Əlaqə',description:'Təsvir'},en:{heading:'CRM data sync',intro:'Choose how contacts and deals move between Beintaskbot and CRM. Sync is off by default. Older history is not imported automatically.',contact:'Contacts',deal:'Deals',provider:'CRM system',direction:'Sync direction',disabled:'Off',toExternal:'Beintaskbot → CRM',fromExternal:'CRM → Beintaskbot',both:'Both directions',save:'Save sync rules',loading:'Loading sync rules…',ready:'Ready. Sync runs only after a direction is enabled.',saved:'Rules saved. Existing CRM records were not changed.',loadError:'Could not load sync rules.',saveError:'Could not save sync rules.',connection:'Connection',queue:'Queue',failed:'Failed',conflicts:'Unresolved conflicts',empty:'empty',name:'Name',phone:'Phone',email:'Email',title:'Deal title',pipeline_id:'Sales pipeline',stage_id:'Stage',contact_id:'Contact',description:'Description'}};
@@ -138,13 +142,17 @@
     try{const settings=[...syncPanel.querySelectorAll('[data-entity]')].map(card=>{const entity=card.dataset.entity,provider=card.querySelector('[data-provider]').value,direction=card.querySelector('[data-direction]').value;return{entity_type:entity,provider,sync_direction:direction,mode:direction==='bidirectional'?'selective':direction==='from_external'?'external':'beintaskbot',primary_provider:direction==='to_external'?'beintaskbot':provider,allowed_fields:[...card.querySelectorAll('[data-field]:checked')].map(input=>input.dataset.field)}});const response=await fetch('/api/platform/crm/external-sync',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings})}),result=await response.json();if(!valid())return;if(!response.ok||!result.success)throw new Error(result.error||syncText('saveError'));setSyncStatus(syncText('saved'));syncSaving=false;panel.querySelectorAll('input,select,button').forEach(node=>node.disabled=false);await loadExternalSync();}
     catch(error){if(valid())setSyncStatus(error.message||syncText('saveError'));}finally{if(valid()){syncSaving=false;panel.querySelectorAll('input,select,button').forEach(node=>node.disabled=false);}}
   }
+  function pause(){authorized=false;generation++;pollController?.abort();watching=false;clearTimeout(timer);profile=null;notified.clear();for(const resource of Object.keys(boxes))display(resource,'');}
+  document.addEventListener('tenant-auth-pending',pause);
+  document.addEventListener('tenant-auth-invalid',pause);
   document.addEventListener('tenant-profile',event=>{
-    generation++;clearTimeout(timer);watching=false;const next=event.detail.member;const changed=profile?.tenant_id!==next?.tenant_id||profile?.telegram_id!==next?.telegram_id||profile?.role!==next?.role;profile=next;if(changed){notified.clear();syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;}
-    for(const button of fullButtons)button.hidden=!['owner','admin'].includes(profile?.role);
-    for(const resource of Object.keys(boxes))display(resource,'');
-    const modules=event.detail.capabilities?.modules||{};if(modules.tasks||modules.deals||modules.customers)start();
+    const next=event.detail.member,key=fingerprint(event.detail),changed=key!==scopeKey;profile=next;const modules=event.detail.capabilities?.modules||{};authorized=profile?.active===true&&!!(modules.tasks||modules.deals||modules.customers||event.detail.capabilities?.actions?.tasks?.view||event.detail.capabilities?.actions?.deals?.view||(Array.isArray(profile.permissions)&&profile.permissions.includes('tasks:view')));
+    if(changed){generation++;clearTimeout(timer);watching=false;refreshAt.clear();nativeReadAt.clear();notified.clear();scopeKey=key;syncSequence++;syncPanel=null;syncStatus=null;syncResult=null;syncSaving=false;for(const resource of Object.keys(boxes))display(resource,'');}
+    if(authorized)start();
   });
+  document.addEventListener('tenant-view',()=>{clearTimeout(timer);if(visible())start();});
+  document.addEventListener('change',event=>{if(['taskFeedSource','dealFeedSource'].includes(event.target.id)&&visible())start();});
   document.addEventListener('tenant-integration-panel-ready',event=>{if(event.detail?.provider==='kommo')queueMicrotask(()=>{if(profile?.role==='owner')void loadExternalSync();});});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(timer);return;}if(watching){generation++;poll(generation);}});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(timer);return;}if(profile&&visible())start();});
   document.addEventListener('tenant-language',()=>{if(syncPanel?.isConnected&&!syncSaving&&profile?.role==='owner'&&syncResult)renderSync({result:syncResult});});
 })();

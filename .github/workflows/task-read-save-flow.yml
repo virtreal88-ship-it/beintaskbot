@@ -19,6 +19,8 @@ on:
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/*task*.js'
       - 'beintaskbot-main/docs/tenant-crm-sync.js'
+      - 'beintaskbot-main/tests/test_crm_sync_live_ui.cjs'
+      - 'beintaskbot-main/tests/test_crm_sync_live_browser.cjs'
       - 'beintaskbot-main/ui/src/**'
       - 'beintaskbot-main/tests/*task*'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
@@ -108,6 +110,8 @@ jobs:
           node tests/test_task_source_picker_ui.cjs
           node tests/test_task_source_picker_browser.cjs
           node tests/test_deal_source_picker_ui.cjs
+          node tests/test_crm_sync_live_ui.cjs
+          node tests/test_crm_sync_live_browser.cjs
           node tests/test_deal_source_picker_browser.cjs
           node tests/test_deal_pagination_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
