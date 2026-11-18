@@ -368,5 +368,3 @@ body[data-app-ui=kwid] button.connect-number-add,.connect-number-add{background:
 .connect-call-status[data-state=online]{color:#10966e}.connect-call-status[data-state=online]:after{content:'✓'}
 .connect-call-status[data-state=offline]:after,.connect-call-status[data-state=unavailable]:after{content:'×'}
 .connect-call-status[data-state=pilot_online],.connect-call-status[data-state=pilot_offline],.connect-call-status[data-state=mismatch]{color:#b37b13}.connect-call-status[data-state=pilot_online]:after{content:'T'}.connect-call-status[data-state=pilot_offline]:after{content:'×'}.connect-call-status[data-state=mismatch]:after{content:'!'}
-.connect-pairing-dialog{box-sizing:border-box;width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--app-line);border-radius:12px;padding:22px;background:var(--app-surface,#fff);color:var(--app-ink,#222)}
-.connect-pairing-dialog::backdrop{background:#0007}.connect-pairing-dialog img{display:block;width:min(320px,100%);height:auto;margin:16px auto;background:white}.connect-pairing-dialog button{margin:6px}.connect-pairing-dialog [hidden]{display:none!important}
