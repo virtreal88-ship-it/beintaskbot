@@ -60,6 +60,25 @@ def test_only_direct_number_and_uuid_binding_are_accepted():
 
 
 @pytest.mark.asyncio
+async def test_unified_pairing_generation_is_immutable_and_keeps_keys_private(tmp_path):
+    supervisor,client=await client_for(tmp_path)
+    headers={'Authorization':'Bearer '+TOKEN};endpoint='/v1/sources/'+SOURCE
+    try:
+        payload={**BINDING,'messaging_generation':'test-g1'}
+        response=await client.post(endpoint,json=payload,headers=headers)
+        assert response.status==200
+        assert set(await response.json())=={'public_key'}
+        original=json.loads((tmp_path/SOURCE/'source.json').read_text())
+        assert original['messaging']['generation']=='test-g1'
+        assert len(original['messaging']['key'])==64
+        assert (await client.post(endpoint,json=payload,headers=headers)).status==200
+        assert json.loads((tmp_path/SOURCE/'source.json').read_text())==original
+        assert (await client.post(endpoint,json={**payload,'messaging_generation':'test-g2'},headers=headers)).status==409
+        assert json.loads((tmp_path/SOURCE/'source.json').read_text())==original
+    finally:await client.close()
+
+
+@pytest.mark.asyncio
 async def test_native_send_requires_explicit_binding_and_exact_scope(tmp_path):
     supervisor,client=await client_for(tmp_path)
     headers={'Authorization':'Bearer '+TOKEN}

@@ -177,7 +177,13 @@ class Supervisor:
 
     async def provision(self,request):
         self.authorize(request);source=safe_uuid(request.match_info['source'])
-        try:spec=binding(await request.json())
+        try:
+            payload=await request.json()
+            if not isinstance(payload,dict):raise web.HTTPBadRequest(text='source_binding_invalid')
+            generation=payload.pop('messaging_generation',None)
+            if generation is not None and (not isinstance(generation,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',generation)):
+                raise web.HTTPBadRequest(text='native_messaging_configuration_invalid')
+            spec=binding(payload)
         except (json.JSONDecodeError,UnicodeDecodeError):raise web.HTTPBadRequest(text='source_binding_invalid') from None
         async with self.lock:
             entry=self.sources.get(source)
@@ -187,6 +193,10 @@ class Supervisor:
                 old=json.dumps(entry['data']['binding'],sort_keys=True)
                 if not hmac.compare_digest(old,json.dumps(spec,sort_keys=True)):
                     raise web.HTTPConflict(text='source_binding_changed')
+                if generation is not None and entry['data'].get('messaging',{}).get('generation')!=generation:
+                    # Existing devices require a separately fenced maintenance
+                    # transition. Provision never restarts a live call engine.
+                    raise web.HTTPConflict(text='source_messaging_transition_required')
             else:
                 if len(self.sources)>=MAX_SOURCES:raise web.HTTPServiceUnavailable(text='calls_source_capacity')
                 if any(e['data']['binding']['account_jid']==spec['account_jid'] for e in self.sources.values()):
@@ -195,6 +205,8 @@ class Supervisor:
                 port=next(p for p in range(18000,18000+MAX_SOURCES) if p not in ports)
                 data={'binding':spec,'port':port,'http_token':secrets.token_hex(32),
                       'signing_seed':secrets.token_hex(32),'encryption_key':secrets.token_hex(32)}
+                if generation is not None:
+                    data['messaging']={'generation':generation,'key':secrets.token_hex(32)}
                 folder=self.root/source
                 folder.mkdir(mode=0o700,exist_ok=False)
                 atomic_json(folder/'source.json',data)

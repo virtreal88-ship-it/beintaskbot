@@ -503,3 +503,23 @@ Neither …103 nor …101 has been switched by this implementation.
 
 Validation here is isolated tests, not a live /app conversation or source cutover.
 Existing lab provider evidence above predates these Worker adapter changes.
+
+### Existing disabled test source: explicit staged rollout
+
+`tenant_whatsapp_native_rollout.migrate(cursor)` is additive and operator-run.
+`stage(owner_profile, source_uuid, exact_account_jid, generation)` checks current
+owner/source rights and the legacy endpoint's exact number and disabled state.
+It requires an inactive existing source, reserves immutable gateway/generation
+bindings, then provisions a new managed device with message capture before QR.
+It neither enables CRM projection/sends nor reactivates the source. Retrying uses
+the same binding and encryption/signing keys. Stop the isolated lab owner before
+pairing the same account; do not copy Evolution sessions or delete old lab data.
+
+The existing owner source-pairing window may inspect this staged source despite
+its archived state; ordinary call/message authority still requires an active
+source. `activate` is separate: the three runtime flags must be enabled, the
+legacy source must still be disabled, and the managed gateway must confirm the
+exact paired number. Source mode, current bindings and generation are locked
+through the transaction. Only that source is reactivated; history and grants
+are not rewritten. Existing call-only engines are deliberately rejected by
+`stage`: their maintenance transition and live …103 acceptance precede …101.
