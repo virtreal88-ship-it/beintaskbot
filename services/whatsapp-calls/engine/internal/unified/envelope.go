@@ -84,7 +84,13 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 		out.QuoteID, out.QuoteChat, out.QuoteSender = context.GetStanzaID(), context.GetRemoteJID(), context.GetParticipant()
 	}
 	variant := "original"
-	if event.IsEdit || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil {
+	// One group stanza can dispatch a sender-key distribution and the actual
+	// content separately, with the same chat/sender/provider ID. A key-only
+	// envelope must not occupy the original message's immutable journal slot.
+	// If content accompanies the key, retain its existing original identity.
+	keyOnly := out.MessageType == "unsupported" &&
+		(event.Message.GetSenderKeyDistributionMessage() != nil || event.Message.GetFastRatchetKeySenderKeyDistributionMessage() != nil)
+	if event.IsEdit || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil || keyOnly {
 		hash := sha256.Sum256(data)
 		variant = hex.EncodeToString(hash[:])
 		// Do not project an edit/reaction/protocol payload as a fresh user turn.
