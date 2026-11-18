@@ -77,13 +77,18 @@ def route(cur, tenant, channel, conversation, lead_id=None):
     return dict(value)
 
 
-def create_in_transaction(cur, tenant, channel, conversation, reason, event_key, *, actor=None, description='', source='ai_handoff', lead_id=None, message_ids=None, bounded_episode=False):
+def create_in_transaction(cur, tenant, channel, conversation, reason, event_key, *, actor=None, description='', source='ai_handoff', lead_id=None, message_ids=None, bounded_episode=False, episode_id=None, expected_revision=None):
     """Caller initializes schema first; ticket and handoff commit together. No provider calls."""
     from tenant_dialog_lifecycle import enabled as lifecycle_enabled
-    if lifecycle_enabled(cur, tenant):
+    lifecycle = lifecycle_enabled(cur, tenant)
+    if lifecycle:
         if actor is None or source == 'ai_handoff':
             return {'id': None, 'created': False, 'disabled': 'manual_episode_required'}
-        raise TenantLinearError('Отправьте завершённое обращение в кейсы из диалога.', 409)
+        if not episode_id or type(expected_revision) is not int or expected_revision<0 or message_ids is not None:
+            raise TenantLinearError('Обновите принятый диалог перед созданием обращения.',409)
+        episode_id=identifier(episode_id)
+    elif episode_id is not None or expected_revision is not None:
+        raise TenantLinearError('Состояние диалога изменилось. Обновите его.',409)
     tenant = identifier(tenant)
     cur.execute('SELECT status FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
     company = cur.fetchone() or {}
@@ -105,19 +110,49 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
             require_create(cur,scoped_actor)
     selected = route(cur, tenant, channel, conversation, lead_id)
     channel, conversation = str(selected['connect_channel_id']), selected['conversation_id']
+    if lifecycle:
+        # Same lock/order as lifecycle close/start/transfer and message admission.
+        # Creation cannot race into a different episode or change its state.
+        lock_dialog(cur,tenant,'connect',channel,conversation)
+        from tenant_dialog_access import require_source
+        from tenant_dialog_consultations import access as dialogs_access
+        from tenant_dialog_lifecycle import require_access
+        _,_,dialog_policy=dialogs_access(cur,{'tenant_id':tenant,'telegram_id':actor},'dialogs')
+        require_source(cur,tenant,dialog_policy,'connect',channel,'view')
+        require_source(cur,tenant,dialog_policy,'connect',channel,'update')
+        require_access(cur,tenant,actor,'connect',channel,conversation,'view')
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('support:' + tenant + ':' + channel + ':' + conversation,))
     event_key = str(event_key)
     if not event_key or len(event_key) > 500:
         raise TenantLinearError('Некорректный код события.')
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('support-event:'+tenant+':'+event_key,))
-    cur.execute('SELECT e.ticket_id,t.channel_id,t.conversation_id,t.created_by FROM saas_support_events e JOIN saas_support_tickets t ON t.tenant_id=e.tenant_id AND t.id=e.ticket_id WHERE e.tenant_id=%s::uuid AND e.event_key=%s', (tenant, event_key))
+    cur.execute('SELECT e.ticket_id,t.channel_id,t.conversation_id,t.created_by,t.dialog_episode_id::text AS dialog_episode_id FROM saas_support_events e JOIN saas_support_tickets t ON t.tenant_id=e.tenant_id AND t.id=e.ticket_id WHERE e.tenant_id=%s::uuid AND e.event_key=%s', (tenant, event_key))
     previous = cur.fetchone()
     if previous:
+        if lifecycle and (previous.get('dialog_episode_id')!=episode_id or previous['created_by']!=actor):
+            raise TenantLinearError('Код запроса принадлежит другому циклу диалога.',409)
         if str(previous['channel_id']) != channel or previous['conversation_id'] != conversation:
             raise TenantLinearError('Код события уже использован для другого диалога.',409)
         if scoped_actor and previous.get('created_by') != actor:
             require(cur,scoped_actor,previous['ticket_id'],'update',lock=True)
         return {'id': str(previous['ticket_id']), 'created': False}
+    episode=None
+    if lifecycle:
+        from tenant_dialog_lifecycle import _row
+        workflow=_row(cur,tenant,channel,conversation)
+        if (not workflow or workflow['state']!='accepted' or workflow.get('operator_id')!=actor
+                or str(workflow['id'])!=episode_id or int(workflow['revision'])!=expected_revision):
+            raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
+        cur.execute('''SELECT id::text,accepted_at,clock_timestamp() AS frozen_at FROM saas_dialog_episodes
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+            AND operator_id=%s AND closed_at IS NULL FOR UPDATE''',(tenant,episode_id,channel,conversation,actor))
+        episode=cur.fetchone()
+        if not episode:raise TenantLinearError('Текущий цикл диалога не подтверждён.',409)
+        cur.execute('''SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+          AND conversation_id=%s AND status<>'resolved' AND completion_outcome<>'test_stopped'
+          AND dialog_episode_id IS DISTINCT FROM %s::uuid FOR UPDATE''',(tenant,channel,conversation,episode_id))
+        if cur.fetchone():
+            raise TenantLinearError('В этом диалоге есть незавершённое обращение другого цикла. Завершите его перед созданием нового.',409)
     if not description:
         cur.execute('''SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
           AND channel=%s AND direction='incoming' AND body<>''
@@ -127,19 +162,30 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
         description = str(latest.get('body') or '')[:240]
     ticket_id = str(uuid.uuid4())
     scope_kind = 'selected' if bounded_episode or message_ids is not None else 'snapshot'
-    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by,history_scope,access_responsible_id)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s)
+    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by,history_scope,access_responsible_id,dialog_episode_id,history_started_at,history_frozen_at,created_at)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s::uuid,%s::timestamptz,%s::timestamptz,COALESCE(%s::timestamptz,now()))
       ON CONFLICT(tenant_id,channel_id,conversation_id)
       WHERE status<>'resolved' AND completion_outcome<>'test_stopped' DO UPDATE
         SET source=CASE WHEN EXCLUDED.source='ai_handoff' THEN 'ai_handoff' ELSE saas_support_tickets.source END,
         reason=CASE WHEN EXCLUDED.source='ai_handoff' THEN EXCLUDED.reason ELSE saas_support_tickets.reason END,
         status=CASE WHEN EXCLUDED.source='ai_handoff' AND saas_support_tickets.status='new' THEN 'waiting' ELSE saas_support_tickets.status END
       RETURNING id''', (tenant,ticket_id,channel,conversation,source,str(reason or 'Требуется помощь сотрудника')[:1000],
-        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor,scope_kind,actor))
+        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor,scope_kind,actor,episode_id if episode else None,episode['accepted_at'] if episode else None,
+        episode['frozen_at'] if episode else None,episode['frozen_at'] if episode else None))
     result_id = str(cur.fetchone()['id'])
     if scoped_actor and result_id != ticket_id:
         require(cur,scoped_actor,result_id,'update',lock=True)
-    if result_id == ticket_id and not bounded_episode:
+    if result_id == ticket_id and episode:
+        # Durable episode membership was admitted under the same dialog lock;
+        # capture every member exactly once, including proven alias messages.
+        cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
+          SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_dialog_episode_messages em
+          JOIN saas_crm_messages m ON m.tenant_id=em.tenant_id AND m.id=em.message_id
+          WHERE em.tenant_id=%s::uuid AND em.episode_id=%s::uuid AND m.channel=%s
+            AND m.direction IN ('incoming','outgoing') AND em.recorded_at<=%s::timestamptz
+          ON CONFLICT DO NOTHING''',(tenant,ticket_id,'dialog-episode:'+episode_id,tenant,episode_id,
+              'connect:'+channel,episode['frozen_at']))
+    elif result_id == ticket_id and not bounded_episode:
         from tenant_support_case_context import SNAPSHOT_LIMIT, _selection
         if message_ids is None:
             # Freeze the recorded acceptance interval for new cases. Legacy
@@ -671,7 +717,7 @@ def _attach_case_materials(profile,ticket_id,message_ids,*,media_only):
 
 def create(profile, data):
     if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids',
-        'assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'}:
+        'assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed','episode_id','expected_revision'}:
         raise TenantLinearError('Некорректные поля обращения.')
     legacy_developer=any(key in data for key in ('assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'))
     if legacy_developer and (data.get('developer_confirmed') is not True or not data.get('assigned_developer_channel_id')
@@ -694,7 +740,8 @@ def create(profile, data):
                     identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
-                description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
+                description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'),
+                episode_id=data.get('episode_id'),expected_revision=data.get('expected_revision'))
             if legacy_developer:
                 cur.execute('''SELECT assigned_developer_channel_id::text,assigned_developer_conversation_id
                   FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,receipt['id']))
@@ -711,7 +758,7 @@ def create(profile, data):
             else:
                 _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],{'developer_assignment':False})
         conn.commit()
-    summarize_created(tenant,receipt)
+    if not data.get('episode_id'):summarize_created(tenant,receipt)
     result=mutation_result(profile,receipt['id'])
     # This response acknowledges this exact idempotent request, including a
     # new explicit request that attached to an already open dialog case.

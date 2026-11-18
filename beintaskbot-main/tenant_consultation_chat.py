@@ -64,7 +64,7 @@ def send(profile, key, data):
     return {**flow.dispatch(profile,key,request), 'request_id':request}
 
 
-def delivery_page(cur, tenant, key, before=''):
+def delivery_page(cur, tenant, key, before='', actor=None):
     """Bounded, stable, exact-ledger pagination; cursor cannot cross a chat."""
     boundary=''
     params=[tenant,key]
@@ -75,10 +75,20 @@ def delivery_page(cur, tenant, key, before=''):
         if not row:raise TenantLinearError('Страница переписки недоступна.',404)
         boundary=' AND (created_at,request_id)<(%s::timestamptz,%s::uuid)'
         params.extend([row['created_at'],before])
-    cur.execute('''SELECT request_id::text,body,state,created_at,updated_at,connect_message_id,provider_message_id,is_chat_followup
+    cur.execute('''SELECT request_id::text,body,state,created_at,updated_at,connect_message_id,provider_message_id,is_chat_followup,media_metadata,channel_id::text,conversation_id
       FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid'''+boundary+' ORDER BY created_at DESC,request_id DESC LIMIT 201',params)
     rows=cur.fetchall()
     values=[{k:str(v) if hasattr(v,'isoformat') else v for k,v in dict(row).items()} for row in rows[:200]][::-1]
+    if actor is not None:
+        from urllib.parse import urlencode
+        for value in values:
+            metadata=value.get('media_metadata') or {}
+            if metadata and value.get('connect_message_id'):
+                try:external='connect:'+str(__import__('uuid').UUID(value['connect_message_id']))
+                except (ValueError,TypeError):continue
+                value['attachment_url']='/api/platform/crm/chat/attachment?'+urlencode({'lead_id':metadata['lead_id'],
+                  'channel_id':value['channel_id'],'conversation_id':value['conversation_id'],'message_id':external,
+                  'expected_tenant_id':tenant,'expected_user_id':actor})
     return {'deliveries':values,'has_earlier':len(rows)>200,'next_before':values[0]['request_id'] if len(rows)>200 else None}
 
 
@@ -94,4 +104,24 @@ def read(profile,key,before=''):
             original=cur.fetchone()
             if not original:raise TenantLinearError('Переписка недоступна.',404)
             flow.route(cur,tenant,policy,original['channel_id'],original['conversation_id'])
-            return delivery_page(cur,tenant,key,before)
+            return delivery_page(cur,tenant,key,before,actor=actor)
+
+
+def can_send(cur,profile,row):
+    """Read-only UI hint using existing update policy; send rechecks under locks."""
+    if not row.get('case_id'):return True
+    from tenant_support_access import policy_access
+    from tenant_scoped_access_store import owned_resource_metadata
+    from tenant_dialog_lifecycle import enabled,_row
+    try:
+        tenant,actor,policy=policy_access(cur,profile,'update')
+        cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['case_id']))
+        case=cur.fetchone()
+        if not case or case['status']=='resolved':return False
+        if policy.action_scope('support','update') is not None and not policy.allows_resource('support','update',owned_resource_metadata(cur,tenant,case)):
+            return False
+        if enabled(cur,tenant):
+            episode=_row(cur,tenant,row['source_channel'],row['source_conversation'])
+            if not episode or episode['state']!='accepted' or int(episode['operator_id'])!=int(actor):return False
+        return True
+    except TenantLinearError:return False

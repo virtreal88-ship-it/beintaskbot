@@ -26,16 +26,20 @@ def schema(conn):
             return
         if schema_ready(cur,include_chat_followup=False):
             cur.execute('ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS is_chat_followup BOOLEAN NOT NULL DEFAULT FALSE')
+            cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS media_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
             conn.commit()
             require_schema(conn)
             return
-        if schema_ready(cur,include_followup=False,include_public_identity=False):
+        if schema_ready(cur,include_followup=False,include_public_identity=False,include_chat_followup=False):
             # The deployed #467 foundation needs only these additive columns.
             # Release each relation lock before touching another table; old
             # readers may still be finishing during a rolling upgrade.
             cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
             conn.commit()
             cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
+            conn.commit()
+            cur.execute('ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS is_chat_followup BOOLEAN NOT NULL DEFAULT FALSE')
+            cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS media_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
             conn.commit()
             from tenant_ai_unused_archive import install_existing
             install_existing(cur)
@@ -50,6 +54,7 @@ def schema(conn):
     legacy_schema(conn)
     with conn.cursor() as cur:
         cur.execute('ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS is_chat_followup BOOLEAN NOT NULL DEFAULT FALSE')
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS media_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
     conn.commit()
     share_schema(conn)
     with conn.cursor() as cur:
@@ -151,6 +156,27 @@ def _case_rows(cur,tenant,case_id,channel,conversation):
     scope=history_projection(cur,load_scope(cur,tenant,case_id,channel,conversation))
     rows=messages(cur,scope,limit=81)
     return rows[-80:],len(rows)>80,metadata(cur,scope)
+
+
+def _automatic_case_rows(cur, tenant, case_id, channel, conversation):
+    from tenant_support_case_context import load_scope, history_projection, all_messages
+    scope=history_projection(cur,load_scope(cur,tenant,case_id,channel,conversation))
+    # Legacy explicit saved evidence is usable; unbounded old whole-dialogue
+    # scope is not proof of a case boundary and must never be shared implicitly.
+    if scope['history_context']['boundary_status']=='boundary_unknown' and scope['kind']=='conversation':
+        raise TenantLinearError('Границы обращения не сохранены. Автоматическая передача всей истории недоступна.',409)
+    return scope,all_messages(cur,scope)
+
+
+def _automatic_case_hash(scope, rows, header_hash):
+    digest=hashlib.sha256(json.dumps({key:scope.get(key) for key in
+        ('tenant_id','ticket_id','channel_id','conversation_id','lead_id','kind','dialog_episode_id','history_start','history_end')},
+        sort_keys=True,default=str).encode())
+    digest.update(header_hash.encode())
+    for row in rows:
+        digest.update(row['id'].encode());digest.update(version(row).encode())
+        digest.update(public_sender_version(row).encode())
+    return digest.hexdigest()
 
 
 def developer_marker(profile,data):
@@ -294,6 +320,13 @@ def preview(profile,data):
                 if suffix:phone=_preview_phone(conversation[:-len(suffix)])
             verified_phone=_verified_contact_phone(cur,tenant,data['channel_id'],source.get('conversation_id'))
             header,header_hash=_public_header(cur,tenant,actor,data['channel_id'],source)
+            case_history_hash=None
+            if case_id:
+                try:
+                    automatic_scope,automatic_rows=_automatic_case_rows(cur,tenant,case_id,data['channel_id'],data['conversation_id'])
+                    case_history_hash=_automatic_case_hash(automatic_scope,automatic_rows,header_hash)
+                except TenantLinearError as exc:
+                    if getattr(exc,'status',409)!=409:raise
             messages=[]
             for row in rows:
                 value={key:str(item) if isinstance(item,uuid.UUID) or hasattr(item,'isoformat') else item for key,item in dict(row).items()};author=value.get('author_name') or '';raw=value.get('raw') or {}
@@ -305,7 +338,7 @@ def preview(profile,data):
                   author_name=_human_preview_name(author,source.get('conversation_id')))
                 for private in ('raw','media_url','channel','ordered_at','external_id'):value.pop(private,None)
                 messages.append(value)
-            return {'public_header':header,'public_header_hash':header_hash,'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+            return {'public_header':header,'public_header_hash':header_hash,'outgoing_link_label':'Фрагмент переписки (ссылка действует 7 дней)','messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,'case_history_hash':case_history_hash,'automatic_case_history_available':bool(case_history_hash),
                     'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
                         'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
@@ -375,9 +408,17 @@ def _selected_last_message_at(rows):
 
 def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    optional={'case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions','public_header_version','public_header_hash','public_header_source_versions','public_dialog_version','public_sender_versions'}
+    optional={'automatic_case_history','case_history_hash','case_id','include_customer_identity','reuse_existing','question_draft_request_id','source_versions','public_header_version','public_header_hash','public_header_source_versions','public_dialog_version','public_sender_versions'}
+    automatic=isinstance(data,dict) and data.get('automatic_case_history') is True
+    if automatic:
+        required=required-{'message_ids','media_ids'}
+        optional=optional|{'message_ids','media_ids'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
+    if automatic and (not data.get('case_id') or not isinstance(data.get('case_history_hash'),str)
+            or not re.fullmatch(r'[0-9a-f]{64}',data['case_history_hash']) or 'question_draft_request_id' in data
+            or data.get('message_ids') or data.get('media_ids') or data.get('public_header_source_versions') or data.get('public_sender_versions')):
+        raise TenantLinearError('Обновите автоматическую историю обращения.',400)
     if ('question_draft_request_id' in data) != ('source_versions' in data):
         raise TenantLinearError('Требуется привязка AI-черновика к выбранному фрагменту.',400)
     if 'reuse_existing' in data and type(data['reuse_existing']) is not bool:
@@ -391,15 +432,17 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
     named_dialog='public_dialog_version' in data
     if named_dialog and (type(data['public_dialog_version']) is not int or data['public_dialog_version']!=1 or not header_requested):
         raise TenantLinearError('Обновите форму публичного диалога.',400)
-    if ('public_sender_versions' in data)!=named_dialog:
+    if not automatic and ('public_sender_versions' in data)!=named_dialog:
         raise TenantLinearError('Обновите форму публичного диалога.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
     case_id=identifier(data['case_id']) if data.get('case_id') else None
     summary=data['summary']
     if not isinstance(summary,str) or not summary.strip() or len(summary)>2600:raise TenantLinearError('Укажите краткую суть проблемы.',400)
     from tenant_public_case import _valid_ids
-    media=_valid_ids(data['media_ids']);selected=_valid_ids(data['message_ids'],required=True)
-    if header_requested:
+    media=[] if automatic else _valid_ids(data['media_ids']);selected=[] if automatic else _valid_ids(data['message_ids'],required=True)
+    if automatic and (not header_requested or not named_dialog or include_identity):
+        raise TenantLinearError('Обновите публичный просмотр обращения.',400)
+    if header_requested and not automatic:
         proof=data.get('public_header_source_versions')
         if not isinstance(proof,dict) or set(proof)!=set(selected) or any(
                 not isinstance(value,str) or not re.fullmatch(r'[0-9a-f]{64}',value) for value in proof.values()):
@@ -438,7 +481,14 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 if case_id:
                     _case_access(cur,profile,case_id,channel,data['conversation_id'],sending=True)
                     normalized['case_id']=case_id
-            if case_id:
+            if automatic:
+                automatic_scope,rows=_automatic_case_rows(cur,tenant,case_id,channel,data['conversation_id'])
+                header,header_hash=_public_header(cur,tenant,actor,channel,source)
+                if not rows or not secrets.compare_digest(_automatic_case_hash(automatic_scope,rows,header_hash),data['case_history_hash']):
+                    raise TenantLinearError('История обращения изменилась. Обновите предварительный просмотр.',409)
+                selected=[row['id'] for row in rows]
+                media=[row['id'] for row in rows if public_preview_fields(row)['media_shareable']]
+            elif case_id:
                 from tenant_support_case_context import selection as case_selection
                 rows=case_selection(cur,tenant,case_id,channel,data['conversation_id'],selected)
             else:rows=selection(cur,tenant,source,selected)
@@ -446,11 +496,11 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 expected_media={row['id'] for row in rows if public_preview_fields(row)['media_shareable']}
                 if set(media)!=expected_media:
                     raise TenantLinearError('Обновите файлы выбранного фрагмента.',409)
-                if data['public_sender_versions']!={row['id']:public_sender_version(row) for row in rows}:
+                if not automatic and data['public_sender_versions']!={row['id']:public_sender_version(row) for row in rows}:
                     raise TenantLinearError('Имена отправителей изменились. Обновите форму.',409)
             identity=None
             if header_requested:
-                if data['public_header_source_versions']!={row['id']:version(row) for row in rows}:
+                if not automatic and data['public_header_source_versions']!={row['id']:version(row) for row in rows}:
                     raise TenantLinearError('Выбранный фрагмент изменился. Обновите предварительный просмотр.',409)
                 header,header_hash=_public_header(cur,tenant,actor,channel,source)
                 if not secrets.compare_digest(header_hash,data['public_header_hash']):
@@ -459,7 +509,7 @@ def prepare(profile,data,origin,*,ai_summary=None,auto_dispatch_id=None):
                 if named_dialog:identity['dialog_version']=1
             snapshot_header_hash=data.get('public_header_hash')
             if named_dialog:
-                snapshot_header_hash=hashlib.sha256((snapshot_header_hash+json.dumps(data['public_sender_versions'],sort_keys=True)).encode()).hexdigest()
+                snapshot_header_hash=hashlib.sha256((snapshot_header_hash+json.dumps({row['id']:public_sender_version(row) for row in rows} if automatic else data['public_sender_versions'],sort_keys=True)).encode()).hexdigest()
             auto=auto_intent(cur,tenant,case_id,request,auto_dispatch_id,dest,data['destination_conversation_id'])
             admitted_media=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
             pending=existing(cur,tenant,channel,data['conversation_id'],selected,case_id,dest,data['destination_conversation_id'],
@@ -628,6 +678,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
             followup=bool((cur.fetchone() or {}).get('is_chat_followup'))
             tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True,validate_draft=not followup)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request));delivery=cur.fetchone()
+            if delivery and delivery.get('media_metadata'):raise TenantLinearError('Используйте проверку отправки вложения; текстовая отправка запрещена.',409)
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
             if delivery['state'] in {'sent','pending'}:return {'state':delivery['state'],'message_id':delivery['connect_message_id']}
             if delivery['state']!='ready':raise TenantLinearError('Результат отправки неизвестен. Повтор отключён.',409)
@@ -1321,14 +1372,15 @@ def inbox(profile,channel='',conversation='',case_id=''):
                         destination_url='/app?'+urlencode({'view':'dialogs','open_dialog':'1','provider':'connect','lead_id':destination['lead_id'],'channel_id':row['destination_channel'],'conversation_id':row['destination_conversation']})
                     except TenantLinearError:recipient='Recipient unavailable'
                 else:recipient=row.get('internal_recipient') or ''
-                from tenant_consultation_chat import delivery_page
-                page=delivery_page(cur,tenant,row['id']) if destination_url else {'deliveries':[],'has_earlier':False,'next_before':None}
-                consultations.append({'deliveries':page['deliveries'],'deliveries_has_earlier':page['has_earlier'],'deliveries_next_before':page['next_before'],'destination_url':destination_url,**{k:str(v) if isinstance(v,uuid.UUID) or hasattr(v,'isoformat') else v for k,v in dict(row).items()},
+                from tenant_consultation_chat import delivery_page,can_send
+                from tenant_consultation_chat_media import enabled as case_media_enabled
+                page=delivery_page(cur,tenant,row['id'],actor=actor) if destination_url else {'deliveries':[],'has_earlier':False,'next_before':None}
+                consultations.append({'deliveries':page['deliveries'],'deliveries_has_earlier':page['has_earlier'],'deliveries_next_before':page['next_before'],'destination_url':destination_url,'case_media_enabled':bool(destination_url) and case_media_enabled(),**{k:str(v) if isinstance(v,uuid.UUID) or hasattr(v,'isoformat') else v for k,v in dict(row).items()},
                     'recipient':recipient,'state':row['state'] or 'internal',
                     'can_dispatch':row['state']=='ready' and row.get('delivery_created_by')==actor and bool(row.get('snapshot_id')),
                     'legacy_delivery':bool(row['state'] and not row.get('snapshot_id')),
                     'needs_public_snapshot':bool(row.get('case_id') and not row.get('snapshot_id')),
-                    'can_send':not row.get('case_id') or policy.profile.get('role')=='owner',
+                    'can_send':bool(destination_url) and can_send(cur,profile,row),
                     'can_manual_reply':policy.profile.get('role') in {'owner','admin'} or row.get('recipient_id') in {None,actor},
                     'message_ids':row['message_ids'] or [],'media_ids':row['media_ids'] or []})
             auto_dispatches=[]

@@ -29,6 +29,8 @@ def read_handler(member,logger,*,receipt=False):
         headers={'Cache-Control':'no-store'}
         try:
             session=require_read_session(request,member)
+            from tenant_consultation_chat_media import validate_read
+            await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'),request.query.get('request_id') if receipt else None)
             if receipt: result=await check(session,request.query.get('lead_id'),request.query.get('request_id'))
             elif not enabled():result={'enabled':False}
             else:result=await asyncio.to_thread(capability,session,request.query.get('lead_id'))

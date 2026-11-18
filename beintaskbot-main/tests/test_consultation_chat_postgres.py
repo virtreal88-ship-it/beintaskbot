@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 from test_dialog_consultations_postgres import database,prepared,PROFILE,A,CA,TARGET
 
 
-def child(dsn,key,request,profile,barrier,results):
+def child(dsn,key,request,profile,barrier,results,kind='text'):
     import tenant_dialog_consultations as flow
     import tenant_consultation_chat as chat
     import tenant_connect_transport as transport
@@ -19,13 +19,26 @@ def child(dsn,key,request,profile,barrier,results):
     transport.send_consultation_with_receipt=submit
     try:
         barrier.wait(20)
-        results.put(('ok',chat.send(profile,key,{'request_id':request,'text':'Synthetic clarification'})))
+        if kind=='media':
+            import os
+            os.environ['CASE_CHAT_MEDIA_ENABLED']='true'
+            import tenant_chat_send_store as store
+            from tenant_chat_upload_policy import prepare
+            store._connect=flow._connect
+            store.authority=lambda cur,session,lead,**kw:({**session,'active':True,'tenant_status':'active'},['connect',CA,TARGET],{'provider':'connect','route':{'api_key':'synthetic','channel_id':CA,'conversation_id':TARGET}})
+            command=prepare({'request_id':request,'lead_id':99,'text':'Synthetic','consultation_id':key},'proof.pdf','application/pdf',b'%PDF-1.7 synthetic')
+            item=store.reserve(profile,command)
+            _,credentials=store.mark_sending(item,{'origin':'connect','media_protocol':True,'channel_id':CA,'conversation_id':TARGET})
+            value=store.dispatch_guarded(item,credentials,submit,'Synthetic media',request)
+            store.finish(item,'unknown')
+        else:value=chat.send(profile,key,{'request_id':request,'text':'Synthetic clarification'})
+        results.put(('ok',value))
     except Exception as error:results.put(('error',type(error).__name__,str(error)))
 
 
 def race(db,operations):
     ctx=multiprocessing.get_context('spawn');barrier=ctx.Barrier(len(operations));queue=ctx.Queue()
-    workers=[ctx.Process(target=child,args=(db.dsn,*operation,barrier,queue)) for operation in operations]
+    workers=[ctx.Process(target=child,args=(db.dsn,*operation[:3],barrier,queue,operation[3] if len(operation)>3 else 'text')) for operation in operations]
     for worker in workers:worker.start()
     try:
         values=[queue.get(timeout=45) for _ in workers]
@@ -77,4 +90,16 @@ def test_concurrent_other_tenant_cannot_send_or_read(case_chat):
     values=race(db,[(key,request,PROFILE),(key,request,{'tenant_id':other,'telegram_id':22})])
     assert sum(v[0]=='ok' and v[1]['state']=='pending' for v in values)==1,values
     assert sum(v[0]=='error' and v[1]=='TenantLinearError' for v in values)==1,values
+    assert len(db.execute('SELECT * FROM test_external_sends'))==1
+
+
+def test_media_double_click_and_text_share_durable_case_fence(case_chat):
+    db,key,_original,_case=case_chat;request=str(uuid.uuid4())
+    values=race(db,[(key,request,PROFILE,'media'),(key,request,PROFILE,'media')])
+    assert sum(v[0]=='ok' for v in values)==1,values
+    assert all(v[0]=='ok' or v[1]=='TenantLinearError' for v in values),values
+    assert len(db.execute('SELECT * FROM test_external_sends'))==1
+    assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE request_id=%s::uuid",(request,))[0]['state']=='unknown'
+    values=race(db,[(key,str(uuid.uuid4()),PROFILE)])
+    assert values[0][0]=='error' and values[0][1]=='TenantLinearError',values
     assert len(db.execute('SELECT * FROM test_external_sends'))==1

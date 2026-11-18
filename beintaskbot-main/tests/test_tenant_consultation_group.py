@@ -646,7 +646,7 @@ def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeyp
     assert focused['focus_message']['media_evidence_context']=='Saved synthetic observation'
     assert 'raw' not in focused['focus_message'] and 'body' not in focused['focus_message']
     scoped=tickets.detail(PROFILE,case)
-    assert {str(row['id']) for row in scoped['messages']}=={image,str(db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id'])}
+    assert {str(row['id']) for row in scoped['messages']}=={str(db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id'])}  # Later explicitly linked attachments remain focusable, not part of the frozen cycle.
     assert all(row['external_id']!='connect:customer-message' for row in scoped['messages'])
     with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,str(uuid.uuid4()))
     other=str(uuid.uuid4());db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)

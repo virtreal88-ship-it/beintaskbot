@@ -3,25 +3,19 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('../.support-test-deps/node_modules/playwright');
 const {docs,assets,appHtml,installNotificationCaseFixture}=require('./notification_case_targets_fixture.cjs');
 function installAliasFixture(mode){
- const f=window.notificationCaseFixture,base=window.fetch,keys=['provider','lead_id','channel_id','conversation_id'];
- const original=Object.fromEntries(keys.map(key=>[key,f.route[key]]));
- const canonical={...original,lead_id:8101,conversation_id:'synthetic:canonical@s.whatsapp.net'};
- f.historyCalls=[];f.historyMode=mode;
+ const f=window.notificationCaseFixture,base=window.fetch;
+ f.historyCalls=[];f.casePages=[];f.historyMode=mode;
  window.fetch=async(input,options={})=>{
   const url=new URL(String(input),location);
-  if(!url.pathname.endsWith('/dialogs/history'))return base(input,options);
-  f.historyCalls.push(Object.fromEntries(url.searchParams));
-  const earlier=url.searchParams.has('before'),mode=f.historyMode;
-  const dialog={...f.route,...canonical};
-  const scope={tenant_id:f.tenant,requested_route:{...original},canonical_route:{...canonical}};
-  if(mode==='exact'||mode==='exact-no-proof'||mode==='exact-wrong-tenant'){Object.assign(dialog,original);scope.canonical_route={...original};}
-  if(mode==='wrong-tenant'||mode==='exact-wrong-tenant')scope.tenant_id='foreign-tenant';
-  if(mode.startsWith('wrong-request-'))scope.requested_route[mode.slice('wrong-request-'.length)]='unrelated';
-  if(mode.startsWith('wrong-canonical-'))scope.canonical_route[mode.slice('wrong-canonical-'.length)]='unrelated';
-  if(mode==='changed-channel'||mode==='changed-provider'){const key=mode==='changed-channel'?'channel_id':'provider';dialog[key]='unrelated';scope.canonical_route[key]='unrelated';}
-  if(mode==='changed-pagination'&&earlier){dialog.lead_id=8999;dialog.conversation_id='changed-after-first-page';Object.assign(scope.canonical_route,{lead_id:8999,conversation_id:dialog.conversation_id});}
-  const message={id:earlier?'older-alias-message':'alias-message',external_id:earlier?'connect:older-alias':'connect:alias',provider_message_id:'alias',direction:'incoming',author_type:'customer',body:earlier?'Earlier merged dialogue':'Merged dialogue text',message_type:'text',happened_at:earlier?'2026-11-01T10:00:00Z':'2026-11-02T10:00:00Z',source_lead_id:earlier?original.lead_id:canonical.lead_id,source_channel_id:f.channel,source_conversation_id:earlier?original.conversation_id:canonical.conversation_id};
-  return new Response(JSON.stringify({success:true,result:{dialog,...(['no-proof','exact-no-proof'].includes(mode)?{}:{history_scope:scope}),messages:[message],next_before:earlier?null:'alias-cursor'}}),{headers:{'Content-Type':'application/json'}});
+  if(url.pathname.endsWith('/dialogs/history')){f.historyCalls.push(String(url));throw Error('Unbounded history must never be requested');}
+  const response=await base(input,options);
+  if(!url.pathname.startsWith('/api/platform/ai/support-tickets/')||!response.ok)return response;
+  const data=await response.json();if(!data.result?.ticket)return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
+  const earlier=url.searchParams.has('before');f.casePages.push({path:url.pathname,before:url.searchParams.get('before')});
+  if(earlier&&mode==='rejected')return new Response(JSON.stringify({success:false,error:'Case history access revoked'}),{status:403,headers:{'Content-Type':'application/json'}});
+  data.result.messages=Array.from({length:earlier?20:50},(_,index)=>({id:index===0?(earlier?'older-case-message':'case-message'):(earlier?'older-':'current-')+index,direction:'incoming',author_name:'Customer',body:(earlier?'Earlier accepted-interval message ':'Pinned case message ')+index,message_type:'text',happened_at:'2026-11-02T10:00:00Z'}));
+  data.result.next_before=earlier?null:'case-cursor';data.result.history_context={boundary_status:mode==='fallback'?'boundary_unknown':'accepted_interval',accepted_at:mode==='fallback'?null:'2026-11-02T09:00:00Z',created_at:'2026-11-02T12:00:00Z',fallback:mode==='fallback'?'saved_materials':null};
+  return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
  };
 }
 (async()=>{
@@ -33,35 +27,20 @@ function installAliasFixture(mode){
   await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installAliasFixture,mode);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
   await page.goto(origin+'/app?view=support&lang=ru');await page.locator('[data-support-id]').first().click();
-  await page.waitForFunction(()=>notificationCaseFixture.historyCalls.length===1&&!document.getElementById('supportDialogueRefresh').disabled);
+  await page.locator('#supportHistory [data-message-id=case-message]').waitFor();
   return {context,page,errors};
  }
  try{
-  for(const mode of ['valid','exact','exact-no-proof']){
-   const {context,page,errors}=await mount(mode);try{
-    assert.equal(await page.locator('#supportDialogueHistory [data-message-id=alias-message]').count(),1,mode);
-    assert.equal(await page.locator('#supportHistory [data-message-id]').count(),0,'display-only history never enters case material scope');
-    await page.locator('#supportDialogueEarlier').click();await page.locator('#supportDialogueHistory [data-message-id=older-alias-message]').waitFor();
-    assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),2);
-    const calls=await page.evaluate(()=>notificationCaseFixture.historyCalls);
-    assert.equal(calls[1].before,'alias-cursor');assert.equal(calls[1].lead_id,'41');assert.equal(calls[1].conversation_id,calls[0].conversation_id);
-    await page.locator('#supportDialogueRefresh').click();await page.waitForFunction(()=>notificationCaseFixture.historyCalls.length===3&&!document.getElementById('supportDialogueRefresh').disabled);
-    assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),1);
-    assert.deepEqual(errors,[]);
-   }finally{await context.close();}
-  }
-  const rejected=['no-proof','wrong-tenant','exact-wrong-tenant','changed-channel','changed-provider',...['provider','lead_id','channel_id','conversation_id'].flatMap(key=>['wrong-request-'+key,'wrong-canonical-'+key])];
-  for(const mode of rejected){
-   const {context,page,errors}=await mount(mode);try{
-    assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),0,mode+' must fail closed');
-    assert.ok(await page.locator('#supportDialogueNotice').textContent(),mode+' reports error');assert.deepEqual(errors,[]);
-   }finally{await context.close();}
-  }
-  const {context,page,errors}=await mount('changed-pagination');try{
-   await page.locator('#supportDialogueEarlier').click();await page.waitForFunction(()=>notificationCaseFixture.historyCalls.length===2&&!document.getElementById('supportDialogueRefresh').disabled);
-   assert.equal(await page.locator('#supportDialogueHistory [data-message-id]').count(),1,'another canonical route cannot be appended to the loaded history');
-   assert.equal(await page.locator('#supportDialogueHistory [data-message-id=older-alias-message]').count(),0);assert.ok(await page.locator('#supportDialogueNotice').textContent());assert.deepEqual(errors,[]);
-  }finally{await context.close();}
-  console.log('PASS case history: authenticated alias, exact-route compatibility, original pagination, material isolation, 13 invalid bindings and changed canonical pagination rejected');
+  for(const mode of ['accepted','fallback','rejected']){const {context,page,errors}=await mount(mode);try{
+   assert.equal(await page.locator('#supportHistory [data-message-id=case-message]').count(),1);
+   assert.equal(await page.locator('#supportDialogueHistory,#supportDialogueRefresh').count(),0,'retired full-dialogue history controls are absent');
+   if(mode==='fallback')assert.match(await page.locator('#supportPanel-history').textContent(),/Время принятия не сохранено/);
+   await page.locator('#supportEarlier').click();
+   if(mode==='rejected'){await page.locator('#supportDialogueNotice').filter({hasText:'Case history access revoked'}).waitFor();assert.equal(await page.locator('#supportHistory [data-message-id]').count(),50,'denied pagination does not append or erase the accepted page');}
+   else{await page.locator('#supportHistory [data-message-id=older-case-message]').waitFor();assert.equal(await page.locator('#supportHistory [data-message-id]').count(),70,'entire accepted cycle exceeding 50 is retained without truncation');assert.equal(await page.locator('#supportEarlier').isVisible(),false);}
+   const pages=await page.evaluate(()=>notificationCaseFixture.casePages);assert.equal(pages.length,2);assert.equal(pages[1].path,pages[0].path,'pagination remains bound to the exact case ID');assert.equal(pages[1].before,'case-cursor');
+   assert.equal(await page.evaluate(()=>notificationCaseFixture.historyCalls.length),0,'alias expansion cannot escape the case snapshot');assert.deepEqual(errors,[]);
+  }finally{await context.close();}}
+  console.log('PASS bounded case history: exact-case cursor, saved-material fallback, denied pagination, no unrestricted alias fetch');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

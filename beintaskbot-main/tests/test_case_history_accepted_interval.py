@@ -134,3 +134,53 @@ def test_historical_selected_membership_cannot_expand_from_acceptance(ready):
     assert [m['id'] for m in detail['messages']]==[keys[8]]
     assert [m['id'] for m in flow.preview(PROFILE,{'channel_id':CA,'conversation_id':'client','case_id':case})['messages']]==[keys[8]]
     assert not sender.called
+
+
+def automatic_request(ready,case):
+    _,data,_=ready
+    shown=flow.preview(PROFILE,{'channel_id':CA,'conversation_id':'client','case_id':case})
+    return {key:value for key,value in {**data,'case_id':case,'automatic_case_history':True,
+        'case_history_hash':shown['case_history_hash'],'public_header_version':1,
+        'public_header_hash':shown['public_header_hash'],'public_dialog_version':1,
+        'include_customer_identity':False}.items() if key not in {'message_ids','media_ids'}},shown
+
+
+@pytest.mark.parametrize('total',[75,255])
+def test_automatic_case_snapshot_has_all_rows_beyond_preview_and_manual_limits(ready,total):
+    local,data,sender=ready;case,keys=seed_interval(ready,total=total)
+    local.execute("UPDATE saas_support_tickets SET created_at='2026-11-01T12:00:00Z'::timestamptz+%s*interval '1 second' WHERE id=%s::uuid",(total,case))
+    local.execute("UPDATE saas_crm_messages SET message_type='image' WHERE id=%s::uuid",(keys[10],));local.commit()
+    request,shown=automatic_request(ready,case)
+    assert shown['scope']['message_count']==total-3
+    assert len(shown['messages'])==min(total-3,80)
+    assert 'message_ids' not in request
+    made=flow.prepare(PROFILE,request,'https://crm.test')
+    share=local.execute('SELECT selected_message_ids,selected_media_ids,public_messages FROM saas_public_case_shares WHERE consultation_id=%s::uuid',(made['id'],))[0]
+    assert share['selected_message_ids']==keys[3:]
+    assert [row['id'] for row in share['public_messages']]==keys[3:]
+    assert share['selected_media_ids']==[keys[10]]
+    local.commit()
+    assert flow.prepare(PROFILE,request,'https://crm.test')['id']==made['id']
+    assert not sender.called
+
+
+@pytest.mark.parametrize('change',['body','author_name'])
+def test_hidden_preview_rows_are_bound_into_automatic_hash(ready,change):
+    local,data,sender=ready;case,keys=seed_interval(ready,total=255)
+    local.execute("UPDATE saas_support_tickets SET created_at='2026-11-01T12:05:00Z' WHERE id=%s::uuid",(case,));local.commit()
+    request,shown=automatic_request(ready,case)
+    assert keys[10] not in [row['id'] for row in shown['messages']]
+    local.execute('UPDATE saas_crm_messages SET '+change+'=%s WHERE id=%s::uuid',('Changed hidden source',keys[10]));local.commit()
+    with pytest.raises(TenantLinearError,match='История обращения изменилась'):
+        flow.prepare(PROFILE,request,'https://crm.test')
+    assert not sender.called
+
+
+def test_automatic_case_requires_exact_case_hash_and_disallows_client_range(ready):
+    local,data,sender=ready;case,keys=seed_interval(ready)
+    request,_=automatic_request(ready,case)
+    for changed in ({'case_id':None},{'message_ids':[keys[4]]},{'case_history_hash':'0'*64},
+                    {'media_ids':[keys[4]]},{'public_header_hash':'0'*64}):
+        with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**request,**changed},'https://crm.test')
+    with pytest.raises(TenantLinearError):flow.prepare({'tenant_id':B,'telegram_id':22},request,'https://crm.test')
+    assert not sender.called

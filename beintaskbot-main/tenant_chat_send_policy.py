@@ -16,6 +16,9 @@ def command(data: dict) -> dict:
     if not isinstance(text, str) or not text.strip() or len(text.strip()) > 8000 or not 0 < lead_id < 2**63:
         raise TenantLinearError('Sövdələşmə və mesaj mətni tələb olunur (maksimum 8000 simvol).')
     result={'request_id': request_id, 'lead_id': lead_id, 'text': text.strip()}
+    if data.get('consultation_id') is not None:
+        try:result['consultation_id']=str(uuid.UUID(str(data['consultation_id'])))
+        except (ValueError,TypeError):raise TenantLinearError('Некорректное обращение.',400) from None
     if data.get('quote_message_id') is not None:
         try:
             result['quote_message_id']=str(uuid.UUID(str(data['quote_message_id'])))
