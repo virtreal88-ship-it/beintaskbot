@@ -23,7 +23,7 @@ func (s *server) registerLabReceiveProbe(mux *http.ServeMux, m *messageLab) {
 		}
 		decoder := json.NewDecoder(io.LimitReader(r.Body, 257))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || (request.Action != "devices" && request.Action != "announce-offline") {
+		if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || (request.Action != "devices" && request.Action != "announce-offline" && request.Action != "announce-online-bounded") {
 			writeJSON(w, 400, map[string]string{"error": "invalid_probe"})
 			return
 		}
@@ -39,6 +39,14 @@ func (s *server) registerLabReceiveProbe(mux *http.ServeMux, m *messageLab) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
+		if request.Action == "announce-online-bounded" {
+			// Same captured client, never a later replacement. Cleanup runs even
+			// when the requesting browser disconnects or the online write fails.
+			client := session.client
+			go labOnlineProbe(s.sessions.appCtx, 2*time.Minute, client.SendPresence, &m.diagnostics)
+			writeJSON(w, 202, map[string]string{"status": "probe_started"})
+			return
+		}
 		if request.Action == "devices" {
 			own := *session.client.Store.ID
 			devices, err := session.client.GetUserDevices(ctx, []types.JID{own.ToNonAD()})
@@ -57,6 +65,32 @@ func (s *server) registerLabReceiveProbe(mux *http.ServeMux, m *messageLab) {
 		}
 		writeJSON(w, 200, map[string]bool{"written": true}) // Socket write, not delivery proof.
 	})
+}
+
+func labOnlineProbe(ctx context.Context, duration time.Duration, send func(context.Context, types.Presence) error, diagnostics *labDiagnostics) {
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if send(cleanup, types.PresenceUnavailable) != nil {
+			diagnostics.add("probe_offline_write_failed")
+		} else {
+			diagnostics.add("probe_offline_written")
+		}
+	}()
+	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err := send(writeCtx, types.PresenceAvailable)
+	cancel()
+	if err != nil {
+		diagnostics.add("probe_online_write_failed")
+		return
+	}
+	diagnostics.add("probe_online_written")
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 func labDeviceFacts(own types.JID, devices []types.JID) map[string]any {

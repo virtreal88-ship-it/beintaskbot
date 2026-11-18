@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow/types"
 )
@@ -42,6 +45,32 @@ func TestLabReceiveProbeAdmission(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		if w.Code != tc.want {
 			t.Fatalf("probe admission: %d != %d", w.Code, tc.want)
+		}
+	}
+}
+
+func TestLabOnlineProbeAlwaysRestoresUnavailable(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		for _, cancelEarly := range []bool{false, true} {
+			ctx, cancel := context.WithCancel(context.Background())
+			if cancelEarly {
+				cancel()
+			}
+			var states []types.Presence
+			labOnlineProbe(ctx, time.Millisecond, func(callCtx context.Context, state types.Presence) error {
+				states = append(states, state)
+				if state == types.PresenceUnavailable && callCtx.Err() != nil {
+					t.Fatal("cleanup inherited canceled context")
+				}
+				if fail {
+					return errors.New("test")
+				}
+				return nil
+			}, &labDiagnostics{})
+			cancel()
+			if len(states) != 2 || states[0] != types.PresenceAvailable || states[1] != types.PresenceUnavailable {
+				t.Fatal("presence cleanup omitted")
+			}
 		}
 	}
 }

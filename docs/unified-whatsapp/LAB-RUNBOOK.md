@@ -110,18 +110,28 @@ before client construction (whatsmeow snapshots child loggers), classifies only
 fixed frame tags and never serializes nodes, IDs, contents or errors.
 
 An authenticated, same-origin `POST /api/unified-lab/receive-probe` accepts only
-`{"action":"devices"}` or `{"action":"announce-offline"}`, once each per process.
+`{"action":"devices"}`, `{"action":"announce-offline"}`, or
+`{"action":"announce-online-bounded"}`, once each per process.
 The former queries only the pinned test account's device roster and exposes
 counts/booleans, never device IDs. The latter writes `PresenceUnavailable` using
 the same client. A successful write is not receipt/delivery confirmation. Neither
 probe accepts a target account, sends a message, alters privacy settings, pairs,
-logs out or removes a device. The entire route is absent from production builds.
+logs out or removes a device. The online probe writes available presence for at
+most two minutes, then writes unavailable even when the request is canceled or
+the initial write fails. It captures the original client, never its replacement;
+cleanup uses an independent bounded context. Counters distinguish attempted and
+successful socket writes. Process death still relies on transport disconnection.
+The entire route is absent from production builds.
 
 The roster query returned the current local device and primary phone. The owner
 confirmed the earlier reply exists on the primary test phone and the latest
 outgoing control text was delivered. This narrows the missing evidence to the
 linked client's incoming path but does not establish the cause. A fresh reply
-after the presence probe is pending; no automatic initialization fix is claimed.
+after the unavailable-presence probe was reported sent but was not observed by
+the engine. A later bounded online probe restored unavailable as intended; fresh
+message/call stimulus during its window has not been confirmed. No automatic
+initialization fix is claimed. Read-only production process inventory found no
+running engine containing this lab account/device.
 
 No live unified call/message conversation test has completed. Calls on the same
 client, audio quality and concurrency must still be proven. Existing successful
