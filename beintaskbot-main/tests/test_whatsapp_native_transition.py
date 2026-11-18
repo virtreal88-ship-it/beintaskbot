@@ -139,7 +139,7 @@ def inbound_evidence(db,cfg,payload=None):
     db.execute("INSERT INTO saas_whatsapp_native_inbox(tenant_id,channel_id,generation,event_id,sequence,after_sequence,payload_sha256,encrypted_payload) VALUES(%s,%s,%s,%s,1,0,%s,%s)",(A,CA,'live-g1',event,hashlib.sha256(raw).hexdigest(),sealed))
     db.commit()
 
-@pytest.mark.parametrize('payload',[{'kind':'group_metadata'},message(from_me=True)])
+@pytest.mark.parametrize('payload',[{'kind':'group_metadata'},message(from_me=True),message(chat='status@broadcast')])
 def test_activation_does_not_treat_metadata_or_outbound_as_inbound(transition_source,payload):
     db,cfg,legacy,remote=transition_source
     prepare(cfg)

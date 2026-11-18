@@ -211,6 +211,11 @@ def require_inbound_evidence(cur,tenant,source,generation,account):
     for event in cur.fetchall():
         payload=open_stored(event,scope)
         if payload.get('kind')=='message' and payload.get('from_me') is False:
-            message_event(scope,event['event_id'],payload,str(uuid.uuid5(uuid.NAMESPACE_URL,event['event_id'])))
+            try:
+                message_event(scope,event['event_id'],payload,str(uuid.uuid5(uuid.NAMESPACE_URL,event['event_id'])))
+            except TenantLinearError as error:
+                if str(error)=='native_event_not_projectable':
+                    continue # Retained control/status is not inbound chat proof.
+                raise
             return
     raise TenantLinearError('native_transition_inbound_unconfirmed',409)

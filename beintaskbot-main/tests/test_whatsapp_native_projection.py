@@ -112,3 +112,15 @@ def test_invalid_device_participants_remain_rejected(jid):
 
 def test_participant_normalization_does_not_rewrite_conversation_scope():
     with pytest.raises(TenantLinearError):event(message(chat='15550000002:3@s.whatsapp.net'))
+
+
+@pytest.mark.parametrize('chat',['status@broadcast','15550000002@broadcast','120363123456789@newsletter'])
+def test_non_conversation_publications_are_retained_not_customer_turns(chat):
+    with pytest.raises(TenantLinearError,match='native_event_not_projectable'):
+        event(message(chat=chat,message_type='image',media_kind='image'))
+
+
+@pytest.mark.parametrize('chat',['arbitrary@broadcast','@newsletter','15550000002@evil','status@broadcast.evil'])
+def test_non_chat_classification_does_not_swallow_invalid_destinations(chat):
+    with pytest.raises(TenantLinearError,match='native_projection_invalid'):
+        event(message(chat=chat))
