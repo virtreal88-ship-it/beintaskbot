@@ -57,7 +57,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(password.value,'','password input is cleared immediately after submission');
   assert.equal(requests.filter(row=>String(row.options.body||'').includes('operator-password')).length,1,
     'credentials are sent only to the authenticated same-origin login endpoint');
-  assert(!panel.querySelector('[data-token]'),'the SSO token is obtained by the server instead of pasted manually');
+  assert(!panel.querySelector('[data-token]'),'the API token is obtained by the server instead of pasted manually');
   assert(panel.textContent.includes('Пароль используется только для получения токена и не сохраняется'));
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
   assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
@@ -85,5 +85,5 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(readOnlyPanel.querySelector('[data-link-controls]').hidden,true);
   assert.equal(readOnlyPanel.querySelector('[data-operator-password]'),null);
   window.close();
-  console.log('PASS: Operator login/password fields connect through SSO and clear the password input');
+  console.log('PASS: Operator credentials connect through the API and the password input is cleared');
 })().catch(error=>{window.close();console.error(error);process.exitCode=1;});

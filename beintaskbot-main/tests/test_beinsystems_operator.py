@@ -130,25 +130,31 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(json.loads(fake.request.data), {"search": "client"})
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
 
-    def test_operator_sso_login_uses_site_auth_contract_and_returns_only_token(self):
+    def test_operator_login_uses_akul_pos_contract_and_returns_only_token(self):
         fake = FakeOpener({"success": True, "data": {"token": "sso-jwt"}})
         with patch.object(operator, "build_opener", return_value=fake):
             token = operator._authenticate_operator("beinsystems-account", "operator-password")
         payload = json.loads(fake.request.data)
         self.assertEqual(token, "sso-jwt")
         self.assertEqual(fake.request.full_url,
-                         "https://auth-api.beinsystems.az/auth/login")
+                         "https://api.akul.az/1.0/online/controllers/pos/pos_getlogin.php")
         self.assertEqual(fake.request.get_method(), "POST")
-        self.assertEqual(payload["login"], "admin@beinsystems-account")
-        self.assertEqual(payload["password"], "operator-password")
-        self.assertRegex(payload["uniqDeviceId"], r"^device_[0-9a-f]{39}$")
-        self.assertEqual(fake.request.get_header("Origin"), "https://auth.beinsystems.az")
-        self.assertEqual(fake.request.get_header("Referer"),
-                         "https://auth.beinsystems.az/?redirect_uri=https%3A%2F%2Foperator.beinsystems.az%2F")
+        self.assertEqual(payload, {
+            "login": "beinsystems-account", "password": "operator-password",
+        })
+        self.assertEqual(fake.request.get_header("Content-type"), "application/json")
         self.assertIsNone(fake.request.get_header("Authorization"))
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
 
-    def test_operator_sso_login_redacts_credentials_from_auth_error(self):
+    def test_operator_login_passes_the_supplied_login_without_rewriting_it(self):
+        fake = FakeOpener({"success": True, "data": {"token": "sso-jwt"}})
+        with patch.object(operator, "build_opener", return_value=fake):
+            operator._authenticate_operator("  operator-user  ", "operator-password")
+        self.assertEqual(json.loads(fake.request.data), {
+            "login": "operator-user", "password": "operator-password",
+        })
+
+    def test_operator_login_redacts_credentials_from_auth_error(self):
         fake = FakeOpener({"success": False, "message": "operator-password rejected"})
         with patch.object(operator, "build_opener", return_value=fake):
             with self.assertRaises(operator.OperatorError) as raised:
@@ -194,7 +200,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             result = operator.connect_with_password(profile, "operator", "raw-password")
         self.assertEqual(result["status"], "connected")
         self.assertEqual(authenticate.call_args.args, ("operator", "raw-password"))
-        self.assertTrue(authenticate.call_args.kwargs["device_id"].startswith("device_"))
+        self.assertEqual(authenticate.call_args.kwargs, {})
         verify.assert_called_once_with("me", {}, token="sso-jwt", base_url="https://operator.example/v1")
         save.assert_called_once_with(profile, "sso-jwt", verified=True)
 
