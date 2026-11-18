@@ -64,6 +64,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(!panel.querySelector('[data-test]'),'unverified /user/me is not exposed as a test action');
   assert(panel.textContent.includes('JWT получен, доступ не подтверждён'));
   assert(panel.textContent.includes('JWT получен и зашифрован отдельно'));
+  assert(panel.textContent.includes('Новый JWT не изменит рабочее подключение'));
   assert(panel.textContent.includes('Пароль отправляется по HTTPS только для получения JWT и не сохраняется'));
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
   assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));

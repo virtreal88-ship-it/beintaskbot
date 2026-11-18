@@ -7,7 +7,7 @@
   const operatorLinkAllowed = () => profile?.member?.role === 'owner' || (profile?.member?.permissions || []).some(value => value === 'operator_data' || value === 'operator_data:link');
   const text = {
     title: 'BeinSystems Operator',
-    privacy: 'Только workspace BeinSystems. Токен хранится на сервере и не показывается повторно. Обновление подключения потребует повторно подтвердить связи.',
+    privacy: 'Только workspace BeinSystems. Текущий токен хранится на сервере и не показывается повторно. Новый JWT не изменит рабочее подключение до подтверждения доступа.',
     save: 'Получить токен Operator',
     tokenPending: 'JWT получен и зашифрован отдельно. Доступ не подтверждён; действующее подключение не менялось.',
     disconnect: 'Отключить', search: 'Поиск аккаунта Operator',
