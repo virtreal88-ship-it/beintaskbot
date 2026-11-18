@@ -96,10 +96,23 @@ disable that guard as a shortcut.
 ## Not yet demonstrated or implemented
 
 The isolated existing test session has connected with the unified build without
-another QR. No live unified conversation test has completed yet. Text send acceptance, actual
-delivery/read, QR plus calls on the same client, audio quality and concurrency
-must be proven with the test number. Existing successful call tests concern the
-old call-only path.
+another QR and survived graceful process replacement. One agreed text and one
+small TXT document were accepted by WhatsApp; the participant confirmed receiving
+both. Repeating the text operation retained the original provider ID and did not
+create another send row. Provider delivery/read receipt events are not confirmed.
+
+Two reported participant replies have not appeared in the encrypted event journal.
+Content-free diagnostics currently show a live provider connection and service IQ
+responses, but no message or receipt frames. This does not establish whether the
+reply reached the primary test phone. Do not label it a decryption, peer-filter or
+journal bug without evidence from that stage. The diagnostic logger is installed
+before client construction (whatsmeow snapshots child loggers), classifies only
+fixed frame tags and never serializes nodes, IDs, contents or errors.
+
+No live unified call/message conversation test has completed. Calls on the same
+client, audio quality and concurrency must still be proven. Existing successful
+call tests concern the old call-only path. The legacy lab duration limit is still
+120 seconds; the planned three-minute acceptance cannot be claimed under it.
 
 Media messages are retained encrypted as protocol payloads; this slice does not
 yet implement production media admission, group-change/history import, Worker event

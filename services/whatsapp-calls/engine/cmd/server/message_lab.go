@@ -132,7 +132,7 @@ func (m *messageLab) attach(s *Session) bool {
 		return false
 	}
 	client := s.client
-	client.Log = labProviderLogger{&m.diagnostics}
+	client.Log = labProviderLogger{diagnostics: &m.diagnostics}
 	client.SynchronousAck = true
 	client.EnableDecryptedEventBuffer = true
 	client.SetMediaHTTPClient(unified.NewMediaHTTPClient())
