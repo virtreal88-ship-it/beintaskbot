@@ -116,10 +116,11 @@ def staged(cur,tenant,source):
 def modes(cur,tenant):
     cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
     if not cur.fetchone()['ready']:return {}
-    cur.execute('''SELECT r.channel_id,r.enabled,s.account_jid FROM saas_whatsapp_native_routes r
+    cur.execute('''SELECT r.channel_id,r.enabled,s.account_jid,s.state,c.name FROM saas_whatsapp_native_routes r
       JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
+      JOIN saas_connect_channels c ON c.tenant_id=r.tenant_id AND c.connect_channel_id=r.channel_id
       WHERE r.tenant_id=%s::uuid''',(tenant,))
     return {str(row['channel_id']):row for row in cur.fetchall()}
 

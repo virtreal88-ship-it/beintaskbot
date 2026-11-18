@@ -92,3 +92,13 @@ def test_staged_source_cannot_reenable_legacy_or_use_legacy_disconnect(staged_so
     with pytest.raises(Exception,match='завершения звонков'):
         transport._disconnect_channel_locked({**PROFILE,'role':'owner'},CA)
     assert all(call.args[1]=='GET' for call in legacy.call_args_list)
+
+
+def test_staged_source_is_visible_even_if_retired_connect_list_omits_it(staged_source):
+    db,account,legacy,remote=staged_source
+    rollout.stage(PROFILE,CA,account,'synthetic-g1')
+    legacy.return_value={'data':[]}
+    rows=transport.channels({**PROFILE,'role':'owner'},'')
+    assert len(rows)==1
+    assert rows[0]['id']==CA and rows[0]['native_staged'] is True
+    assert rows[0]['active'] is False and rows[0]['phone']==account.split('@')[0]

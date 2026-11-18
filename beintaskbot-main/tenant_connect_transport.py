@@ -651,8 +651,8 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str, *, expect
             if requested.intersection(native_modes):
                 raise TenantPlatformError('Этот источник уже переводится на единый WhatsApp. Используйте его окно подключения; старый движок повторно не включается.')
             for source,mode in native_modes.items():
-                if source in remote_by_id:
-                    remote_by_id[source]={**remote_by_id[source],'status':'connected' if mode['enabled'] else 'disconnected'}
+                remote_by_id[source]={**remote_by_id.get(source,{}),'id':source,'name':mode['name'],
+                    'status':'connected' if mode['enabled'] else 'disconnected','phone':mode['account_jid'].split('@')[0]}
             cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected'", (tenant,))
             row = cur.fetchone()
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
@@ -759,6 +759,10 @@ def channels(profile: dict, api_key: str, *, authorization=None) -> list[dict]:
             active_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
             from tenant_whatsapp_native_rollout import modes
             native_modes=modes(cur,tenant)
+    rows=[row for row in rows if isinstance(row,dict) and str(row.get('id')) not in native_modes]
+    rows.extend({'id':source,'name':mode['name'],'phone':mode['account_jid'].split('@')[0],
+        'status':'connected' if mode['enabled'] and mode['state']=='ready' else 'connecting' if not mode['enabled'] else 'disconnected'}
+        for source,mode in native_modes.items())
     return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or ''),
              'phone': str(row.get('phone') or ''), 'phoneConflict': bool(row.get('phoneConflict')),
              'duplicateChannelId': str(row.get('duplicateChannelId') or ''),
