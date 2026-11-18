@@ -20,9 +20,11 @@ window.fetch=async(path,options={})=>{
     result={success:true,link:employeeLinks[0]};
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
-  else result=options.method==='POST'
-    ?{success:true,integration:{status:JSON.parse(options.body).action==='login'?'connected':'configured',api_ready:true}}
-    :{success:true,integration:{status:'not_connected',api_ready:true}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='login')result={success:true,integration:{
+    status:'connected',connected:true,configured:true,api_ready:false,pending_auth_received:true,
+    pending_auth_access_confirmed:false,pending_auth_received_at:'2026-11-18T22:00:00+00:00'}};
+  else result={success:true,integration:{status:'connected',connected:true,configured:true,api_ready:false,
+    pending_auth_received:false,pending_auth_access_confirmed:null}};
   return {ok:true,json:async()=>result};
 };
 window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8'));
@@ -42,12 +44,13 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(memberSelect.options.length,2);
   const confirmEmployee=panel.querySelector('[data-confirm-employee]');
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
-  assert(panel.textContent.includes('Сначала подключите Operator'));
+  assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
   assert.equal(requests.filter(row=>row.path==='/api/platform/operator/employee-links'&&row.options.method==='POST').length,0,
-    'employee mapping is blocked until the Operator connection is verified');
+    'employee mapping still requires an explicit employee selection');
   login.value='operator-login';
   password.value='operator-password';
   const save=panel.querySelector('[data-save]');
+  assert.equal(save.disabled,false,'credential exchange does not depend on API verification host');
   await save.onclick({currentTarget:save});
   const posted=JSON.parse(requests.at(-1).options.body);
   assert.deepEqual(posted,{
@@ -58,7 +61,11 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(requests.filter(row=>String(row.options.body||'').includes('operator-password')).length,1,
     'credentials are sent only to the authenticated same-origin login endpoint');
   assert(!panel.querySelector('[data-token]'),'the API token is obtained by the server instead of pasted manually');
-  assert(panel.textContent.includes('Пароль используется только для получения токена и не сохраняется'));
+  assert(!panel.querySelector('[data-test]'),'unverified /user/me is not exposed as a test action');
+  assert(panel.textContent.includes('JWT получен, доступ не подтверждён'));
+  assert(panel.textContent.includes('JWT получен и зашифрован отдельно'));
+  assert(panel.textContent.includes('Новый JWT не изменит рабочее подключение'));
+  assert(panel.textContent.includes('Пароль отправляется по HTTPS только для получения JWT и не сохраняется'));
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
   assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
   memberSelect.value='42';
@@ -85,5 +92,5 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(readOnlyPanel.querySelector('[data-link-controls]').hidden,true);
   assert.equal(readOnlyPanel.querySelector('[data-operator-password]'),null);
   window.close();
-  console.log('PASS: Operator credentials connect through the API and the password input is cleared');
+  console.log('PASS: Operator credentials stage a private JWT without claiming access confirmation');
 })().catch(error=>{window.close();console.error(error);process.exitCode=1;});

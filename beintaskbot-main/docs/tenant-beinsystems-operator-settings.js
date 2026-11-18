@@ -7,15 +7,16 @@
   const operatorLinkAllowed = () => profile?.member?.role === 'owner' || (profile?.member?.permissions || []).some(value => value === 'operator_data' || value === 'operator_data:link');
   const text = {
     title: 'BeinSystems Operator',
-    privacy: 'Только workspace BeinSystems. Токен хранится на сервере и не показывается повторно. Обновление подключения потребует повторно подтвердить связи.',
-    save: 'Подключить Operator', test: 'Проверить подключение',
+    privacy: 'Только workspace BeinSystems. Текущий токен хранится на сервере и не показывается повторно. Новый JWT не изменит рабочее подключение до подтверждения доступа.',
+    save: 'Получить токен Operator',
+    tokenPending: 'JWT получен и зашифрован отдельно. Доступ не подтверждён; действующее подключение не менялось.',
     disconnect: 'Отключить', search: 'Поиск аккаунта Operator',
     searchButton: 'Найти (от 4 символов)', entityType: 'Тип локальной записи',
     entityId: 'UUID CRM-компании или кейса', account: 'Идентификатор account из Operator',
     evidence: 'Основание ручной проверки', confirm: 'Подтвердить связь',
     linked: 'Связь подтверждена', waiting: 'Проверка…',
     userWarning: 'Связь с ERP-пользователем подтверждается вручную по паре account + login.',
-    authPending: 'Вход проходит через API Operator по HTTPS. Пароль используется только для получения токена и не сохраняется в Beintaskbot; сохраняется только проверенный JWT.',
+    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Новый токен хранится отдельно до документированной проверки доступа; действующее подключение не меняется.',
     contract: 'Создание тикетов и публичные ссылки включатся после подтверждения контрактов Operator.',
     employeeLink: 'Пользователь Operator выбирается из ответа API и связывается с сотрудником Beintaskbot по паре account + login. Документация пока не описывает отдельный стабильный user ID. Сервисные вызовы остаются под ограниченным SSO-пользователем подключения; Beintaskbot отдельно фиксирует сотрудника, который подтвердил связь.',
   };
@@ -54,24 +55,29 @@
     const status = $(panel, '[data-status]'), message = $(panel, '[data-message]'), connection = $(panel, '[data-connection]');
     if (!operatorLinkAllowed()) $(panel, '[data-link-controls]').hidden = true;
     if (data.member.role !== 'owner') employeeControls.hidden = true;
-    status.textContent = 'Состояние подключения: '+state.status+(state.api_ready ? '' : ' · API host не задан в серверной конфигурации');
+    const renderStatus = () => {
+      const parts = ['Состояние подключения: '+state.status];
+      if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
+      if (state.pending_auth_received) {
+        parts.push(state.pending_auth_access_confirmed === true
+          ? 'Доступ нового токена подтверждён'
+          : 'JWT получен, доступ не подтверждён');
+      }
+      status.textContent = parts.join(' · ');
+    };
+    renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<label>Логин оператора<input type="text" data-operator-login autocomplete="username"></label><label>Пароль оператора<input type="password" data-operator-password autocomplete="current-password"></label><p>'+text.authPending+'</p><button type="button" data-save>'+text.save+'</button><button type="button" data-test>'+text.test+'</button><button type="button" data-disconnect>'+text.disconnect+'</button>';
-      $(panel,'[data-save]').disabled = !state.api_ready;
-      $(panel,'[data-test]').disabled = !state.api_ready;
+      connection.innerHTML = '<label>Логин оператора<input type="text" data-operator-login autocomplete="username"></label><label>Пароль оператора<input type="password" data-operator-password autocomplete="current-password"></label><p>'+text.authPending+'</p><button type="button" data-save>'+text.save+'</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка доступа станет доступна после подтверждения документированного read-only метода Operator.</p>';
       const run = async (button, fn) => {
         button.disabled = true; message.textContent = text.waiting;
         try { const result = await fn(); if (current !== revision) return;
-          if (result?.integration) { state = result.integration; status.textContent = 'Состояние подключения: '+state.status+(state.api_ready ? '' : ' · API host не задан в серверной конфигурации'); }
-          message.textContent = result?.message || 'Готово.';
+          if (result?.integration) { state = result.integration; renderStatus(); }
+          message.textContent = result?.integration?.pending_auth_received
+            ? text.tokenPending : (result?.message || 'Готово.');
         } catch (error) { if (current === revision) message.textContent = error.message; }
         finally { button.disabled = false; }
       };
       $(panel,'[data-save]').onclick = event => {
-        if (state.configured && !window.confirm('Обновление подключения сделает старые привязки Operator устаревшими. Продолжить?')) {
-          $(panel,'[data-operator-password]').value = '';
-          return;
-        }
         const login = $(panel,'[data-operator-login]').value.trim();
         let password = $(panel,'[data-operator-password]').value;
         $(panel,'[data-operator-password]').value = '';
@@ -79,7 +85,6 @@
         const pending = run(event.currentTarget, () => request('/api/platform/integrations/beinsystems-operator', {action:'login',login,password}));
         return pending.finally(() => { password = ''; });
       };
-      $(panel,'[data-test]').onclick = event => run(event.currentTarget, () => request('/api/platform/integrations/beinsystems-operator', {action:'test'}));
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});

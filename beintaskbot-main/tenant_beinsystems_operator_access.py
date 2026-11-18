@@ -8,6 +8,8 @@ import uuid
 WORKSPACE_ENV = "BEINSYSTEMS_OPERATOR_TENANT_ID"
 API_BASE_URL_ENV = "BEINSYSTEMS_OPERATOR_API_BASE_URL"
 PROVIDER = "beinsystems_operator"
+OPERATOR_API_BASE_URL = "https://operator-api.beinsystems.az/v1"
+OPERATOR_WEB_ORIGIN = "https://operator.beinsystems.az"
 
 
 def configured_workspace_id() -> str | None:
@@ -31,21 +33,5 @@ def is_operator_workspace(tenant_id: object) -> bool:
 
 
 def api_base_url() -> str:
-    """Read the Operator host only from server configuration, never a request."""
-    from urllib.parse import urlsplit
-
-    value = str(os.environ.get(API_BASE_URL_ENV) or "").strip().rstrip("/")
-    if not value:
-        return ""
-    try:
-        parsed = urlsplit(value)
-        if (parsed.scheme != "https" or not parsed.hostname or parsed.username
-                or parsed.password or parsed.query or parsed.fragment):
-            return ""
-        if parsed.port not in (None, 443):
-            return ""
-        if any(ord(char) < 32 for char in value):
-            return ""
-        return value
-    except (TypeError, ValueError):
-        return ""
+    """Return the exact Operator API origin confirmed by the vendor."""
+    return OPERATOR_API_BASE_URL

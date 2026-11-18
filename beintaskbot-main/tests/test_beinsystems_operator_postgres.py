@@ -1,4 +1,4 @@
-"""PostgreSQL regression for upgrading the Operator login rate-limit constraint."""
+"""PostgreSQL regression for Operator rate limits and pending-token storage."""
 import os
 import uuid
 
@@ -35,6 +35,8 @@ def test_existing_rate_limit_table_accepts_auth_login_after_migration():
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,actor_telegram_id,endpoint,bucket_start))""")
             conn.execute("INSERT INTO saas_tenants(id) VALUES(%s::uuid)", (tenant_id,))
+            conn.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id) VALUES(%s::uuid,7)",
+                         (tenant_id,))
 
             for _ in range(2):
                 with conn.cursor() as cur:
@@ -45,6 +47,16 @@ def test_existing_rate_limit_table_accepts_auth_login_after_migration():
               VALUES(%s::uuid,7,'auth_login',date_trunc('minute',now()),1)""", (tenant_id,))
             assert conn.execute("""SELECT endpoint FROM saas_beinsystems_operator_rate_limits
               WHERE tenant_id=%s::uuid""", (tenant_id,)).fetchone() == ("auth_login",)
+            conn.execute("""INSERT INTO saas_beinsystems_operator_pending_auth
+              (tenant_id,owner_telegram_id,token_ciphertext)
+              VALUES(%s::uuid,7,%s)""", (tenant_id, b"encrypted-only"))
+            assert conn.execute("""SELECT token_ciphertext
+              FROM saas_beinsystems_operator_pending_auth WHERE tenant_id=%s::uuid""",
+              (tenant_id,)).fetchone() == (b"encrypted-only",)
+            conn.execute("DELETE FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=7",
+                         (tenant_id,))
+            assert conn.execute("""SELECT count(*) FROM saas_beinsystems_operator_pending_auth
+              WHERE tenant_id=%s::uuid""", (tenant_id,)).fetchone() == (0,)
         finally:
             conn.execute("SET search_path TO public")
             conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
