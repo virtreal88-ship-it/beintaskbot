@@ -826,7 +826,7 @@ def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
     return (status.__wrapped__ if admitted(profile, 'connect') else status)(profile)
 
 
-@operation('connect', lambda v: 'update' if v['reconnect'] else 'view', data_arg='authorization')
+@operation('connect', lambda v: 'connect' if v['reconnect'] else 'view', data_arg='authorization')
 def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
                    callback_url: str = '', authorization=None) -> dict:
     _owner(profile)
