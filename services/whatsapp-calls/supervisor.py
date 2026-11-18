@@ -214,20 +214,35 @@ class Supervisor:
                 headers={'Authorization':'Bearer '+data['http_token']},max_msg_size=6400,compress=0)
             downstream=web.WebSocketResponse(max_msg_size=6400,compress=False,heartbeat=10)
             await downstream.prepare(request)
-            async def copy(src,dst):
-                async for message in src:
-                    if message.type!=WSMsgType.BINARY or not message.data or len(message.data)>6400 or len(message.data)%2:break
-                    await asyncio.wait_for(dst.send_bytes(message.data),2)
-            tasks=[asyncio.create_task(copy(upstream,downstream)),asyncio.create_task(copy(downstream,upstream))]
-            try:await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
+            tasks=[asyncio.create_task(copy_audio(upstream,downstream,'engine')),asyncio.create_task(copy_audio(downstream,upstream,'worker'))]
+            code='cancelled'
+            try:
+                done,_=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
+                for task in tasks:
+                    if task in done and not task.cancelled():
+                        code=task.result();break
             finally:
                 for task in tasks:task.cancel()
                 await asyncio.gather(*tasks,return_exceptions=True)
+                print('calls_audio_proxy_end code='+code,flush=True)
                 await downstream.close()
             return downstream
         except (OSError,asyncio.TimeoutError):raise web.HTTPServiceUnavailable(text='calls_audio_unavailable') from None
         finally:
             if upstream:await upstream.close()
+
+
+async def copy_audio(src,dst,side):
+    # Local allowlisted stage only. Never log a frame, URL, identifier or error.
+    side='engine' if side=='engine' else 'worker'
+    try:
+        async for message in src:
+            if message.type!=WSMsgType.BINARY:return side+'_closed'
+            if not message.data or len(message.data)>6400 or len(message.data)%2:return side+'_invalid_pcm'
+            await asyncio.wait_for(dst.send_bytes(message.data),2)
+    except asyncio.TimeoutError:return side+'_send_timeout'
+    except Exception:return side+'_transport_error'
+    return side+'_closed'
 
 
 def make_app(supervisor):

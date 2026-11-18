@@ -57,3 +57,23 @@ def test_only_direct_number_and_uuid_binding_are_accepted():
     for changed in ({'account_jid':'123456@g.us'},{'account_jid':'123456@lid'},{'tenant_id':'../other'},
                     {'gateway_token':'short'},{'arbitrary_url':'https://external.invalid'}):
         with pytest.raises(web.HTTPBadRequest):binding({**BINDING,**changed})
+
+
+@pytest.mark.asyncio
+async def test_audio_proxy_diagnosis_distinguishes_stage_without_error_text():
+    import asyncio
+    from types import SimpleNamespace
+    from aiohttp import WSMsgType
+    from supervisor import copy_audio
+    async def frames(data=b'\x00\x01'):
+        yield SimpleNamespace(type=WSMsgType.BINARY,data=data)
+    target=SimpleNamespace(send_bytes=AsyncMock())
+    assert await copy_audio(frames(),target,'engine')=='engine_closed'
+    target.send_bytes.assert_awaited_once_with(b'\x00\x01')
+    target.send_bytes.reset_mock()
+    assert await copy_audio(frames(b'\x00'),target,'worker')=='worker_invalid_pcm'
+    target.send_bytes.assert_not_awaited()
+    target.send_bytes.side_effect=asyncio.TimeoutError('private payload')
+    assert await copy_audio(frames(),target,'engine')=='engine_send_timeout'
+    target.send_bytes.side_effect=RuntimeError('private credentials')
+    assert await copy_audio(frames(),target,'worker')=='worker_transport_error'

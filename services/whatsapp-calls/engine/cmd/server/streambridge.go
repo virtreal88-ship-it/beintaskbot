@@ -26,13 +26,22 @@ type streamBridge struct {
 	inputFrames    atomic.Uint64
 	outputFrames   atomic.Uint64
 	onStart        func() error
+	onDiagnosis    func(streamEndDiagnostic)
 }
 
 func newStreamBridge(onPCM func([]float32), onEnd func()) *Bridge {
 	s := &streamBridge{output: make(chan []byte, 64), done: make(chan struct{}), onPCM: onPCM, onEnd: onEnd}
 	return &Bridge{stream: s}
 }
-func (s *streamBridge) close() { s.once.Do(func() { close(s.done) }) }
+func (s *streamBridge) close() { s.closeReason("call_closed") }
+func (s *streamBridge) closeReason(code string) {
+	s.once.Do(func() {
+		if s.onDiagnosis != nil {
+			s.onDiagnosis(streamEndDiagnostic{code, s.inputFrames.Load(), s.outputFrames.Load(), time.Now().UnixMilli()})
+		}
+		close(s.done)
+	})
+}
 func (s *streamBridge) setStart(start func() error) {
 	s.startMu.Lock()
 	s.onStart = start
@@ -50,7 +59,7 @@ func (s *streamBridge) startProvider() {
 		s.startMu.Unlock()
 		if start != nil {
 			if err := start(); err != nil {
-				s.close()
+				s.closeReason("provider_start_failed")
 			}
 		}
 	})
@@ -72,7 +81,7 @@ func (s *streamBridge) write(pcm []float32) error {
 		s.outputFrames.Add(1)
 		return nil
 	default:
-		s.close()
+		s.closeReason("output_backpressure")
 		return errors.New("audio_backpressure")
 	}
 }
@@ -89,14 +98,14 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	c, e := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
 	if e != nil {
-		s.close()
+		s.closeReason("handshake_failed")
 		if s.onEnd != nil {
 			s.onEnd()
 		}
 		return
 	}
 	defer c.CloseNow()
-	defer s.close()
+	defer s.closeReason("stream_finished")
 	defer func() {
 		if s.onEnd != nil {
 			s.onEnd()
@@ -118,6 +127,11 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 				e := c.Write(writeCtx, websocket.MessageBinary, data)
 				stop()
 				if e != nil {
+					code := "output_write_error"
+					if errors.Is(e, context.DeadlineExceeded) {
+						code = "output_write_timeout"
+					}
+					s.closeReason(code)
 					return
 				}
 			}
@@ -128,9 +142,11 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 	for {
 		kind, data, e := c.Read(ctx)
 		if e != nil {
+			s.closeReason("input_closed")
 			return
 		}
 		if kind != websocket.MessageBinary || len(data) == 0 || len(data)%2 != 0 {
+			s.closeReason("input_invalid_pcm")
 			return
 		}
 		if time.Since(window) >= time.Second {
@@ -139,6 +155,7 @@ func (s *streamBridge) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		bytes += len(data)
 		if bytes > 65536 {
+			s.closeReason("input_rate_limit")
 			return
 		}
 		s.inputFrames.Add(1)
