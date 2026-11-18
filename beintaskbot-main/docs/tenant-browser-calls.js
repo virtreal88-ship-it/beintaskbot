@@ -58,9 +58,10 @@
   function release(s){if(!s)return;clearTimeout(s.connectTimer);s.media?.close();s.media=null;s.release?.();s.release=null;}
   async function stop(s=session,hide=false){
     if(!s){if(hide)closeModal();return;}
+    const closingModal=modal;
     s.stopping=true;release(s);draw();
     try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
-    if(hide)closeModal();void poll();
+    if(hide&&session===s&&modal===closingModal)closeModal();void poll();
   }
   function closeModal(){stopRing();if(modal){clearInterval(modal.clockTimer);modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
   function trackRecording(s,call){
