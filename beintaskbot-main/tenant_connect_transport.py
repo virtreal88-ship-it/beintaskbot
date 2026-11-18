@@ -959,7 +959,9 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             time.sleep(0.05 * (attempt + 1))
 
 
-def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
+def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=None) -> bool:
+    if _native_reference is not None and event.get('type') not in ('message.inbound.received', 'message.outbound.observed'):
+        raise TenantLinearError('native_event_not_projectable', 409)
     if event.get('type') == 'channel.connection.updated':
         from tenant_connect_health import ingest as ingest_health
         return ingest_health(raw, signature, event)
@@ -1006,18 +1008,22 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             ensure_notice_schema(conn)
         conn.commit()  # Release all DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
-            cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
-            matches = []
-            for row in cur.fetchall():
-                try:
-                    secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()).get('webhook_secret', '')
-                except Exception:
-                    continue
-                if _verify_signature(secret, raw, signature):
-                    matches.append(str(row['tenant_id']))
-            if len(matches) != 1:
-                raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
-            tenant = matches[0]
+            if _native_reference is not None:
+                from tenant_whatsapp_native_consumer import authorize
+                tenant = authorize(cur, _native_reference, event)
+            else:
+                cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
+                matches = []
+                for row in cur.fetchall():
+                    try:
+                        secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()).get('webhook_secret', '')
+                    except Exception:
+                        continue
+                    if _verify_signature(secret, raw, signature):
+                        matches.append(str(row['tenant_id']))
+                if len(matches) != 1:
+                    raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
+                tenant = matches[0]
             from tenant_dialog_rollout import guard as rollout_guard
             rollout_guard(cur, tenant)
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
@@ -1071,6 +1077,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 data = {**data, 'originalConversationId': data.get('originalConversationId') or original_conversation,
                         '_crm_provider_conversation_id':original_conversation,'conversationId': conversation}
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
+            if _native_reference is not None:
+                from tenant_whatsapp_native_consumer import preserve_identity
+                data = preserve_identity(cur, tenant, channel_id, conversation, data)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             if call_occurred is not None:

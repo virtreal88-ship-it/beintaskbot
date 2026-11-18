@@ -5,7 +5,36 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import tenant_whatsapp_native_api as api
+import tenant_whatsapp_native_consumer as consumer
 from tenant_linear_policy import TenantLinearError
+
+
+def test_projection_finishes_before_receipt_and_failure_is_retried(monkeypatch):
+    async def run():
+        monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_INBOX', '1')
+        monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION', '1')
+        monkeypatch.setattr(api, 'SLOTS', asyncio.Semaphore(2))
+        monkeypatch.setattr(api.tenant_browser_calls, 'gateway_auth', lambda _: {'managed':True})
+        receipt = {'state':'stored', 'sequence':7}
+        order = []
+        def store(*args):
+            order.append('store_committed')
+            return receipt
+        def project(value):
+            assert value == receipt and order[-1] == 'store_committed'
+            order.append('crm_committed')
+        monkeypatch.setattr(api.inbox, 'store_delivery', store)
+        monkeypatch.setattr(consumer, 'project_stored', project)
+        app = web.Application()
+        app.router.add_post('/messages', api.handler(Mock(), 'https://example.invalid', Mock()))
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post('/messages', json={})
+            assert response.status == 200
+            assert order == ['store_committed', 'crm_committed']
+            monkeypatch.setattr(consumer, 'project_stored', Mock(side_effect=RuntimeError('PRIVATE')))
+            response = await client.post('/messages', json={})
+            assert response.status == 503 and 'PRIVATE' not in await response.text()
+    asyncio.run(run())
 
 
 def test_private_delivery_gate_and_post_commit_response(monkeypatch):

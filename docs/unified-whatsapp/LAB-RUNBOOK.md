@@ -416,3 +416,25 @@ raw protobuf, keys or download URLs. Exact provider-ID lookup, the transaction
 consumer, current source-generation ownership and media/outgoing adapters still
 need integration. There is no automatic CRM mutation or AI dispatch from this
 converter. Unit tests are not `/app` acceptance evidence.
+
+### Shared CRM ingestion implementation
+
+The private delivery endpoint now optionally invokes `tenant_whatsapp_native_consumer`
+after durable capture and before returning the receipt. Projection requires both
+`BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION=1` and an explicitly enabled projection
+generation (default false, at most one per tenant/source). No startup migration
+or automatic source activation was added.
+
+The consumer reopens encrypted inbox evidence and rechecks/locks the active
+source, gateway, account and generation in the existing CRM ingestion transaction.
+It uses the same canonical identity, dialogue lock, history, lifecycle and AI
+admission path as Connect, without forging a webhook signature. Exact legacy
+message identity is retained under that dialogue lock. Synthetic SQL tests cover
+duplicate delivery, existing history identity, revoked source, changed evidence,
+cross-company/source/generation references and rollback/retry after CRM failure.
+Unsupported control events remain captured and cannot become customer turns.
+
+This path is not enabled on either live number. Production gateway capture,
+outgoing/media adapters, source-owner cutover fencing and live `/app` acceptance
+remain rollout gates. In particular the projection flag alone must not be used
+to switch a working source or authorize a second protocol owner.

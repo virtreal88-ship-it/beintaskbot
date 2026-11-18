@@ -58,6 +58,9 @@ def handler(member, origin, logger):
                 # store_delivery repeats authentication and locks/rechecks the
                 # source in its commit transaction, including credential revoke.
                 receipt = await _finish_thread(inbox.store_delivery, authorization, raw)
+                if os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION') == '1':
+                    from tenant_whatsapp_native_consumer import project_stored
+                    await _finish_thread(project_stored, receipt)
             return web.json_response(receipt, headers=HEADERS)
         except TenantLinearError as error:
             return web.json_response({'error': str(error)}, status=error.status, headers=HEADERS)
