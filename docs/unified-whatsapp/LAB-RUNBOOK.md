@@ -372,6 +372,39 @@ effect on this live account is not yet accepted, and it does not prove a fix for
 the missing incoming stream. The candidate is prepared, not deployed to a
 working source.
 
+### Fresh binding and post-restart acceptance (18 November)
+
+The owner confirmed both primary-phone controls: control 29 was visible on the
+test phone and outgoing control 30 reached the agreed recipient. The former
+linked client still received no corresponding incoming frames. Its process was
+stopped after checking zero active calls/audio and no uncertain operations; its
+database and journal remain preserved. The cause of that silent receive failure
+is not established. A new test-only QR binding restored incoming delivery; it
+does not prove the old session was repaired. Working source …101 was untouched.
+
+Code `032085351fa4a4f877a5ef27d1c1308a6b588b6e`, lab binary SHA-256
+`34c51df4b45eb1fbf673bcc3cc59f7ab518881a6d16fe132d4acf471a1303c88`:
+
+- Incoming control 31 was retained exactly once (sequence 1) on the fresh binding.
+- Reject received a correlated provider ACK without an error. The owner confirmed
+  the calling phone stopped immediately; active calls and audio attachments were
+  zero, and neither acceptance nor recording was started.
+- The same saved session was gracefully stopped for 44,931 ms. Control 32, sent
+  during the outage, arrived exactly once (sequence 3) after restart without QR.
+  The preceding encrypted journal rows remained byte-identical to the backup.
+- A second incoming call after that restart was rejected with a provider ACK.
+  The owner again confirmed immediate termination on the calling phone; no media
+  or recording started and active calls returned to zero.
+- All ten PR workflows for this exact code SHA completed successfully, including
+  the isolated recording workflow with PostgreSQL and Go race coverage.
+
+Private evidence is retained under `receive-relink-20261118`: `paired-evidence`,
+`control31-evidence`, `upstream-reject-evidence`, `first-restart-evidence` and
+`post-restart-reject-evidence` JSON files. They contain bounded diagnostic facts;
+session databases, keys and conversation content are not published. These tests
+confirm graceful restart and rejection on this binding, not arbitrary network
+partitions, crash-during-send behavior, or production migration acceptance.
+
 ### CRM projection foundation (not wired to production)
 
 The common Go envelope retains stable event identity, participant/direction,
