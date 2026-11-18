@@ -125,4 +125,15 @@ func TestLabMediaRoutesFailClosedBeforeNetwork(t *testing.T) {
 	if got := request("GET", "/api/unified-lab/media/"+items[0].ID, nil, true, ""); got != 404 {
 		t.Fatal("revoked peer media exposed")
 	}
+	r := httptest.NewRequest("GET", "http://127.0.0.1:8080/api/unified-lab/events", nil)
+	r.SetBasicAuth("lab", token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	var page struct {
+		Events []json.RawMessage `json:"events"`
+		Next   int64             `json:"next_cursor"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Events) != 0 || page.Next != items[0].Sequence {
+		t.Fatal("revoked event exposed or filtering stalled cursor")
+	}
 }

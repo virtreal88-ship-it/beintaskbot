@@ -21,6 +21,7 @@ async function poll(){
   statusNode.textContent=ready?'Тестовая сессия подключена. Для текста и звонков используется один client.':'Точная тестовая сессия не подключена. Отправка заблокирована.';controls();
   const events=await fetch('/api/unified-lab/events?after='+cursor,{cache:'no-store'});if(!events.ok)throw Error();const data=await events.json();
   for(const event of data.events){const p=event.payload,item=document.createElement('li');item.textContent=new Date(p.timestamp).toLocaleTimeString()+' · '+p.kind+' · '+(p.from_me?'исходящее':'входящее')+' · '+(p.text||p.status||p.media_kind||'нет текстовой части');if(p.media_kind&&p.media_size){const link=document.createElement('a');link.href='/api/unified-lab/media/'+encodeURIComponent(event.id);link.textContent=' Скачать тестовое вложение';link.download='';item.append(link)}list.append(item);cursor=event.sequence;while(list.children.length>100)list.firstChild.remove()}
+  if(Number.isSafeInteger(data.next_cursor)&&data.next_cursor>=cursor)cursor=data.next_cursor;
  }catch{statusNode.textContent='Нет подтверждения состояния. Отправка приостановлена.';ready=false;controls()}
  finally{if(!stopped)timer=setTimeout(poll,2500)}
 }

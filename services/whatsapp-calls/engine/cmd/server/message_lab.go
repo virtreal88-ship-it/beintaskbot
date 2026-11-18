@@ -282,16 +282,24 @@ func (s *server) registerMessageLab(mux *http.ServeMux) {
 			writeJSON(w, 503, map[string]string{"error": "journal_unavailable"})
 			return
 		}
+		nextCursor := after
+		visible := make([]unified.Event, 0, len(items))
 		for index := range items {
+			nextCursor = items[index].Sequence
 			var envelope labEnvelope
 			if json.Unmarshal(items[index].Payload, &envelope) != nil {
 				writeJSON(w, 503, map[string]string{"error": "journal_invalid"})
 				return
 			}
+			chat, parseErr := types.ParseJID(envelope.Chat)
+			if parseErr != nil || !m.allows(chat) {
+				continue
+			}
 			envelope.Proto = nil
 			items[index].Payload, _ = json.Marshal(envelope)
+			visible = append(visible, items[index])
 		}
-		writeJSON(w, 200, map[string]any{"events": items})
+		writeJSON(w, 200, map[string]any{"events": visible, "next_cursor": nextCursor})
 	})
 	mux.HandleFunc("POST /api/unified-lab/text", func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
