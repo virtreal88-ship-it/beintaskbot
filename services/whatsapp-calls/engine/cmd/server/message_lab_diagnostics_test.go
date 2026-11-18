@@ -97,3 +97,37 @@ func TestLabCallFramesSeparateOfferFromNoticeWithoutContent(t *testing.T) {
 		t.Fatal("unsafe or ambiguous call diagnostics")
 	}
 }
+
+func TestLabActivationEvidenceRequiresCurrentMatchingResponse(t *testing.T) {
+	d := &labDiagnostics{}
+	l := labProviderLogger{diagnostics: d}
+	send, recv := l.Sub("Send"), l.Sub("Recv")
+	request := func(id string) {
+		send.Debugf("%s", &waBinary.Node{Tag: "iq", Attrs: waBinary.Attrs{"id": id, "xmlns": "passive", "type": "set"}, Content: []waBinary.Node{{Tag: "active"}}})
+	}
+	response := func(id, kind string) {
+		recv.Debugf("%s", &waBinary.Node{Tag: "iq", Attrs: waBinary.Attrs{"id": id, "type": kind}, Content: []byte("secret-provider-content")})
+	}
+	request("secret-old-id")
+	recv.Debugf("%s", &waBinary.Node{Tag: "success"})
+	response("secret-old-id", "result")
+	request("secret-current-id")
+	response("secret-unrelated-id", "result")
+	response("secret-current-id", "unknown")
+	if d.snapshot()["activation_acknowledged"] != 0 {
+		t.Fatal("unrelated, old or unknown response established activation")
+	}
+	response("secret-current-id", "result")
+	response("secret-current-id", "result")
+	request("secret-next-id")
+	response("secret-next-id", "error")
+	recv.Debugf("%s", &waBinary.Node{Tag: "ib", Content: []waBinary.Node{{Tag: "offline_preview"}, {Tag: "offline"}, {Tag: "secret-unknown-tag"}}})
+	counts := d.snapshot()
+	raw, _ := json.Marshal(counts)
+	if strings.Contains(string(raw), "secret") || counts["activation_requested"] != 3 || counts["activation_acknowledged"] != 1 || counts["activation_rejected"] != 1 || counts["provider_ib_offline"] != 1 || counts["provider_ib_offline_preview"] != 1 {
+		t.Fatal("connection evidence leaked content or accepted incorrect response")
+	}
+	if counts["provider_call_offer"] != 0 || counts["provider_frame_message"] != 0 {
+		t.Fatal("activation was mislabeled as inbound delivery")
+	}
+}

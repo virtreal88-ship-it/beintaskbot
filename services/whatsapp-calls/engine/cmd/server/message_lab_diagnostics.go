@@ -18,6 +18,8 @@ import (
 type labDiagnostics struct {
 	mu     sync.Mutex
 	counts map[string]uint64
+	// One ephemeral correlation value, never included in snapshots or logs.
+	activationID string
 }
 
 func (d *labDiagnostics) once(code string) bool {
@@ -70,6 +72,7 @@ func (l labProviderLogger) record(level, format string, args []any) {
 	if (l.receive || l.send) && level == "debug" && format == "%s" && len(args) == 1 {
 		if node, ok := args[0].(*waBinary.Node); ok && node != nil {
 			l.callShape(node)
+			l.connectionShape(node)
 		}
 	}
 	if l.receive && level == "debug" && format == "%s" && len(args) == 1 {
@@ -120,6 +123,48 @@ func (l labProviderLogger) record(level, format string, args []any) {
 		if err, ok := arg.(error); ok && errors.Is(err, unified.ErrConfiguration) {
 			l.diagnostics.add("provider_buffer_configuration_failed")
 			break
+		}
+	}
+}
+
+// Authentication and keepalive alone do not establish inbound delivery. Observe
+// the SDK's existing activation exchange; do not send extra protocol messages.
+func (l labProviderLogger) connectionShape(node *waBinary.Node) {
+	d := l.diagnostics
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.counts == nil {
+		d.counts = map[string]uint64{}
+	}
+	if l.receive && node.Tag == "success" {
+		d.activationID = "" // Never correlate an old connection's response.
+	}
+	if node.Tag == "iq" {
+		id, _ := node.Attrs["id"].(string)
+		if l.send && node.Attrs["xmlns"] == "passive" && node.Attrs["type"] == "set" {
+			children := node.GetChildren()
+			if id != "" && len(children) == 1 && children[0].Tag == "active" {
+				d.activationID = id
+				d.counts["activation_requested"]++
+			}
+		}
+		if l.receive && id != "" && id == d.activationID {
+			switch node.Attrs["type"] {
+			case "result":
+				d.counts["activation_acknowledged"]++
+				d.activationID = ""
+			case "error":
+				d.counts["activation_rejected"]++
+				d.activationID = ""
+			}
+		}
+	}
+	if l.receive && node.Tag == "ib" {
+		for _, child := range node.GetChildren() {
+			switch child.Tag {
+			case "offline_preview", "offline", "dirty":
+				d.counts["provider_ib_"+child.Tag]++
+			}
 		}
 	}
 }

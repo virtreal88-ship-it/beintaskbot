@@ -207,6 +207,24 @@ func (m *messageLab) capture(ctx context.Context, raw any) bool {
 	case *events.Disconnected:
 		m.diagnostics.add("disconnected_event")
 		return true
+	case *events.OfflineSyncPreview:
+		m.diagnostics.add("offline_sync_preview_event")
+		return true
+	case *events.OfflineSyncCompleted:
+		m.diagnostics.add("offline_sync_completed_event")
+		return true
+	case *events.StreamReplaced:
+		m.diagnostics.add("stream_replaced_event")
+		return true
+	case *events.LoggedOut:
+		m.diagnostics.add("logged_out_event")
+		return true
+	case *events.KeepAliveTimeout:
+		m.diagnostics.add("keepalive_timeout_event")
+		return true
+	case *events.KeepAliveRestored:
+		m.diagnostics.add("keepalive_restored_event")
+		return true
 	default:
 		m.diagnostics.add("other_event")
 		return true

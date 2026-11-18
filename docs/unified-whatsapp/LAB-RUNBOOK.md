@@ -332,6 +332,25 @@ These changes are not a production rollout. Remote rejection must be verified
 before promoting the candidate. The test client now visibly retains the
 failure state; it closes after the later actual remote termination.
 
+After installing the minimal-reject candidate, the linked client received no
+raw call frames during owner-reported calls that rang on the primary test phone.
+Authentication and IQ replies continued; the bound device was returned by the
+provider's device query. A bounded two-minute presence probe and one graceful
+restart of the same binary/database did not establish inbound-call recovery.
+Only one process held the exact test database/runtime lock. The primary platform
+is WhatsApp Business Android and its stored LID migration marker is absent;
+similar upstream LID-account reports are therefore not a proven explanation.
+`missing-inbound-after-reconnect.json` retains safe counters and binary evidence.
+The minimal reject itself has not been exercised successfully on a new offer.
+
+Lab diagnostics now distinguish the SDK's existing activation request and its
+matching IQ result/error, offline synchronization, replacement/logout and
+keepalive events. Correlation IDs stay only in bounded memory and never enter a
+snapshot or log. Old/unrelated/duplicate responses cannot establish activation.
+These counters send no extra protocol messages and do not equate authentication
+or activation with successful delivery. No logout, session deletion, new QR or
+working-source change is a recovery step in this experiment.
+
 ### CRM projection foundation (not wired to production)
 
 The common Go envelope retains stable event identity, participant/direction,
