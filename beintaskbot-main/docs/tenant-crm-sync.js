@@ -5,7 +5,7 @@
   const notified = new Map();
   let scopeKey='', pollBusy=false, pollController, authorized=false;
   const refreshAt=new Map();
-  const fingerprint=data=>JSON.stringify([data.member,data.capabilities,data.role_permissions,(data.integrations||[]).map(({updated_at,...binding})=>binding)]);
+  const fingerprint=data=>JSON.stringify([data.member,data.capabilities,data.role_permissions,(Array.isArray(data.integrations)?data.integrations.map(({updated_at,...binding})=>binding):data.integrations)]);
   const visible=()=>!document.hidden&&!!document.querySelector('#view-deals.active,#view-tasks.active');
   const selected=resource=>document.getElementById(resource==='tasks'?'view-tasks':'view-deals')?.classList.contains('active')&&document.getElementById(resource==='tasks'?'taskFeedSource':'dealFeedSource')?.value==='kommo';
   const query=()=>new URLSearchParams({expected_tenant_id:profile.tenant_id,expected_user_id:String(profile.telegram_id)});
@@ -32,14 +32,6 @@
     if (!authorized || !profile || epoch !== generation || !visible() || pollBusy) return;
     pollBusy=true;const controller=new AbortController();pollController=controller;const timeout=setTimeout(()=>controller.abort(),15000);
     try {
-      for(const resource of ['leads','tasks']){
-        const canSync=resource==='tasks'?window.tenantTaskFlow?.sourceActions('kommo')?.sync===true:!!(window.tenantProfileSnapshot?.capabilities?.modules?.deals||window.tenantProfileSnapshot?.capabilities?.modules?.customers);
-        if(!selected(resource)||!canSync||Date.now()-(refreshAt.get(resource)??-Infinity)<60000)continue;
-        refreshAt.set(resource,Date.now());const params=query();params.set('refresh','1');
-        const response=await fetch('/api/platform/crm/'+(resource==='leads'?'deals':'tasks')+'?'+params,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
-        const result=await response.json();if(epoch!==generation)return;
-        if(!response.ok||!result.success||result.warning)throw Error('refresh unavailable');
-      }
       const response = await fetch('/api/platform/crm/sync?'+query(), {credentials:'same-origin',cache:'no-store',signal:controller.signal});
       const data = await response.json();
       if (epoch !== generation) return;
@@ -62,6 +54,17 @@
       if (completed.length){for(const item of completed)notified.set(item.resource,item.stamp);document.dispatchEvent(new CustomEvent('tenant-crm-sync-complete', {
         detail: {resources:completed.map(item=>item.resource), tenant_id:profile.tenant_id, expected_user_id:String(profile.telegram_id)}
       }));}
+      // Observe completed runs before enqueue can replace their status.
+      for(const resource of ['leads','tasks']){
+        if(epoch!==generation||!authorized||!profile)return;
+        const canSync=resource==='tasks'?window.tenantTaskFlow?.sourceActions('kommo')?.sync===true:!!(window.tenantProfileSnapshot?.capabilities?.modules?.deals||window.tenantProfileSnapshot?.capabilities?.modules?.customers);
+        if(!visible()||!selected(resource)||!canSync||Date.now()-(refreshAt.get(resource)??-Infinity)<60000)continue;
+        refreshAt.set(resource,Date.now());const params=query();params.set('refresh','1');
+        const response=await fetch('/api/platform/crm/'+(resource==='leads'?'deals':'tasks')+'?'+params,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+        const result=await response.json();if(epoch!==generation)return;
+        if(!response.ok||!result.success||result.warning)throw Error('refresh unavailable');
+        watching=true;
+      }
     } catch (_) {
       if (epoch !== generation) return;
       watching = false;

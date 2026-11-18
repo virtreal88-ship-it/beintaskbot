@@ -9,11 +9,15 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
   await page.route('**/*',route=>{if(route.request().isNavigationRequest())return route.fulfill({contentType:'text/html',body:appHtml()});const url=new URL(route.request().url()),file=path.join(__dirname,'../docs',path.basename(url.pathname));if(url.origin==='https://fixture.test'&&url.pathname.startsWith('/assets/')&&file.endsWith('.css')&&fs.existsSync(file))return route.fulfill({path:file});return route.abort();});
   await page.goto('https://fixture.test/app?view=tasks&lang=ru');
   await page.waitForFunction(()=>document.querySelector('#nativeTasksList')?.textContent.includes('PRIVATE task A'));
+  await page.addScriptTag({content:fs.readFileSync(__dirname+'/../docs/tenant-mobile-crm-toolbar.js','utf8')});
+  if(width<=700)await page.locator('#view-tasks .crm-mobile-more').waitFor();
   await page.addScriptTag({content:fs.readFileSync(__dirname+'/../docs/tenant-crm-sync.js','utf8')});
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:tenantProfileSnapshot})));
   for(const view of ['tasks','deals']){
    await page.evaluate(view=>{document.querySelectorAll('.view.active').forEach(n=>n.classList.remove('active'));document.getElementById('view-'+view).classList.add('active');},view);
-   assert.equal(await page.locator('#'+view+'Refresh').isVisible(),false,view+' refresh hidden at '+width);
+   if(width<=700){const more=page.locator('#view-'+view+' .crm-mobile-more');await more.click();assert.equal(await more.getAttribute('aria-expanded'),'true');}
+   assert.equal(await page.locator('#'+view+'Refresh').isVisible(),false,view+' refresh hidden even with More open at '+width);
+   if(width<=700)await page.keyboard.press('Escape');
    assert.equal(await page.locator('#view-'+view+' [data-task-admin-sync]').count(),0);
    assert.equal(await page.locator('#view-'+view+' .crm-toolbar-actions button.refresh:visible').count(),0,'no refresh action remains');
   }
