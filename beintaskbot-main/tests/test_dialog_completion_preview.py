@@ -281,7 +281,7 @@ def test_mark_all_read_clears_unread_messages_in_closed_dialogs(active):
     assert after['dialogs'][0]['unread_count']==0
 
 
-def test_old_target_paginates_and_bulk_read_skips_newer_system_events(active):
+def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arrival(active,monkeypatch):
     dialogs.listing(PROFILE, lifecycle='all')  # establish the employee's initial cursor
     active.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
       channel,direction,body,created_at,happened_at)
@@ -300,6 +300,11 @@ def test_old_target_paginates_and_bulk_read_skips_newer_system_events(active):
       (system_event,A,CA))
     active.commit()
 
+    dismissed=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,
+        conversation_id='client',lead_id=41,action='dismiss',expected_revision=0,
+        message_id=str(uuid.UUID(int=1000150)),request_id=str(uuid.uuid4())))
+    assert dismissed['lifecycle']['state']=='dismissed'
+
     anchor_page=dialogs.history(PROFILE,'connect',41,CA,'client',anchor=target)
     anchor_ids={str(row['id']) for row in anchor_page['messages']}
     assert target in anchor_ids
@@ -316,9 +321,29 @@ def test_old_target_paginates_and_bulk_read_skips_newer_system_events(active):
                                    conversation_id='client',message_id=target))
     after_target=dialogs.listing(PROFILE,lifecycle='all')
     assert after_target['unread_count']==75
+    assert after_target['dialogs'][0]['lifecycle']['state']=='dismissed'
 
+    original_mark_read=dialogs.mark_read
+    arrived=[]
+    def add_message_after_bulk_snapshot(profile,payload):
+        if not arrived:
+            arrived.append(True)
+            active.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
+              channel,direction,body,created_at,happened_at)
+              VALUES(%s::uuid,%s::uuid,41,'arrived-after-bulk-snapshot','connect:'||%s::text,
+                'incoming','Synthetic post-snapshot message','2200-01-01T00:00:00Z','2200-01-01T00:00:00Z')''',
+              (str(uuid.UUID(int=3000000)),A,CA))
+            active.commit()
+        return original_mark_read(profile,payload)
+    monkeypatch.setattr(dialogs,'mark_read',add_message_after_bulk_snapshot)
     result=dialogs.mark_all_read(PROFILE)
     assert result['updated_dialogs']==1
     after_all=dialogs.listing(PROFILE,lifecycle='all')
-    assert after_all['unread_count']==0
-    assert after_all['dialogs'][0]['unread_count']==0
+    assert after_all['unread_count']==1
+    assert after_all['dialogs'][0]['unread_count']==1
+    assert after_all['dialogs'][0]['lifecycle']['state']=='dismissed'
+    # A fresh server listing (the state after reload) retains both lifecycle and read cursor.
+    reloaded=dialogs.listing(PROFILE,lifecycle='all')
+    assert reloaded['unread_count']==1
+    assert reloaded['dialogs'][0]['unread_count']==1
+    assert reloaded['dialogs'][0]['lifecycle']['state']=='dismissed'
