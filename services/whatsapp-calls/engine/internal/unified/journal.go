@@ -31,10 +31,11 @@ type Scope struct {
 }
 
 type Journal struct {
-	db    *sql.DB
-	aead  cipher.AEAD
-	key   []byte
-	scope string
+	db             *sql.DB
+	aead           cipher.AEAD
+	key            []byte
+	scope          string
+	operationScope string
 }
 
 type Event struct {
@@ -64,6 +65,10 @@ func New(ctx context.Context, db *sql.DB, scope Scope, key []byte) (*Journal, er
 	}
 	b, _ := json.Marshal(scope)
 	hash := sha256.Sum256(b)
+	stableScope := scope
+	stableScope.Generation = ""
+	stable, _ := json.Marshal(stableScope)
+	stableHash := sha256.Sum256(stable)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -72,7 +77,7 @@ func New(ctx context.Context, db *sql.DB, scope Scope, key []byte) (*Journal, er
 	if err != nil {
 		return nil, err
 	}
-	j := &Journal{db: db, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:])}
+	j := &Journal{db: db, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:]), operationScope: hex.EncodeToString(stableHash[:])}
 	_, err = db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS unified_bindings(scope TEXT PRIMARY KEY, key_check TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS unified_events(
@@ -85,41 +90,55 @@ CREATE TABLE IF NOT EXISTS unified_sends(
 	if err != nil {
 		return nil, err
 	}
-	check := j.digest("key-check")
-	if _, err = db.ExecContext(ctx, `INSERT INTO unified_bindings(scope,key_check) VALUES(?,?) ON CONFLICT DO NOTHING`, j.scope, check); err != nil {
-		return nil, err
-	}
-	var stored string
-	if err = db.QueryRowContext(ctx, `SELECT key_check FROM unified_bindings WHERE scope=?`, j.scope).Scan(&stored); err != nil {
-		return nil, err
-	}
-	if !hmac.Equal([]byte(stored), []byte(check)) {
-		return nil, ErrConfiguration
+	for _, namespace := range []string{j.operationScope, j.scope} {
+		check := j.digestForScope(namespace, "key-check")
+		if _, err = db.ExecContext(ctx, `INSERT INTO unified_bindings(scope,key_check) VALUES(?,?) ON CONFLICT DO NOTHING`, namespace, check); err != nil {
+			return nil, err
+		}
+		var stored string
+		if err = db.QueryRowContext(ctx, `SELECT key_check FROM unified_bindings WHERE scope=?`, namespace).Scan(&stored); err != nil {
+			return nil, err
+		}
+		if !hmac.Equal([]byte(stored), []byte(check)) {
+			return nil, ErrConfiguration
+		}
 	}
 	return j, nil
 }
 
 func (j *Journal) digest(parts ...string) string {
+	return j.digestForScope(j.scope, parts...)
+}
+
+func (j *Journal) digestForScope(scope string, parts ...string) string {
 	h := hmac.New(sha256.New, j.key)
-	b, _ := json.Marshal(append([]string{j.scope}, parts...))
+	b, _ := json.Marshal(append([]string{scope}, parts...))
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (j *Journal) seal(label string, payload []byte) ([]byte, error) {
+	return j.sealForScope(j.scope, label, payload)
+}
+
+func (j *Journal) sealForScope(scope, label string, payload []byte) ([]byte, error) {
 	nonce := make([]byte, j.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return j.aead.Seal(nonce, nonce, payload, []byte(j.scope+":"+label)), nil
+	return j.aead.Seal(nonce, nonce, payload, []byte(scope+":"+label)), nil
 }
 
 func (j *Journal) open(label string, body []byte) ([]byte, error) {
+	return j.openForScope(j.scope, label, body)
+}
+
+func (j *Journal) openForScope(scope, label string, body []byte) ([]byte, error) {
 	n := j.aead.NonceSize()
 	if len(body) < n {
 		return nil, ErrConfiguration
 	}
-	return j.aead.Open(nil, body[:n], body[n:], []byte(j.scope+":"+label))
+	return j.aead.Open(nil, body[:n], body[n:], []byte(scope+":"+label))
 }
 
 // Append commits before returning success to the provider callback. Identical
@@ -186,13 +205,15 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 	if operation == "" || len(operation) > 128 || peer == "" || len(payload) == 0 || len(payload) > 1<<20 || send == nil || allocateID == nil {
 		return Result{}, ErrConfiguration
 	}
-	op := j.digest("operation", operation)
-	fingerprint := j.digest("payload", peer, string(payload))
+	// Operation identity survives an owner-generation change. A new owner must
+	// not retry an old unknown send with a new provider ID.
+	op := j.digestForScope(j.operationScope, "operation", operation)
+	fingerprint := j.digestForScope(j.operationScope, "payload", peer, string(payload))
 	providerID := allocateID()
 	if len(providerID) < 1 || len(providerID) > 200 {
 		return Result{}, ErrConfiguration
 	}
-	result, err := j.db.ExecContext(ctx, `INSERT INTO unified_sends(scope,operation,fingerprint,provider_id,state) VALUES(?,?,?,?,'unknown') ON CONFLICT DO NOTHING`, j.scope, op, fingerprint, providerID)
+	result, err := j.db.ExecContext(ctx, `INSERT INTO unified_sends(scope,operation,fingerprint,provider_id,state) VALUES(?,?,?,?,'unknown') ON CONFLICT DO NOTHING`, j.operationScope, op, fingerprint, providerID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -203,7 +224,7 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 	if n == 0 {
 		var stored string
 		var old Result
-		if err := j.db.QueryRowContext(ctx, `SELECT fingerprint,provider_id,state FROM unified_sends WHERE scope=? AND operation=?`, j.scope, op).Scan(&stored, &old.ProviderID, &old.State); err != nil {
+		if err := j.db.QueryRowContext(ctx, `SELECT fingerprint,provider_id,state FROM unified_sends WHERE scope=? AND operation=?`, j.operationScope, op).Scan(&stored, &old.ProviderID, &old.State); err != nil {
 			return Result{}, err
 		}
 		if !hmac.Equal([]byte(stored), []byte(fingerprint)) {
@@ -218,7 +239,7 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 	if err := send(ctx, providerID); err != nil {
 		return unknown, ErrUnknown
 	}
-	result, err = j.db.ExecContext(ctx, `UPDATE unified_sends SET state='accepted' WHERE scope=? AND operation=? AND fingerprint=? AND provider_id=? AND state='unknown'`, j.scope, op, fingerprint, providerID)
+	result, err = j.db.ExecContext(ctx, `UPDATE unified_sends SET state='accepted' WHERE scope=? AND operation=? AND fingerprint=? AND provider_id=? AND state='unknown'`, j.operationScope, op, fingerprint, providerID)
 	if err != nil {
 		return unknown, ErrUnknown
 	}
@@ -230,8 +251,8 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 
 // BufferSeal/BufferOpen bind the protocol retry buffer to this exact scope.
 func (j *Journal) BufferSeal(kind, identity string, payload []byte) ([]byte, error) {
-	return j.seal(fmt.Sprintf("buffer:%s:%s", kind, identity), payload)
+	return j.sealForScope(j.operationScope, fmt.Sprintf("buffer:%s:%s", kind, identity), payload)
 }
 func (j *Journal) BufferOpen(kind, identity string, body []byte) ([]byte, error) {
-	return j.open(fmt.Sprintf("buffer:%s:%s", kind, identity), body)
+	return j.openForScope(j.operationScope, fmt.Sprintf("buffer:%s:%s", kind, identity), body)
 }

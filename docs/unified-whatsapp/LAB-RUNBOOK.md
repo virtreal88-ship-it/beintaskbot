@@ -67,6 +67,9 @@ disable that guard as a shortcut.
 - Each send reserves its immutable operation and provider-generated ID before
   one transport call. A timeout, process crash or local result-commit failure
   leaves `unknown`; repeating the same operation cannot invoke transport again.
+  Send identity and protocol buffers survive an owner-generation change; changing
+  generation cannot reset an unknown operation. Event pages remain generation
+  scoped, so a future Worker dispatcher must drain retained generations too.
 - `accepted` is provider server acceptance, **not delivered/read**. Receipts are
   retained separately. This slice does not yet reconcile unknown operations.
 - Same-source event replay is idempotent; edits/reactions have separate event

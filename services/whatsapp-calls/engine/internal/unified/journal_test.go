@@ -155,6 +155,35 @@ func TestSendAmbiguitySurvivesRestartAndCommitFailure(t *testing.T) {
 	}
 }
 
+func TestOwnerGenerationDoesNotResetSendIdentityOrProtocolBuffer(t *testing.T) {
+	ctx := context.Background()
+	db := database(t, filepath.Join(t.TempDir(), "owners.db"))
+	old := journal(t, db, testScope)
+	result, err := old.Send(ctx, "inflight-operation", "peer", []byte("message"), testProviderID, func(context.Context, string) error { return ErrUnknown })
+	if !errors.Is(err, ErrUnknown) {
+		t.Fatal(err)
+	}
+	body, err := old.BufferSeal("incoming", "message-key", []byte("buffered message"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextScope := testScope
+	nextScope.Generation = "owner-generation-2"
+	next := journal(t, db, nextScope)
+	retry, err := next.Send(ctx, "inflight-operation", "peer", []byte("message"), testProviderID, func(context.Context, string) error { t.Fatal("new owner resent an unknown operation"); return nil })
+	if !errors.Is(err, ErrUnknown) || retry.ProviderID != result.ProviderID {
+		t.Fatal("generation changed operation identity")
+	}
+	plain, err := next.BufferOpen("incoming", "message-key", body)
+	if err != nil || string(plain) != "buffered message" {
+		t.Fatal("owner change made protocol retry data unreadable")
+	}
+	nextScope.Generation = "owner-generation-3"
+	if _, err := New(ctx, db, nextScope, bytes.Repeat([]byte{9}, 32)); !errors.Is(err, ErrConfiguration) {
+		t.Fatal("changing generation bypassed the key binding")
+	}
+}
+
 func TestConcurrentProcessesAndCrash(t *testing.T) {
 	if os.Getenv("UNIFIED_TEST_CHILD") == "1" {
 		j := journal(t, database(t, os.Getenv("UNIFIED_TEST_DB")), testScope)
