@@ -109,6 +109,29 @@ func newAppGateway(s *server, path string) (*appGateway, error) {
 		if err != nil {
 			return nil, unified.ErrConfiguration
 		}
+		rows, err := s.sessions.store.db.Query("SELECT COALESCE(jid,'') FROM sessions")
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
+		count := 0
+		for rows.Next() {
+			var raw string
+			if rows.Scan(&raw) != nil {
+				rows.Close()
+				return nil, unified.ErrConfiguration
+			}
+			count++
+			jid, parseErr := types.ParseJID(raw)
+			if count > 1 || (raw != "" && (parseErr != nil || jid.ToNonAD().String() != c.Account)) {
+				rows.Close()
+				return nil, unified.ErrConfiguration
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, unified.ErrConfiguration
+		}
 	}
 	if c.Managed {
 		if !s.runtimeExclusive {

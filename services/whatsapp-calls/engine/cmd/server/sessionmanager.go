@@ -13,15 +13,16 @@ import (
 )
 
 type SessionManager struct {
-	messageLab *messageLab
-	recordings *recordingStore
-	appCtx     context.Context
-	container  *sqlstore.Container
-	broker     *Broker
-	store      *sessionStore
-	waLogger   waLog.Logger
-	log        *slog.Logger
-	maxCalls   int
+	nativeGateway *appGateway
+	messageLab    *messageLab
+	recordings    *recordingStore
+	appCtx        context.Context
+	container     *sqlstore.Container
+	broker        *Broker
+	store         *sessionStore
+	waLogger      waLog.Logger
+	log           *slog.Logger
+	maxCalls      int
 
 	mu       sync.RWMutex
 	sessions map[string]*Session

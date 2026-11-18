@@ -64,6 +64,10 @@ def _connect_receipt(route, request_id):
 
 
 def _submit(route, request_id, mime, content):
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import media_receipt
+        return _checked_receipt(media_receipt(route,request_id,
+            kind='voice',mime=mime,content=content),route,request_id)
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-voice',
                      {'conversationId': route['conversation_id'], 'clientMessageId': request_id,
                       'authorId': str(route['author_id']), 'crmConversationId': str(route['crm_conversation_id']),

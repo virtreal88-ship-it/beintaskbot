@@ -438,3 +438,32 @@ This path is not enabled on either live number. Production gateway capture,
 outgoing/media adapters, source-owner cutover fencing and live `/app` acceptance
 remain rollout gates. In particular the projection flag alone must not be used
 to switch a working source or authorize a second protocol owner.
+
+### Worker dispatch and managed capture (disabled rollout)
+
+Implemented source-bound Worker adapters for ordinary text, customer attachments
+and voice submission, plus native attachment retrieval. Existing authority and
+dialogue dispatch transactions remain in use. A native binding replaces the
+legacy sending credential with a nonfunctional sentinel; unported operations
+fail closed instead of sending through Connect. Old historical attachments may
+still use the retained credential on the explicitly read-only media path.
+
+Managed sessions now install encrypted message buffering and durable capture
+before connecting; the existing private gateway delivers retained events to the
+Worker inbox. Source-mode shared advisory locks span sends; cutover must take the
+same key exclusively. Dispatch rechecks transport/generation, including the
+legacy unscoped branch. Native dispatch reuses that transaction's cursor to avoid
+a nested-connection lock deadlock. Outgoing operations are namespaced by actor
+(or service), and receipt/echo rows share a canonical dialogue/provider UUID.
+
+Validation: 84 selected Python tests plus 17 subtests passed; 15 media-backpressure
+tests passed after fixing a test race between executor reservation and coroutine
+entry. Default and unifiedlab Go server tests and unified journal tests passed.
+These are isolated tests, not live `/app` acceptance. Independent Security Review
+confirmed fixes for direct receipt validation and transport cutover races.
+
+**Do not activate production yet:** the journal's permanent 10,000-event ceiling
+still needs archival/retention that preserves deduplication and attachment
+evidence. Quotes, receipt recovery/status projection, complete send consumer
+coverage, explicit cutover tooling and live …103 acceptance remain required.
+Neither …103 nor …101 has been switched by this implementation.

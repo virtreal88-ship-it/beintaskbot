@@ -53,6 +53,11 @@ def _connect_receipt(route, request_id):
 
 
 def _submit(route, request_id, file, caption, content):
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import media_receipt
+        return _checked_receipt(media_receipt(route,request_id,
+            kind={'picture':'image','file':'document','video':'video'}[file['type']],
+            mime=file['mime'],name=file['name'],caption=caption,content=content),route,request_id)
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-media',
         {'conversationId':route['conversation_id'],'clientMessageId':request_id,
          'authorId':str(route['author_id']),'crmConversationId':str(route['crm_conversation_id']),

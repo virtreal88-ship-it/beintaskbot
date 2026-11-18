@@ -6,6 +6,7 @@ event never grants permission to project it. No provider sends occur here.
 import hashlib
 import json
 import os
+import uuid
 
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect
@@ -40,7 +41,7 @@ def load(cur, reference, *, lock=False):
     # Stable across reconnect/generation changes, but never across source/chat/
     # direction. A proven legacy mapping replaces this ID under the dialog lock.
     identity = [tenant, source, payload.get('chat'), payload.get('provider_id'), payload.get('from_me')]
-    message_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+    message_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'beintaskbot:native:'+json.dumps(identity, separators=(',', ':'))))
     return tenant, message_event(scope, event_id, payload, message_id)
 
 
@@ -76,13 +77,11 @@ def authorize(cur, reference, event):
 
 
 def preserve_identity(cur, tenant, source, conversation, data):
-    from tenant_whatsapp_native_identity import existing_message_id
+    from tenant_whatsapp_native_identity import existing_message_id, message_id
     cur.execute('''SELECT lead_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',
       (tenant, source, conversation))
     row = cur.fetchone()
-    if not row:
-        return data
     previous = existing_message_id(cur, tenant=tenant, source=source,
-        lead_id=row['lead_id'], provider_id=data['externalMessageId'], outgoing=data['fromMe'])
-    return {**data, 'id': previous} if previous else data
+        lead_id=row['lead_id'], provider_id=data['externalMessageId'], outgoing=data['fromMe']) if row else None
+    return {**data, 'id': previous or message_id(tenant,source,conversation,data['externalMessageId'],data['fromMe'])}

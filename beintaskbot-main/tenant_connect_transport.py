@@ -398,6 +398,8 @@ def _public_channel(row: dict) -> dict:
 
 def _request(key: str, method: str, path: str, payload: dict | None = None, *,
              safe_preflight_codes: tuple[str, ...] = (), idempotency_key: str | None = None) -> dict:
+    if key == 'native-route-requires-dispatch':
+        raise TenantPlatformError('native_operation_not_enabled')
     # HTTP header values must be Latin-1 encodable. Connect-generated API keys
     # are ASCII; fail clearly if a copied key contains a look-alike character.
     if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
@@ -1481,7 +1483,8 @@ def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = Fal
     if not row: return None
     try: secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
     except Exception as exc: raise TenantPlatformError('Connect açarı oxunmadı.') from exc
-    return {'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')}
+    from tenant_whatsapp_native_transport import bind
+    return bind(cur,{'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')})
 
 
 QUOTED_ONCE_TENANT='e09a5c24-093f-4141-992d-532052e00c90'
@@ -1492,6 +1495,10 @@ def quoted_once_scope(tenant,channel):
 
 
 def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None, return_receipt=False):
+    if route.get('native'):
+        from tenant_whatsapp_native_transport import text as native_text
+        result=native_text(route,text,client_message_id,quoted_message_id=quoted_message_id)
+        return result if return_receipt else result['message_id']
     from tenant_ai_group_coordination import group_jid
     if group_jid(route.get('conversation_id')):
         # Group sends must use Connect's synchronous at-most-once path. The
@@ -1518,6 +1525,8 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
         client_message_id = str(uuid.UUID(str(run_id)))
     except (ValueError, TypeError, AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    if route.get('native'):
+        return send(route,text,client_message_id)
     from tenant_ai_group_coordination import group_jid
     if group_jid(route.get('conversation_id')):
         result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/group-messages',
@@ -1534,6 +1543,8 @@ def send_ai_reply_with_receipt(route: dict, text: str, request_id: str) -> str:
         client_message_id=str(uuid.UUID(str(request_id)))
     except (ValueError,TypeError,AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    if route.get('native'):
+        return send(route,text,client_message_id)
     result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/messages',
         {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id})
     if not isinstance(result,dict) or not isinstance(result.get('id'),str) or not result['id']:
@@ -1803,12 +1814,13 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None, quoted_message_id=None, receipt=None) -> None:
     facts={}
     if receipt is not None:
-        if (not isinstance(receipt,dict) or receipt.get('_crm_group_send_receipt') is not True
+        native_receipt=isinstance(receipt,dict) and receipt.get('_crm_native_send_receipt') is True and bool(route.get('native'))
+        if (not isinstance(receipt,dict) or (not native_receipt and receipt.get('_crm_group_send_receipt') is not True)
             or receipt.get('channelId')!=route['channel_id'] or receipt.get('conversationId')!=route['conversation_id']
-            or not route['conversation_id'].endswith('@g.us') or receipt.get('fromMe') is not True
+            or (not native_receipt and not route['conversation_id'].endswith('@g.us')) or receipt.get('fromMe') is not True
             or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',str(receipt.get('externalMessageId') or ''))):
             raise TenantPlatformError('Connect group receipt scope mismatch.')
-        facts={key:receipt[key] for key in ('channelId','conversationId','externalMessageId','fromMe','_crm_group_send_receipt')}
+        facts={key:receipt[key] for key in ('channelId','conversationId','externalMessageId','fromMe','_crm_group_send_receipt','_crm_native_send_receipt') if key in receipt}
         facts['status']='sent'
         if re.fullmatch(r'[1-9][0-9]{5,14}@s[.]whatsapp[.]net',str(receipt.get('participantJid') or '')):
             facts['participantJid']=receipt['participantJid']

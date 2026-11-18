@@ -6,6 +6,12 @@ An absent mapping is not permission to send, create a route or replay history.
 """
 import re
 import uuid
+import json
+
+
+def message_id(tenant,source,conversation,provider,outgoing):
+    identity=[str(tenant),str(source),conversation,provider,outgoing]
+    return str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:native:'+json.dumps(identity,separators=(',',':'))))
 
 
 class NativeIdentityConflict(ValueError):

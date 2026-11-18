@@ -315,7 +315,10 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
             # Preserve the original unscoped legacy final-dispatch behavior,
             # but never outside the shared activation barrier.
             if not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
-                return callback(expected_credentials,*args,**kwargs)
+                from tenant_whatsapp_native_transport import guard_dispatch
+                guard_dispatch(cur,item['key'][0],expected_credentials)
+                dispatch_credentials={**expected_credentials,'_native_cursor':cur,'native_actor_id':item['key'][1]} if expected_credentials.get('native') else expected_credentials
+                return callback(dispatch_credentials,*args,**kwargs)
             profile,connection,integration=authority(cur,
               {'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
             from tenant_dialog_rollout import guard
@@ -329,7 +332,8 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
                 raise TenantLinearError('Источник диалога изменился.',409)
             if connection[0]=='connect':
                 current=integration['route']
-                if any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id')):
+                if (any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id','api_key'))
+                        or current.get('native')!=expected_credentials.get('native')):
                     raise TenantLinearError('Источник диалога изменился.',409)
             if connection[0]=='connect' and lifecycle_enabled(cur, profile['tenant_id']):
                 from tenant_dialog_lifecycle import _row as lifecycle_row
@@ -338,7 +342,8 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
                 receipt=cur.fetchone() or {}
                 if (receipt.get('route') or {}).get('lifecycle_episode_id')!=str((current_episode or {}).get('id')):
                     raise TenantLinearError('Обращение изменилось. Подготовьте новую отправку.',409)
-            result=callback(expected_credentials,*args,**kwargs)
+            dispatch_credentials={**expected_credentials,'_native_cursor':cur,'native_actor_id':item['key'][1]} if expected_credentials.get('native') else expected_credentials
+            result=callback(dispatch_credentials,*args,**kwargs)
             if connection[0]=='connect':
                 from tenant_dialog_lifecycle import record_dispatch
                 record_dispatch(cur,profile['tenant_id'],connection[1],connection[2],item['command']['request_id'],result)
