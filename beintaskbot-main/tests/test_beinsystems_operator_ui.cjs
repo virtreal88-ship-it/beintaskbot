@@ -7,6 +7,9 @@ const dom=new JSDOM('<!doctype html><div id="integrationSettingsHost"></div>',{
 });
 const {window}=dom;
 let viewDemand,requests=[];
+let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
+  pending_auth_received:false,pending_auth_access_confirmed:null};
+let loginMode='success';
 let employeeLinks=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
 window.confirm=()=>true;
@@ -20,11 +23,16 @@ window.fetch=async(path,options={})=>{
     result={success:true,link:employeeLinks[0]};
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
-  else if(options.method==='POST'&&JSON.parse(options.body).action==='login')result={success:true,integration:{
-    status:'connected',connected:true,configured:true,api_ready:false,pending_auth_received:true,
-    pending_auth_access_confirmed:false,pending_auth_received_at:'2026-11-18T22:00:00+00:00'}};
-  else result={success:true,integration:{status:'connected',connected:true,configured:true,api_ready:false,
-    pending_auth_received:false,pending_auth_access_confirmed:null}};
+  else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='login'){
+    if(loginMode==='error')result={success:false,error:'Mock provider refusal (HTTP 403)'};
+    else {
+      mockIntegration={status:'not_connected',connected:false,configured:false,api_ready:false,pending_auth_received:true,
+        pending_auth_access_confirmed:false,pending_auth_received_at:'2026-11-18T22:00:00+00:00'};
+      result={success:true,integration:{...mockIntegration}};
+    }
+  }
+  else result={success:true,integration:{...mockIntegration}};
   return {ok:true,json:async()=>result};
 };
 window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8'));
@@ -47,25 +55,6 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
   assert.equal(requests.filter(row=>row.path==='/api/platform/operator/employee-links'&&row.options.method==='POST').length,0,
     'employee mapping still requires an explicit employee selection');
-  login.value='operator-login';
-  password.value='operator-password';
-  const save=panel.querySelector('[data-save]');
-  assert.equal(save.disabled,false,'credential exchange does not depend on API verification host');
-  await save.onclick({currentTarget:save});
-  const posted=JSON.parse(requests.at(-1).options.body);
-  assert.deepEqual(posted,{
-    action:'login',login:'operator-login',password:'operator-password',
-    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
-  });
-  assert.equal(password.value,'','password input is cleared immediately after submission');
-  assert.equal(requests.filter(row=>String(row.options.body||'').includes('operator-password')).length,1,
-    'credentials are sent only to the authenticated same-origin login endpoint');
-  assert(!panel.querySelector('[data-token]'),'the API token is obtained by the server instead of pasted manually');
-  assert(!panel.querySelector('[data-test]'),'unverified /user/me is not exposed as a test action');
-  assert(panel.textContent.includes('JWT получен, доступ не подтверждён'));
-  assert(panel.textContent.includes('JWT получен и зашифрован отдельно'));
-  assert(panel.textContent.includes('Новый JWT не изменит рабочее подключение'));
-  assert(panel.textContent.includes('Пароль отправляется по HTTPS только для получения JWT и не сохраняется'));
   await confirmEmployee.onclick({currentTarget:confirmEmployee});
   assert(panel.textContent.includes('Выберите сотрудника Beintaskbot'));
   memberSelect.value='42';
@@ -85,6 +74,75 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
   });
   assert(panel.textContent.includes('staff-account/operator.login'));
+
+  // Keep the auth result beside the submit action, and retain the pending state after a reload.
+  mockIntegration={status:'not_connected',connected:false,configured:false,api_ready:false,
+    pending_auth_received:false,pending_auth_access_confirmed:null};
+  await viewDemand.activate(profile);
+  let authPanel=window.document.querySelector('#operatorIntegrationSettings');
+  assert(authPanel,'the credential panel is recreated on a fresh integrations view');
+  const authForm=authPanel.querySelector('[data-operator-auth-form]');
+  const authLogin=authPanel.querySelector('[data-operator-login]');
+  const authPassword=authPanel.querySelector('[data-operator-password]');
+  const save=authPanel.querySelector('[data-save]');
+  const authMessage=authPanel.querySelector('[data-auth-message]');
+  assert(authForm && authMessage && authForm.contains(authMessage));
+  assert.equal(save.type,'submit','the save control uses native form submission');
+  assert.equal(authLogin.required,true);
+  assert.equal(authPassword.required,true);
+  assert.equal(authLogin.autocomplete,'off','do not autofill the app login into the Operator login');
+  assert.equal(authPassword.autocomplete,'new-password','do not reuse the Beintaskbot saved password');
+  assert.equal(save.nextElementSibling,authMessage,'auth result appears immediately after the submit button');
+  assert.equal(authPanel.querySelector('[data-status]').getAttribute('aria-live'),'polite');
+  assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
+  const authPosts=()=>requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
+    &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='login');
+  save.click();
+  assert.equal(authPosts().length,0,'native required validation blocks empty credentials');
+  assert.equal(authForm.checkValidity(),false);
+  authLogin.value='synthetic-login';
+  authPassword.value='synthetic-password';
+  save.click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const posted=JSON.parse(authPosts().at(-1).options.body);
+  assert.deepEqual(posted,{
+    action:'login',login:'synthetic-login',password:'synthetic-password',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+  });
+  assert.equal(authPassword.value,'','password input is cleared immediately after submission');
+  assert.equal(authPosts().length,1,'synthetic credentials are sent once to the authenticated same-origin endpoint');
+  assert.equal(mockIntegration.status,'not_connected','receiving a JWT must not activate the integration');
+  assert.equal(mockIntegration.connected,false,'unverified JWT does not change active connection state');
+  assert.equal(mockIntegration.pending_auth_received,true);
+  assert(authMessage.textContent.includes('JWT получен и зашифрован отдельно'));
+  assert(authMessage.textContent.includes('Доступ не подтверждён'));
+  assert.equal(window.document.activeElement,authMessage,'success focuses the visible auth result');
+  assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
+  assert(!authPanel.querySelector('[data-token]'),'the API token remains server-side');
+  assert(!authPanel.querySelector('[data-test]'),'an undocumented verifier is not exposed');
+
+  // A fresh render/reload reads the durable pending state and shows the result without repeating login.
+  await viewDemand.activate(profile);
+  authPanel=window.document.querySelector('#operatorIntegrationSettings');
+  assert(authPanel.querySelector('[data-auth-message]').textContent.includes('JWT получен и зашифрован отдельно'));
+  assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
+  assert.equal(authPosts().length,1,'a reload does not resubmit credentials');
+
+  // Provider errors appear next to the submit action.
+  loginMode='error';
+  const errorLogin=authPanel.querySelector('[data-operator-login]');
+  const errorPassword=authPanel.querySelector('[data-operator-password]');
+  const errorSave=authPanel.querySelector('[data-save]');
+  errorLogin.value='synthetic-login';
+  errorPassword.value='synthetic-password';
+  errorSave.click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-auth-message]').textContent.includes('Mock provider refusal (HTTP 403)'));
+  assert.equal(window.document.activeElement,authPanel.querySelector('[data-auth-message]'),'errors focus the visible auth result');
+  assert.equal(errorPassword.value,'');
+  assert.equal(mockIntegration.status,'not_connected');
+  assert.equal(mockIntegration.pending_auth_received,true,'an error does not erase the prior pending token');
+  assert.equal(authPosts().length,2);
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);
