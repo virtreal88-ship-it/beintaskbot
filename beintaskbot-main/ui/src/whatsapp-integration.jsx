@@ -19,6 +19,10 @@ export function WhatsAppIntegration({profile, onStatus}) {
       const response=await fetch('/api/platform/integrations/whatsapp?'+query,{
         method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,
         headers:{'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})});
+      if(response.status===401 || response.status===403){
+        alive.current=false;generation.current++;setPair(null);setChannels([]);setInvalid(true);
+        for(const pending of controllers.current)if(pending!==controller)pending.abort();
+      }
       const value=await response.json();
       if(!response.ok || !value.success)throw new Error(value.error || 'Не удалось проверить подключение.');
       return value.result;

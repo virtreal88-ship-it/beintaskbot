@@ -7,12 +7,13 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const page=await browser.newPage({viewport:{width,height:850}});
   const member={tenant_id:'synthetic-tenant',telegram_id:11,role:'owner'};
   const me={success:true,member,integrations:[{provider:'connect',status:'connected',management_actions:{view:true}}]};
-  let mutations=0,reads=0,paired=false;
+  let mutations=0,reads=0,paired=false,denied=false;
   await page.route('https://app.invalid/**',async route=>{
    const url=new URL(route.request().url());let value={success:true};
    if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div id="chakra-integrations-root"></div>'});
    if(url.pathname==='/api/platform/me')value=me;
    if(url.pathname==='/api/platform/integrations/whatsapp'){
+    if(denied)return route.fulfill({status:403,json:{success:false,error:'Access revoked'}});
     assert.equal(url.searchParams.get('expected_tenant_id'),member.tenant_id);
     assert.equal(url.searchParams.get('expected_user_id'),'11');reads++;
     if(route.request().method()==='POST'){
@@ -39,7 +40,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   paired=true;await page.getByText('Переписка и звонки подключены.',{exact:true}).waitFor({timeout:12000});
   assert.equal(mutations,2,'one begin and one activation only');
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no mobile horizontal overflow');
-  await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-invalid')));
+  if(width===390){denied=true;await page.getByRole('button',{name:'К списку номеров'}).click();}
+  else await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-invalid')));
   await page.getByRole('alert').filter({hasText:'Доступ изменился'}).waitFor();
   assert.equal(await page.getByAltText('QR подключения WhatsApp').count(),0);
   const count=reads;await page.waitForTimeout(1500);assert.equal(reads,count,'no polling after access is lost');
