@@ -1,6 +1,6 @@
 # Local dialog reply templates rollout
 
-This is a tenant-local feature. It has no Operator calls and does not write template text or drafts into message history.
+This pilot is limited to the single UUID-configured BeinSystems workspace through the shared `is_operator_workspace` predicate. The API rejects every other workspace and the client hides its control there. Within BeinSystems, existing tenant, department, membership, and permission checks remain in force. It has no Operator calls and does not write template text or drafts into message history.
 
 ## Preflight
 
