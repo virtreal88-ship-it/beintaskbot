@@ -27,6 +27,7 @@ from tenant_call_recordings_api import handler as call_recordings_handler
 from tenant_browser_calls_api import handler as browser_calls_handler
 from tenant_whatsapp_native_api import handler as native_whatsapp_handler
 from tenant_call_sources_api import handler as call_sources_handler
+from tenant_whatsapp_integration_api import handler as whatsapp_integration_handler
 from tenant_chat_review_api import handler as chat_review_handler
 from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_owner_asr_comparison_api import handler as owner_asr_comparison_handler
@@ -76,6 +77,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/test-call-recordings', call_recordings_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/browser-calls', browser_calls_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/call-sources/{channel_id:[0-9a-fA-F-]{36}}', call_sources_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/integrations/whatsapp', whatsapp_integration_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/browser-calls/{call_id:[0-9a-fA-F-]{36}}/audio', call_sources_handler(member,origin,logger,'audio'), ('GET',)),
         ('/api/platform/call-gateway/sync', browser_calls_handler(member,origin,logger,'sync'), ('POST',)),
         ('/api/platform/call-gateway/recording', browser_calls_handler(member,origin,logger,'recording'), ('POST',)),
