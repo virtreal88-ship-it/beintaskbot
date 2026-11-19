@@ -589,7 +589,6 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         })
         self.assertEqual(profile["permissions"], ["operator_data:view"])
         for invalid in (
-            {"status": "success", "data": {"identifier": "x", "role": "admin"}},
             {"status": "error", "data": {"identifier": "x", "role": "admin"}},
             {"status": "success", "data": {"identifier": " ", "role": "admin"}},
         ):

@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 import psycopg
+from unittest.mock import patch
 
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
 
@@ -175,11 +176,10 @@ def test_valid_instance_matches_only_authorized_current_links(operator_context_s
     assert f['snapshot']()==before
 
 
-def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_context_sql,monkeypatch):
+def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_context_sql):
     import tenant_beinsystems_operator as operator
     f=operator_context_sql
-    with monkeypatch.context() as patcher:
-        outbound=patcher.patch.object(operator,'_request_operator')
+    with patch.object(operator,'_request_operator') as outbound:
         binding=operator.set_dialog_company_binding(
             f['profile'],channel_id=f['channel'],conversation_id='client',
             company_id=str(f['company']))
