@@ -42,7 +42,7 @@ window.fetch=async(path,options={})=>{
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
   else if(options.method==='POST'&&JSON.parse(options.body).action==='create_companies'){
     companyImports.push(JSON.parse(options.body));
-    result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1}};
+    result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,\n      name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
     mockIntegration={...mockIntegration,pending_auth_me_verified:true};
@@ -252,6 +252,9 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(confirmMessages.at(-1).includes('свежему списку активного Operator'));
   assert(authPanel.querySelector('[data-message]').textContent.includes('создано компаний: 2'));
   assert(authPanel.querySelector('[data-message]').textContent.includes('ручная проверка: 1'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('Совпадение названия'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('synthetic-collision'));
+  assert.equal(authPanel.querySelector('[data-message] img'),null,'account names render as text, not markup');
   assert(!requests.some(row=>/^https?:/.test(row.path)),'all Operator reads and local company creation use the same-origin backend only');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
@@ -259,6 +262,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const readOnlyPanel=window.document.querySelector('#operatorIntegrationSettings');
   assert.equal(readOnlyPanel.querySelector('[data-link-controls]').hidden,true);
   assert.equal(readOnlyPanel.querySelector('[data-operator-password]'),null);
+  assert.equal(readOnlyPanel.querySelector('[data-create-companies]'),null,
+    'the owner-only company action and collision list are not exposed to a read-only member');
   window.close();
   console.log('PASS: Operator credentials stage a private JWT without claiming access confirmation');
 })().catch(error=>{window.close();console.error(error);process.exitCode=1;});
