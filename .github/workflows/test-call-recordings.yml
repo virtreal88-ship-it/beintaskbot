@@ -56,14 +56,15 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -r requirements.txt pytest pytest-asyncio
-      - run: |
-          if ! command -v ffmpeg >/dev/null; then
-            sudo timeout 120s apt-get update -qq
-            sudo timeout 300s apt-get install -y ffmpeg
-          fi
-          ffmpeg -version | head -n 1
+      - name: Install verified test FFmpeg without system package mirrors
+        run: |
+          python -m pip install imageio-ffmpeg==0.6.0
+          mkdir -p "$RUNNER_TEMP/call-test-bin"
+          python -c 'import imageio_ffmpeg,os; os.symlink(imageio_ffmpeg.get_ffmpeg_exe(), os.path.join(os.environ["RUNNER_TEMP"],"call-test-bin","ffmpeg"))'
+          echo "$RUNNER_TEMP/call-test-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/call-test-bin/ffmpeg" -version | head -n 1
       - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.3.14 playwright@1.62.1 jsdom@26.1.0
-      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - run: node .support-test-deps/node_modules/playwright/cli.js install chromium
       - run: python -m pytest -q tests/test_call_recordings.py tests/test_browser_calls.py tests/test_browser_call_timeline.py tests/test_call_sources.py tests/test_call_sources_audio_api.py tests/test_call_audio_storage.py tests/test_tenant_web_routes.py tests/test_tenant_app_pwa_assets.py
       - run: python -m pytest -q tests/test_whatsapp_native_inbox.py tests/test_whatsapp_native_api.py tests/test_whatsapp_native_projection.py tests/test_whatsapp_native_identity.py tests/test_whatsapp_native_consumer.py tests/test_whatsapp_native_transport.py tests/test_whatsapp_native_rollout.py
       - run: python -m pytest -q tests/test_group_participants.py
