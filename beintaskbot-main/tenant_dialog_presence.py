@@ -58,17 +58,18 @@ def get_status(profile):
     with _connect() as conn:
         with conn.cursor() as cur:
             if not _available(cur):
-                return {"available": False, "status": "away", "configured": False}
-            cur.execute("""SELECT m.telegram_id,p.status FROM saas_tenant_members m
-              LEFT JOIN saas_dialog_employee_presence p
-                ON p.tenant_id=m.tenant_id AND p.employee_id=m.telegram_id
-              WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s AND m.active=TRUE""",
+                return {"available": False, "status": "away", "configured": False,
+                        "can_update": False}
+            from tenant_operator_access import access
+            tenant, employee, policy = access(cur, profile, "dialogs")
+            cur.execute("""SELECT p.status FROM saas_dialog_employee_presence p
+              WHERE p.tenant_id=%s::uuid AND p.employee_id=%s""",
               (tenant, employee))
             row = cur.fetchone()
-            if not row:
-                raise TenantLinearError("Нет доступа.", 403)
-    return {"available": True, "status": row.get("status") or "away",
-            "configured": row.get("status") is not None}
+            can_update = (policy.action_scope("dialogs", "update") is not None
+                          or policy.legacy_allows("dialogs"))
+    return {"available": True, "status": row.get("status") if row else "away",
+            "configured": bool(row), "can_update": can_update}
 
 
 def set_status(profile, payload):
@@ -77,12 +78,13 @@ def set_status(profile, payload):
     status = payload.get("status")
     if not isinstance(status, str) or status not in STATUSES:
         raise TenantLinearError("Выберите допустимый статус сотрудника.")
-    tenant, employee = _scope(profile)
     from tenant_platform import _connect
     with _connect() as conn:
         with conn.cursor() as cur:
             if not _available(cur):
                 raise TenantLinearError("Статусы сотрудников ещё не активированы.", 409)
+            from tenant_operator_access import access
+            tenant, employee, _policy = access(cur, profile, "dialogs", "update")
             # Serialize status changes with recipient checks, which lock this
             # membership row first. Inactive members cannot update stale sessions.
             cur.execute("""SELECT 1 FROM saas_tenant_members
