@@ -139,6 +139,7 @@ def test_reject_unclaimed_call_without_accepting_dialog_and_accept_uses_episode(
     db,key,cfg=managed
     with db.cursor() as cur:
         lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s,%s,'online',%s)",(A,11,11))
     db.commit()
     calls.sync(cfg,snapshot(2,active=[provider(peer=CONVERSATION)]))
     incoming=calls.status(PROFILE)['calls'][0]
@@ -168,6 +169,7 @@ def test_new_incoming_reopens_queue_and_accept_assigns_exact_operator(managed,mo
     db.execute('INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by) VALUES(%s,%s,33,11)',(A,CA))
     with db.cursor() as cur:
         lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s,%s,'online',%s)",(A,33,33))
     db.execute('''INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at)
       VALUES(%s,%s,%s,%s,%s,11,1,now()-interval '1 minute')''',(A,CA,CONVERSATION,str(uuid.uuid4()),previous))
     db.commit()
