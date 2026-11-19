@@ -104,17 +104,18 @@
   async function loadTemplates(state){
     const serial=++state.loadSerial,owner=identity();
     if(!owner||owner.key!==state.identity)return;
+    state.button.hidden=true;
     state.loaded=false;state.loading=true;state.error='';
     try{
       const result=await request('GET',null,owner);
       if(state!==mounted||serial!==state.loadSerial||identity()?.key!==state.identity)return;
       state.templates=Array.isArray(result.templates)?result.templates:[];
       state.allowed=Array.isArray(result.allowed_visibility)?result.allowed_visibility:[];
-      state.available=result.available===true;state.loaded=true;state.error='';
+      state.available=result.available===true;state.button.hidden=!state.available;state.loaded=true;state.error='';
     }catch(error){
       if(state!==mounted||serial!==state.loadSerial||identity()?.key!==state.identity)return;
       if(error?.status===404){teardown();return;}
-      state.templates=[];state.allowed=[];state.available=false;state.loaded=true;state.error=error?.message||copy('error');
+      state.templates=[];state.allowed=[];state.available=false;state.button.hidden=true;state.loaded=true;state.error=error?.message||copy('error');
     }finally{
       if(state===mounted&&serial===state.loadSerial){
         state.loading=false;renderSuggestions(state);state.renderManager?.();
@@ -231,7 +232,7 @@
     const root=actions.closest('.operator-composer')||actions.parentElement;
     if(!root)return;
     root.classList.add('operator-reply-template-root');
-    const button=document.createElement('button');button.type='button';button.id='operatorReplyTemplatesOpen';button.className='outline';button.textContent=copy('button');button.title=copy('manage');button.setAttribute('aria-label',copy('manage'));
+    const button=document.createElement('button');button.type='button';button.hidden=true;button.id='operatorReplyTemplatesOpen';button.className='outline';button.textContent=copy('button');button.title=copy('manage');button.setAttribute('aria-label',copy('manage'));
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
     const state={actions,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
     state.onInput=()=>renderSuggestions(state);
