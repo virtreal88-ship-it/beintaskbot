@@ -138,6 +138,16 @@ not a fresh alias guess. No external action or AI work occurs in this path.
 
 ## Native caller identity
 
+For old private histories split between PN and LID, the dialog header can request
+`GET /api/platform/ai/dialogs/contact-phone`. This read-only endpoint requires
+current dialog/source access both before and after a bounded lookup in the paired
+device's contact store. It validates the exact tenant/source/account/generation
+and original peer. It returns a display-only phone; it does not create aliases,
+merge histories, modify CRM phone fields or change the send/call route.
+The UI hydrates the header asynchronously without replacing the conversation or
+composer. Requests are coalesced in a bounded, short-lived identity-scoped cache;
+late responses and tenant/permission changes cannot restore an old label.
+
 Authenticated source snapshots may carry `caller.phone_jid` and
 `caller.display_name` for inbound calls. The engine reads only its paired
 device's local contact store and reciprocal LID/PN mapping, after verifying its
