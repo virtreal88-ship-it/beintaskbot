@@ -8,6 +8,8 @@ on:
       - 'beintaskbot-main/tenant_beinsystems_operator_access.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_schema.py'
+      - 'beintaskbot-main/bot.py'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
       - 'beintaskbot-main/docs/tenant-request-coordinator.js'
       - 'beintaskbot-main/docs/tenant-beinsystems-operator-settings.js'
       - 'beintaskbot-main/tests/test_beinsystems_operator*'

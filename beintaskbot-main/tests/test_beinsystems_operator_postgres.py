@@ -90,6 +90,11 @@ def operator_context_sql(monkeypatch):
         try:
             conn.execute(f'SET search_path TO "{schema}"')
             conn.execute('CREATE TABLE saas_crm_native_contacts (tenant_id uuid,id uuid,company_id uuid,archived_at timestamptz)')
+            conn.execute('CREATE TABLE saas_crm_native_companies (tenant_id uuid,id uuid,name text,archived_at timestamptz)')
+            conn.execute('''CREATE TABLE saas_beinsystems_operator_dialog_company_bindings (
+              tenant_id uuid,channel_id uuid,conversation_id text,company_id uuid,
+              created_by bigint,updated_by bigint,created_at timestamptz,updated_at timestamptz,
+              PRIMARY KEY(tenant_id,channel_id,conversation_id))''')
             conn.execute('CREATE TABLE saas_crm_native_contact_conversations (tenant_id uuid,provider text,channel_id uuid,conversation_id text,contact_id uuid)')
             conn.execute('''CREATE TABLE saas_beinsystems_operator_links (
               id uuid,tenant_id uuid,local_entity_type text,local_entity_id uuid,
@@ -98,6 +103,7 @@ def operator_context_sql(monkeypatch):
               verification_basis text,evidence_summary text,verified_at timestamptz,
               verified_by bigint,version int,created_at timestamptz)''')
             conn.execute('INSERT INTO saas_crm_native_contacts VALUES(%s,%s,%s,NULL)',(tenant,contact,company))
+            conn.execute('INSERT INTO saas_crm_native_companies VALUES(%s,%s,%s,NULL)',(tenant,company,'Synthetic Company'))
             conn.execute("INSERT INTO saas_crm_native_contact_conversations VALUES(%s,'connect',%s,'client',%s)",(tenant,channel,contact))
             for label,owner,inst,generation,revoked,kind,local_kind,local_id in [
                 ('current',tenant,instance,'gen',False,'account','contact',contact),
@@ -127,10 +133,14 @@ def operator_context_sql(monkeypatch):
                 return {'connect_channel_id':channel,'conversation_id':'client'}
             monkeypatch.setattr(access,'access',authorize);monkeypatch.setattr(access,'assert_route',route)
             def crm_access(*_):calls.append('crm_access');return profile
-            def resource(*args):calls.append('locked_resource');assert args[-2:]==(tenant,contact);return {'id':contact}
+            def resource(*args):
+                calls.append('locked_resource')
+                assert args[-2] == tenant
+                ident=args[-1]
+                return {'id':ident} if ident in {contact,company} else None
             monkeypatch.setattr(crm,'current_access',crm_access);monkeypatch.setattr(crm,'locked_resource',resource)
             def snapshot():return conn.execute('SELECT row_to_json(l)::text AS row FROM saas_beinsystems_operator_links l ORDER BY id').fetchall()
-            yield dict(operator=operator,conn=conn,profile=profile,channel=channel,contact=contact,instance=instance,metadata=metadata,calls=calls,snapshot=snapshot)
+            yield dict(operator=operator,conn=conn,profile=profile,channel=channel,contact=contact,company=company,instance=instance,metadata=metadata,calls=calls,snapshot=snapshot)
         finally:
             conn.execute('SET search_path TO public')
             conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
@@ -165,6 +175,30 @@ def test_valid_instance_matches_only_authorized_current_links(operator_context_s
     assert f['snapshot']()==before
 
 
+def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_context_sql,monkeypatch):
+    import tenant_beinsystems_operator as operator
+    f=operator_context_sql
+    with monkeypatch.context() as patcher:
+        outbound=patcher.patch.object(operator,'_request_operator')
+        binding=operator.set_dialog_company_binding(
+            f['profile'],channel_id=f['channel'],conversation_id='client',
+            company_id=str(f['company']))
+        assert binding=={'company_id':str(f['company']),'company_name':'Synthetic Company'}
+        rows=f['conn'].execute("""SELECT tenant_id::text,channel_id::text,conversation_id,company_id::text
+          FROM saas_beinsystems_operator_dialog_company_bindings""").fetchall()
+        assert rows==[(f['profile']['tenant_id'],f['channel'],'client',str(f['company']))]
+        outsider=str(uuid.uuid4())
+        with pytest.raises(operator.OperatorError) as denied:
+            operator.set_dialog_company_binding(
+                f['profile'],channel_id=f['channel'],conversation_id='client',company_id=outsider)
+        assert denied.value.status==403
+        assert f['conn'].execute(
+            "SELECT company_id::text FROM saas_beinsystems_operator_dialog_company_bindings").fetchone()==(str(f['company']),)
+        outbound.assert_not_called()
+
+
+
+
 def test_context_authorization_still_precedes_metadata(operator_context_sql,monkeypatch):
     import tenant_operator_access as access
     from tenant_linear_policy import TenantLinearError
@@ -184,3 +218,69 @@ def test_invalid_generation_never_confirms_existing_links(operator_context_sql,g
     links=f['operator'].links_for_local(f['profile'],local_entity_type='contact',local_entity_id=f['contact'])
     assert len(links)==5 and all(row['status'] in {'stale','revoked'} for row in links)
     assert f['snapshot']()==before
+
+
+
+@pytest.mark.skipif(
+    not os.environ.get("BEINTASKBOT_TEST_POSTGRES_DSN"),
+    reason="Set BEINTASKBOT_TEST_POSTGRES_DSN to an isolated PostgreSQL database",
+)
+def test_operator_account_catalog_import_is_atomic_idempotent_and_never_deletes_absent_rows():
+    import tenant_beinsystems_operator as operator
+    dsn = os.environ["BEINTASKBOT_TEST_POSTGRES_DSN"]
+    schema = "operator_account_import_" + uuid.uuid4().hex
+    tenant_id = str(uuid.uuid4())
+    accounts = [{"account": f"synthetic-account-{index:03d}"} for index in range(137)]
+    with psycopg.connect(dsn, autocommit=True) as setup:
+        setup.execute(f'CREATE SCHEMA "{schema}"')
+        try:
+            setup.execute(f'SET search_path TO "{schema}"')
+            setup.execute("""CREATE TABLE saas_beinsystems_operator_account_catalog (
+              tenant_id UUID NOT NULL, external_account TEXT NOT NULL, imported_by BIGINT NOT NULL,
+              first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              local_label TEXT NOT NULL DEFAULT '',
+              PRIMARY KEY(tenant_id,external_account))""")
+            setup.execute("SET search_path TO public")
+        finally:
+            setup.execute("SET search_path TO public")
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            conn.execute(f'SET search_path TO "{schema}"')
+            try:
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        operator._upsert_imported_accounts(cur, tenant_id, 7, accounts)
+                    raise RuntimeError("synthetic failure before commit")
+            except RuntimeError:
+                pass
+            assert conn.execute("SELECT count(*) FROM saas_beinsystems_operator_account_catalog").fetchone() == (0,)
+
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    operator._upsert_imported_accounts(cur, tenant_id, 7, accounts)
+            assert conn.execute("SELECT count(*) FROM saas_beinsystems_operator_account_catalog").fetchone() == (137,)
+            before = conn.execute("""SELECT first_seen_at,imported_by FROM saas_beinsystems_operator_account_catalog
+              WHERE external_account='synthetic-account-000'""").fetchone()
+            conn.execute("""UPDATE saas_beinsystems_operator_account_catalog
+              SET local_label='preserve-me',last_seen_at=now()-interval '1 day'
+              WHERE external_account='synthetic-account-000'""")
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    operator._upsert_imported_accounts(cur, tenant_id, 9, accounts[1:])
+            assert conn.execute("SELECT count(*) FROM saas_beinsystems_operator_account_catalog").fetchone() == (137,)
+            after = conn.execute("""SELECT first_seen_at,imported_by,local_label,
+                last_seen_at>now()-interval '1 minute'
+              FROM saas_beinsystems_operator_account_catalog
+              WHERE external_account='synthetic-account-000'""").fetchone()
+            assert after == (before[0], 7, "preserve-me", True)
+            assert conn.execute("""SELECT count(*) FROM saas_beinsystems_operator_account_catalog
+              WHERE external_account='synthetic-account-136'""").fetchone() == (1,)
+        with psycopg.connect(dsn, autocommit=True) as cleanup:
+            cleanup.execute("SET search_path TO public")
+            cleanup.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as cleanup:
+            cleanup.execute("SET search_path TO public")
+            cleanup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

@@ -19,8 +19,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.fernet import InvalidToken
 
 from tenant_beinsystems_operator_access import (
-    OPERATOR_API_BASE_URL, OPERATOR_WEB_ORIGIN,
-    PROVIDER, api_base_url, is_operator_workspace,
+    OPERATOR_API_BASE_URL, PROVIDER, api_base_url, is_operator_workspace,
 )
 from tenant_platform_core import (
     TenantPlatformError, _connect, _ensure_schema, _fernet, _json,
@@ -36,6 +35,7 @@ AUTH_APPLICATION_USER_AGENT = (
     f"Beintaskbot-Operator Python-urllib/{sys.version_info.major}.{sys.version_info.minor}"
 )
 READ_ENDPOINTS = {
+    "me": ("/user/me", set()),
     "accounts": ("/user/accounts", {"search"}),
     "account_info": ("/user/info", {"account"}),
     "profile_users": ("/user/profileUsers", {"account"}),
@@ -90,8 +90,10 @@ def _operator_row(cur, tenant, *, lock=False):
 
 def _pending_auth_state(cur, tenant, actor):
     """Read only timestamps for the current and legacy pending-auth stores."""
-    cur.execute("""SELECT received_at FROM saas_beinsystems_operator_pending_auth_v2
-      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
+    cur.execute("""SELECT received_at,me_verified_at,accounts_access_verified_at
+      FROM saas_beinsystems_operator_pending_auth_v2
+      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND activated_at IS NULL""",
+      (tenant, actor))
     current = cur.fetchone()
     # Preserve visibility of legacy pending tokens without ever selecting their ciphertext.
     cur.execute("""SELECT received_at FROM saas_beinsystems_operator_pending_auth
@@ -101,6 +103,7 @@ def _pending_auth_state(cur, tenant, actor):
 
 
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
+            pending_auth_me_verified=False, pending_auth_accounts_access_verified=False,
             legacy_pending_auth_received=False):
     row = row or {}
     return {
@@ -113,7 +116,10 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "api_ready": bool(api_base_url()),
         "pending_auth_received": bool(pending_auth_received),
         "pending_auth_contract": AUTH_CONTRACT_VERSION if pending_auth_received else None,
-        "pending_auth_access_confirmed": False if pending_auth_received else None,
+        "pending_auth_access_confirmed": bool(pending_auth_accounts_access_verified)
+            if pending_auth_received else None,
+        "pending_auth_me_verified": bool(pending_auth_me_verified),
+        "pending_auth_accounts_access_verified": bool(pending_auth_accounts_access_verified),
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
@@ -145,6 +151,8 @@ def status(profile):
         row,
         pending_auth_received=bool(pending),
         pending_auth_received_at=(pending or {}).get("received_at"),
+        pending_auth_me_verified=bool((pending or {}).get("me_verified_at")),
+        pending_auth_accounts_access_verified=bool((pending or {}).get("accounts_access_verified_at")),
         legacy_pending_auth_received=bool(legacy_pending),
     )
 
@@ -220,10 +228,13 @@ def stage_auth_token(profile, token):
             if current.get("role") != "owner":
                 raise OperatorError("Подключить Operator может только владелец BeinSystems.")
             cur.execute("""INSERT INTO saas_beinsystems_operator_pending_auth
-              (tenant_id,owner_telegram_id,token_ciphertext,received_at)
-              VALUES(%s::uuid,%s,%s,now())
+              (tenant_id,owner_telegram_id,token_ciphertext,received_at,me_verified_at,
+               accounts_access_verified_at,verified_identifier,verified_role,activated_at)
+              VALUES(%s::uuid,%s,%s,now(),NULL,NULL,NULL,NULL,NULL)
               ON CONFLICT(tenant_id,owner_telegram_id) DO UPDATE SET
-                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now()
+                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now(),
+                me_verified_at=NULL,accounts_access_verified_at=NULL,
+                verified_identifier=NULL,verified_role=NULL,activated_at=NULL
               RETURNING received_at""", (tenant, actor, encrypted))
             pending = cur.fetchone() or {}
             row = _operator_row(cur, tenant)
@@ -339,10 +350,13 @@ def stage_confirmed_auth_token(profile, token):
             if current.get("role") != "owner":
                 raise OperatorError("Подключить Operator может только владелец BeinSystems.")
             cur.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
-              (tenant_id,owner_telegram_id,token_ciphertext,received_at)
-              VALUES(%s::uuid,%s,%s,now())
+              (tenant_id,owner_telegram_id,token_ciphertext,received_at,me_verified_at,
+               accounts_access_verified_at,verified_identifier,verified_role,activated_at)
+              VALUES(%s::uuid,%s,%s,now(),NULL,NULL,NULL,NULL,NULL)
               ON CONFLICT(tenant_id,owner_telegram_id) DO UPDATE SET
-                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now()
+                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now(),
+                me_verified_at=NULL,accounts_access_verified_at=NULL,
+                verified_identifier=NULL,verified_role=NULL,activated_at=NULL
               RETURNING received_at""", (tenant, actor, encrypted))
             pending = cur.fetchone() or {}
             _, legacy_pending = _pending_auth_state(cur, tenant, actor)
@@ -469,14 +483,15 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
         if not account or len(account) > 240 or any(ord(char) < 32 for char in account):
             raise OperatorError("Идентификатор аккаунта Operator некорректен.")
         payload = {"account": account}
-    base = str(base_url or api_base_url()).rstrip("/")
-    if base != OPERATOR_API_BASE_URL or base != api_base_url():
+    approved_base = str(api_base_url() or "").rstrip("/")
+    base = str(base_url or approved_base).rstrip("/")
+    if not approved_base or base != approved_base or base != OPERATOR_API_BASE_URL:
         raise OperatorError("Адрес Operator API не настроен.")
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = Request(base + path, data=body, method="POST", headers={
+    method = "GET" if endpoint == "me" else "POST"
+    body = None if method == "GET" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = Request(base + path, data=body, method=method, headers={
         "Authorization": "Bearer " + str(token),
         "Content-Type": "application/json", "Accept": "application/json",
-        "Origin": OPERATOR_WEB_ORIGIN, "Referer": OPERATOR_WEB_ORIGIN + "/",
     })
     transport = opener or build_opener(_NoRedirect())
     try:
@@ -499,8 +514,118 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     return result
 
 
+def operator_me_payload(response):
+    """Project identity from the documented /user/me response, without granting app rights."""
+    if (not isinstance(response, dict)
+            or str(response.get("status") or "").strip().casefold() != "success"
+            or not isinstance(response.get("data"), dict)):
+        raise OperatorError("Operator не подтвердил доступ к профилю пользователя.", 403)
+    data = response["data"]
+    def clean(value):
+        if not isinstance(value, str):
+            raise OperatorError("Operator вернул некорректный профиль пользователя.")
+        value = value.strip()
+        if not value or len(value) > 240 or any(ord(char) < 32 for char in value):
+            raise OperatorError("Operator вернул некорректный профиль пользователя.")
+        return value
+    return {"identifier": clean(data.get("identifier")), "role": clean(data.get("role"))}
+
+
+def accounts_import_payload(response):
+    """Validate the entire documented list before an atomic local import."""
+    if (not isinstance(response, dict)
+            or str(response.get("status") or "").strip().casefold() != "success"
+            or not isinstance(response.get("data"), list)):
+        raise OperatorError("Operator не вернул полный список доступных аккаунтов.")
+    values = response["data"]
+    if len(values) > 10000:
+        raise OperatorError("Список аккаунтов превышает безопасный предел импорта.")
+    result, seen = [], set()
+    for item in values:
+        if not isinstance(item, dict):
+            raise OperatorError("Список аккаунтов Operator содержит некорректную запись.")
+        account = item.get("account")
+        if not isinstance(account, str):
+            raise OperatorError("Список аккаунтов Operator содержит некорректный идентификатор.")
+        account = account.strip()
+        if not account or len(account) > 240 or any(ord(char) < 32 for char in account):
+            raise OperatorError("Список аккаунтов Operator содержит некорректный идентификатор.")
+        if account not in seen:
+            seen.add(account)
+            result.append({"account": account})
+    return result
+
+
+def _pending_auth_candidate(profile, *, required=True):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Проверить Operator может только владелец BeinSystems.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Проверить Operator может только владелец BeinSystems.")
+            cur.execute("""SELECT token_ciphertext,received_at
+              FROM saas_beinsystems_operator_pending_auth_v2
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND activated_at IS NULL""",
+              (tenant, actor))
+            row = cur.fetchone()
+    if not row:
+        if required:
+            raise OperatorError("Сначала получите JWT из карточки интеграции.")
+        return None
+    try:
+        envelope = json.loads(_fernet().decrypt(bytes(row["token_ciphertext"])).decode("utf-8"))
+    except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise OperatorError("Зашифрованный кандидат Operator не удалось прочитать.") from None
+    if (not isinstance(envelope, dict) or envelope.get("tenant_id") != tenant
+            or envelope.get("provider") != PROVIDER
+            or envelope.get("owner_telegram_id") != actor
+            or envelope.get("purpose") != "pending_auth_verification"
+            or envelope.get("auth_contract") != AUTH_CONTRACT_VERSION
+            or not isinstance(envelope.get("token"), str) or not envelope.get("token")):
+        raise OperatorError("Кандидат Operator не относится к этому владельцу и workspace.")
+    return {"token": envelope["token"], "received_at": row["received_at"],
+            "base_url": api_base_url()}
+
+
+def _record_operator_read(profile, endpoint, payload):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    limits = {"me": 12, "accounts": 12, "account_info": 30, "profile_users": 20, "task_list": 20}
+    if endpoint not in limits:
+        raise OperatorError("Операция Operator пока не поддерживается.")
+    account = str((payload or {}).get("account") or "").strip()
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            _, actor, _ = _authorize(cur, profile, "view")
+            cur.execute("""INSERT INTO saas_beinsystems_operator_rate_limits
+              (tenant_id,actor_telegram_id,endpoint,bucket_start,request_count)
+              VALUES(%s::uuid,%s,%s,date_trunc('minute',now()),1)
+              ON CONFLICT(tenant_id,actor_telegram_id,endpoint,bucket_start)
+              DO UPDATE SET request_count=saas_beinsystems_operator_rate_limits.request_count+1,
+                updated_at=now() RETURNING request_count""", (tenant, actor, endpoint))
+            if int(cur.fetchone()["request_count"]) > limits[endpoint]:
+                raise OperatorError("Слишком много запросов Operator. Повторите позже.", 429)
+            cur.execute("""INSERT INTO saas_tenant_audit_events
+              (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s,%s::uuid,%s,'operator_read_requested','operator_endpoint',%s,%s::jsonb)""",
+              (str(uuid.uuid4()), tenant, actor, endpoint,
+               _json({"account_hash": hashlib.sha256(account.encode("utf-8")).hexdigest() if account else ""})))
+        conn.commit()
+
+
 def verify_connection(profile):
-    """Fail closed until Operator publishes a documented read-only verifier."""
+    """Check only documented GET/POST /user/me; this never activates a pending token."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -512,9 +637,40 @@ def verify_connection(profile):
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Проверить Operator может только владелец BeinSystems.")
-    raise OperatorError(
-        "Доступ к Operator нельзя подтвердить без документированного read-only метода. "
-        "Подключение не изменено.", 409)
+            row = _operator_row(cur, tenant)
+    candidate = _pending_auth_candidate(profile, required=False)
+    if candidate:
+        credentials = candidate
+        source = "pending"
+    elif row and row.get("status") in {"connected", "configured"} and row.get("secrets"):
+        credentials = _credentials(tenant, allow_configured=True)
+        source = "active"
+    else:
+        raise OperatorError("Сначала получите JWT из карточки интеграции.")
+    _record_operator_read(profile, "me", {})
+    response = _request_operator("me", {}, token=credentials["token"], base_url=credentials["base_url"])
+    identity = operator_me_payload(response)
+    if source == "active":
+        fresh = _credentials(tenant, allow_configured=True)
+        if (fresh["generation"] != credentials["generation"]
+                or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
+            raise OperatorError("Подключение Operator изменилось во время запроса.", 409)
+        return {**identity, "source": "active"}
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Проверить Operator может только владелец BeinSystems.")
+            cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
+              SET me_verified_at=now(),verified_identifier=%s,verified_role=%s
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
+                AND activated_at IS NULL""",
+              (identity["identifier"], identity["role"], tenant, actor, candidate["received_at"]))
+            if cur.rowcount != 1:
+                raise OperatorError("JWT Operator был заменён во время проверки. Повторите проверку.", 409)
+        conn.commit()
+    return {**identity, "source": "pending"}
 
 
 def read(profile, endpoint, payload, *, allow_configured=False):
@@ -527,7 +683,7 @@ def read(profile, endpoint, payload, *, allow_configured=False):
         _ensure_schema(conn)
         with conn.cursor() as cur:
             _, actor, _ = _authorize(cur, profile, "view")
-            limits = {"accounts": 12, "account_info": 30,
+            limits = {"me": 12, "accounts": 12, "account_info": 30,
                       "profile_users": 20, "task_list": 20}
             cur.execute("""INSERT INTO saas_beinsystems_operator_rate_limits
               (tenant_id,actor_telegram_id,endpoint,bucket_start,request_count)
@@ -553,6 +709,229 @@ def read(profile, endpoint, payload, *, allow_configured=False):
             or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
         raise OperatorError("Подключение Operator изменилось во время запроса.", 409)
     return result
+
+
+def _upsert_imported_accounts(cur, tenant, actor, accounts):
+    for item in accounts:
+        cur.execute("""INSERT INTO saas_beinsystems_operator_account_catalog
+          (tenant_id,external_account,imported_by,first_seen_at,last_seen_at)
+          VALUES(%s::uuid,%s,%s,now(),now())
+          ON CONFLICT(tenant_id,external_account) DO UPDATE SET last_seen_at=now()""",
+          (tenant, item["account"], actor))
+
+
+def _pending_timestamp_is_current(cur, tenant, actor, received_at):
+    cur.execute("""SELECT received_at FROM saas_beinsystems_operator_pending_auth_v2
+      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND activated_at IS NULL FOR UPDATE""",
+      (tenant, actor))
+    row = cur.fetchone()
+    return bool(row and row.get("received_at") == received_at)
+
+
+def _activate_candidate_if_unconfigured(cur, tenant, actor, token):
+    row = _operator_row(cur, tenant, lock=True)
+    if row and row.get("status") in {"connected", "configured"} and row.get("secrets"):
+        return False
+    instance_id, generation = str(uuid.uuid4()), str(uuid.uuid4())
+    encrypted = _fernet().encrypt(_json({
+        "tenant_id": tenant, "provider": PROVIDER, "token": token,
+        "connection_instance_id": instance_id,
+    }).encode("utf-8"))
+    metadata = {"connection_instance_id": instance_id, "generation": generation}
+    cur.execute("""INSERT INTO saas_tenant_integrations
+      (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
+      VALUES(%s::uuid,%s,'connected',%s,%s::jsonb,%s,now(),now())
+      ON CONFLICT(tenant_id,provider) DO UPDATE SET
+        account_domain=EXCLUDED.account_domain,metadata=EXCLUDED.metadata,
+        secrets=EXCLUDED.secrets,status='connected',connected_at=now(),updated_at=now()
+      WHERE saas_tenant_integrations.status NOT IN ('connected','configured')
+        OR saas_tenant_integrations.secrets IS NULL
+      RETURNING status""",
+      (tenant, PROVIDER, api_base_url(), _json(metadata), encrypted))
+    activated = cur.fetchone() is not None
+    if activated:
+        cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
+          SET activated_at=now(),accounts_access_verified_at=now()
+          WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
+    return activated
+
+
+def import_accounts(profile):
+    """Import the complete documented account result in one local transaction."""
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner" or profile.get("role") != "owner":
+                raise OperatorError("Импортировать аккаунты Operator может только владелец.")
+            active_row = _operator_row(cur, tenant)
+    active = bool(active_row and active_row.get("status") in {"connected", "configured"}
+                  and active_row.get("secrets"))
+    candidate = _pending_auth_candidate(profile, required=False)
+    if candidate:
+        active = False
+        credentials = candidate
+    elif active:
+        credentials = _credentials(tenant, allow_configured=True)
+    else:
+        raise OperatorError("Сначала получите JWT из карточки интеграции.")
+    _record_operator_read(profile, "me", {})
+    identity = operator_me_payload(_request_operator(
+        "me", {}, token=credentials["token"], base_url=credentials["base_url"]))
+    _record_operator_read(profile, "accounts", {})
+    response = _request_operator(
+        "accounts", {}, token=credentials["token"], base_url=credentials["base_url"])
+    accounts = accounts_import_payload(response)
+    if active:
+        fresh = _credentials(tenant, allow_configured=True)
+        if (fresh["generation"] != credentials["generation"]
+                or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
+            raise OperatorError("Подключение Operator изменилось во время импорта.", 409)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Импортировать аккаунты Operator может только владелец.")
+            if candidate and not _pending_timestamp_is_current(
+                    cur, tenant, actor, candidate["received_at"]):
+                raise OperatorError("JWT Operator был заменён во время импорта. Повторите попытку.", 409)
+            _upsert_imported_accounts(cur, tenant, actor, accounts)
+            activated = False
+            if candidate:
+                cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
+                  SET me_verified_at=COALESCE(me_verified_at,now()),accounts_access_verified_at=now(),
+                      verified_identifier=%s,verified_role=%s
+                  WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
+                    AND activated_at IS NULL""",
+                  (identity["identifier"], identity["role"], tenant, actor, candidate["received_at"]))
+                if cur.rowcount != 1:
+                    raise OperatorError("JWT Operator был заменён во время импорта. Повторите попытку.", 409)
+                activated = _activate_candidate_if_unconfigured(cur, tenant, actor, credentials["token"])
+        conn.commit()
+    return {"imported": len(accounts), "activated": activated,
+            "identity": identity, "status": status(profile)}
+
+
+def imported_accounts(profile, *, search="", limit=100):
+    tenant = _tenant(profile)
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 100
+    term = str(search or "").strip()[:120]
+    if any(ord(char) < 32 for char in term):
+        raise OperatorError("Поисковый запрос некорректен.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            _, actor, _ = _authorize(cur, profile, "view")
+            cur.execute("""SELECT external_account AS account
+              FROM saas_beinsystems_operator_account_catalog
+              WHERE tenant_id=%s::uuid AND position(lower(%s) in lower(external_account))>0
+              ORDER BY external_account LIMIT %s""",
+              (tenant, term, limit))
+            rows = cur.fetchall()
+    return [{"account": row["account"]} for row in rows]
+
+
+def _dialog_company_route(cur, profile, channel, conversation, action):
+    from tenant_operator_access import access, assert_route
+    tenant, actor, policy = access(cur, profile, "dialogs", action)
+    route = assert_route(cur, tenant, policy, "connect", conversation=conversation,
+                         channel=channel, action=action)
+    return tenant, actor, route
+
+
+def dialog_company_binding(profile, *, channel_id, conversation_id):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+        channel = str(uuid.UUID(str(channel_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Диалог или канал недоступен.") from None
+    conversation = str(conversation_id or "").strip()
+    if not conversation or len(conversation) > 160:
+        raise OperatorError("Диалог или канал недоступен.")
+    from tenant_crm_native_access import current_access, locked_resource
+    from tenant_linear_policy import TenantLinearError
+    try:
+        with _connect() as conn:
+            _ensure_schema(conn)
+            with conn.cursor() as cur:
+                _, actor, route = _dialog_company_route(cur, profile, channel, conversation, "view")
+                company_access = current_access(cur, tenant, actor, "companies", "view")
+                cur.execute("""SELECT b.company_id::text AS company_id,c.name
+                  FROM saas_beinsystems_operator_dialog_company_bindings b
+                  JOIN saas_crm_native_companies c ON c.tenant_id=b.tenant_id
+                    AND c.id=b.company_id AND c.archived_at IS NULL
+                  WHERE b.tenant_id=%s::uuid AND b.channel_id=%s::uuid
+                    AND b.conversation_id=%s""",
+                  (tenant, route["connect_channel_id"], route["conversation_id"]))
+                row = cur.fetchone()
+                if not row:
+                    return {"company_id": None, "company_name": None}
+                allowed = locked_resource(cur, company_access, "companies", "view",
+                    "saas_crm_native_companies", tenant, row["company_id"])
+                if not allowed:
+                    return {"company_id": None, "company_name": None}
+                return {"company_id": row["company_id"], "company_name": row["name"]}
+    except TenantLinearError as error:
+        raise OperatorError("Нет доступа к диалогу или компании.", getattr(error, "status", 403)) from error
+    except ValueError as error:
+        raise OperatorError("Нет доступа к диалогу или компании.", 403) from error
+
+
+def set_dialog_company_binding(profile, *, channel_id, conversation_id, company_id=None):
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+        channel = str(uuid.UUID(str(channel_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Диалог или канал недоступен.") from None
+    conversation = str(conversation_id or "").strip()
+    if not conversation or len(conversation) > 160:
+        raise OperatorError("Диалог или канал недоступен.")
+    from tenant_crm_native_access import current_access, locked_resource
+    from tenant_linear_policy import TenantLinearError
+    try:
+        with _connect() as conn:
+            _ensure_schema(conn)
+            with conn.cursor() as cur:
+                _, actor, route = _dialog_company_route(cur, profile, channel, conversation, "update")
+                if company_id:
+                    company = str(uuid.UUID(str(company_id)))
+                    read_profile = current_access(cur, tenant, actor, "companies", "view")
+                    update_profile = current_access(cur, tenant, actor, "companies", "update")
+                    visible = locked_resource(cur, read_profile, "companies", "view",
+                        "saas_crm_native_companies", tenant, company)
+                    editable = locked_resource(cur, update_profile, "companies", "update",
+                        "saas_crm_native_companies", tenant, company)
+                    if not visible or not editable:
+                        raise OperatorError("CRM-компания недоступна по вашим правам.", 403)
+                    cur.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+                      (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+                      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s)
+                      ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET
+                        company_id=EXCLUDED.company_id,updated_by=EXCLUDED.updated_by,updated_at=now()""",
+                      (tenant, route["connect_channel_id"], route["conversation_id"], company, actor, actor))
+                else:
+                    cur.execute("""DELETE FROM saas_beinsystems_operator_dialog_company_bindings
+                      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
+                      (tenant, route["connect_channel_id"], route["conversation_id"]))
+            conn.commit()
+        return dialog_company_binding(profile, channel_id=channel, conversation_id=conversation)
+    except OperatorError:
+        raise
+    except TenantLinearError as error:
+        raise OperatorError("Нет доступа к диалогу или компании.", getattr(error, "status", 403)) from error
+    except ValueError as error:
+        raise OperatorError("Нет доступа к диалогу или компании.", 403) from error
 
 
 def account_info_payload(response, requested_account):
