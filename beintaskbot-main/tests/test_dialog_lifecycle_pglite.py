@@ -14,6 +14,7 @@ import tenant_dialog_lifecycle as lifecycle
 @pytest.fixture
 def episodes(db, monkeypatch, request):
     import tenant_platform
+    monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', A)
     monkeypatch.setattr(tenant_platform, '_connect', lambda: db)
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db)
@@ -439,3 +440,61 @@ def test_authorized_reader_rechecks_raw_proof_after_canonical_lock(episodes, mon
             access_module.assert_route(cur, tenant, policy, 'connect', 'client', CA, 41, allow_merged=True)
     assert error.value.status == 409
     assert len(reads) == 2
+
+def test_presence_gate_is_limited_to_configured_beinsystems_workspace(episodes):
+    import tenant_dialog_presence as presence
+    from tenant_dialog_rollout import transition
+
+    other = {'tenant_id': B, 'telegram_id': 22}
+    status = presence.get_status(other)
+    assert status == {
+        'available': False, 'status': 'away', 'configured': False, 'can_update': False
+    }
+    with pytest.raises(TenantLinearError) as disabled:
+        presence.set_status(other, {'status': 'online'})
+    assert disabled.value.status == 403
+
+    # The shared presence table exists, but a non-Operator workspace keeps its
+    # previous admission behavior even when no presence row exists.
+    with episodes.cursor() as cur:
+        assert presence.is_online(cur, B, 22) is True
+        transition(cur, B, mode='active', admission_enabled=True, expected_generation=0)
+    episodes.commit()
+    result = lifecycle.mutate(other, {
+        'provider': 'connect', 'channel_id': CB, 'conversation_id': 'client',
+        'lead_id': 42, 'action': 'accept', 'expected_revision': 0,
+        'request_id': str(uuid.uuid4()),
+    })
+    assert result['lifecycle']['state'] == 'accepted'
+    row = episodes.execute(
+        "SELECT state,operator_id FROM saas_dialog_workflows "
+        "WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",
+        (B, CB),
+    )[0]
+    episodes.commit()
+    assert row == {'state': 'accepted', 'operator_id': 22}
+
+
+def test_beinsystems_employee_without_presence_can_set_online_then_accept(episodes):
+    import tenant_dialog_presence as presence
+    employee = {'tenant_id': A, 'telegram_id': 33}
+    episodes.execute(
+        "DELETE FROM saas_dialog_employee_presence WHERE tenant_id=%s::uuid AND employee_id=33",
+        (A,),
+    )
+    episodes.commit()
+    initial = presence.get_status(employee)
+    assert initial['available'] is True
+    assert initial['status'] == 'away'
+    assert initial['configured'] is False
+    with pytest.raises(TenantLinearError) as offline:
+        lifecycle.mutate(employee, payload(actor=33))
+    assert offline.value.status == 403
+    assert state(episodes) is None
+
+    saved = presence.set_status(employee, {'status': 'online'})
+    assert saved['status'] == 'online'
+    assert presence.get_status(employee)['status'] == 'online'
+    accepted = lifecycle.mutate(employee, payload(actor=33))
+    assert accepted['lifecycle']['state'] == 'accepted'
+    assert state(episodes)['operator_id'] == 33
