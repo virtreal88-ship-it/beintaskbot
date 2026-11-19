@@ -16,7 +16,7 @@
     evidence: 'Основание ручной проверки', confirm: 'Подтвердить связь',
     linked: 'Связь подтверждена', waiting: 'Проверка…',
     userWarning: 'Связь с ERP-пользователем подтверждается вручную по паре account + login.',
-    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Новый токен хранится отдельно до документированной проверки доступа; действующее подключение не меняется.',
+    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Новый токен остаётся pending до проверки /user/me и чтения /user/accounts; ошибочный кандидат не меняет действующее подключение.',
     contract: 'Создание тикетов и публичные ссылки включатся после подтверждения контрактов Operator.',
     employeeLink: 'Пользователь Operator выбирается из ответа API и связывается с сотрудником Beintaskbot по паре account + login. Документация пока не описывает отдельный стабильный user ID. Сервисные вызовы остаются под ограниченным SSO-пользователем подключения; Beintaskbot отдельно фиксирует сотрудника, который подтвердил связь.',
   };
@@ -28,6 +28,19 @@
     const response = await fetch(path, {
       credentials: 'same-origin', cache: 'no-store',
       ...(body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {}),
+    });
+    const value = await response.json();
+    if (!response.ok || value.success === false) throw new Error(value.error || 'Операция не выполнена.');
+    return value;
+  }
+  async function requestGet(path, params = {}) {
+    const query = new URLSearchParams({
+      ...params,
+      expected_tenant_id: String(profile?.member?.tenant_id || ''),
+      expected_user_id: String(profile?.member?.telegram_id || ''),
+    });
+    const response = await fetch(path + '?' + query.toString(), {
+      credentials: 'same-origin', cache: 'no-store',
     });
     const value = await response.json();
     if (!response.ok || value.success === false) throw new Error(value.error || 'Операция не выполнена.');
@@ -59,15 +72,19 @@
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
       if (state.pending_auth_received) {
-        parts.push(state.pending_auth_access_confirmed === true
-          ? 'Доступ нового токена подтверждён'
-          : 'JWT получен, доступ не подтверждён');
+        if (state.pending_auth_access_confirmed === true) parts.push('Доступ к accounts подтверждён');
+        else if (state.pending_auth_me_verified === true) parts.push('JWT принят; доступ к accounts ещё не подтверждён');
+        else parts.push('JWT получен; доступ ещё не подтверждён');
       }
       status.textContent = parts.join(' · ');
+      const testButton=connection.querySelector('[data-test]');
+      if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка доступа станет доступна после подтверждения документированного read-only метода Operator.</p>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Каждый Operator account можно связать с CRM-компанией только вручную через существующую форму.</p><div data-catalog aria-live="polite"></div>';
+      const testControl = $(connection, '[data-test]');
+      testControl.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const authForm = $(connection, '[data-operator-auth-form]');
       const authMessage = $(connection, '[data-auth-message]');
       const saveButton = $(connection, '[data-save]');
@@ -82,8 +99,19 @@
         button.disabled = true; message.textContent = text.waiting;
         try { const result = await fn(); if (current !== revision) return;
           if (result?.integration) { state = result.integration; renderStatus(); }
-          message.textContent = result?.integration?.pending_auth_received
-            ? text.tokenPending : (result?.message || 'Готово.');
+          if (result?.verification) {
+            message.textContent = 'JWT Operator принят. Профиль: '+result.verification.identifier+
+              ' · роль провайдера: '+result.verification.role+
+              '. Эта роль не меняет права Beintaskbot; доступ к accounts проверяется отдельно.';
+          } else if (Number.isInteger(result?.imported)) {
+            message.textContent = 'Импортировано account ID: '+result.imported+
+              (result.activated ? '. Доступ к /user/me и /user/accounts подтверждён; подключение активировано.'
+                : '. Существующее подключение сохранено.');
+            void loadCatalog();
+          } else {
+            message.textContent = result?.integration?.pending_auth_received
+              ? text.tokenPending : (result?.message || 'Готово.');
+          }
         } catch (error) { if (current === revision) message.textContent = error.message; }
         finally { button.disabled = false; }
       };
@@ -118,6 +146,33 @@
           if (current === revision) saveButton.disabled = false;
         }
       });
+      let catalogRevision=0;
+      const loadCatalog = async (search='') => {
+        const requestId=++catalogRevision, host=$(panel,'[data-catalog]');
+        try {
+          const result=await requestGet('/api/platform/operator/accounts',{search});
+          if(current!==revision||requestId!==catalogRevision)return;
+          host.replaceChildren();
+          const heading=document.createElement('h4');heading.textContent='Импортированный каталог account ID';host.append(heading);
+          const label=document.createElement('label');label.textContent='Найти account ID локально';
+          const input=document.createElement('input');input.type='search';input.maxLength=120;input.autocomplete='off';
+          input.value=search;input.dataset.catalogSearch='';label.append(input);host.append(label);
+          const find=document.createElement('button');find.type='button';find.textContent='Искать в локальном каталоге';
+          find.onclick=()=>void loadCatalog(input.value.trim());host.append(find);
+          const results=document.createElement('div');results.dataset.catalogResults='';host.append(results);
+          for(const row of result.accounts||[]){
+            const item=document.createElement('button');item.type='button';item.textContent=row.account;
+            item.onclick=()=>{$(panel,'[data-account]').value=row.account;};
+            results.append(item);
+          }
+          if(!(result.accounts||[]).length){const empty=document.createElement('p');empty.textContent='Аккаунты в локальном каталоге не найдены.';results.append(empty);}
+        } catch(error) { if(current===revision&&requestId===catalogRevision)host.textContent=error.message; }
+      };
+      void loadCatalog();
+      $(panel,'[data-test]').onclick = event => run(event.currentTarget, async () =>
+        request('/api/platform/integrations/beinsystems-operator',{action:'test'}));
+      $(panel,'[data-import]').onclick = event => run(event.currentTarget, async () =>
+        request('/api/platform/operator/accounts',{action:'import'}));
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});
@@ -257,6 +312,91 @@
       finally { button.disabled=false; }
     };
   }
+  async function mountDialogCompanyPicker(detail) {
+    const card=detail?.card, route=detail?.route, isCurrent=detail?.isCurrent, member=detail?.member;
+    if (!card || !route || route.provider!=='connect' || route.customer_kind==='group' ||
+        typeof isCurrent!=='function' || !isCurrent() ||
+        !String(member?.tenant_id||'') || !String(member?.telegram_id||'')) return;
+    card.querySelector('[data-operator-dialog-company]')?.remove();
+    const section=document.createElement('section');
+    section.dataset.operatorDialogCompany='';
+    section.className='operator-dialog-company-binding';
+    section.innerHTML='<h3>Компания диалога</h3><p>Локальная связь Beintaskbot; она не отправляется в Operator.</p><p data-current-company role="status" aria-live="polite"></p><div data-company-picker hidden><label>Найти CRM-компанию<input type="search" data-company-search maxlength="120" autocomplete="off"></label><button type="button" data-company-search-button>Найти компании</button><div data-company-results></div></div>';
+    const actions=card.querySelector('.operator-client-card-actions');
+    if(actions)card.insertBefore(section,actions);else card.append(section);
+    const query={channel_id:String(route.channel_id||''),conversation_id:String(route.conversation_id||'')};
+    const current=()=>isCurrent()&&card.isConnected&&card.querySelector('[data-operator-dialog-company]')===section;
+    const localRequest=async(path,method,fields={})=>{
+      const context={expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
+      let url=path, options={credentials:'same-origin',cache:'no-store'};
+      if(method==='GET'){
+        url+='?'+new URLSearchParams({...fields,...context}).toString();
+      }else{
+        options={...options,method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({...fields,...context})};
+      }
+      const response=await fetch(url,options),value=await response.json();
+      if(!response.ok||value.success===false)throw new Error(value.error||'Операция не выполнена.');
+      return value;
+    };
+    const currentLabel=section.querySelector('[data-current-company]');
+    const showBinding=binding=>{
+      if(!current())return;
+      section.querySelector('[data-binding-controls]')?.remove();
+      const canManage=binding?.can_manage===true;
+      const picker=section.querySelector('[data-company-picker]');
+      if(canManage)picker.hidden=false;else picker.remove();
+      currentLabel.textContent=binding?.company_id
+        ? 'Выбрана: '+String(binding.company_name||binding.company_id)
+        : 'Компания не выбрана.';
+      if(!canManage)currentLabel.textContent+=' Изменять привязку может владелец workspace.';
+      if(binding?.company_id&&canManage){
+        const controls=document.createElement('div');controls.dataset.bindingControls='';
+        const clear=document.createElement('button');clear.type='button';clear.textContent='Снять связь';
+        clear.onclick=async()=>{
+          clear.disabled=true;currentLabel.textContent='Сохраняем…';
+          try{const saved=await localRequest('/api/platform/operator/dialog-company','POST',query);if(current())showBinding(saved.binding);}
+          catch(error){if(current())currentLabel.textContent=error.message;}
+          finally{clear.disabled=false;}
+        };
+        controls.append(clear);section.append(controls);
+      }
+    };
+    let initial;
+    try{initial=await localRequest('/api/platform/operator/dialog-company','GET',query);}
+    catch(error){if(current())currentLabel.textContent=error.message;return;}
+    if(!current())return;
+    showBinding(initial.binding);
+    if(initial.binding?.can_manage!==true)return;
+    section.querySelector('[data-company-search-button]').onclick=async event=>{
+      const button=event.currentTarget, results=section.querySelector('[data-company-results]');
+      const term=section.querySelector('[data-company-search]').value.trim();
+      button.disabled=true;results.textContent='Загружаем компании…';
+      try{
+        const found=await localRequest('/api/platform/crm/native/companies','GET',{search:term});
+        if(!current())return;
+        results.replaceChildren();
+        for(const company of found.companies||[]){
+          const option=document.createElement('button');option.type='button';
+          option.textContent=String(company.name||company.id||'CRM-компания');
+          option.onclick=async()=>{
+            option.disabled=true;currentLabel.textContent='Сохраняем…';
+            try{const saved=await localRequest('/api/platform/operator/dialog-company','POST',{
+              ...query,company_id:company.id,
+            });if(current())showBinding(saved.binding);}
+            catch(error){if(current())currentLabel.textContent=error.message;}
+            finally{option.disabled=false;}
+          };
+          results.append(option);
+        }
+        if(!(found.companies||[]).length)results.textContent='Компании не найдены.';
+      }catch(error){if(current())results.textContent=error.message;}
+      finally{button.disabled=false;}
+    };
+  }
+  document.addEventListener('tenant-beinsystems-dialog-card',event=>{
+    void mountDialogCompanyPicker(event.detail);
+  });
   window.tenantViewDemand.watch({
     provider:'beinsystems_operator',editable:'#'+hostId,resetOnHide:true,activate:install,
     reset:()=>{revision++;profile=null;document.getElementById(hostId)?.remove();},

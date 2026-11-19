@@ -8,8 +8,8 @@ import uuid
 WORKSPACE_ENV = "BEINSYSTEMS_OPERATOR_TENANT_ID"
 API_BASE_URL_ENV = "BEINSYSTEMS_OPERATOR_API_BASE_URL"
 PROVIDER = "beinsystems_operator"
+# Confirmed by the owner's Operator browser trace and provider documentation.
 OPERATOR_API_BASE_URL = "https://operator-api.beinsystems.az/v1"
-OPERATOR_WEB_ORIGIN = "https://operator.beinsystems.az"
 
 
 def configured_workspace_id() -> str | None:
@@ -33,5 +33,5 @@ def is_operator_workspace(tenant_id: object) -> bool:
 
 
 def api_base_url() -> str:
-    """Return the exact Operator API origin confirmed by the vendor."""
+    """Return the exact HTTPS API base confirmed by BeinSystems."""
     return OPERATOR_API_BASE_URL

@@ -108,6 +108,40 @@ def migrate_operator_identity_links(cur) -> None:
       FOREIGN KEY(tenant_id,owner_telegram_id)
         REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
     )''')
+    cur.execute('''ALTER TABLE saas_beinsystems_operator_pending_auth_v2
+      ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ NULL''')
+    cur.execute('''ALTER TABLE saas_beinsystems_operator_pending_auth_v2
+      ADD COLUMN IF NOT EXISTS me_verified_at TIMESTAMPTZ NULL''')
+    cur.execute('''ALTER TABLE saas_beinsystems_operator_pending_auth_v2
+      ADD COLUMN IF NOT EXISTS accounts_access_verified_at TIMESTAMPTZ NULL''')
+    cur.execute('''ALTER TABLE saas_beinsystems_operator_pending_auth_v2
+      ADD COLUMN IF NOT EXISTS verified_identifier TEXT NULL''')
+    cur.execute('''ALTER TABLE saas_beinsystems_operator_pending_auth_v2
+      ADD COLUMN IF NOT EXISTS verified_role TEXT NULL''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_account_catalog (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      external_account TEXT NOT NULL CHECK(external_account<>'' AND length(external_account)<=240),
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,external_account)
+    )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      channel_id UUID NOT NULL,
+      conversation_id TEXT NOT NULL CHECK(conversation_id<>'' AND length(conversation_id)<=160),
+      company_id UUID NOT NULL,
+      created_by BIGINT NOT NULL CHECK(created_by>0),
+      updated_by BIGINT NOT NULL CHECK(updated_by>0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,channel_id,conversation_id),
+      FOREIGN KEY(tenant_id,created_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE,
+      FOREIGN KEY(tenant_id,updated_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
+    )''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_dialog_company_lookup_idx
+      ON saas_beinsystems_operator_dialog_company_bindings(tenant_id,company_id)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_employee_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL,

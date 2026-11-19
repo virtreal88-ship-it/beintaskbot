@@ -83,16 +83,19 @@ def integration_handler(member: Callable, origin: str, logger):
                 return _json_response({"integration": await asyncio.to_thread(operator.status, profile)})
             data = await _body(request, profile, origin)
             action = str(data.get("action") or "").strip().lower()
+            verification = None
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
             elif action == "test" and set(data) == {"action"}:
-                value = await asyncio.to_thread(operator.verify_connection, profile)
+                verification = await asyncio.to_thread(operator.verify_connection, profile)
+                value = await asyncio.to_thread(operator.status, profile)
             elif action == "disconnect" and set(data) == {"action"}:
                 value = await asyncio.to_thread(operator.disconnect, profile)
             else:
                 raise operator.OperatorError("Операция Operator некорректна.")
-            return _json_response({"integration": value})
+            return _json_response({"integration": value,
+                                   **({"verification": verification} if verification else {})})
         except operator.OperatorError as error:
             headers = {"Cache-Control": "no-store"}
             if error.status == 401:
@@ -117,9 +120,19 @@ def accounts_handler(member: Callable, origin: str, logger):
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
         try:
+            if request.method == "GET":
+                _context(dict(request.query), profile)
+                rows = await asyncio.to_thread(
+                    operator.imported_accounts, profile, search=request.query.get("search", ""))
+                return _json_response({"accounts": rows})
             data = await _body(request, profile, origin)
+            if data == {"action": "import"}:
+                result = await asyncio.to_thread(operator.import_accounts, profile)
+                return _json_response({"imported": result["imported"],
+                    "activated": result["activated"], "integration": result["status"],
+                    "identity": result["identity"]})
             if set(data) != {"search"}:
-                raise operator.OperatorError("Укажите строку поиска.")
+                raise operator.OperatorError("Укажите строку поиска или действие import.")
             response = await asyncio.to_thread(operator.read, profile, "accounts", data)
             accounts = operator.accounts_list_payload(response)
             return _json_response({"accounts": accounts})
@@ -128,11 +141,46 @@ def accounts_handler(member: Callable, origin: str, logger):
                                      status=error.status,
                                      headers={"Cache-Control": "no-store"})
         except Exception:
-            logger.exception("Operator account search failed")
-            return web.json_response({"success": False, "error": "Поиск аккаунтов Operator временно недоступен."},
+            logger.exception("Operator account request failed")
+            return web.json_response({"success": False, "error": "Список аккаунтов Operator временно недоступен."},
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint
 
+
+def dialog_company_handler(member: Callable, origin: str, logger):
+    async def endpoint(request: web.Request):
+        profile = _profile(member, request)
+        if not profile:
+            return web.json_response({"success": False, "error": "Интеграция недоступна."},
+                                     status=404, headers={"Cache-Control": "no-store"})
+        try:
+            if request.method == "GET":
+                query = dict(request.query)
+                _context(query, profile)
+                binding = await asyncio.to_thread(operator.dialog_company_binding, profile,
+                    channel_id=query.get("channel_id", ""),
+                    conversation_id=query.get("conversation_id", ""))
+                return _json_response({"binding": binding})
+            data = await _body(request, profile, origin)
+            expected = {"channel_id", "conversation_id"}
+            if set(data) == expected:
+                company_id = None
+            elif set(data) == expected | {"company_id"}:
+                company_id = data.get("company_id")
+            else:
+                raise operator.OperatorError("Поля привязки компании некорректны.")
+            binding = await asyncio.to_thread(operator.set_dialog_company_binding, profile,
+                channel_id=data["channel_id"], conversation_id=data["conversation_id"],
+                company_id=company_id)
+            return _json_response({"binding": binding})
+        except operator.OperatorError as error:
+            return web.json_response({"success": False, "error": str(error)}, status=error.status,
+                                     headers={"Cache-Control": "no-store"})
+        except Exception:
+            logger.exception("Operator dialog company binding failed")
+            return web.json_response({"success": False, "error": "Не удалось сохранить компанию диалога."},
+                                     status=503, headers={"Cache-Control": "no-store"})
+    return endpoint
 
 def links_handler(member: Callable, origin: str, logger):
     async def endpoint(request: web.Request):

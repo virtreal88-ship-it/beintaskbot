@@ -11,12 +11,28 @@ let mockIntegration={status:'connected',connected:true,configured:true,api_ready
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
 let employeeLinks=[];
+let dialogBinding={company_id:null,company_name:null,can_manage:true};
+let companySearches=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
 window.confirm=()=>true;
 window.fetch=async(path,options={})=>{
   requests.push({path,options});
   let result;
   if(path==='/api/platform/members')result={success:true,members:[{telegram_id:42,display_name:'Workspace operator',role:'operator',active:true}]};
+  else if(path.startsWith('/api/platform/crm/native/companies?')){
+    const query=new URL(path,'https://beintaskbot.test').searchParams;
+    companySearches.push(query.get('search'));
+    result={success:true,companies:[{id:'company-synthetic',name:'Synthetic company'}]};
+  }
+  else if(path.startsWith('/api/platform/operator/dialog-company?'))result={success:true,binding:{...dialogBinding}};
+  else if(path==='/api/platform/operator/dialog-company'&&options.method==='POST'){
+    const body=JSON.parse(options.body);
+    dialogBinding=body.company_id
+      ? {company_id:body.company_id,company_name:'Synthetic company',can_manage:true}
+      : {company_id:null,company_name:null,can_manage:true};
+    result={success:true,binding:{...dialogBinding}};
+  }
+  else if(path.startsWith('/api/platform/operator/accounts?')&&options.method!=='POST')result={success:true,accounts:[{account:'imported-synthetic'}]};
   else if(path==='/api/platform/operator/employee-users')result={success:true,users:[{login:'operator.login',bindable:true}]};
   else if(path==='/api/platform/operator/employee-links'&&options.method==='POST'){
     const body=JSON.parse(options.body);employeeLinks=[{id:'link-1',member_telegram_id:body.member_telegram_id,account:body.account,login:body.login,status:'confirmed'}];
@@ -24,6 +40,17 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
+    mockIntegration={...mockIntegration,pending_auth_me_verified:true};
+    result={success:true,integration:{...mockIntegration},
+      verification:{identifier:'synthetic.operator',role:'superadmin',source:'pending'}};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='import'){
+    mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
+      pending_auth_received:false,pending_auth_access_confirmed:null};
+    result={success:true,imported:137,activated:true,identity:{identifier:'synthetic.operator',role:'superadmin'},
+      integration:{...mockIntegration}};
+  }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='login'){
     if(loginMode==='error')result={success:false,error:'Mock provider refusal (HTTP 403)'};
     else {
@@ -42,12 +69,59 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     integrations:[{provider:'beinsystems_operator'}]};
   await viewDemand.activate(profile);
   const panel=window.document.querySelector('#operatorIntegrationSettings');
+  // The dialog-company picker only uses same-origin CRM reads and local binding writes.
+  const card=window.document.createElement('article');card.id='operatorClientCard';
+  const actions=window.document.createElement('div');actions.className='operator-client-card-actions';
+  card.append(actions);window.document.body.append(card);
+  window.document.dispatchEvent(new window.CustomEvent('tenant-beinsystems-dialog-card',{detail:{
+    route:{provider:'connect',channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',customer_kind:'person'},
+    card,scope:'scope-synthetic',isCurrent:()=>true,
+    member:{tenant_id:profile.member.tenant_id,telegram_id:profile.member.telegram_id},
+  }}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const localPicker=card.querySelector('[data-operator-dialog-company]');
+  assert(localPicker,'company selector is mounted in the current dialog card');
+  assert(localPicker.textContent.includes('не отправляется в Operator'));
+  localPicker.querySelector('[data-company-search]').value='Synthetic';
+  await localPicker.querySelector('[data-company-search-button]').onclick({
+    currentTarget:localPicker.querySelector('[data-company-search-button]'),
+  });
+  assert.deepEqual(companySearches,['Synthetic']);
+  const companyOption=[...localPicker.querySelector('[data-company-results]').querySelectorAll('button')]
+    .find(button=>button.textContent==='Synthetic company');
+  assert(companyOption);
+  await companyOption.onclick({currentTarget:companyOption});
+  assert.equal(dialogBinding.company_id,'company-synthetic');
+  const bindingPost=requests.filter(row=>row.path==='/api/platform/operator/dialog-company'
+    &&row.options.method==='POST').at(-1);
+  assert.deepEqual(JSON.parse(bindingPost.options.body),{
+    channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',company_id:'company-synthetic',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+  });
+  dialogBinding={company_id:'company-synthetic',company_name:'Synthetic company',can_manage:false};
+  window.document.dispatchEvent(new window.CustomEvent('tenant-beinsystems-dialog-card',{detail:{
+    route:{provider:'connect',channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',customer_kind:'person'},
+    card,scope:'scope-synthetic-readonly',isCurrent:()=>true,
+    member:{tenant_id:profile.member.tenant_id,telegram_id:profile.member.telegram_id},
+  }}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const readonlyPicker=card.querySelector('[data-operator-dialog-company]');
+  assert(readonlyPicker.textContent.includes('Изменять привязку может владелец workspace.'));
+  assert.equal(readonlyPicker.querySelector('[data-company-search]'),null,
+    'non-admins can see the local company but cannot change its binding');
+  assert(!requests.some(row=>/^https?:/.test(row.path)),'the UI never calls Operator directly');
   assert(panel,'Operator settings panel is mounted in the existing integrations host');
   const login=panel.querySelector('[data-operator-login]');
   const password=panel.querySelector('[data-operator-password]');
   assert.equal(login.type,'text');
   assert.equal(password.type,'password');
   await new Promise(resolve=>setTimeout(resolve,0));
+  const importedAccount=panel.querySelector('[data-catalog-results] button');
+  assert(importedAccount);
+  assert.equal(importedAccount.textContent,'imported-synthetic');
+  importedAccount.click();
+  assert.equal(panel.querySelector('[data-account]').value,'imported-synthetic',
+    'imported account identifiers fill the existing manual mapping field without guessing a company');
   const memberSelect=panel.querySelector('[data-employee-member]');
   assert.equal(memberSelect.options.length,2);
   const confirmEmployee=panel.querySelector('[data-confirm-employee]');
@@ -119,7 +193,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(window.document.activeElement,authMessage,'success focuses the visible auth result');
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert(!authPanel.querySelector('[data-token]'),'the API token remains server-side');
-  assert(!authPanel.querySelector('[data-test]'),'an undocumented verifier is not exposed');
+  assert(authPanel.querySelector('[data-test]'),'the documented /user/me check is available');
+  assert(authPanel.querySelector('[data-import]'),'full account import is an explicit owner action');
 
   // A fresh render/reload reads the durable pending state and shows the result without repeating login.
   await viewDemand.activate(profile);
@@ -127,6 +202,16 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(authPanel.querySelector('[data-auth-message]').textContent.includes('JWT получен и зашифрован отдельно'));
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert.equal(authPosts().length,1,'a reload does not resubmit credentials');
+  const testButton=authPanel.querySelector('[data-test]');
+  await testButton.onclick({currentTarget:testButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.textContent.includes('synthetic.operator'));
+  assert(authPanel.textContent.includes('superadmin'));
+  assert(authPanel.textContent.includes('не меняет права Beintaskbot'));
+  assert.equal(mockIntegration.status,'not_connected','/user/me alone does not activate the pending token');
+  const testPost=requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
+    &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='test').at(-1);
+  assert(testPost,'the documented identity check is explicitly invoked');
 
   // Provider errors appear next to the submit action.
   loginMode='error';
@@ -143,6 +228,14 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(mockIntegration.status,'not_connected');
   assert.equal(mockIntegration.pending_auth_received,true,'an error does not erase the prior pending token');
   assert.equal(authPosts().length,2);
+  const importButton=authPanel.querySelector('[data-import]');
+  await importButton.onclick({currentTarget:importButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(mockIntegration.status,'connected','mocked full account read may activate a new token after access succeeds');
+  assert(authPanel.textContent.includes('Импортировано account ID: 137'));
+  assert(requests.some(row=>row.path==='/api/platform/operator/accounts'
+    &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='import'));
+  assert(!requests.some(row=>/^https?:/.test(row.path)),'import uses the same-origin backend only');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);

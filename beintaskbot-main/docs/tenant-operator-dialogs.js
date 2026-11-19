@@ -1013,6 +1013,11 @@
     if(snapshot?.error)error.textContent=snapshot.error;
     let authorized=true;
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&!!currentDialog&&scope===contextKey('client-card',currentDialog);
+    if(operatorWorkspaceAvailable)document.dispatchEvent(new CustomEvent('tenant-beinsystems-dialog-card',{detail:{
+      route:{provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,
+        customer_kind:route.customer_kind},scope,card,isCurrent:current,
+      member:{tenant_id:member?.tenant_id,telegram_id:member?.telegram_id},
+    }}));
     if(operatorWorkspaceAvailable&&hasOperatorDataRight())void renderOperatorDialogContext(route,scope,card,current);
     const position=()=>{if(!card.open)return;const v=window.visualViewport,width=v?.width||innerWidth,height=v?.height||innerHeight,left=v?.offsetLeft||0,top=v?.offsetTop||0;card.style.width=Math.max(1,Math.min(420,width-24))+'px';card.style.maxHeight=Math.max(1,height-24)+'px';const box=card.getBoundingClientRect();card.style.left=left+Math.max(12,(width-box.width)/2)+'px';card.style.top=top+Math.max(12,(height-box.height)/2)+'px';};
     const close=(restore=true)=>{if(card.open){if(card.close)card.close();else card.removeAttribute('open');}trigger.setAttribute('aria-expanded','false');if(restore){input.value=route.manual_display_name||name;error.textContent='';}if(restore&&trigger.isConnected)trigger.focus({preventScroll:true});};
