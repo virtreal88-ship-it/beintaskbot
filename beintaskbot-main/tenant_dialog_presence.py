@@ -66,8 +66,9 @@ def get_status(profile):
               WHERE p.tenant_id=%s::uuid AND p.employee_id=%s""",
               (tenant, employee))
             row = cur.fetchone()
-            can_update = (policy.action_scope("dialogs", "update") is not None
-                          or policy.legacy_allows("dialogs"))
+            update_scope = policy.action_scope("dialogs", "update")
+            can_update = (update_scope != "none" if update_scope is not None
+                          else policy.legacy_allows("dialogs"))
     return {"available": True, "status": row.get("status") if row else "away",
             "configured": bool(row), "can_update": can_update}
 
