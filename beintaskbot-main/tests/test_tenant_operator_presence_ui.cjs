@@ -22,7 +22,12 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await tick();await w.tenantOperator.refresh();await tick();
  const button=w.document.getElementById('operatorPresenceOpen');
  assert.ok(button&&button.hidden,'status is not fetched before the user opens tools');
- const menu=w.document.getElementById('operatorToolsMenu');menu.open=true;await tick();
+ assert.equal(getCalls,0,'status is not read until the tools menu opens');
+ const menu=w.document.getElementById('operatorToolsMenu'),trigger=menu.querySelector('summary');let toggleEvents=0;
+ menu.addEventListener('toggle',()=>{toggleEvents++;});trigger.click();await tick();
+ assert.equal(menu.open,true,'clicking the tools summary opens its menu');
+ if(toggleEvents===0){menu.dispatchEvent(new w.Event('toggle'));await tick();}
+ assert.equal(toggleEvents,1,'the test emits one opening toggle when JSDOM omits the native details event');
  assert.ok(button&&!button.hidden,'current employee status is available in the tools menu');
  assert.equal(getCalls,1,'the menu loads one tenant-scoped status snapshot');
  assert.match(button.textContent,/Away|Отошёл|Kənarda/);
