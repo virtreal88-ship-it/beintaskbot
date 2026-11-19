@@ -226,7 +226,7 @@ const integrationCatalog = [
   },
   {
     id: "whatsapp",
-    name: "Ватсапп",
+    name: "WhatsApp",
     mark: "WA", color: "#25D366", section: "whatsapp",
     copy: {
       ru: {category: "Каналы сообщений", description: "Переписка и звонки. Один QR для каждого номера."},

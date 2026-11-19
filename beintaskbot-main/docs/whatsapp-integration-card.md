@@ -1,6 +1,6 @@
 # Unified WhatsApp integration card
 
-The owner opens **Ватсапп**, sees native sources and their live message/call
+The owner opens **WhatsApp**, sees native sources and their live message/call
 readiness, and opens a form before explicitly generating a QR. Enter the exact
 number including country code. The gateway checks the scanned account against
 that number; a mismatch cannot activate CRM delivery or sends.
@@ -12,7 +12,7 @@ session keys between engines. No additional service or volume is provisioned.
 ## Existing source transfer
 
 1. Disconnect the source in the reserve Connect integration.
-2. In Ватсапп enter the same number and generate a QR.
+2. In WhatsApp enter the same number and generate a QR.
 3. Worker verifies the phone against Connect, preserves the original source ID,
    and invokes Connect's `native-transfer` operation. Connect requires a closed
    provider and takes its existing dispatch fence. Pending/unknown sends block

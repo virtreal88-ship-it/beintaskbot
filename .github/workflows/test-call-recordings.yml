@@ -11,6 +11,12 @@ on:
       - 'beintaskbot-main/tenant_whatsapp_integration*.py'
       - 'beintaskbot-main/tests/test_whatsapp_integration*'
       - 'beintaskbot-main/ui/src/whatsapp-integration.jsx'
+      - 'beintaskbot-main/ui/src/main.jsx'
+      - 'beintaskbot-main/ui/src/app-theme.css'
+      - 'beintaskbot-main/docs/tenant-chakra-ui.js'
+      - 'beintaskbot-main/docs/tenant-shared-integration-settings.js'
+      - 'beintaskbot-main/docs/tenant-call-sources.js'
+      - 'beintaskbot-main/docs/whatsapp-integration-card.md'
       - 'beintaskbot-main/tenant_group_participants.py'
       - 'beintaskbot-main/tests/test_group_participants.py'
       - 'beintaskbot-main/tests/test_whatsapp_native*'
@@ -58,6 +64,12 @@ jobs:
       - run: python -m pytest -q tests/test_group_participants.py
       - run: python -m pytest -q tests/test_whatsapp_integration.py tests/test_whatsapp_integration_api.py
       - run: node tests/test_whatsapp_integration_ui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-whatsapp-integration-visuals
+          path: beintaskbot-main/tests/artifacts/whatsapp-integration/*.png
+          if-no-files-found: warn
       - run: python -m pytest -q tests/test_whatsapp_native_transition.py
       - run: python -m pytest -q tests/test_browser_calls_postgres.py tests/test_whatsapp_native_inbox_postgres.py tests/test_whatsapp_native_transition_postgres.py
         env:
