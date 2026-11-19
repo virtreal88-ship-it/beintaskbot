@@ -97,6 +97,9 @@ def operator_context_sql(monkeypatch):
               tenant_id uuid,channel_id uuid,conversation_id text,company_id uuid,
               created_by bigint,updated_by bigint,created_at timestamptz,updated_at timestamptz,
               PRIMARY KEY(tenant_id,channel_id,conversation_id))''')
+            conn.execute('''CREATE TABLE saas_beinsystems_operator_company_imports (
+              tenant_id uuid,external_account text,company_id uuid,
+              last_seen_connection_instance_id uuid,last_seen_generation text)''')
             conn.execute('CREATE TABLE saas_crm_native_contact_conversations (tenant_id uuid,provider text,channel_id uuid,conversation_id text,contact_id uuid)')
             conn.execute('''CREATE TABLE saas_beinsystems_operator_links (
               id uuid,tenant_id uuid,local_entity_type text,local_entity_id uuid,
@@ -126,7 +129,7 @@ def operator_context_sql(monkeypatch):
             monkeypatch.setattr(operator,'_ensure_schema',lambda _:None)
             def current(*_):calls.append('current_profile');return profile
             monkeypatch.setattr(operator,'_current_profile',current)
-            def integration(*_):calls.append('metadata');return {'metadata':metadata}
+            def integration(*_):calls.append('metadata');return {'status':'connected','secrets':b'synthetic-active-connection','metadata':metadata}
             monkeypatch.setattr(operator,'_operator_row',integration)
             def authorize(*_):calls.append('dialog_access');return tenant,11,object()
             def route(*args,**kwargs):
@@ -184,7 +187,7 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
         binding=operator.set_dialog_company_binding(
             f['profile'],channel_id=f['channel'],conversation_id='client',
             company_id=str(f['company']))
-        assert binding=={'company_id':str(f['company']),'company_name':'Synthetic Company','can_manage':True}
+        assert binding=={'company_id':str(f['company']),'company_name':'Synthetic Company','external_account':'company','can_manage':True}
         rows=f['conn'].execute("""SELECT tenant_id::text,channel_id::text,conversation_id,company_id::text
           FROM saas_beinsystems_operator_dialog_company_bindings""").fetchall()
         assert [tuple(row[key] for key in ('tenant_id','channel_id','conversation_id','company_id'))
@@ -201,6 +204,12 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
         readonly=f['operator'].dialog_company_binding(
             f['profile'],channel_id=f['channel'],conversation_id='client')
         assert readonly['can_manage'] is False
+        with patch.object(operator.TenantPolicy,'allows_action',return_value=False):
+            restricted=operator.dialog_company_binding(
+                f['profile'],channel_id=f['channel'],conversation_id='client')
+        assert restricted['company_id']==str(f['company'])
+        assert restricted['external_account'] is None
+
         with pytest.raises(operator.OperatorError) as owner_required:
             f['operator'].set_dialog_company_binding(
                 f['profile'],channel_id=f['channel'],conversation_id='client',
@@ -209,6 +218,55 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
         f['profile']['role']='owner'
         outbound.assert_not_called()
 
+
+
+
+def test_dialog_company_binding_resolves_current_imported_account(operator_context_sql):
+    import tenant_beinsystems_operator as operator
+    f=operator_context_sql
+    f['conn'].execute("""DELETE FROM saas_beinsystems_operator_links
+      WHERE tenant_id=%s::uuid AND local_entity_type='company'
+        AND local_entity_id=%s::uuid""",(f['profile']['tenant_id'],f['company']))
+    f['conn'].execute("""INSERT INTO saas_beinsystems_operator_company_imports
+      VALUES(%s::uuid,'imported-current',%s::uuid,%s::uuid,'gen')""",
+      (f['profile']['tenant_id'],f['company'],f['instance']))
+    binding=operator.set_dialog_company_binding(
+        f['profile'],channel_id=f['channel'],conversation_id='client',
+        company_id=str(f['company']))
+    assert binding['external_account']=='imported-current'
+
+
+def test_dialog_company_binding_refuses_ambiguous_accounts(operator_context_sql):
+    import tenant_beinsystems_operator as operator
+    f=operator_context_sql
+    f['conn'].execute("""INSERT INTO saas_beinsystems_operator_company_imports
+      VALUES(%s::uuid,'imported-different',%s::uuid,%s::uuid,'gen')""",
+      (f['profile']['tenant_id'],f['company'],f['instance']))
+    binding=operator.set_dialog_company_binding(
+        f['profile'],channel_id=f['channel'],conversation_id='client',
+        company_id=str(f['company']))
+    assert binding['company_id']==str(f['company'])
+    assert binding['external_account'] is None
+
+
+def test_dialog_company_binding_ignores_stale_and_other_tenant_accounts(operator_context_sql):
+    import tenant_beinsystems_operator as operator
+    f=operator_context_sql
+    tenant=f['profile']['tenant_id']
+    f['conn'].execute("""DELETE FROM saas_beinsystems_operator_links
+      WHERE tenant_id=%s::uuid AND local_entity_type='company'
+        AND local_entity_id=%s::uuid""",(tenant,f['company']))
+    f['conn'].execute("INSERT INTO saas_crm_native_companies VALUES(%s::uuid,%s::uuid,'Foreign Company',NULL)",
+      (str(uuid.uuid4()),f['company']))
+    f['conn'].execute("""INSERT INTO saas_beinsystems_operator_company_imports
+      VALUES(%s::uuid,'stale-account',%s::uuid,%s::uuid,'old-generation'),
+            (%s::uuid,'foreign-tenant-account',%s::uuid,%s::uuid,'gen')""",
+      (tenant,f['company'],f['instance'],str(uuid.uuid4()),f['company'],f['instance']))
+    binding=operator.set_dialog_company_binding(
+        f['profile'],channel_id=f['channel'],conversation_id='client',
+        company_id=str(f['company']))
+    assert binding['company_id']==str(f['company'])
+    assert binding['external_account'] is None
 
 
 
