@@ -425,7 +425,7 @@ def sync(c,data):
                 cur.execute('''UPDATE saas_browser_calls SET state='ended',ended_at=COALESCE(ended_at,now()),updated_at=now()
                   WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND provider_id=%s AND peer_jid=%s
                     AND state NOT IN ('ended','failed')
-                  RETURNING id,tenant_id,channel_id,conversation_id,lead_id,direction,actor_id,created_at''',
+                  RETURNING id,tenant_id,channel_id,conversation_id,lead_id,direction,actor_id,ended_at''',
                   (c['tenant_id'],c['gateway_id'],boot,item['provider_id'],item['peer_jid']))
                 ended_call=cur.fetchone()
                 if ended_call and ended_call['direction']=='inbound' and ended_call['actor_id'] is None:
@@ -440,7 +440,7 @@ def sync(c,data):
                         '{"isVideo":false,"call_source":"whatsapp_calls"}'::jsonb,clock_timestamp())
                       ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                       (str(missed_id),str(ended_call['tenant_id']),int(ended_call['lead_id']),external_id,
-                       str(ended_call['channel_id']),ended_call['created_at']))
+                       str(ended_call['channel_id']),ended_call['ended_at']))
             for item in active:
                 if item['state']=='ended':continue
                 cur.execute('SELECT * FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND provider_id=%s FOR UPDATE',(c['tenant_id'],c['gateway_id'],item['provider_id']))
