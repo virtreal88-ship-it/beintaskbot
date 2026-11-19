@@ -848,6 +848,40 @@ def _dialog_company_route(cur, profile, channel, conversation, action):
     return tenant, actor, route
 
 
+def _dialog_company_external_account(cur, tenant, company_id, integration):
+    """Return one current verified Operator account for a visible CRM company."""
+    if (not isinstance(integration, dict)
+            or integration.get("status") not in {"connected", "configured"}
+            or not integration.get("secrets")):
+        return None
+    generation, instance = _link_connection_scope(integration)
+    if not generation or not instance:
+        return None
+    cur.execute("""SELECT account FROM (
+        SELECT external_account AS account
+          FROM saas_beinsystems_operator_company_imports
+          WHERE tenant_id=%s::uuid AND company_id=%s::uuid
+            AND last_seen_generation=%s
+            AND last_seen_connection_instance_id=%s::uuid
+        UNION
+        SELECT external_id AS account
+          FROM saas_beinsystems_operator_links
+          WHERE tenant_id=%s::uuid AND local_entity_type='company'
+            AND local_entity_id=%s::uuid AND external_entity_type='account'
+            AND external_scope_id='' AND connection_generation=%s
+            AND connection_instance_id=%s::uuid AND revoked_at IS NULL
+      ) AS verified_accounts
+      ORDER BY account LIMIT 2""",
+      (tenant, company_id, generation, instance,
+       tenant, company_id, generation, instance))
+    rows = cur.fetchall()
+    # An absent or ambiguous current association is not safe to send onward.
+    if len(rows) != 1:
+        return None
+    account = rows[0].get("account")
+    return account if isinstance(account, str) and account else None
+
+
 def dialog_company_binding(profile, *, channel_id, conversation_id):
     tenant = _tenant(profile)
     try:
@@ -865,7 +899,9 @@ def dialog_company_binding(profile, *, channel_id, conversation_id):
             _ensure_schema(conn)
             with conn.cursor() as cur:
                 _, actor, route = _dialog_company_route(cur, profile, channel, conversation, "view")
-                can_manage = _current_profile(cur, tenant, actor).get("role") == "owner"
+                current = _current_profile(cur, tenant, actor)
+                can_manage = current.get("role") == "owner"
+                can_view_operator = TenantPolicy(current).allows_action("operator_data", "view")
                 company_access = current_access(cur, tenant, actor, "companies", "view")
                 cur.execute("""SELECT b.company_id::text AS company_id,c.name
                   FROM saas_beinsystems_operator_dialog_company_bindings b
@@ -877,14 +913,19 @@ def dialog_company_binding(profile, *, channel_id, conversation_id):
                 row = cur.fetchone()
                 if not row:
                     return {"company_id": None, "company_name": None,
-                            "can_manage": can_manage}
+                            "external_account": None, "can_manage": can_manage}
                 allowed = locked_resource(cur, company_access, "companies", "view",
                     "saas_crm_native_companies", tenant, row["company_id"])
                 if not allowed:
                     return {"company_id": None, "company_name": None,
-                            "can_manage": can_manage}
+                            "external_account": None, "can_manage": can_manage}
+                external_account = None
+                if can_view_operator:
+                    external_account = _dialog_company_external_account(
+                        cur, tenant, row["company_id"], _operator_row(cur, tenant)
+                    )
                 return {"company_id": row["company_id"], "company_name": row["name"],
-                        "can_manage": can_manage}
+                        "external_account": external_account, "can_manage": can_manage}
     except TenantLinearError as error:
         raise OperatorError("Нет доступа к диалогу или компании.", getattr(error, "status", 403)) from error
     except ValueError as error:
