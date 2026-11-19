@@ -303,7 +303,7 @@
     try{
       const result=await api('dialogs/presence');
       if(owner!==identity(member))return;
-      if(result?.available!==true||!presenceStates.includes(result.status)){
+      if(result?.available!==true||result.can_update!==true||!presenceStates.includes(result.status)){
         presenceAvailable=false;button.hidden=true;return;
       }
       currentPresence=result.status;presenceAvailable=true;button.hidden=false;paintPresenceButton();
