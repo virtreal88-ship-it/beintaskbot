@@ -17,8 +17,8 @@ closed. This revision therefore requires the additive schema before deployment.
   owner/admin exception to operator ownership.
 - A route with no workflow is initially waiting. Accept creates an episode. Only
   the accepting operator can read/send on its exact source and canonical dialog.
-- Transfer requires a currently active employee with source view and update access.
-  The same episode continues; the previous operator immediately loses access.
+- Only an employee explicitly marked Online can accept/start a new episode or receive a transfer. The server rechecks status while holding the employee row lock; a stale candidate list is rejected. Lunch/away does not revoke an already assigned episode.
+- Transfer still requires current source view/update access and continues the same episode; once transfer commits, the previous operator immediately loses access.
 - Close records its end, removes it from the active queue, and keeps a readonly
   detail for the last operator's explicit **Send to cases** action.
 - The last operator may explicitly **Start dialogue** from a closed or dismissed
@@ -54,7 +54,7 @@ closed. This revision therefore requires the additive schema before deployment.
 `tenant_dialog_lifecycle.migrate(cursor)` creates six tables and one index:
 `saas_dialog_rollout`, `saas_dialog_episodes`, `saas_dialog_workflows`,
 `saas_dialog_lifecycle_receipts`, `saas_dialog_episode_messages`,
-`saas_dialog_episode_sends`. No existing messages, cases or rights are rewritten.
+`saas_dialog_episode_sends`, and `saas_dialog_employee_presence` (plus its status lookup index). No existing messages, cases or rights are rewritten.
 
 Required rollout order, after a verified backup/restore plan and explicit approval:
 

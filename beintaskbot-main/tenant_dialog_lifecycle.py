@@ -59,6 +59,9 @@ def migrate(cur):
       PRIMARY KEY(tenant_id,request_id),UNIQUE(tenant_id,channel_id,external_id),
       FOREIGN KEY(tenant_id,episode_id) REFERENCES saas_dialog_episodes(tenant_id,id))""")
 
+    from tenant_dialog_presence import migrate as presence_migrate
+    presence_migrate(cur)
+
 
 def record_dispatch(cur, tenant, channel, conversation, request_id, result):
     """Only a verified successful provider result inside the final send lock."""
@@ -233,6 +236,7 @@ def _targets(cur, tenant, policy, channel, actor):
     from tenant_scoped_access_store import read_access_profile
     from tenant_policy import TenantPolicy
     from tenant_dialog_access import require_source
+    from tenant_dialog_presence import is_online
     cur.execute('SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id', (tenant,))
     members=cur.fetchall(); result=[]
     for member in members:
@@ -246,6 +250,7 @@ def _targets(cur, tenant, policy, channel, actor):
             require_source(cur,tenant,p,'connect',channel,'view')
             require_source(cur,tenant,p,'connect',channel,'update')
         except TenantLinearError: continue
+        if not is_online(cur,tenant,target,lock=True): continue
         result.append({'employee_id':target,'name':member.get('display_name') or str(target)})
     return result
 
@@ -332,6 +337,10 @@ def _mutate_once(profile, payload):
             if action in {'accept','start','dismiss'} and not acceptance_enabled(cur, tenant):
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
+            if action in {'accept','start'}:
+                from tenant_dialog_presence import is_online
+                if not is_online(cur,tenant,actor,lock=True):
+                    raise TenantLinearError('Установите статус «Онлайн», чтобы принять диалог.',403)
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']

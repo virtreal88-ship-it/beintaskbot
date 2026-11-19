@@ -16,6 +16,7 @@ from test_dialog_lifecycle_pglite import episodes, payload
 def worker(dsn, actor, request, barrier, output, operation='mutate'):
     import tenant_platform
     import tenant_dialog_lifecycle as lifecycle
+    import tenant_dialog_presence as presence
     from tenant_linear_policy import TenantLinearError
     os.environ['TENANT_DIALOG_LIFECYCLE_ENABLED']='true'
     os.environ['TENANT_DIALOG_ACCEPT_ENABLED']='true'
@@ -24,6 +25,8 @@ def worker(dsn, actor, request, barrier, output, operation='mutate'):
         barrier.wait(20)
         if operation=='mutate':
             result=lifecycle.mutate({'tenant_id':A,'telegram_id':actor},request)
+        elif operation=='presence':
+            result=presence.set_status({'tenant_id':A,'telegram_id':actor},{'status':request['status']})
         elif operation=='incoming':
             from tenant_ai_dialog_scope import lock_dialog
             with psycopg.connect(dsn,row_factory=dict_row) as conn:
@@ -79,6 +82,29 @@ def test_native_simultaneous_accept_has_exactly_one_winner(episodes):
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==1
     assert episodes.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='dialog_accept'")[0]['n']==1
     assert not episodes.execute('SELECT * FROM test_external_sends')
+    episodes.commit()
+
+
+
+def test_native_transfer_races_recipient_going_away_without_losing_owner(episodes):
+    from tenant_dialog_lifecycle import mutate, require_access
+    from tenant_linear_policy import TenantLinearError
+    from tenant_dialog_presence import get_status
+    mutate({'tenant_id':A,'telegram_id':33},payload('accept'))
+    transfer=payload('transfer',1,target_employee_id=11)
+    values=race(episodes,[(33,transfer,'mutate'),(11,{'status':'away'},'presence')])
+    assert any(value[0]=='ok' for value in values)
+    assert get_status({'tenant_id':A,'telegram_id':11})['status']=='away'
+    current=episodes.execute("SELECT operator_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['operator_id']
+    episode=episodes.execute("SELECT operator_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['operator_id']
+    assert episode==current
+    with episodes.cursor() as cur:
+        if current==11:
+            require_access(cur,A,11,'connect',CA,'client','update')
+            with pytest.raises(TenantLinearError):require_access(cur,A,33,'connect',CA,'client','update')
+        else:
+            assert current==33
+            require_access(cur,A,33,'connect',CA,'client','update')
     episodes.commit()
 
 

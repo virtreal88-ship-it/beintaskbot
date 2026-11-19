@@ -27,6 +27,9 @@ def episodes(db, monkeypatch, request):
         cur.execute('TRUNCATE saas_dialog_lifecycle_receipts')
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Employee','[\"dialogs\",\"support\"]'::jsonb)", (A,))
     db.commit()
+    from tenant_dialog_presence import set_status
+    set_status({'tenant_id':A,'telegram_id':11},{'status':'online'})
+    set_status({'tenant_id':A,'telegram_id':33},{'status':'online'})
     return db
 
 
@@ -130,6 +133,61 @@ def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     assert state(episodes)['revision']==2
     with pytest.raises(TenantLinearError):command('close',2,actor=33)
     assert state(episodes)['state']=='accepted'
+
+
+
+def test_employee_presence_is_self_scoped_and_tenant_isolated(episodes):
+    import tenant_dialog_presence as presence
+    own={'tenant_id':A,'telegram_id':33}
+    assert presence.get_status(own)=={'available':True,'status':'online','configured':True}
+    presence.set_status(own,{'status':'lunch'})
+    assert presence.get_status(own)['status']=='lunch'
+    with pytest.raises(TenantLinearError):
+        presence.set_status(own,{'status':'online','employee_id':11})
+    with pytest.raises(TenantLinearError):
+        presence.set_status(own,{'status':'not-a-status'})
+    try:
+        other=presence.get_status({'tenant_id':B,'telegram_id':33})
+    except TenantLinearError:
+        other=None
+    assert other is None or other['status']=='away'
+
+
+def test_stale_transfer_candidate_is_rejected_and_assignment_is_preserved(episodes):
+    import tenant_dialog_presence as presence
+    from tenant_operator_access import access
+    command(actor=33)
+    with episodes.cursor() as cur:
+        tenant,_,policy=access(cur,{'tenant_id':A,'telegram_id':33},'dialogs')
+        listed=lifecycle._targets(cur,tenant,policy,CA,33)
+        assert 11 in {item['employee_id'] for item in listed}
+    episodes.commit()
+    presence.set_status({'tenant_id':A,'telegram_id':11},{'status':'lunch'})
+    with pytest.raises(TenantLinearError) as stale:
+        lifecycle.mutate({'tenant_id':A,'telegram_id':33},
+                         payload('transfer',1,target_employee_id=11))
+    assert stale.value.status==403
+    assert state(episodes)['operator_id']==33
+    with episodes.cursor() as cur:
+        lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
+        with pytest.raises(TenantLinearError):
+            lifecycle.require_access(cur,A,11,'connect',CA,'client','update')
+    episodes.commit()
+
+
+def test_away_owner_keeps_existing_assignment_but_cannot_claim_new_dialog(episodes):
+    import tenant_dialog_presence as presence
+    presence.set_status({'tenant_id':A,'telegram_id':11},{'status':'away'})
+    with pytest.raises(TenantLinearError) as denied:
+        command(actor=11)
+    assert denied.value.status==403
+    assert state(episodes) is None
+    command(actor=33)
+    presence.set_status({'tenant_id':A,'telegram_id':33},{'status':'away'})
+    with episodes.cursor() as cur:
+        lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
+    episodes.commit()
+    assert state(episodes)['operator_id']==33
 
 
 def test_ai_and_visibility_stay_exact_source_and_tenant(episodes):

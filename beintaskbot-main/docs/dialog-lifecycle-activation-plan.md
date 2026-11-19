@@ -10,7 +10,7 @@ This plan is not evidence of any production changes.
 
 ## Order
 1. Take and verify the approved backup; record timestamp and recovery procedure without secrets.
-2. Use a separate short transaction with local lock_timeout=2s, statement_timeout=30s to run reviewed tenant_dialog_lifecycle.migrate(cursor). It creates rollout plus five lifecycle/episode tables/indexes. No backfill, deletion, role changes or ownership reassignment. Abort on timeout/unexpected schema; verify definitions and constraints.
+2. Use a separate short transaction with local lock_timeout=2s, statement_timeout=30s to run reviewed tenant_dialog_lifecycle.migrate(cursor). It creates rollout, five lifecycle/episode tables, and the local employee presence table/index. No backfill, deletion, role changes or ownership reassignment. Abort on timeout/unexpected schema; verify definitions and constraints.
 3. Only after schema verification merge/deploy the compatible tested code. Main auto-deploys; code deployed before schema fails closed even for legacy tenants.
 4. Keep every tenant legacy. Verify existing list/detail/history, sends, notifications, workers. No real customer test messages; only test doubles or separately approved staff smoke tests.
 5. Verify ALL web/worker replicas run compatible SHA; drain old containers and in-flight jobs, prevent restarting older deployments. Advisory barriers cannot fence binaries which do not acquire them. Stop if this cannot be established.
