@@ -135,3 +135,22 @@ a CRM message/lead/route; a later matching observation is suppressed. Known
 outcomes remain admissible. Conflicting ledger/projection evidence rejects the
 whole transaction. Reconciled rows match preserved original provider identity,
 not a fresh alias guess. No external action or AI work occurs in this path.
+
+## Native caller identity
+
+Authenticated source snapshots may carry `caller.phone_jid` and
+`caller.display_name` for inbound calls. The engine reads only its paired
+device's local contact store and reciprocal LID/PN mapping, after verifying its
+account binding. No provider lookup or contact matching by name occurs on the
+call path. The batch lookup is bounded and runs outside the broker mutex.
+
+Worker validates the evidence and uses the existing channel-scoped identity
+resolver. Missing labels can be filled on the same conversation; manual names,
+call peer, route/lead IDs, timestamps, ownership and history are retained.
+Conflicting independent histories are not merged. Missing proof remains unknown.
+Late evidence during ringing or at termination can enrich the original route.
+
+An addressed historical repair uses `tenant_call_identity.refresh_call` with an
+owner profile and an exact call ID. It fetches fresh evidence from the private
+source-scoped endpoint and rechecks owner, binding and call identity before the
+transaction. It sends no WhatsApp message, places no call and replays no event.

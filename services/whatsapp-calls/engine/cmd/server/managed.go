@@ -88,6 +88,10 @@ func managedHandler(s *server, host, token string) http.Handler {
 			s.handleManagedAvatar(w, r)
 			return
 		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/contact" {
+			s.handleManagedContact(w, r)
+			return
+		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages" {
 			s.handleManagedMessage(w, r)
 			return

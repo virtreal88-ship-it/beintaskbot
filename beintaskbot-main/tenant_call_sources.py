@@ -183,8 +183,13 @@ def configs(profile=None,*,channel=None,token_hash=None):
         return [as_config({k:v for k,v in row.items() if k!='encrypted_token'}) for row in cur.fetchall()]
 
 
-def route(cur,c,*,conversation=None,lead=None,peer=None,create_incoming=False):
+def route(cur,c,*,conversation=None,lead=None,peer=None,create_incoming=False,caller=None):
     """Only exact channel history or a previously verified PN/LID alias."""
+    identity={}
+    if peer and caller and create_incoming:
+        from tenant_call_identity import enrich
+        identity=enrich(cur,c,peer,caller)
+        peer=identity.get('canonical',peer)
     if peer:
         if not JID.fullmatch(peer):raise TenantLinearError('call_peer_invalid',400)
         cur.execute('''SELECT c.* FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid
@@ -201,7 +206,7 @@ def route(cur,c,*,conversation=None,lead=None,peer=None,create_incoming=False):
         # Reuse ordinary conversation storage; never join by a display name or
         # infer that a numeric LID is a telephone number.
         from tenant_connect_transport import _upsert_conversation
-        lead=_upsert_conversation(cur,c['tenant_id'],c['channel_id'],peer,{'kind':'contact','provider_conversation_id':peer})
+        lead=_upsert_conversation(cur,c['tenant_id'],c['channel_id'],peer,identity.get('metadata') or {'kind':'contact','provider_conversation_id':peer})
         return {'conversation_id':peer,'lead_id':lead,'dial_jid':peer}
     if len(rows)!=1 or rows[0].get('conversation_kind')=='group' or not JID.fullmatch(rows[0]['conversation_id']):
         raise TenantLinearError('Нет однозначной переписки в этом источнике.',409)
