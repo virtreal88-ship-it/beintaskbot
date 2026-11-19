@@ -16,6 +16,9 @@ from tenant_crm_native_access import (
 from tenant_policy import TenantPolicy
 
 
+MANUAL_REVIEW_ACCOUNT_LIMIT = 20
+
+
 def _owner(profile, current):
     if profile.get("role") != "owner" or current.get("role") != "owner":
         raise operator.OperatorError(
@@ -117,11 +120,24 @@ def _plan_company_import(accounts, mappings, confirmed_links, visible_company_id
         if name_key in reserved_names:
             # A name collision is only a reason to ask for manual binding;
             # it is never evidence that two records represent the same company.
-            actions.append({"account": account, "action": "manual_review"})
+            actions.append({"account": account, "action": "manual_review",
+                            "reason": "name_collision"})
             continue
         actions.append({"account": account, "action": "create"})
         reserved_names.add(name_key)
     return actions
+
+
+def _name_collision_summary(plan):
+    accounts = [action["account"] for action in plan
+                if action.get("action") == "manual_review"
+                and action.get("reason") == "name_collision"]
+    visible = accounts[:MANUAL_REVIEW_ACCOUNT_LIMIT]
+    return {
+        "name_collision_count": len(accounts),
+        "name_collision_accounts": visible,
+        "name_collision_truncated": len(accounts) > len(visible),
+    }
 
 
 def _put_mapping(cur, tenant, account, company_id, actor, credentials):
@@ -262,6 +278,7 @@ def create_companies(profile):
             plan = _plan_company_import(
                 accounts, mappings, confirmed_links, visible_company_ids, existing_name_keys
             )
+            collision_summary = _name_collision_summary(plan)
             created = reused = manual_review = 0
             for action in plan:
                 account = action["account"]
@@ -309,4 +326,5 @@ def create_companies(profile):
     return {
         "checked": len(accounts), "created": created,
         "reused": reused, "manual_review": manual_review,
+        **collision_summary,
     }
