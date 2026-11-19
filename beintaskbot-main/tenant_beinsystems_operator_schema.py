@@ -148,7 +148,7 @@ def migrate_operator_identity_links(cur) -> None:
     # may not have the native CRM schema yet. Install the tenant-scoped foreign
     # key as soon as that table exists; normal app migration order creates it
     # before reaching this point.
-    cur.execute('''DO $ BEGIN
+    cur.execute('''DO $operator_company_import$ BEGIN
       IF to_regclass('saas_crm_native_companies') IS NOT NULL
          AND NOT EXISTS (
            SELECT 1 FROM pg_constraint
@@ -160,7 +160,7 @@ def migrate_operator_identity_links(cur) -> None:
           FOREIGN KEY(tenant_id,company_id)
           REFERENCES saas_crm_native_companies(tenant_id,id) ON DELETE RESTRICT;
       END IF;
-    END $''')
+    END; $operator_company_import$;''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       channel_id UUID NOT NULL,
