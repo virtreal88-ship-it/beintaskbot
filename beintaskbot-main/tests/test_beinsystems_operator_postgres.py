@@ -1,4 +1,5 @@
 """PostgreSQL regression for Operator rate limits and pending-token storage."""
+import json
 import os
 import uuid
 
@@ -299,3 +300,196 @@ def test_operator_account_catalog_import_is_atomic_idempotent_and_never_deletes_
         with psycopg.connect(dsn, autocommit=True) as cleanup:
             cleanup.execute("SET search_path TO public")
             cleanup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+\n\n
+def test_active_account_company_creation_is_idempotent_and_rotation_scoped(monkeypatch):
+    import tenant_beinsystems_operator as operator
+    import tenant_beinsystems_operator_company_import as company_import
+    from cryptography.fernet import Fernet
+    from psycopg.rows import dict_row
+
+    dsn = os.environ.get("BEINTASKBOT_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("Disposable localhost PostgreSQL required")
+    from psycopg.conninfo import conninfo_to_dict
+    if conninfo_to_dict(dsn).get("host") not in {"localhost", "127.0.0.1", "::1"}:
+        pytest.fail("Local test server only")
+
+    schema = "operator_company_import_" + uuid.uuid4().hex
+    tenant, legacy_company, collision_company, instance_one, instance_two = [
+        str(uuid.uuid4()) for _ in range(5)
+    ]
+    profile = {"tenant_id": tenant, "telegram_id": 7, "role": "owner", "active": True}
+    active = {
+        "token": "synthetic-active-token-one",
+        "base_url": "https://operator-api.beinsystems.az/v1",
+        "generation": "generation-one",
+        "connection_instance_id": instance_one,
+        "status": "connected",
+    }
+    account_snapshots = [
+        [{"account": "legacy-account"}, {"account": "name-collision"},
+         {"account": "manually-bound"}],
+        [{"account": "new-only"}, {"account": "legacy-account"}],
+    ]
+    requests = []
+
+    def connect():
+        conn = psycopg.connect(dsn, row_factory=dict_row)
+        conn.execute(f'SET search_path TO "{schema}", public')
+        return conn
+
+    cipher = Fernet(Fernet.generate_key())
+
+    def integration_row(_cur, _tenant, lock=False):
+        envelope = {
+            "tenant_id": tenant, "provider": operator.PROVIDER,
+            "token": active["token"],
+            "connection_instance_id": active["connection_instance_id"],
+        }
+        return {
+            "status": active["status"],
+            "secrets": cipher.encrypt(json.dumps(envelope).encode()),
+            "metadata": {
+                "generation": active["generation"],
+                "connection_instance_id": active["connection_instance_id"],
+            },
+        }
+
+    def provider_read(endpoint, payload, *, token, base_url):
+        requests.append((endpoint, token, base_url))
+        if endpoint == "me":
+            return {"status": "success", "data": {
+                "identifier": "synthetic.operator", "role": "operator"
+            }}
+        return {"status": "success", "data": account_snapshots.pop(0)}
+
+    def visible_company(cur, _profile, _module, _action, _table, tenant_id, company_id):
+        row = cur.execute(
+            "SELECT id::text AS id FROM saas_crm_native_companies "
+            "WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL",
+            (tenant_id, company_id),
+        ).fetchone()
+        return row
+
+    class FullAccess:
+        def __init__(self, _profile):
+            pass
+
+        def has_scoped_access(self, _module):
+            return False
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+        try:
+            conn.execute(f'SET search_path TO "{schema}", public')
+            conn.execute("CREATE TABLE saas_tenants (id UUID PRIMARY KEY)")
+            conn.execute("""CREATE TABLE saas_tenant_members (
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id),
+              telegram_id BIGINT NOT NULL,
+              PRIMARY KEY(tenant_id,telegram_id))""")
+            conn.execute("""CREATE TABLE saas_crm_native_companies (
+              id UUID NOT NULL, tenant_id UUID NOT NULL REFERENCES saas_tenants(id),
+              name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
+              email TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+              responsible_id BIGINT NULL, access_responsible_id BIGINT NULL,
+              archived_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              UNIQUE(tenant_id,id))""")
+            conn.execute("""CREATE TABLE saas_tenant_audit_events (
+              id UUID PRIMARY KEY, tenant_id UUID NOT NULL, actor_telegram_id BIGINT NOT NULL,
+              action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+              payload JSONB NOT NULL)""")
+            conn.execute("INSERT INTO saas_tenants(id) VALUES(%s::uuid)", (tenant,))
+            conn.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id) VALUES(%s::uuid,7)",
+                         (tenant,))
+            conn.execute("""INSERT INTO saas_crm_native_companies
+              (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
+              VALUES(%s::uuid,%s::uuid,'name-collision','','','',NULL,7)""",
+                         (collision_company, tenant))
+            conn.execute("""INSERT INTO saas_crm_native_companies
+              (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
+              VALUES(%s::uuid,%s::uuid,'Existing CRM company','','','',NULL,7)""",
+                         (legacy_company, tenant))
+            with conn.cursor() as cur:
+                migrate_operator_identity_links(cur)
+            conn.execute("""INSERT INTO saas_beinsystems_operator_links
+              (id,tenant_id,connection_instance_id,connection_generation,local_entity_type,
+               local_entity_id,external_entity_type,external_id,external_scope_id,
+               verification_basis,evidence_summary,verified_by)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,'generation-one','company',%s::uuid,
+                     'account','manually-bound','','manual_operator_review',
+                     'Owner confirmed synthetic account',7)""",
+                         (str(uuid.uuid4()), tenant, instance_one, legacy_company))
+            conn.execute("""INSERT INTO saas_beinsystems_operator_account_catalog
+              (tenant_id,external_account) VALUES(%s::uuid,'catalog-only')""", (tenant,))
+        finally:
+            conn.execute("SET search_path TO public")
+    try:
+        with (
+            monkeypatch.context() as patcher,
+        ):
+            patcher.setattr(operator, "_tenant", lambda _profile: tenant)
+            patcher.setattr(operator, "_connect", connect)
+            patcher.setattr(operator, "_ensure_schema", lambda _conn: None)
+            patcher.setattr(operator, "_current_profile", lambda *_args: profile)
+            patcher.setattr(operator, "_operator_row", integration_row)
+            patcher.setattr(operator, "_credentials", lambda _tenant, **_kwargs: dict(active))
+            patcher.setattr(operator, "_record_operator_read", lambda *_args: None)
+            patcher.setattr(operator, "_pending_auth_candidate",
+                            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pending token read")))
+            patcher.setattr(operator, "_request_operator", provider_read)
+            patcher.setattr(operator, "_fernet", lambda: cipher)
+            patcher.setattr(company_import, "current_access", lambda *_args: profile)
+            patcher.setattr(company_import, "authorize_create", lambda *_args: None)
+            patcher.setattr(company_import, "locked_resource", visible_company)
+            patcher.setattr(company_import, "TenantPolicy", FullAccess)
+
+            first = company_import.create_companies(profile)
+            assert first == {"checked": 3, "created": 1, "reused": 1, "manual_review": 1}
+            with connect() as db:
+                first_legacy = db.execute("""SELECT company_id::text AS company_id
+                  FROM saas_beinsystems_operator_company_imports
+                  WHERE tenant_id=%s::uuid AND external_account='legacy-account'""",
+                                          (tenant,)).fetchone()["company_id"]
+                assert db.execute("""SELECT count(*) AS n FROM saas_crm_native_companies
+                  WHERE tenant_id=%s::uuid AND lower(name)='name-collision'""",
+                                  (tenant,)).fetchone()["n"] == 1
+                assert db.execute("""SELECT count(*) AS n FROM saas_beinsystems_operator_company_imports
+                  WHERE tenant_id=%s::uuid AND external_account='manually-bound'
+                    AND company_id=%s::uuid""", (tenant, legacy_company)).fetchone()["n"] == 1
+                assert db.execute("""SELECT count(*) AS n FROM saas_beinsystems_operator_company_imports
+                  WHERE tenant_id=%s::uuid AND external_account='catalog-only'""",
+                                  (tenant,)).fetchone()["n"] == 0
+
+            # A rotated active connection has a disjoint fresh list. It creates only
+            # that list's new account and keeps old stable mappings untouched.
+            active.update({
+                "token": "synthetic-active-token-two",
+                "generation": "generation-two",
+                "connection_instance_id": instance_two,
+            })
+            second = company_import.create_companies(profile)
+            assert second == {"checked": 2, "created": 1, "reused": 1, "manual_review": 0}
+            with connect() as db:
+                mapping = db.execute("""SELECT external_account,company_id::text AS company_id,
+                    last_seen_generation FROM saas_beinsystems_operator_company_imports
+                    WHERE tenant_id=%s::uuid ORDER BY external_account""", (tenant,)).fetchall()
+                values = {row["external_account"]: row for row in mapping}
+                assert values["legacy-account"]["company_id"] == first_legacy
+                assert values["legacy-account"]["last_seen_generation"] == "generation-two"
+                assert values["manually-bound"]["company_id"] == legacy_company
+                assert values["manually-bound"]["last_seen_generation"] == "generation-one"
+                assert set(values) == {"legacy-account", "manually-bound", "new-only"}
+                assert db.execute("""SELECT count(*) AS n FROM saas_crm_native_companies
+                  WHERE tenant_id=%s::uuid""", (tenant,)).fetchone()["n"] == 4
+            assert [endpoint for endpoint, _token, _base in requests] == [
+                "me", "accounts", "me", "accounts"
+            ]
+            assert requests[0][1] == "synthetic-active-token-one"
+            assert requests[2][1] == "synthetic-active-token-two"
+            assert all(base == active["base_url"] for _endpoint, _token, base in requests)
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
