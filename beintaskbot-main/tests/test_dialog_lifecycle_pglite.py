@@ -488,13 +488,13 @@ def test_beinsystems_employee_without_presence_can_set_online_then_accept(episod
     assert initial['status'] == 'away'
     assert initial['configured'] is False
     with pytest.raises(TenantLinearError) as offline:
-        lifecycle.mutate(employee, payload(actor=33))
+        lifecycle.mutate(employee, payload())
     assert offline.value.status == 403
     assert state(episodes) is None
 
     saved = presence.set_status(employee, {'status': 'online'})
     assert saved['status'] == 'online'
     assert presence.get_status(employee)['status'] == 'online'
-    accepted = lifecycle.mutate(employee, payload(actor=33))
+    accepted = lifecycle.mutate(employee, payload())
     assert accepted['lifecycle']['state'] == 'accepted'
     assert state(episodes)['operator_id'] == 33
