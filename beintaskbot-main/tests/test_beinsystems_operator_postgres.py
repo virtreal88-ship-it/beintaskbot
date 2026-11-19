@@ -300,7 +300,8 @@ def test_operator_account_catalog_import_is_atomic_idempotent_and_never_deletes_
         with psycopg.connect(dsn, autocommit=True) as cleanup:
             cleanup.execute("SET search_path TO public")
             cleanup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-\n\n
+
+
 def test_active_account_company_creation_is_idempotent_and_rotation_scoped(monkeypatch):
     import tenant_beinsystems_operator as operator
     import tenant_beinsystems_operator_company_import as company_import
