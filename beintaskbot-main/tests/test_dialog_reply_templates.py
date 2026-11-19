@@ -187,11 +187,17 @@ def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
     called=[]
     monkeypatch.setattr(api,"mutate_template",lambda *_: called.append(True))
     handler=api.handler(lambda _request:profile,"https://crm.test",Mock())
-    request=make_mocked_request("POST","/api/platform/ai/dialogs/reply-templates",
-        headers={"Origin":"https://crm.test","Content-Type":"application/json"},
-        payload=json.dumps({"action":"create","expected_tenant_id":OTHER,
-            "expected_user_id":ACTOR,"request_id":str(uuid.uuid4()),"name":"x","body":"y","visibility":"personal"}).encode())
-    response=asyncio.run(handler(request))
+    body=json.dumps({"action":"create","expected_tenant_id":OTHER,
+        "expected_user_id":ACTOR,"request_id":str(uuid.uuid4()),"name":"x","body":"y","visibility":"personal"}).encode()
+    class Request:
+        method="POST"
+        query={}
+        content_type="application/json"
+        content_length=len(body)
+        headers={"Origin":"https://crm.test"}
+        async def read(self):
+            return body
+    response=asyncio.run(handler(Request()))
     assert response.status==409
     assert not called
     assert response.headers["Cache-Control"]=="no-store"
