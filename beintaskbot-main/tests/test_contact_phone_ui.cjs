@@ -1,0 +1,44 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const read=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
+const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
+const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
+const routes=[1,2,3,4,5].map(n=>({provider:'connect',channel_id:channel,lead_id:n,conversation_id:`11111111111111${n}@lid`,customer_kind:'contact',customer_name:'Synthetic '+n,phone:'',channel_name:'Synthetic source',available_actions:[],can_send:true,controls_allowed:true,display_state:'human',state:'human',agent_status:'manual'}));
+const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r));};
+const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
+w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+w.document.getElementById('view-dialogs').classList.add('active');
+const pending=new Map(),failures=new Map(),lookups=[];
+w.fetch=async target=>{
+ const url=new URL(String(target),'https://fixture.test'),id=Number(url.searchParams.get('lead_id'));
+ const result=value=>({ok:true,json:async()=>({success:true,result:value})});
+ if(url.pathname.endsWith('/me'))return{ok:true,json:async()=>profile};
+ if(url.pathname.endsWith('/dialogs'))return result({dialogs:routes,channels:[],agents:[],total_count:3,unread_count:0,next_offset:null});
+ if(url.pathname.endsWith('/dialogs/history'))return result({dialog:{...routes.find(r=>r.lead_id===id)},messages:[{id:'m'+id,direction:'incoming',body:'Synthetic history',message_type:'text'}],next_before:null});
+ if(url.pathname.endsWith('/dialogs/contact-phone')){lookups.push(id);return new Promise((resolve,reject)=>{pending.set(id,value=>resolve(result(value)));failures.set(id,reject);});}
+ return result({});
+};
+const answer=(id,value={})=>pending.get(id)({...routes.find(r=>r.lead_id===id),display_only:true,status:'available',phone:'+99410000000'+id,...value});
+const label=()=>w.document.querySelector('.operator-client-phone')?.textContent||'';
+(async()=>{
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
+ await w.tenantOperator.openDialog(routes[0]);await settle();
+ assert.deepEqual(lookups,[1]);assert(!label().includes('111111'),'LID is never a phone');
+ const history=w.document.getElementById('chatRows'),editor=w.document.getElementById('chatText');editor.value='Unsaved text';editor.focus();
+ answer(1);await settle();assert.equal(label(),'+994100000001');
+ assert.equal(w.document.getElementById('chatRows'),history);assert.equal(w.document.getElementById('chatText'),editor);assert.equal(editor.value,'Unsaved text');assert.equal(w.document.activeElement,editor);
+ assert.equal(w.tenantOperator.currentDialog.phone,'','presentation must not mutate routing data');
+ await w.tenantOperator.openDialog(routes[0]);await settle();assert.deepEqual(lookups,[1],'same scoped lookup is reused');
+ await w.tenantOperator.openDialog(routes[1]);await settle();
+ await w.tenantOperator.openDialog(routes[2]);await settle();answer(2);await settle();assert.notEqual(label(),'+994100000002','late A cannot alter B');
+ answer(3,{channel_id:'other-source'});await settle();assert(!label().startsWith('+'),'wrong source result denied');
+ await w.tenantOperator.openDialog(routes[1]);await settle();assert.equal(label(),'+994100000002');
+ await w.tenantOperator.openDialog(routes[3]);await settle();
+ const optionalHistory=w.document.getElementById('chatRows');failures.get(4)(new Error('metadata unavailable'));await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,4);assert.equal(w.document.getElementById('chatRows'),optionalHistory,'lookup failure keeps chat open');
+ await w.tenantOperator.openDialog(routes[4]);await settle();
+ w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,tenant_id:'00000000-0000-0000-0000-000000000999'}}}));await settle();
+ answer(5);await settle();assert(!w.document.getElementById('operatorConversationHeader').textContent.includes('+99410000000'),'tenant switch clears presentation proof and rejects late result');
+ console.log('PASS display-only verified phones: no history/composer rerender, scope checks, late results, shared lookup and tenant purge');
+ dom.window.close();
+})().catch(e=>{console.error(e);dom.window.close();process.exitCode=1;});

@@ -43,6 +43,9 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(dialog_sources,profile)
                 elif resource=='group_participants':
                     result=await get_participants(profile,dict(query))
+                elif resource=='contact_phone':
+                    from tenant_contact_phone import get_phone
+                    result=await get_phone(profile,dict(query))
                 elif resource=='avatar':
                     content,mime=await get_avatar(profile,dict(query))
                     return web.Response(body=content,content_type=mime,headers={
