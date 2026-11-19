@@ -35,6 +35,8 @@ def owner(cur,profile,source):
 
 
 def legacy_disabled(profile,source,account):
+    from tenant_whatsapp_integration import fresh_source
+    if fresh_source(profile,source,account):return
     from tenant_connect_transport import _stored_connect_credentials,_request
     key=_stored_connect_credentials(profile)['api_key']
     result=_request(key,'GET','/v1/channels/'+source+'/status')

@@ -552,6 +552,14 @@ def projection(cur, policy, *, include_read_cursors=False):
         OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
         OR NOT COALESCE(connected,FALSE) THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes WHERE '''+dialog_filter+''') '''
+    # A native source does not need a reserve Connect credential to enable the
+    # composer. This is a display observation only; each send still resolves
+    # and fences the actual source through connect_route/bind.
+    from tenant_whatsapp_native_rollout import modes as native_modes
+    native_sources=[str(uuid.UUID(source)) for source,row in native_modes(cur,str(policy.profile['tenant_id'])).items() if row['enabled']]
+    if native_sources:
+        legacy="EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected')"
+        sql=sql.replace(legacy,"("+legacy+" OR c.connect_channel_id=ANY(ARRAY["+','.join("'"+source+"'" for source in native_sources)+"]::uuid[]))")
     if include_read_cursors:
         sql=sql.replace('lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,',
                         'lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,lrc.read_through_message_id,')
