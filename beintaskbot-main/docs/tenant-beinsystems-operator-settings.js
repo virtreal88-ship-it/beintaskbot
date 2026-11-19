@@ -112,10 +112,20 @@
             void loadCatalog();
           } else if (result?.company_import) {
             const counts=result.company_import;
+            const collisionCount=Number.isFinite(Number(counts.name_collision_count))
+              ? Math.max(0,Number(counts.name_collision_count)) : 0;
+            const collisionAccounts=(Array.isArray(counts.name_collision_accounts)
+              ? counts.name_collision_accounts : []).slice(0,20)
+              .map(account=>String(account).slice(0,240)).filter(Boolean);
+            const collisionDetails=collisionCount
+              ? ' Совпадение названия, требуется ручная проверка ('+collisionCount+')'+
+                (collisionAccounts.length ? ': '+collisionAccounts.join(', ') : '')+
+                (counts.name_collision_truncated ? ' …' : '')+'.'
+              : '';
             message.textContent='Проверено аккаунтов: '+counts.checked+
               ' · создано компаний: '+counts.created+
               ' · повторно связано: '+counts.reused+
-              ' · ручная проверка: '+counts.manual_review+'.';
+              ' · ручная проверка: '+counts.manual_review+'.'+collisionDetails;
           } else {
             message.textContent = result?.integration?.pending_auth_received
               ? text.tokenPending : (result?.message || 'Готово.');
