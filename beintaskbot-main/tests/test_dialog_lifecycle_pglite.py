@@ -139,7 +139,9 @@ def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
 def test_employee_presence_is_self_scoped_and_tenant_isolated(episodes):
     import tenant_dialog_presence as presence
     own={'tenant_id':A,'telegram_id':33}
-    assert presence.get_status(own)=={'available':True,'status':'online','configured':True}
+    status=presence.get_status(own)
+    assert status['available'] and status['can_update']
+    assert status['status']=='online' and status['configured']
     presence.set_status(own,{'status':'lunch'})
     assert presence.get_status(own)['status']=='lunch'
     with pytest.raises(TenantLinearError):
