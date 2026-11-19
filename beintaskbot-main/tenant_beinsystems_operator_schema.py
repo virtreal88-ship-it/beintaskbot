@@ -137,8 +137,6 @@ def migrate_operator_identity_links(cur) -> None:
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY(tenant_id,external_account),
-      FOREIGN KEY(tenant_id,company_id)
-        REFERENCES saas_crm_native_companies(tenant_id,id) ON DELETE RESTRICT,
       FOREIGN KEY(tenant_id,created_by)
         REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
       FOREIGN KEY(tenant_id,updated_by)
@@ -146,6 +144,23 @@ def migrate_operator_identity_links(cur) -> None:
     )''')
     cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_company_import_lookup_idx
       ON saas_beinsystems_operator_company_imports(tenant_id,company_id)''')
+    # The Operator identity migration is also exercised on isolated databases that
+    # may not have the native CRM schema yet. Install the tenant-scoped foreign
+    # key as soon as that table exists; normal app migration order creates it
+    # before reaching this point.
+    cur.execute('''DO $ BEGIN
+      IF to_regclass('saas_crm_native_companies') IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+           WHERE conrelid='saas_beinsystems_operator_company_imports'::regclass
+             AND conname='saas_operator_company_import_company_fk'
+         ) THEN
+        ALTER TABLE saas_beinsystems_operator_company_imports
+          ADD CONSTRAINT saas_operator_company_import_company_fk
+          FOREIGN KEY(tenant_id,company_id)
+          REFERENCES saas_crm_native_companies(tenant_id,id) ON DELETE RESTRICT;
+      END IF;
+    END $''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       channel_id UUID NOT NULL,
