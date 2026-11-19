@@ -51,7 +51,7 @@ closed. This revision therefore requires the additive schema before deployment.
 
 ## Additive migration
 
-`tenant_dialog_lifecycle.migrate(cursor)` creates six tables and one index:
+`tenant_dialog_lifecycle.migrate(cursor)` creates seven tables and two indexes:
 `saas_dialog_rollout`, `saas_dialog_episodes`, `saas_dialog_workflows`,
 `saas_dialog_lifecycle_receipts`, `saas_dialog_episode_messages`,
 `saas_dialog_episode_sends`, and `saas_dialog_employee_presence` (plus its status lookup index). No existing messages, cases or rights are rewritten.
