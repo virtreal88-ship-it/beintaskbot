@@ -193,8 +193,9 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
             operator.set_dialog_company_binding(
                 f['profile'],channel_id=f['channel'],conversation_id='client',company_id=outsider)
         assert denied.value.status==403
-        assert f['conn'].execute(
-            "SELECT company_id::text FROM saas_beinsystems_operator_dialog_company_bindings").fetchone()==(str(f['company']),)
+        persisted=f['conn'].execute(
+            "SELECT company_id::text FROM saas_beinsystems_operator_dialog_company_bindings").fetchone()
+        assert persisted['company_id']==str(f['company'])
         f['profile']['role']='manager'
         readonly=f['operator'].dialog_company_binding(
             f['profile'],channel_id=f['channel'],conversation_id='client')
