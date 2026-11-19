@@ -9,6 +9,7 @@ import tenant_beinsystems_operator as operator
 import tenant_beinsystems_operator_api as operator_api
 import tenant_beinsystems_operator_access as access
 import tenant_beinsystems_operator_ai_tools as ai_tools
+import tenant_beinsystems_operator_company_import as company_import
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
 from tenant_member_store import _EDITOR_PERMISSION_KEYS
 from tenant_platform_common import _permissions
@@ -682,6 +683,9 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_pending_auth_v2", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS accounts_access_verified_at", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_account_catalog", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_company_imports", sql)
+        self.assertIn("PRIMARY KEY(tenant_id,external_account)", sql)
+        self.assertIn("FOREIGN KEY(tenant_id,company_id)", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings", sql)
         self.assertIn("saas_beinsystems_operator_rate_limits_endpoint_check", sql)
         self.assertIn("CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login'))", sql)
@@ -689,6 +693,117 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIn("FOREIGN KEY(tenant_id,member_telegram_id)", sql)
         self.assertIn("saas_operator_active_member_link_idx", sql)
         self.assertIn("saas_operator_active_staff_identity_idx", sql)
+
+
+
+class OperatorCompanyImportTests(unittest.TestCase):
+    def test_active_snapshot_uses_only_active_token_and_documented_read_endpoints(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        instance = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        row = {"status": "connected", "secrets": b"synthetic-ciphertext",
+               "metadata": {"generation": "active-generation",
+                            "connection_instance_id": instance}}
+        credentials = {"token": "synthetic-active-jwt",
+                       "base_url": "https://operator-api.beinsystems.az/v1",
+                       "generation": "active-generation",
+                       "connection_instance_id": instance, "status": "connected"}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        responses = [
+            {"status": "success", "data": {"identifier": "synthetic.operator", "role": "operator"}},
+            {"status": "success", "data": [{"account": "fresh-account"}]},
+        ]
+        with (
+            patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}),
+            patch.object(operator, "_connect", return_value=connection),
+            patch.object(operator, "_ensure_schema"),
+            patch.object(operator, "_current_profile", return_value=profile),
+            patch.object(operator, "_operator_row", return_value=row),
+            patch.object(operator, "_credentials", side_effect=[credentials, credentials]) as active,
+            patch.object(operator, "_pending_auth_candidate") as pending,
+            patch.object(operator, "_record_operator_read") as audit,
+            patch.object(operator, "_request_operator", side_effect=responses) as request,
+        ):
+            accounts, used = company_import._fresh_active_accounts(profile, TENANT, 7)
+        self.assertEqual(accounts, [{"account": "fresh-account"}])
+        self.assertEqual(used, credentials)
+        self.assertEqual([call.args[0] for call in request.call_args_list], ["me", "accounts"])
+        self.assertTrue(all(call.kwargs["token"] == "synthetic-active-jwt"
+                            for call in request.call_args_list))
+        self.assertEqual(audit.call_count, 2)
+        self.assertEqual(active.call_args_list[0].kwargs, {"allow_configured": True})
+        pending.assert_not_called()
+
+    def test_active_connection_rotation_during_read_rejects_before_import(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        instance = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        row = {"status": "connected", "secrets": b"synthetic-ciphertext",
+               "metadata": {"generation": "old", "connection_instance_id": instance}}
+        first = {"token": "synthetic-old-token", "base_url": "https://operator-api.beinsystems.az/v1",
+                 "generation": "old", "connection_instance_id": instance, "status": "connected"}
+        second = {**first, "token": "synthetic-new-token", "generation": "new"}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        responses = [
+            {"status": "success", "data": {"identifier": "synthetic.operator", "role": "operator"}},
+            {"status": "success", "data": [{"account": "fresh-account"}]},
+        ]
+        with (
+            patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}),
+            patch.object(operator, "_connect", return_value=connection),
+            patch.object(operator, "_ensure_schema"),
+            patch.object(operator, "_current_profile", return_value=profile),
+            patch.object(operator, "_operator_row", return_value=row),
+            patch.object(operator, "_credentials", side_effect=[first, second]),
+            patch.object(operator, "_pending_auth_candidate") as pending,
+            patch.object(operator, "_record_operator_read"),
+            patch.object(operator, "_request_operator", side_effect=responses),
+        ):
+            with self.assertRaises(operator.OperatorError) as raised:
+                company_import._fresh_active_accounts(profile, TENANT, 7)
+        self.assertEqual(raised.exception.status, 409)
+        pending.assert_not_called()
+
+    def test_fresh_lists_drive_creation_across_rotation_without_removing_old_mapping(self):
+        existing = {"legacy-account": "company-legacy"}
+        visible = {"company-legacy"}
+        first = company_import._plan_company_import(
+            [{"account": "new-account"}], existing, {}, visible, set()
+        )
+        self.assertEqual(first, [{"account": "new-account", "action": "create"}])
+        second = company_import._plan_company_import(
+            [{"account": "legacy-account"}], existing, {}, visible, set()
+        )
+        self.assertEqual(second, [{
+            "account": "legacy-account", "action": "reuse", "company_id": "company-legacy"
+        }])
+        self.assertEqual(existing, {"legacy-account": "company-legacy"})
+
+    def test_manual_links_are_reused_but_name_collisions_require_review(self):
+        plan = company_import._plan_company_import(
+            [{"account": "bound-account"}, {"account": "same-name"},
+             {"account": "new-account"}, {"account": "ambiguous-account"}],
+            {},
+            {"bound-account": ["company-bound"],
+             "ambiguous-account": ["company-one", "company-two"]},
+            {"company-bound"},
+            {"same-name"},
+        )
+        self.assertEqual([item["action"] for item in plan],
+                         ["bind", "manual_review", "create", "manual_review"])
+        self.assertEqual(plan[0]["company_id"], "company-bound")
+        self.assertNotIn("company_id", plan[1],
+                         "name similarity never creates an automatic CRM link")
 
 
 if __name__ == "__main__":

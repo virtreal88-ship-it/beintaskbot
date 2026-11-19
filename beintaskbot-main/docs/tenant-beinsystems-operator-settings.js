@@ -79,10 +79,12 @@
       status.textContent = parts.join(' · ');
       const testButton=connection.querySelector('[data-test]');
       if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
+      const createCompaniesButton=connection.querySelector('[data-create-companies]');
+      if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Каждый Operator account можно связать с CRM-компанией только вручную через существующую форму.</p><div data-catalog aria-live="polite"></div>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Создание компаний — отдельное подтверждаемое действие только из свежего списка текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
       testControl.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const authForm = $(connection, '[data-operator-auth-form]');
@@ -108,6 +110,22 @@
               (result.activated ? '. Доступ к /user/me и /user/accounts подтверждён; подключение активировано.'
                 : '. Существующее подключение сохранено.');
             void loadCatalog();
+          } else if (result?.company_import) {
+            const counts=result.company_import;
+            const collisionCount=Number.isFinite(Number(counts.name_collision_count))
+              ? Math.max(0,Number(counts.name_collision_count)) : 0;
+            const collisionAccounts=(Array.isArray(counts.name_collision_accounts)
+              ? counts.name_collision_accounts : []).slice(0,20)
+              .map(account=>String(account).slice(0,240)).filter(Boolean);
+            const collisionDetails=collisionCount
+              ? ' Совпадение названия, требуется ручная проверка ('+collisionCount+')'+
+                (collisionAccounts.length ? ': '+collisionAccounts.join(', ') : '')+
+                (counts.name_collision_truncated ? ' …' : '')+'.'
+              : '';
+            message.textContent='Проверено аккаунтов: '+counts.checked+
+              ' · создано компаний: '+counts.created+
+              ' · повторно связано: '+counts.reused+
+              ' · ручная проверка: '+counts.manual_review+'.'+collisionDetails;
           } else {
             message.textContent = result?.integration?.pending_auth_received
               ? text.tokenPending : (result?.message || 'Готово.');
@@ -173,6 +191,11 @@
         request('/api/platform/integrations/beinsystems-operator',{action:'test'}));
       $(panel,'[data-import]').onclick = event => run(event.currentTarget, async () =>
         request('/api/platform/operator/accounts',{action:'import'}));
+      $(panel,'[data-create-companies]').onclick = event => run(event.currentTarget, async () => {
+        if(!(state.connected||state.configured))throw new Error('Сначала проверьте действующее подключение Operator.');
+        if(!window.confirm('Создать недостающие CRM-компании по свежему списку активного Operator? Совпадения названия отправятся на ручную проверку.'))return {message:'Отменено.'};
+        return request('/api/platform/operator/accounts',{action:'create_companies'});
+      });
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});
