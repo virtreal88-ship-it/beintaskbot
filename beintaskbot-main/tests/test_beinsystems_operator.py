@@ -51,8 +51,11 @@ class FakeHTTPErrorOpener:
     def __init__(self, status, payload):
         self.status = status
         self.response = FakeResponse(payload)
+        self.request = None
+        self.timeout = None
 
     def open(self, request, timeout):
+        self.request, self.timeout = request, timeout
         raise HTTPError(request.full_url, self.status, "Unauthorized", None, self.response)
 
 
