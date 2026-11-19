@@ -14,7 +14,7 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
   if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   if(value.includes('/dialogs/presence')){
    if(options.method==='POST'){postBody=JSON.parse(options.body);status=postBody.status;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:true}})};}
-   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:status!=='away'}})};
+   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:status!=='away',can_update:true}})};
   }
   if(value.includes('/dialogs?'))return{ok:true,json:async()=>({success:true,result:{dialogs:[row],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],attention_count:0,unread_count:0,total_count:1,next_offset:null}})};
   throw Error('Unexpected request '+value);
