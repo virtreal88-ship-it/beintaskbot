@@ -186,7 +186,8 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
         assert binding=={'company_id':str(f['company']),'company_name':'Synthetic Company','can_manage':True}
         rows=f['conn'].execute("""SELECT tenant_id::text,channel_id::text,conversation_id,company_id::text
           FROM saas_beinsystems_operator_dialog_company_bindings""").fetchall()
-        assert rows==[(f['profile']['tenant_id'],f['channel'],'client',str(f['company']))]
+        assert [tuple(row[key] for key in ('tenant_id','channel_id','conversation_id','company_id'))
+                for row in rows]==[(f['profile']['tenant_id'],f['channel'],'client',str(f['company']))]
         outsider=str(uuid.uuid4())
         with pytest.raises(operator.OperatorError) as denied:
             operator.set_dialog_company_binding(
