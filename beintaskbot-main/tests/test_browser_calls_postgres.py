@@ -126,7 +126,7 @@ def test_unanswered_native_inbound_call_is_persisted_as_idempotent_missed_dialog
     calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
     rows=db.execute('''SELECT id,direction,channel,message_type,raw FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND external_id=%s''',(A,'browser-call-missed:'+incoming['id']))
-    assert rows==[{'id':str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:browser-call-missed:'+incoming['id'])),
+    assert rows==[{'id':uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:browser-call-missed:'+incoming['id']),
       'direction':'system','channel':'connect:'+CA,'message_type':'call_missed',
       'raw':{'isVideo':False,'call_source':'whatsapp_calls'}}]
     db.commit()
@@ -142,7 +142,9 @@ def test_claimed_inbound_call_does_not_create_missed_dialog_event(managed):
     db,key,cfg=managed
     calls.sync(cfg,snapshot(2,active=[provider()]))
     incoming=calls.status(PROFILE)['calls'][0]
-    calls.action(PROFILE,command('reject',call_id=incoming['id']))
+    reject=command('reject',call_id=incoming['id'],channel_id=incoming['channel_id'],
+      conversation_id=incoming['conversation_id'],lead_id=incoming['lead_id'])
+    calls.action(PROFILE,reject)
     calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
     assert db.execute("SELECT id FROM saas_crm_messages WHERE message_type='call_missed'")==[]
     db.commit()
