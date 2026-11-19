@@ -42,7 +42,8 @@ window.fetch=async(path,options={})=>{
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
   else if(options.method==='POST'&&JSON.parse(options.body).action==='create_companies'){
     companyImports.push(JSON.parse(options.body));
-    result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,\n      name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
+    result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,
+      name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
     mockIntegration={...mockIntegration,pending_auth_me_verified:true};
