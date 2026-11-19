@@ -20,6 +20,8 @@ def projection(history_db,monkeypatch):
     with d.cursor() as cur:lifecycle.migrate(cur)
     for actor in (33,44):
         d.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,%s,'operator','Synthetic operator','[\"dialogs\",\"support\"]'::jsonb)",(A,actor))
+    for actor in (11,33,44):
+        d.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s::uuid,%s,'online',%s)",(A,actor,actor))
     policies={str(actor):{'access_scopes':{'dialogs':{'view':scope,'update':scope}}} for actor,scope in ((33,'self'),(44,'all'))}
     d.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s::uuid,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",(A,json.dumps(policies)))
     d.execute("INSERT INTO saas_dialog_source_members(tenant_id,provider,source_id,employee_id,updated_by) VALUES(%s::uuid,'connect',%s::uuid,33,11)",(A,CB))

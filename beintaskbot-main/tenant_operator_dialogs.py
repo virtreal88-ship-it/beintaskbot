@@ -993,11 +993,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
             inbound=_completion_inbound_snapshot(cur,tenant,rows,presence_only=not completion_preview) if rollout.enforced else {}
             workflows={}
+            presence_online=False
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
                 # Only entries matching already-authorized rows are projected.
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
+                from tenant_dialog_presence import is_online
+                presence_online=is_online(cur,tenant,int(profile['telegram_id']))
             for r in rows:
                 action_capabilities={}
                 # The legacy, unscoped capability path is a no-op; avoid its
@@ -1006,7 +1009,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
                     lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
-                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
+                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),_online=presence_online,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
             # Mode is a read-only view over already-authorized physical routes.

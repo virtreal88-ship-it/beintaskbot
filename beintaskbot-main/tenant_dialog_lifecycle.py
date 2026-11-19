@@ -258,7 +258,7 @@ def _targets(cur, tenant, policy, channel, actor):
 _UNSET_WORKFLOW=object()
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -266,9 +266,16 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     if not rollout.enforced or dialog.get('provider')!='connect': return dialog
     row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id']) if _workflow is _UNSET_WORKFLOW else _workflow
     state=(row or {}).get('state','waiting')
-    from tenant_dialog_presence import is_online
-    online=is_online(cur,tenant,actor)
     own=bool(row and row.get('operator_id')==actor)
+    if _online is None:
+        needs_presence=(state=='waiting' and bool(dialog.get('can_send'))) or state in {'closed','dismissed'}
+        if needs_presence:
+            from tenant_dialog_presence import is_online
+            online=is_online(cur,tenant,actor)
+        else:
+            online=False
+    else:
+        online=bool(_online)
     # Internal list-preview token only; mutation always revalidates the message.
     last={'id':_last_inbound} if _last_inbound else {}
     if details:
