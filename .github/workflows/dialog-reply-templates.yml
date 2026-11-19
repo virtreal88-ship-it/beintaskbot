@@ -1,0 +1,36 @@
+name: Dialog reply templates
+on:
+  pull_request:
+    paths:
+      - 'beintaskbot-main/tenant_dialog_reply_templates.py'
+      - 'beintaskbot-main/tenant_dialog_reply_templates_api.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
+      - 'beintaskbot-main/tests/test_dialog_reply_templates.py'
+      - 'beintaskbot-main/tests/test_dialog_reply_templates_ui.cjs'
+      - 'beintaskbot-main/tests/test_tenant_web_routes.py'
+      - '.github/workflows/dialog-reply-templates.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Python test dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Verify route catalogue and tenant permissions
+        run: python -m pytest -q --tb=short tests/test_dialog_reply_templates.py tests/test_tenant_web_routes.py
+      - name: Install DOM test dependency
+        run: npm install --prefix .support-test-deps --no-save jsdom@26
+      - name: Verify suggestions never send messages
+        run: NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_reply_templates_ui.cjs
