@@ -128,7 +128,7 @@ def begin(profile,phone,name):
             if old:
                 cur.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid FOR UPDATE',(tenant,source))
                 local=cur.fetchone()
-                if not local or local['active']:raise TenantLinearError('Отключите источник в резервной интеграции.',409)
+                if not local:raise TenantLinearError('Источник резервной интеграции не найден в компании.',409)
                 cur.execute('SELECT 1 FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,source))
                 if cur.fetchone():raise TenantLinearError('У номера уже есть сервер звонков; требуется проверка перехода без активных звонков.',409)
             else:
@@ -139,6 +139,19 @@ def begin(profile,phone,name):
         result=_request(_stored_connect_credentials(profile)['api_key'],'POST','/v1/channels/'+source+'/native-transfer',{'phone':phone.lstrip('+'),'migration':generation})
         if result.get('channelId')!=source or result.get('status')!='disabled':
             raise TenantLinearError('Старый отправитель не подтвердил остановку.',409)
+        # Disconnecting in Connect itself does not clear the Worker's local
+        # selection flag. Reconcile it only AFTER the transactional dispatch
+        # fence and a fresh exact-account status check, never from inventory.
+        rollout.legacy_disabled(profile,source,account)
+        with _connect() as conn,conn.cursor() as cur:
+            tenant,_=owner(cur,profile)
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('whatsapp-source-mode:'+tenant+':'+source,))
+            cur.execute('''UPDATE saas_connect_channels c SET active=FALSE,status='disconnected',updated_at=now()
+              FROM saas_whatsapp_onboarding o WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid
+                AND o.tenant_id=c.tenant_id AND o.channel_id=c.connect_channel_id
+                AND o.generation=%s AND o.account_jid=%s AND NOT o.fresh
+              RETURNING c.connect_channel_id''',(tenant,source,generation,account))
+            if not cur.fetchone():raise TenantLinearError('native_setup_changed',409)
     # Reuse the existing staged-source protocol, same immutable gateway/token.
     # Already serialized by this endpoint, so avoid a second tenant lock.
     rollout.stage.__wrapped__(profile,source,account,generation)

@@ -43,9 +43,13 @@ def test_fresh_number_retries_same_source_gateway_and_activates_exact_account(se
     assert db.execute('SELECT enabled,projection_enabled FROM saas_whatsapp_capture_generations')[0]=={'enabled':True,'projection_enabled':True};db.commit()
 
 
-def test_transfer_requires_disconnected_legacy_and_preserves_identity_history_permissions(setup,monkeypatch):
+@pytest.mark.parametrize('local_active',[False,True])
+def test_transfer_requires_disconnected_legacy_and_preserves_identity_history_permissions(setup,monkeypatch,local_active):
     db,account,legacy,remote=setup
     phone=account.split('@')[0]
+    db.execute('UPDATE saas_connect_channels SET active=%s WHERE tenant_id=%s AND connect_channel_id=%s',(local_active,A,CA));db.commit()
+    other=db.execute('SELECT * FROM saas_connect_channels WHERE tenant_id=%s',(B,));db.commit()
+    grants=db.execute('SELECT * FROM saas_dialog_source_members ORDER BY tenant_id,source_id,employee_id');db.commit()
     old={'id':CA,'phone':phone,'status':'connected'}
     monkeypatch.setattr(app,'legacy_inventory',lambda _:[old])
     with pytest.raises(TenantLinearError,match='Сначала отключите'):app.begin(PROFILE,phone,'Synthetic')
@@ -56,18 +60,38 @@ def test_transfer_requires_disconnected_legacy_and_preserves_identity_history_pe
     assert app.begin(PROFILE,phone,'Do not rename')['channel_id']==CA
     assert db.execute('SELECT fresh FROM saas_whatsapp_onboarding')[0]['fresh'] is False
     assert db.execute('SELECT id,external_id FROM saas_crm_messages ORDER BY id')==history;db.commit()
+    assert db.execute('SELECT active,status FROM saas_connect_channels WHERE tenant_id=%s AND connect_channel_id=%s',(A,CA))[0]=={'active':False,'status':'disconnected'}
+    assert db.execute('SELECT * FROM saas_connect_channels WHERE tenant_id=%s',(B,))==other
+    assert db.execute('SELECT * FROM saas_dialog_source_members ORDER BY tenant_id,source_id,employee_id')==grants;db.commit()
     assert legacy.call_args_list[0].args[2].endswith('/native-transfer')
 
 
-def test_transfer_failure_never_creates_gateway_or_enables_sender(setup,monkeypatch):
+@pytest.mark.parametrize('local_active',[False,True])
+def test_transfer_failure_never_creates_gateway_or_enables_sender(setup,monkeypatch,local_active):
     db,account,legacy,remote=setup
+    db.execute('UPDATE saas_connect_channels SET active=%s WHERE tenant_id=%s AND connect_channel_id=%s',(local_active,A,CA));db.commit()
+    before=db.execute('SELECT * FROM saas_connect_channels ORDER BY tenant_id,connect_channel_id');db.commit()
     monkeypatch.setattr(app,'legacy_inventory',lambda _:[{'id':CA,'phone':account.split('@')[0],'status':'disconnected'}])
     legacy.return_value={'status':'unknown'}
     with pytest.raises(TenantLinearError,match='не подтвердил остановку'):app.begin(PROFILE,account.split('@')[0],'')
     remote.assert_not_called()
+    assert db.execute('SELECT * FROM saas_connect_channels ORDER BY tenant_id,connect_channel_id')==before;db.commit()
     assert not db.execute('SELECT 1 FROM saas_whatsapp_native_routes');db.commit()
     row=app.inventory(PROFILE)['channels'][0]
     assert row['id']==CA and row['state']=='preparing' and row['activation_pending']
+
+
+@pytest.mark.parametrize('change',[{'status':'connected'},{'phone':'994100000999'},{'phoneConflict':True}])
+def test_transfer_does_not_clear_local_selection_without_exact_disabled_account(setup,monkeypatch,change):
+    db,account,legacy,remote=setup
+    phone=account.split('@')[0]
+    db.execute('UPDATE saas_connect_channels SET active=TRUE WHERE tenant_id=%s AND connect_channel_id=%s',(A,CA));db.commit()
+    monkeypatch.setattr(app,'legacy_inventory',lambda _:[{'id':CA,'phone':phone,'status':'disconnected'}])
+    legacy.side_effect=lambda key,method,path,*args: ({'channelId':CA,'status':'disabled'} if method=='POST' else {'id':CA,'phone':phone,'status':'disabled',**change})
+    with pytest.raises(TenantLinearError,match='native_legacy_not_disabled'):app.begin(PROFILE,phone,'')
+    assert db.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s AND connect_channel_id=%s',(A,CA))[0]['active'] is True
+    assert not db.execute('SELECT 1 FROM saas_whatsapp_native_routes');db.commit()
+    remote.assert_not_called()
 
 
 def test_new_source_can_send_without_connect_integration(setup):
