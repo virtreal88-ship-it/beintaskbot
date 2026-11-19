@@ -266,6 +266,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     if not rollout.enforced or dialog.get('provider')!='connect': return dialog
     row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id']) if _workflow is _UNSET_WORKFLOW else _workflow
     state=(row or {}).get('state','waiting')
+    from tenant_dialog_presence import is_online
+    online=is_online(cur,tenant,actor)
     own=bool(row and row.get('operator_id')==actor)
     # Internal list-preview token only; mutation always revalidates the message.
     last={'id':_last_inbound} if _last_inbound else {}
@@ -277,8 +279,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
-        'can_accept':state=='waiting' and rollout.admission_enabled and bool(dialog.get('can_send')),
-        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and own and _can_update is True,
+        'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
+        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and online and own and _can_update is True,
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
