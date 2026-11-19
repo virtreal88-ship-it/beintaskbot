@@ -221,8 +221,10 @@ def test_dialog_company_binding_is_local_route_and_tenant_scoped(operator_contex
 
 
 
-def test_dialog_company_binding_resolves_current_imported_account(operator_context_sql):
+def test_dialog_company_binding_resolves_current_imported_account(operator_context_sql,monkeypatch):
     import tenant_beinsystems_operator as operator
+    monkeypatch.setattr(operator,"_request_operator",
+        lambda *args,**kwargs: pytest.fail("dialog binding must remain local"))
     f=operator_context_sql
     f['conn'].execute("""DELETE FROM saas_beinsystems_operator_links
       WHERE tenant_id=%s::uuid AND local_entity_type='company'
@@ -236,8 +238,10 @@ def test_dialog_company_binding_resolves_current_imported_account(operator_conte
     assert binding['external_account']=='imported-current'
 
 
-def test_dialog_company_binding_refuses_ambiguous_accounts(operator_context_sql):
+def test_dialog_company_binding_refuses_ambiguous_accounts(operator_context_sql,monkeypatch):
     import tenant_beinsystems_operator as operator
+    monkeypatch.setattr(operator,"_request_operator",
+        lambda *args,**kwargs: pytest.fail("dialog binding must remain local"))
     f=operator_context_sql
     f['conn'].execute("""INSERT INTO saas_beinsystems_operator_company_imports
       VALUES(%s::uuid,'imported-different',%s::uuid,%s::uuid,'gen')""",
@@ -249,8 +253,10 @@ def test_dialog_company_binding_refuses_ambiguous_accounts(operator_context_sql)
     assert binding['external_account'] is None
 
 
-def test_dialog_company_binding_ignores_stale_and_other_tenant_accounts(operator_context_sql):
+def test_dialog_company_binding_ignores_stale_and_other_tenant_accounts(operator_context_sql,monkeypatch):
     import tenant_beinsystems_operator as operator
+    monkeypatch.setattr(operator,"_request_operator",
+        lambda *args,**kwargs: pytest.fail("dialog binding must remain local"))
     f=operator_context_sql
     tenant=f['profile']['tenant_id']
     f['conn'].execute("""DELETE FROM saas_beinsystems_operator_links
