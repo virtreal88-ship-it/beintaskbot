@@ -7,7 +7,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const page=await browser.newPage({viewport:{width,height:850}});
   const member={tenant_id:'synthetic-tenant',telegram_id:11,role:'owner'};
   const me={success:true,member,integrations:[{provider:'connect',status:'connected',management_actions:{view:true}}]};
-  let mutations=0,reads=0,paired=false,denied=false;
+  let mutations=0,reads=0,paired=false,denied=false,stopped=false;
   await page.route('https://app.invalid/**',async route=>{
    const url=new URL(route.request().url());let value={success:true};
    if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div id="chakra-integrations-root"></div>'});
@@ -19,9 +19,11 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
     if(route.request().method()==='POST'){
       const data=route.request().postDataJSON();mutations++;
       if(data.action==='begin')value={success:true,result:{channel_id:'source-new',phone:data.phone,state:'pairing',activation_pending:true,qr:'YWJj'}};
+      else if(data.action==='disconnect'||data.action==='disconnect_all'){assert.deepEqual(data.sources,['source-101']);stopped=true;value={success:true,result:{stopped:data.sources}};}
+      else if(data.action==='resume'){assert.equal(data.source,'source-101');stopped=false;value={success:true,result:{channel_id:'source-101',phone:'994102135101',state:'pairing',activation_pending:true}};}
       else {assert.equal(data.action,'activate');value={success:true,result:{channel_id:'source-new',phone:'994100000777',state:'ready',activation_pending:false}};}
     } else if(url.searchParams.has('source'))value={success:true,result:{channel_id:'source-new',phone:'994100000777',state:paired?'ready':'pairing',activation_pending:true,qr:paired?null:'YWJj'}};
-    else value={success:true,result:{channels:[{id:'source-101',name:'Texniki Dəstək',phone:'994102135101',state:'ready',messages_ready:true,calls_ready:true}]}};
+    else value={success:true,result:{channels:[{id:'source-101',name:'Texniki Dəstək',phone:'994102135101',state:stopped?'stopped':'ready',paused:stopped,messages_ready:!stopped,calls_ready:!stopped}]}};
    }
    return route.fulfill({json:value});
   });
@@ -39,6 +41,18 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.getByAltText('QR подключения WhatsApp').waitFor();assert.equal(mutations,1);
   paired=true;await page.getByText('Переписка и звонки подключены.',{exact:true}).waitFor({timeout:12000});
   assert.equal(mutations,2,'one begin and one activation only');
+  await page.getByRole('button',{name:'К списку номеров'}).click();
+  await page.getByRole('button',{name:'Отключить номер',exact:true}).click();
+  assert.equal(mutations,2,'opening confirmation is not a disconnect');
+  await page.getByRole('button',{name:'Отмена',exact:true}).click();
+  assert.equal(mutations,2,'cancel leaves source unchanged');
+  await page.getByRole('button',{name:'Отключить интеграцию',exact:true}).click();
+  await page.getByRole('button',{name:'Отключить',exact:true}).click();
+  await page.getByText('Номер отключён. История сохранена.',{exact:true}).waitFor();
+  assert.equal(mutations,3);
+  await page.getByRole('button',{name:'Подключить снова',exact:true}).click();
+  await page.getByText('Ожидаем подключение WhatsApp. Проверка обновляется автоматически.',{exact:true}).waitFor();
+  assert.equal(mutations,4,'resume existing source, no new begin');
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no mobile horizontal overflow');
   if(width===390){denied=true;await page.getByRole('button',{name:'К списку номеров'}).click();}
   else await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-invalid')));

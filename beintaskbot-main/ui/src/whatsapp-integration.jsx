@@ -6,6 +6,7 @@ export function WhatsAppIntegration({profile, onStatus}) {
   const [phone,setPhone]=useState(''),[name,setName]=useState('');
   const [pair,setPair]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [invalid,setInvalid]=useState(false);
+  const [confirm,setConfirm]=useState(null);
   const alive=useRef(false),generation=useRef(0),controllers=useRef(new Set());
   const owner=profile?.member?.role==='owner';
   const tenant=profile?.tenant?.id || profile?.member?.tenant_id;
@@ -71,17 +72,27 @@ export function WhatsAppIntegration({profile, onStatus}) {
   return <Stack gap="4" data-whatsapp-integration="true">
     <Text color="app.muted">Один QR для переписки и звонков. Connect остаётся отдельной резервной интеграцией.</Text>
     {error && <Box role="alert" p="3" borderWidth="1px" borderRadius="lg">{error}</Box>}
+    {confirm && <Box role="alertdialog" aria-label="Подтверждение отключения" p="4" borderWidth="1px" borderRadius="xl">
+      <Text fontWeight="700">{confirm.all?'Отключить все номера Ватсапп?':'Отключить номер '+confirm.name+'?'}</Text>
+      <Text mt="2">Переписка и звонки в Beintaskbot остановятся. История, записи и права сохранятся. Подключение можно включить снова здесь.</Text>
+      <Flex gap="2" mt="3"><Button disabled={busy} onClick={()=>run(async()=>{try{await request({action:confirm.all?'disconnect_all':'disconnect',sources:confirm.sources});setConfirm(null);}finally{await load();}})}>Отключить</Button>
+        <Button variant="outline" disabled={busy} onClick={()=>setConfirm(null)}>Отмена</Button></Flex>
+    </Box>}
     {!form ? <>
       <Flex gap="2" wrap="wrap">
         <Button onClick={()=>{setPair(null);setPhone('');setName('');setForm(true);setError('');}}>Подключить номер</Button>
         <Button variant="outline" disabled={busy} onClick={()=>run(load)}>Обновить</Button>
+        {channels.length>0 && <Button variant="outline" disabled={busy} onClick={()=>setConfirm({all:true,sources:channels.map(c=>c.id)})}>Отключить интеграцию</Button>}
       </Flex>
       {channels.length===0 && <Text color="app.muted">Подключённых номеров пока нет.</Text>}
       {channels.map(c=><Box key={c.id} p="4" borderWidth="1px" borderRadius="xl">
         <Flex justify="space-between" gap="3" wrap="wrap"><Box><Text fontWeight="700">{c.name}</Text><Text color="app.muted">+{c.phone}</Text></Box>
-          <Button size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{const value=await request(c.activation_pending?{action:'begin',phone:c.phone,name:c.name}:null,c.activation_pending?null:c.id);if(alive.current){setPair(value);setForm(true);}})}>{c.activation_pending?'Продолжить подключение':'Подключение'}</Button>
+          <Flex gap="2" wrap="wrap">
+          {c.state!=='stopping' && <Button size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{const data=c.paused?{action:'resume',source:c.id}:c.activation_pending?{action:'begin',phone:c.phone,name:c.name}:null;const value=await request(data,data?null:c.id);if(alive.current){setPair(value);setForm(true);}})}>{c.paused?'Подключить снова':c.activation_pending?'Продолжить подключение':'Подключение'}</Button>}
+          {c.state!=='stopped' && <Button size="sm" variant="outline" disabled={busy} onClick={()=>setConfirm({sources:[c.id],name:'+'+c.phone})}>{c.state==='stopping'?'Повторить отключение':'Отключить номер'}</Button>}
+          </Flex>
         </Flex>
-        <Flex gap="4" mt="2" wrap="wrap"><Text fontSize="sm">Переписка: {c.messages_ready?'подключена':c.activation_pending?'ожидает подключения':'недоступна'}</Text><Text fontSize="sm">Звонки: {c.calls_ready?'подключены':'недоступны'}</Text></Flex>
+        {c.paused?<Text mt="2" fontSize="sm">{c.state==='stopped'?'Номер отключён. История сохранена.':'Новые операции остановлены. Подтверждение отключения ещё не получено; повторите отключение.'}</Text>:<Flex gap="4" mt="2" wrap="wrap"><Text fontSize="sm">Переписка: {c.messages_ready?'подключена':c.activation_pending?'ожидает подключения':'недоступна'}</Text><Text fontSize="sm">Звонки: {c.calls_ready?'подключены':'недоступны'}</Text></Flex>}
       </Box>)}
     </> : <Box p="4" borderWidth="1px" borderRadius="xl">
       <Stack gap="3">

@@ -6,8 +6,82 @@ from aiohttp.test_utils import TestServer,TestClient
 from supervisor import Supervisor,make_app,binding
 
 SOURCE=str(uuid.UUID(int=1));TOKEN='s'*48
+
+@pytest.mark.asyncio
+async def test_source_stop_is_durable_scoped_idempotent_and_requires_explicit_resume(tmp_path):
+    supervisor,client=await client_for(tmp_path)
+    headers={'Authorization':'Bearer '+TOKEN};endpoint='/v1/sources/'+SOURCE
+    payload={**BINDING,'messaging_generation':'g1'}
+    scope={'tenant':BINDING['tenant_id'],'source':BINDING['channel_id'],'account':BINDING['account_jid'],'generation':'g1'}
+    try:
+        await client.post(endpoint,json=payload,headers=headers)
+        original=json.loads((tmp_path/SOURCE/'source.json').read_text())
+        supervisor.engine.return_value={'diagnostics':{'active_registry_calls':0,'provider_start_requested':0,'audio_attached':0},
+            'messaging_diagnostics':{'unknown_sends':0,'pending_events':0}}
+        assert (await client.post(endpoint+'/disconnect',json={'scope':{**scope,'generation':'other'}},headers=headers)).status==403
+        assert (await client.post(endpoint+'/disconnect',json={'scope':scope},headers=headers)).status==200
+        saved=json.loads((tmp_path/SOURCE/'source.json').read_text())
+        assert saved=={**original,'disabled':True}
+        assert (await (await client.get(endpoint,headers=headers)).json())['stopped']
+        assert (await client.post(endpoint+'/messages',json={'scope':scope},headers=headers)).status==409
+        assert (await client.post(endpoint,json=payload,headers=headers)).status==409
+        supervisor.engine.reset_mock()
+        assert (await client.post(endpoint+'/disconnect',json={'scope':scope},headers=headers)).status==200
+        supervisor.engine.assert_not_called()
+        assert (await client.post(endpoint,json={**payload,'resume':True},headers=headers)).status==200
+        assert json.loads((tmp_path/SOURCE/'source.json').read_text())=={**original,'disabled':False}
+    finally:await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key',['active_registry_calls','unknown_sends','pending_events'])
+async def test_source_stop_refuses_live_or_unknown_work(tmp_path,key):
+    supervisor,client=await client_for(tmp_path)
+    headers={'Authorization':'Bearer '+TOKEN};endpoint='/v1/sources/'+SOURCE
+    scope={'tenant':BINDING['tenant_id'],'source':BINDING['channel_id'],'account':BINDING['account_jid'],'generation':'g1'}
+    try:
+        await client.post(endpoint,json={**BINDING,'messaging_generation':'g1'},headers=headers)
+        status={'diagnostics':dict(active_registry_calls=0,provider_start_requested=0,audio_attached=0),
+                'messaging_diagnostics':dict(unknown_sends=0,pending_events=0)}
+        status['diagnostics' if key=='active_registry_calls' else 'messaging_diagnostics'][key]=1
+        supervisor.engine.return_value=status
+        assert (await client.post(endpoint+'/disconnect',json={'scope':scope},headers=headers)).status==409
+        assert not supervisor.sources[SOURCE]['data'].get('disabled')
+    finally:await client.close()
+
 BINDING={'tenant_id':str(uuid.UUID(int=2)),'channel_id':str(uuid.UUID(int=3)),
          'account_jid':'123456789@s.whatsapp.net','gateway_token':'x'*48}
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_process_exit_and_saved_stop_survives_restart(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    supervisor,client=await client_for(tmp_path)
+    headers={'Authorization':'Bearer '+TOKEN};endpoint='/v1/sources/'+SOURCE
+    try:
+        await client.post(endpoint,json={**BINDING,'messaging_generation':'g1'},headers=headers)
+        entry=supervisor.sources[SOURCE];exited=asyncio.Event()
+        def terminate():
+            assert json.loads((tmp_path/SOURCE/'source.json').read_text())['disabled']
+            exited.set()
+        async def process_owner():
+            await exited.wait()
+            entry['process']=None
+        entry['process']=SimpleNamespace(returncode=None,terminate=terminate)
+        entry['task']=asyncio.create_task(process_owner())
+        supervisor.engine.return_value={'diagnostics':dict(active_registry_calls=0,provider_start_requested=0,audio_attached=0),'messaging_diagnostics':dict(unknown_sends=0,pending_events=0)}
+        scope={'tenant':BINDING['tenant_id'],'source':BINDING['channel_id'],'account':BINDING['account_jid'],'generation':'g1'}
+        assert (await client.post(endpoint+'/disconnect',json={'scope':scope},headers=headers)).status==200
+        assert entry['task'].done() and entry['process'] is None
+        saved=json.loads((tmp_path/SOURCE/'source.json').read_text())
+        restarted=Supervisor(tmp_path,TOKEN,'https://worker.invalid','never-executed')
+        restarted.validate_saved(SOURCE,saved)
+        restarted.sources[SOURCE]={'data':saved,'task':None,'process':None}
+        restarted.configure=Mock(side_effect=AssertionError('disabled source must not launch'))
+        restarted.launch(SOURCE)
+        assert restarted.sources[SOURCE]['task'] is None
+    finally:await client.close()
 
 
 async def client_for(tmp_path):

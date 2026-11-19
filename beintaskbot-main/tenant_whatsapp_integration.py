@@ -77,6 +77,10 @@ def inventory(profile):
             'state':'preparing','messages_ready':False,'calls_ready':False,'activation_pending':True} for r in (cur.fetchall() if ready else [])]
     def status(item):
         source,row=item
+        if row.get('paused'):
+            return {'id':source,'name':row['name'],'phone':row['account_jid'].split('@')[0],
+                'state':'stopping' if row['active'] else 'stopped','messages_ready':False,'calls_ready':False,
+                'paused':True,'activation_pending':False}
         try:
             value=sources.source_status(profile,source)
             ready=value['state']=='ready' and row['enabled']
@@ -110,6 +114,8 @@ def begin(profile,phone,name):
         existing=[(key,row) for key,row in rollout.modes(cur,tenant).items() if row['account_jid']==account]
     if existing and existing[0][1]['enabled']:
         return pairing(profile,existing[0][0])
+    if existing and existing[0][1].get('paused'):
+        raise TenantLinearError('Номер отключён. Нажмите «Подключить снова» в его карточке.',409)
     if pending:
         source=str(pending['channel_id']);generation=pending['generation']
     else:

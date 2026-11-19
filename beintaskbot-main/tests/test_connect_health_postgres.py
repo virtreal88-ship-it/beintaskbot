@@ -19,6 +19,7 @@ from psycopg.rows import dict_row
 import pytest
 import tenant_connect_health as health
 import tenant_connect_transport as transport
+import tenant_whatsapp_native_health as native
 
 FIXTURE=json.loads((Path(__file__).parent/'fixtures/connect-health-signed.json').read_text())
 CHANNEL=FIXTURE['expectedData']['channelId']
@@ -48,6 +49,7 @@ def db(monkeypatch):
         conn.execute("INSERT INTO saas_tenant_integrations VALUES(%s,'connect','connected',%s)",(tenant,fernet.encrypt(json.dumps({'webhook_secret':FIXTURE['secret'],'api_key':'test-only-api','webhook_id':'00000000-0000-4000-8000-000000000003'}).encode())))
         health.ensure_schema(conn)
     monkeypatch.setattr(transport,'_connect',connect);monkeypatch.setattr(transport,'_fernet',lambda:fernet)
+    monkeypatch.setattr(native,'_connect',connect)
     try:yield SimpleNamespace(connect=connect,tenant=tenant,channel=CHANNEL)
     finally:
         with psycopg.connect(dsn) as conn:conn.execute('DROP SCHEMA '+schema+' CASCADE')
@@ -63,6 +65,35 @@ def race(fn,count=8):
     barrier=Barrier(count)
     def run(_):barrier.wait(timeout=10);return fn()
     with ThreadPoolExecutor(max_workers=count) as pool:return list(pool.map(run,range(count)))
+
+
+def test_native_sampling_reservation_race_expired_token_and_generation(db):
+    account='994100000001@s.whatsapp.net';gateway=str(uuid4())
+    with db.connect() as conn:
+        conn.execute('CREATE TABLE saas_whatsapp_native_routes(tenant_id UUID,channel_id UUID,generation TEXT,enabled BOOLEAN,legacy_fallback BOOLEAN)')
+        conn.execute('CREATE TABLE saas_whatsapp_capture_generations(tenant_id UUID,channel_id UUID,generation TEXT,gateway_id UUID,account_jid TEXT,enabled BOOLEAN)')
+        conn.execute('CREATE TABLE saas_browser_call_sources(tenant_id UUID,channel_id UUID,gateway_id UUID,account_jid TEXT,enabled BOOLEAN)')
+        conn.execute("INSERT INTO saas_whatsapp_native_routes VALUES(%s,%s,'g1',TRUE,FALSE)",(db.tenant,db.channel))
+        conn.execute("INSERT INTO saas_whatsapp_capture_generations VALUES(%s,%s,'g1',%s,%s,TRUE)",(db.tenant,db.channel,gateway,account))
+        conn.execute('INSERT INTO saas_browser_call_sources VALUES(%s,%s,%s,%s,TRUE)',(db.tenant,db.channel,gateway,account))
+    jobs=[job for batch in race(native.reserve) for job in batch]
+    assert len(jobs)==1
+    old=jobs[0]
+    with db.connect() as conn:
+        conn.execute("UPDATE saas_connect_health SET state=state||jsonb_build_object('nativePollStartedAt',now()-interval '3 minutes')")
+    replacement=native.reserve()[0]
+    data={'connected':True,'account_jid':account,'messaging_generation':'g1'}
+    assert not native.apply(old,data)
+    assert native.apply(replacement,data)
+    assert native.reserve()==[]
+    assert rows(db,'saas_connect_health')[0]['state']['status']=='connected'
+    with db.connect() as conn:
+        conn.execute("UPDATE saas_connect_health SET state=state||jsonb_build_object('nativeCheckedAt',now()-interval '3 minutes')")
+    pending=native.reserve()[0]
+    with db.connect() as conn:conn.execute('UPDATE saas_whatsapp_native_routes SET enabled=FALSE')
+    assert not native.apply(pending,{'connected':False,'account_jid':account,'messaging_generation':'g1'})
+    health.prepare()
+    assert rows(db,'saas_connect_health_notices')==[]
 
 
 def rows(db,table):

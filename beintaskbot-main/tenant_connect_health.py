@@ -141,12 +141,17 @@ def _queue(cur, tenant, channel, incident, kind):
     return True
 
 
-def record(cur, tenant, channel, data, now):
+def record(cur, tenant, channel, data, now, *, origin=None):
     """Called only after HMAC verification and active tenant/channel validation."""
     cur.execute('''INSERT INTO saas_connect_health(tenant_id,channel_id) VALUES(%s::uuid,%s::uuid)
       ON CONFLICT DO NOTHING''', (tenant, channel))
     cur.execute('SELECT state FROM saas_connect_health WHERE tenant_id=%s::uuid AND channel_id=%s::uuid FOR UPDATE', (tenant, channel))
-    state, recovered = observe(cur.fetchone()['state'], data['status'], data['observedAt'], now)
+    previous=cur.fetchone()['state']
+    origin=origin or {'provider':'connect'}
+    # A new protocol generation never inherits a prior sender's incident.
+    if previous.get('transport',{'provider':'connect'})!=origin:previous={}
+    state, recovered = observe(previous, data['status'], data['observedAt'], now)
+    state['transport']=origin
     cur.execute('UPDATE saas_connect_health SET state=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',
                 (json.dumps(state), tenant, channel))
     if recovered:
@@ -188,6 +193,9 @@ def ingest(raw, signature, event):
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE FOR SHARE', (tenant, channel))
             if not cur.fetchone():
                 return False
+            from tenant_whatsapp_native_health import authority
+            if authority(cur,tenant,channel)['provider']!='connect':
+                return False
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant, str(event['id'])))
             if not cur.fetchone():
                 return False
@@ -223,6 +231,8 @@ def prepare():
               ORDER BY h.updated_at LIMIT 50 FOR UPDATE OF h SKIP LOCKED''', (list(tenants),))
             for row in cur.fetchall():
                 state = row['state']
+                from tenant_whatsapp_native_health import current
+                if not current(cur,str(row['tenant_id']),str(row['channel_id']),state):continue
                 # Rotate bounded scan fairly even if early rows are not yet due
                 # or their owners have not linked Telegram.
                 cur.execute('UPDATE saas_connect_health SET updated_at=now() WHERE tenant_id=%s AND channel_id=%s',
@@ -255,6 +265,8 @@ def claim():
             allowed = (str(item['tenant_id']) in allowed_tenants() and item['active']
                        and _owner(cur, str(item['tenant_id'])) == item['recipient_id'])
             state = item['state']
+            from tenant_whatsapp_native_health import current
+            allowed = allowed and current(cur,str(item['tenant_id']),str(item['channel_id']),state)
             if item['kind'] == 'down':
                 allowed = allowed and state.get('status') in BAD and state.get('incidentId') == str(item['incident_id'])
                 if allowed and not debounce_elapsed(state, datetime.now(timezone.utc)):
@@ -303,9 +315,27 @@ def notice(item):
     title = ('WhatsApp bağlantısı bərpa olunduğunu bildirir. Mesajların çatdırılması ayrıca yoxlanmalıdır.'
              if item['kind'] == 'recovered' else
              'Təcili: WhatsApp bağlantısında problem var. Yeni mesajlar CRM-ə çatmaya bilər. Bağlantını yoxlayın.')
+    if item['kind']=='down' and item.get('state',{}).get('reason')=='pairing_required':
+        title+=' WhatsApp cihazın bağlantısını ləğv edib. «Ватсапп» inteqrasiyasında QR kodu yenidən skan edin.'
     return '\n\n'.join((title, 'Şirkət: ' + str(item['tenant_name'])[:160],
                          'Kanal: ' + str(item['channel_name'] or item['channel_id'])[:160],
                          'https://crm.pro.az/app'))
+
+
+def revalidate(item):
+    from tenant_connect_transport import _connect
+    from tenant_whatsapp_native_health import current
+    with _connect() as conn,conn.cursor() as cur:
+        cur.execute('''SELECT h.state,c.active FROM saas_connect_health h JOIN saas_connect_channels c
+          ON c.tenant_id=h.tenant_id AND c.connect_channel_id=h.channel_id
+          WHERE h.tenant_id=%s AND h.channel_id=%s''',key(item)[:2])
+        row=cur.fetchone()
+        if (not row or not row['active'] or _owner(cur,str(item['tenant_id']))!=item['recipient_id']
+                or not current(cur,str(item['tenant_id']),str(item['channel_id']),row['state'])):return False
+        state=row['state']
+        field='incidentId' if item['kind']=='down' else 'recoveredIncidentId'
+        return state.get(field)==str(item['incident_id']) and (
+            state.get('status') in BAD if item['kind']=='down' else state.get('status')=='connected')
 
 
 async def deliver(bot, logger):
@@ -313,6 +343,8 @@ async def deliver(bot, logger):
     if os.environ.get('CONNECT_HEALTH_ALERTS_ENABLED', '').lower() != 'true' or not allowed_tenants():
         return
     from tenant_notice_transport import attempt
+    from tenant_whatsapp_native_health import collect
+    await asyncio.to_thread(collect)
     await asyncio.to_thread(prepare)
     for _ in range(10):
         item = await asyncio.to_thread(claim)
@@ -322,7 +354,8 @@ async def deliver(bot, logger):
             continue
         # Re-read rollout authorization immediately before the external send,
         # not only when the pending notice was prepared or claimed.
-        if str(item['tenant_id']) not in allowed_tenants() or os.environ.get('CONNECT_HEALTH_ALERTS_ENABLED', '').lower() != 'true':
+        if (str(item['tenant_id']) not in allowed_tenants() or os.environ.get('CONNECT_HEALTH_ALERTS_ENABLED', '').lower() != 'true'
+                or not await asyncio.to_thread(revalidate,item)):
             await asyncio.to_thread(finish, item, skipped=True)
             continue
         result = await attempt(item, 'telegram', bot, text=notice, parts=lambda text: [text])

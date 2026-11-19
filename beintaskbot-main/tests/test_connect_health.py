@@ -113,13 +113,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(state['incidentId'],self.observe(restored,'error',100)[0]['incidentId'])
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.collect=patch('tenant_whatsapp_native_health.collect').start()
+        self.revalidate=patch.object(health,'revalidate',return_value=True).start()
+        self.addCleanup(patch.stopall)
     async def test_disabled_does_not_prepare_or_send(self):
         with patch.dict('os.environ',{},clear=True), patch.object(health,'prepare') as prepare:
             bot=AsyncMock(); await health.deliver(bot,Mock())
             prepare.assert_not_called();bot.send_message.assert_not_called()
 
     async def test_uncertain_delivery_checkpoint_no_retry(self):
-        item={'send':True,'tenant_id':TENANT,'recipient_id':42,'kind':'down','tenant_name':'Tenant','channel_name':'Channel'}
+        item={'send':True,'tenant_id':TENANT,'recipient_id':42,'kind':'down','tenant_name':'Tenant','channel_name':'Channel','state':{}}
         bot=AsyncMock();bot.send_message.side_effect=TimeoutError()
         with patch.dict('os.environ',{'CONNECT_HEALTH_ALERTS_ENABLED':'true','CONNECT_HEALTH_ALERT_TENANT_IDS':TENANT}), patch.object(health,'prepare'), patch.object(health,'claim',side_effect=[item,None]), patch.object(health,'finish') as finish:
             await health.deliver(bot,Mock())
