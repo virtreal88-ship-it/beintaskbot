@@ -21,7 +21,8 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
    if(!value.includes('/api/platform/ai/dialogs/reply-templates'))throw new Error('unexpected non-template request: '+value);
    if((options.method||'GET')==='GET'){
      const tenant=new URL(value,'https://crm.test').searchParams.get('expected_tenant_id');
-     return{ok:true,json:async()=>({success:true,result:{available:true,templates:tenant===tenantA?initial:[],allowed_visibility:['personal','team']}})};
+     if(tenant===tenantB)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};
+     return{ok:true,json:async()=>({success:true,result:{available:true,templates:initial,allowed_visibility:['personal','team']}})};
    }
    const body=JSON.parse(options.body);
    return{ok:true,json:async()=>({success:true,result:{id:'t2',name:body.name,body:body.body,visibility:body.visibility,version:1,can_edit:true}})};
@@ -58,6 +59,7 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  w.tenantProfileSnapshot=profile(tenantB);
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:w.tenantProfileSnapshot}));await tick();await tick();
  assert.ok(calls.some(call=>call.method==='GET'&&call.url.includes(tenantB)),'tenant changes reload only that tenant');
+ assert.equal(w.document.querySelector('#operatorReplyTemplatesOpen'),null,'pilot control is hidden outside the configured BeinSystems workspace');
  input.value='welcome';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();
  assert.equal(w.document.querySelector('.operator-reply-template-suggestions button'),null,'old tenant templates are cleared');
  w.document.dispatchEvent(new w.CustomEvent('tenant-chat-close'));await tick();
