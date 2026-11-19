@@ -316,7 +316,7 @@ class Supervisor:
         expected={'tenant':b['tenant_id'],'source':b['channel_id'],'account':b['account_jid'],'generation':cfg['generation']}
         if not isinstance(payload,dict) or payload.get('scope')!=expected:
             raise web.HTTPForbidden(text='native_message_scope_denied')
-        suffix=next((part for part in ('/media','/status','/group','/avatar') if request.path.endswith(part)),'')
+        suffix=next((part for part in ('/media','/status','/group','/avatar','/contact') if request.path.endswith(part)),'')
         if self.client is None:raise web.HTTPServiceUnavailable(text='calls_service_unavailable')
         # No retries: a lost response may follow an accepted provider send.
         async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages'+suffix,
@@ -426,6 +426,7 @@ def make_app(supervisor):
     app.router.add_post('/v1/sources/{source}/messages/media',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/group',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/avatar',supervisor.messages)
+    app.router.add_post('/v1/sources/{source}/messages/contact',supervisor.messages)
     app.router.add_get('/v1/sources/{source}/audio/{provider}/{call}',supervisor.audio)
     app.on_startup.append(supervisor.start);app.on_cleanup.append(supervisor.stop)
     return app

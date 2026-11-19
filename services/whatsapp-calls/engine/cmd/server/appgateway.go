@@ -226,6 +226,19 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 		}
 	}
 	info := sess.info()
+	// Enrich after releasing the broker lock. Local identity lookup cannot hold
+	// up media/provider callbacks, and the whole batch has a bounded deadline.
+	identityCtx, identityCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	for _, rows := range [][]map[string]any{active, ended} {
+		for _, item := range rows {
+			if item["direction"] == "inbound" && identityCtx.Err() == nil {
+				if identity := g.caller(identityCtx, sess, item["peer_jid"].(string)); identity != nil {
+					item["caller"] = identity
+				}
+			}
+		}
+	}
+	identityCancel()
 	g.seq++
 	result := map[string]any{"boot_id": g.boot, "seq": g.seq, "connected": info.State == "open" && sess.transportReady() && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account, "active": active, "ended": ended}
 	if g.cfg.Managed {

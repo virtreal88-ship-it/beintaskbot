@@ -371,6 +371,9 @@ def sync(c,data):
             if not isinstance(item,dict) or not ID.fullmatch(item['provider_id']) or not valid_peer:
                 raise ValueError()
             if item['direction'] not in {'inbound','outbound'} or item['state'] not in {'ringing','connected','ended'}:raise ValueError()
+            if 'caller' in item:
+                from tenant_call_identity import valid
+                if not c.get('managed') or item['direction']!='inbound' or not valid(item['peer_jid'],item['caller']):raise ValueError()
         for result in results:
             uuid.UUID(result['id'])
             if type(result.get('ok')) is not bool or len(_json(result))>26000:raise ValueError()
@@ -428,6 +431,9 @@ def sync(c,data):
                   RETURNING id,tenant_id,channel_id,conversation_id,lead_id,direction,actor_id,ended_at''',
                   (c['tenant_id'],c['gateway_id'],boot,item['provider_id'],item['peer_jid']))
                 ended_call=cur.fetchone()
+                if ended_call and c.get('managed') and item.get('caller'):
+                    from tenant_call_identity import enrich
+                    enrich(cur,c,item['peer_jid'],item['caller'],expected=ended_call['conversation_id'])
                 if ended_call and ended_call['direction']=='inbound' and ended_call['actor_id'] is None:
                     # A live inbound call that ends without an employee claiming
                     # it is a missed-call timeline event. The deterministic ID
@@ -448,6 +454,9 @@ def sync(c,data):
                 if row:
                     if str(row['boot_id'])!=boot or row['peer_jid']!=item['peer_jid']:raise TenantLinearError('gateway_call_mismatch',409)
                     if row['state'] in FINAL:continue
+                    if c.get('managed') and item.get('caller'):
+                        from tenant_call_identity import enrich
+                        enrich(cur,c,item['peer_jid'],item['caller'],expected=row['conversation_id'])
                     if row['state'] not in {'incoming','ending','unknown'}:
                         cur.execute('UPDATE saas_browser_calls SET state=%s,updated_at=now() WHERE id=%s::uuid',(item['state'],str(row['id'])))
                 elif item['direction']=='inbound':
@@ -456,7 +465,7 @@ def sync(c,data):
                     if c.get('managed'):
                         from tenant_call_sources import route as exact_route
                         if not data['connected']:continue
-                        target=exact_route(cur,c,peer=item['peer_jid'],create_incoming=True)
+                        target=exact_route(cur,c,peer=item['peer_jid'],create_incoming=True,caller=item.get('caller'))
                     else:target=c['routes'][item['peer_jid']]
                     incoming_id=uuid.uuid4()
                     cur.execute('''INSERT INTO saas_browser_calls(id,tenant_id,gateway_id,boot_id,channel_id,conversation_id,lead_id,peer_jid,
