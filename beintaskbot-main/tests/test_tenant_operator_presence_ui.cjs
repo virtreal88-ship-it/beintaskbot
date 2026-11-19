@@ -21,7 +21,10 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  };
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await tick();await w.tenantOperator.refresh();await tick();
  const button=w.document.getElementById('operatorPresenceOpen');
+ assert.ok(button&&button.hidden,'status is not fetched before the user opens tools');
+ const menu=w.document.getElementById('operatorToolsMenu');menu.querySelector('summary').click();await tick();
  assert.ok(button&&!button.hidden,'current employee status is available in the tools menu');
+ assert.equal(getCalls,1,'the menu loads one tenant-scoped status snapshot');
  assert.match(button.textContent,/Away|Отошёл|Kənarda/);
  button.click();await tick();
  assert.ok(w.document.getElementById('operatorPresenceModal'),'status control opens an accessible dialog');

@@ -673,9 +673,9 @@
     $('operatorCompleteAll').onclick=completeAllDialogs;
     $('operatorMarkAllRead').onclick=async()=>{const button=$('operatorMarkAllRead');if(markAllReadBusy||!hasRight('dialogs'))return;if(!window.confirm(t('markAllReadConfirm')))return;markAllReadBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;try{const result=await api('dialogs/read-all','POST',{});listFlight=null;lastListAt=0;const refreshed=await refresh(false,false,{suppressRead:true});const remaining=Number(refreshed?.unread_count);notice(Number.isFinite(remaining)?t('markAllReadDone').replace('{count}',String(result.updated_dialogs||0)).replace('{remaining}',String(remaining)):t('markAllReadProcessed').replace('{count}',String(result.updated_dialogs||0)));}catch(error){notice(error.message||t('error'));}finally{markAllReadBusy=false;if(button.isConnected)button.disabled=false;};};
     $('operatorPresenceOpen').onclick=()=>{if(!presenceAvailable)return;$('operatorToolsMenu').open=false;openPresenceModal();};
+    $('operatorToolsMenu').addEventListener('toggle',()=>{if($('operatorToolsMenu').open)void loadPresenceStatus();});
     document.addEventListener('tenant-language',paintPresenceButton);
-    document.addEventListener('tenant-profile',()=>{presenceAvailable=false;currentPresence='away';const button=$('operatorPresenceOpen');if(button)button.hidden=true;void loadPresenceStatus();});
-    void loadPresenceStatus();
+    document.addEventListener('tenant-profile',()=>{presenceAvailable=false;currentPresence='away';const button=$('operatorPresenceOpen');if(button)button.hidden=true;if($('operatorToolsMenu')?.open)void loadPresenceStatus();});
     // This is an explicit browser permission only; Web Push enrollment remains in profile settings.
     $('operatorNotificationToggle').onclick=requestBrowserNoticePermission;updateBrowserNoticeButton();
     $('operatorSoundToggle').onclick=async()=>{if(!soundEnabled){soundEnabled=true;await unlockMessageSound();}else if(!soundUnlocked){await unlockMessageSound();}else soundEnabled=false;try{localStorage.setItem(soundPrefKey(),soundEnabled?'on':'off');}catch{}updateSoundButton();};
