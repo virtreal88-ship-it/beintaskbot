@@ -77,6 +77,46 @@ def test_incoming_claim_recording_exact_route_and_replay(gateway):
     row=db.execute('SELECT direction,message_type FROM saas_crm_messages WHERE message_type=\'call_recording\'');db.commit()
     assert row==[{'direction':'system','message_type':'call_recording'}]
 
+
+def test_unanswered_incoming_call_creates_readable_missed_timeline_event_once(gateway,monkeypatch):
+    db,key,cfg=gateway
+    import tenant_platform
+    import tenant_operator_dialogs as dialogs
+    monkeypatch.setattr(dialogs,'_connect',lambda:db)
+    monkeypatch.setattr(tenant_platform,'_connect',lambda:db)
+    calls.sync(cfg,snapshot(2,active=[provider()]))
+    incoming=calls.status(PROFILE)['calls'][0]
+    calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
+    event=db.execute('''SELECT id,direction,channel,message_type FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s''',(A,'browser-call-missed:'+incoming['id']))
+    assert event==[{'id':str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:browser-call-missed:'+incoming['id'])),
+      'direction':'system','channel':'connect:'+CA,'message_type':'call_missed'}]
+    db.commit()
+    listing=dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)
+    dialog=next(row for row in listing['dialogs'] if row['lead_id']==41)
+    assert dialog['unread_count']==listing['unread_count']==1
+    page=dialogs.history(PROFILE,'connect',41,CA,CONVERSATION)
+    assert page['read_through_message_id']==event[0]['id']
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+      conversation_id=CONVERSATION,message_id=page['read_through_message_id']))
+    assert next(row for row in dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+CA)['dialogs']
+      if row['lead_id']==41)['unread_count']==0
+
+    calls.sync(cfg,snapshot(4,ended=[provider('ended')]))
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s",
+      (A,'browser-call-missed:'+incoming['id']))==[{'n':1}]
+    db.commit()
+
+
+def test_employee_claimed_and_rejected_incoming_call_is_not_missed(gateway):
+    db,key,cfg=gateway
+    calls.sync(cfg,snapshot(2,active=[provider()]))
+    incoming=calls.status(PROFILE)['calls'][0]
+    calls.action(PROFILE,command('reject',call_id=incoming['id']))
+    calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
+    assert db.execute("SELECT id FROM saas_crm_messages WHERE message_type='call_missed'")==[]
+    db.commit()
+
 def test_tenant_source_member_consent_and_signature_boundaries(gateway):
     db,key,cfg=gateway
     for change in ({'channel_id':CB},{'lead_id':42},{'conversation_id':'another@s.whatsapp.net'},{'consent_confirmed':False}):

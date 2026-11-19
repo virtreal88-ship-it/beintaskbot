@@ -1,6 +1,7 @@
 """Independent native PostgreSQL connections; disposable localhost database only."""
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event, current_thread
+import uuid
 import pytest
 import psycopg
 from psycopg.rows import dict_row
@@ -114,3 +115,36 @@ def test_two_employees_cannot_both_accept_new_incoming_after_close(managed,monke
     assert row['state']=='starting' and workflow=={'operator_id':row['actor_id'],'state':'accepted'}
     assert len(db.execute("SELECT id FROM saas_browser_call_commands WHERE op='accept'"))==1
     assert len(db.execute('SELECT id FROM saas_dialog_episodes'))==1;db.commit()
+
+
+def test_unanswered_native_inbound_call_is_persisted_as_idempotent_missed_dialog_event(managed):
+    db,key,cfg=managed
+    calls.sync(cfg,snapshot(2,active=[provider()]))
+    incoming=calls.status(PROFILE)['calls'][0]
+    assert incoming['state']=='incoming'
+
+    calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
+    rows=db.execute('''SELECT id,direction,channel,message_type,raw FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s''',(A,'browser-call-missed:'+incoming['id']))
+    assert rows==[{'id':uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:browser-call-missed:'+incoming['id']),
+      'direction':'system','channel':'connect:'+CA,'message_type':'call_missed',
+      'raw':{'isVideo':False,'call_source':'whatsapp_calls'}}]
+    db.commit()
+
+    # Replayed snapshots may repeat the same ended call; timeline identity is stable.
+    calls.sync(cfg,snapshot(4,ended=[provider('ended')]))
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s",
+      (A,'browser-call-missed:'+incoming['id']))==[{'n':1}]
+    db.commit()
+
+
+def test_claimed_inbound_call_does_not_create_missed_dialog_event(managed):
+    db,key,cfg=managed
+    calls.sync(cfg,snapshot(2,active=[provider()]))
+    incoming=calls.status(PROFILE)['calls'][0]
+    reject=command('reject',call_id=incoming['id'],channel_id=incoming['channel_id'],
+      conversation_id=incoming['conversation_id'],lead_id=incoming['lead_id'])
+    calls.action(PROFILE,reject)
+    calls.sync(cfg,snapshot(3,ended=[provider('ended')]))
+    assert db.execute("SELECT id FROM saas_crm_messages WHERE message_type='call_missed'")==[]
+    db.commit()
