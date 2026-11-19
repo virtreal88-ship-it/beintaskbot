@@ -1,6 +1,45 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {Box, Button, Flex, Input, Stack, Text} from '@chakra-ui/react';
 
+const copy = {
+  ru: {
+    intro: 'Один QR для переписки и звонков. Connect остаётся отдельной резервной интеграцией.',
+    connect: 'Подключить номер', refresh: 'Обновить', name: 'Имя', number: 'Номер', pipeline: 'Воронка', status: 'Статус', actions: 'Действия',
+    noNumbers: 'Подключённых номеров пока нет.', messagesReady: 'Переписка подключена', messagesPending: 'Ожидает подключения', messagesUnavailable: 'Переписка недоступна',
+    callsReady: 'Звонки подключены', callsUnavailable: 'Звонки недоступны', continue: 'Продолжить подключение', details: 'Подключение',
+    formTitle: 'Подключение номера', existing: 'Если номер уже есть в Connect, сначала отключите его там. Здесь укажите тот же номер — источник, история и права сохранятся.',
+    phone: 'Номер WhatsApp', sourceName: 'Название источника', prepare: 'Подготовка…', generate: 'Сгенерировать QR',
+    scan: 'WhatsApp → Связанные устройства → Привязка устройства. Сканируйте только номером', ready: 'Переписка и звонки подключены.',
+    mismatch: 'Отсканирован другой номер. Подключение не активировано.', confirming: 'Подтверждаем подключение…', waiting: 'Ожидаем подключения WhatsApp. Проверка обновляется автоматически.', back: 'К списку номеров',
+    permission: 'Подключением номеров управляет владелец компании. Доступ сотрудников к диалогам и звонкам задаётся в правах источника.',
+    changed: 'Доступ изменился. Откройте интеграцию заново.', callIconReady: 'Звонки подключены', callIconUnavailable: 'Звонки недоступны',
+  },
+  az: {
+    intro: 'Mesajlar və zənglər üçün bir QR. Connect ayrıca ehtiyat inteqrasiya olaraq qalır.',
+    connect: 'Nömrə qoş', refresh: 'Yenilə', name: 'Ad', number: 'Nömrə', pipeline: 'Satış xətti', status: 'Status', actions: 'Əməliyyatlar',
+    noNumbers: 'Hələ qoşulmuş nömrə yoxdur.', messagesReady: 'Mesajlar qoşulub', messagesPending: 'Qoşulma gözlənilir', messagesUnavailable: 'Mesajlar əlçatan deyil',
+    callsReady: 'Zənglər qoşulub', callsUnavailable: 'Zənglər əlçatan deyil', continue: 'Qoşulmanı davam et', details: 'Qoşulma',
+    formTitle: 'Nömrənin qoşulması', existing: 'Nömrə Connect-də varsa, əvvəlcə orada ayırın. Burada eyni nömrəni daxil edin — mənbə, tarixçə və icazələr saxlanacaq.',
+    phone: 'WhatsApp nömrəsi', sourceName: 'Mənbənin adı', prepare: 'Hazırlanır…', generate: 'QR yarat',
+    scan: 'WhatsApp → Əlaqəli cihazlar → Cihazı əlaqələndir. Yalnız bu nömrə ilə skan edin:', ready: 'Mesajlar və zənglər qoşulub.',
+    mismatch: 'Başqa nömrə skan edilib. Qoşulma aktivləşdirilməyib.', confirming: 'Qoşulma təsdiqlənir…', waiting: 'WhatsApp qoşulması gözlənilir. Yoxlama avtomatik yenilənir.', back: 'Nömrələr siyahısına',
+    permission: 'Nömrələri şirkət sahibi qoşur. Əməkdaşların dialoq və zənglərə girişi mənbə icazələri ilə idarə olunur.',
+    changed: 'Giriş dəyişib. İnteqrasiyanı yenidən açın.', callIconReady: 'Zənglər qoşulub', callIconUnavailable: 'Zənglər əlçatan deyil',
+  },
+  en: {
+    intro: 'One QR for messages and calls. Connect remains a separate reserve integration.',
+    connect: 'Connect number', refresh: 'Refresh', name: 'Name', number: 'Number', pipeline: 'Pipeline', status: 'Status', actions: 'Actions',
+    noNumbers: 'No connected numbers yet.', messagesReady: 'Messages connected', messagesPending: 'Connection pending', messagesUnavailable: 'Messages unavailable',
+    callsReady: 'Calls connected', callsUnavailable: 'Calls unavailable', continue: 'Continue setup', details: 'Connection',
+    formTitle: 'Connect number', existing: 'If this number is already in Connect, disconnect it there first. Enter the same number here to keep its source, history, and permissions.',
+    phone: 'WhatsApp number', sourceName: 'Source name', prepare: 'Preparing…', generate: 'Generate QR',
+    scan: 'WhatsApp → Linked devices → Link a device. Scan only with this number:', ready: 'Messages and calls are connected.',
+    mismatch: 'A different number was scanned. The connection was not activated.', confirming: 'Confirming connection…', waiting: 'Waiting for WhatsApp. Status refreshes automatically.', back: 'Back to numbers',
+    permission: 'Only the company owner can connect numbers. Employee access to conversations and calls is controlled by source permissions.',
+    changed: 'Access changed. Reopen the integration.', callIconReady: 'Calls connected', callIconUnavailable: 'Calls unavailable',
+  },
+};
+
 export function WhatsAppIntegration({profile, onStatus}) {
   const [channels,setChannels]=useState([]),[form,setForm]=useState(false);
   const [phone,setPhone]=useState(''),[name,setName]=useState('');
@@ -10,8 +49,9 @@ export function WhatsAppIntegration({profile, onStatus}) {
   const owner=profile?.member?.role==='owner';
   const tenant=profile?.tenant?.id || profile?.member?.tenant_id;
   const actor=profile?.member?.telegram_id;
+  const t=copy[window.tenantI18n?.language]||copy.az;
   const request=async(data,source)=>{
-    if(!alive.current)throw new Error('Откройте интеграцию заново.');
+    if(!alive.current)throw new Error(t.changed);
     const controller=new AbortController();controllers.current.add(controller);
     try {
       const query=new URLSearchParams({expected_tenant_id:tenant,expected_user_id:actor});
@@ -66,41 +106,49 @@ export function WhatsAppIntegration({profile, onStatus}) {
     try{await action();}catch(e){if(alive.current)setError(e.message);}
     finally{if(alive.current)setBusy(false);}
   };
-  if(invalid)return <Text role="alert">Доступ изменился. Откройте интеграцию заново.</Text>;
-  if(!owner)return <Text>Подключением номеров управляет владелец компании. Доступ сотрудников к диалогам и звонкам задаётся в правах источника.</Text>;
+  if(invalid)return <Text role="alert">{t.changed}</Text>;
+  if(!owner)return <Text>{t.permission}</Text>;
+  const number=value=>value?String(value).replace(/^\+?/, '+'):'—';
   return <Stack gap="4" data-whatsapp-integration="true">
-    <Text color="app.muted">Один QR для переписки и звонков. Connect остаётся отдельной резервной интеграцией.</Text>
+    <Text color="app.muted" fontSize="sm">{t.intro}</Text>
     {error && <Box role="alert" p="3" borderWidth="1px" borderRadius="lg">{error}</Box>}
     {!form ? <>
       <Flex gap="2" wrap="wrap">
-        <Button onClick={()=>{setPair(null);setPhone('');setName('');setForm(true);setError('');}}>Подключить номер</Button>
-        <Button variant="outline" disabled={busy} onClick={()=>run(load)}>Обновить</Button>
+        <Button className="connect-number-add" onClick={()=>{setPair(null);setPhone('');setName('');setForm(true);setError('');}}>{t.connect}</Button>
+        <Button className="outline" variant="outline" disabled={busy} onClick={()=>run(load)}>{t.refresh}</Button>
       </Flex>
-      {channels.length===0 && <Text color="app.muted">Подключённых номеров пока нет.</Text>}
-      {channels.map(c=><Box key={c.id} p="4" borderWidth="1px" borderRadius="xl">
-        <Flex justify="space-between" gap="3" wrap="wrap"><Box><Text fontWeight="700">{c.name}</Text><Text color="app.muted">+{c.phone}</Text></Box>
-          <Button size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{const value=await request(c.activation_pending?{action:'begin',phone:c.phone,name:c.name}:null,c.activation_pending?null:c.id);if(alive.current){setPair(value);setForm(true);}})}>{c.activation_pending?'Продолжить подключение':'Подключение'}</Button>
-        </Flex>
-        <Flex gap="4" mt="2" wrap="wrap"><Text fontSize="sm">Переписка: {c.messages_ready?'подключена':c.activation_pending?'ожидает подключения':'недоступна'}</Text><Text fontSize="sm">Звонки: {c.calls_ready?'подключены':'недоступны'}</Text></Flex>
-      </Box>)}
-    </> : <Box p="4" borderWidth="1px" borderRadius="xl">
-      <Stack gap="3">
-        <Text fontWeight="700">Подключение номера</Text>
-        {!pair && <>
-          <Text fontSize="sm">Если номер уже есть в Connect, сначала отключите его там. Здесь укажите тот же номер — источник, история и права сохранятся.</Text>
-          <label>Номер WhatsApp<Input aria-label="Номер WhatsApp" type="tel" autoComplete="tel" placeholder="+994…" value={phone} onChange={e=>setPhone(e.target.value)} disabled={busy}/></label>
-          <label>Название источника<Input aria-label="Название источника" maxLength={100} value={name} onChange={e=>setName(e.target.value)} disabled={busy}/></label>
-          <Button disabled={busy || !/^\+?[1-9][0-9]{5,21}$/.test(phone)} onClick={()=>run(async()=>{const value=await request({action:'begin',phone,name});if(alive.current)setPair(value);})}>{busy?'Подготовка…':'Сгенерировать QR'}</Button>
-        </>}
-        {pair && <>
-          <Text>+{pair.phone}</Text>
-          {pair.state==='ready' && !pair.activation_pending ? <Text role="status">Переписка и звонки подключены.</Text> : pair.qr ? <>
-            <Text>WhatsApp → Связанные устройства → Привязка устройства. Сканируйте только номером +{pair.phone}.</Text>
-            <img alt="QR подключения WhatsApp" src={'data:image/png;base64,'+pair.qr} style={{width:280,maxWidth:'100%',alignSelf:'center'}}/>
-          </> : <Text role="status">{pair.state==='identity_mismatch'?'Отсканирован другой номер. Подключение не активировано.':pair.state==='ready'?'Подтверждаем подключение…':'Ожидаем подключение WhatsApp. Проверка обновляется автоматически.'}</Text>}
-        </>}
-        <Button variant="outline" disabled={busy} onClick={()=>{generation.current++;setForm(false);setPair(null);run(load);}}>К списку номеров</Button>
-      </Stack>
-    </Box>}
+      {channels.length===0 ? <Text color="app.muted" fontSize="sm">{t.noNumbers}</Text> : <Box className="connect-numbers-wrap" data-whatsapp-number-list="true">
+        <table className="connect-numbers-table"><thead><tr><th scope="col">{t.name}</th><th scope="col">{t.number}</th><th scope="col">{t.pipeline}</th><th scope="col">{t.status}</th><th scope="col">{t.actions}</th></tr></thead><tbody>
+          {channels.map(c=>{
+            const callLabel=c.calls_ready?t.callIconReady:t.callIconUnavailable;
+            return <tr key={c.id}>
+              <td>{c.name||c.id}</td><td>{number(c.phone)}</td><td>—</td>
+              <td><span className="connect-number-status" data-state={c.messages_ready?'connected':c.activation_pending?'warning':'other'}>{c.messages_ready?t.messagesReady:c.activation_pending?t.messagesPending:t.messagesUnavailable}</span>
+                <span className="connect-call-status" data-state={c.calls_ready?'online':'unavailable'} role="img" title={callLabel} aria-label={callLabel}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M5 3h4l2 5-3 2c1.5 3 3 4.5 6 6l2-3 5 2v4c0 1-1 2-2 2C10 20 4 14 3 5c0-1 1-2 2-2Z"/></svg>
+                </span>
+              </td>
+              <td className="connect-number-actions"><Button className="outline" size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{const value=await request(c.activation_pending?{action:'begin',phone:c.phone,name:c.name}:null,c.activation_pending?null:c.id);if(alive.current){setPair(value);setForm(true);}})}>{c.activation_pending?t.continue:t.details}</Button></td>
+            </tr>;
+          })}
+        </tbody></table>
+      </Box>}
+    </> : <Stack gap="4" data-whatsapp-setup="true">
+      <Text fontWeight="700">{t.formTitle}</Text>
+      {!pair && <>
+        <Text fontSize="sm" color="app.muted">{t.existing}</Text>
+        <label>{t.phone}<Input aria-label={t.phone} type="tel" autoComplete="tel" placeholder="+994…" value={phone} onChange={e=>setPhone(e.target.value)} disabled={busy}/></label>
+        <label>{t.sourceName}<Input aria-label={t.sourceName} maxLength={100} value={name} onChange={e=>setName(e.target.value)} disabled={busy}/></label>
+        <Button colorPalette="brand" disabled={busy || !/^\+?[1-9][0-9]{5,21}$/.test(phone)} onClick={()=>run(async()=>{const value=await request({action:'begin',phone,name});if(alive.current)setPair(value);})}>{busy?t.prepare:t.generate}</Button>
+      </>}
+      {pair && <>
+        <Text fontWeight="600">{number(pair.phone)}</Text>
+        {pair.state==='ready' && !pair.activation_pending ? <Text role="status">{t.ready}</Text> : pair.qr ? <>
+          <Text fontSize="sm">{t.scan} {number(pair.phone)}.</Text>
+          <img alt="QR подключения WhatsApp" src={'data:image/png;base64,'+pair.qr} style={{width:280,maxWidth:'100%',alignSelf:'center'}}/>
+        </> : <Text role="status">{pair.state==='identity_mismatch'?t.mismatch:pair.state==='ready'?t.confirming:t.waiting}</Text>}
+      </>}
+      <Flex><Button className="outline" variant="outline" disabled={busy} onClick={()=>{generation.current++;setForm(false);setPair(null);run(load);}}>{t.back}</Button></Flex>
+    </Stack>}
   </Stack>;
 }
