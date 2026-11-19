@@ -201,3 +201,53 @@ def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
     assert response.status==409
     assert not called
     assert response.headers["Cache-Control"]=="no-store"
+
+
+def test_templates_api_is_limited_to_configured_beinsystems_workspace(monkeypatch):
+    import tenant_dialog_reply_templates_api as api
+
+    profile_tenant = {"value": TENANT}
+    calls = []
+    monkeypatch.setattr(api, "is_operator_workspace",
+                        lambda tenant: str(tenant) == TENANT)
+    monkeypatch.setattr(api, "list_templates",
+                        lambda profile: calls.append(("list", profile["tenant_id"])
+                            ) or {"available": True, "templates": [], "allowed_visibility": []})
+    monkeypatch.setattr(api, "mutate_template",
+                        lambda profile, payload: calls.append(("mutate", profile["tenant_id"])
+                            ) or {"id": "template-id"})
+
+    handler = api.handler(
+        lambda _request: {"tenant_id": profile_tenant["value"], "telegram_id": ACTOR},
+        "https://crm.test", Mock(),
+    )
+
+    class Request:
+        def __init__(self, method, tenant):
+            self.method = method
+            self.query = {
+                "expected_tenant_id": tenant,
+                "expected_user_id": str(ACTOR),
+            }
+            self.content_type = "application/json"
+            self.headers = {"Origin": "https://crm.test"}
+            self.body = json.dumps({
+                "action": "create",
+                "expected_tenant_id": tenant,
+                "expected_user_id": ACTOR,
+            }).encode()
+            self.content_length = len(self.body)
+        async def read(self):
+            return self.body
+
+    for method in ("GET", "POST"):
+        profile_tenant["value"] = OTHER
+        denied = asyncio.run(handler(Request(method, OTHER)))
+        assert denied.status == 404
+        assert not calls
+
+        profile_tenant["value"] = TENANT
+        allowed = asyncio.run(handler(Request(method, TENANT)))
+        assert allowed.status == 200
+        assert calls[-1][0] == ("list" if method == "GET" else "mutate")
+        calls.clear()
