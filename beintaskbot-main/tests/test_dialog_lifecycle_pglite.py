@@ -180,6 +180,12 @@ def test_stale_transfer_candidate_is_rejected_and_assignment_is_preserved(episod
 def test_away_owner_keeps_existing_assignment_but_cannot_claim_new_dialog(episodes):
     import tenant_dialog_presence as presence
     presence.set_status({'tenant_id':A,'telegram_id':11},{'status':'away'})
+    with episodes.cursor() as cur:
+        preview=lifecycle.decorate(cur,A,11,{'provider':'connect','channel_id':CA,
+            'conversation_id':'client','lead_id':41,'can_send':True},details=False,
+            _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True)
+        assert preview['lifecycle']['can_accept'] is False
+    episodes.commit()
     with pytest.raises(TenantLinearError) as denied:
         command(actor=11)
     assert denied.value.status==403
@@ -188,6 +194,10 @@ def test_away_owner_keeps_existing_assignment_but_cannot_claim_new_dialog(episod
     presence.set_status({'tenant_id':A,'telegram_id':33},{'status':'away'})
     with episodes.cursor() as cur:
         lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
+        projected=lifecycle.decorate(cur,A,33,{'provider':'connect','channel_id':CA,
+            'conversation_id':'client','lead_id':41,'can_send':True},details=False,
+            _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True)
+        assert projected['can_send'] is True
     episodes.commit()
     assert state(episodes)['operator_id']==33
 
