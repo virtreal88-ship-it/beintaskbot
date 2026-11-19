@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import platform as runtime_platform
 import re
+import struct
+import sys
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -28,6 +31,10 @@ MAX_RESPONSE_BYTES = 1_000_000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
 AUTH_LOGIN_URL = "https://auth.beinsystems.az/auth/login"
+AUTH_CONTRACT_VERSION = "auth_login_runtime_metadata_v1"
+AUTH_APPLICATION_USER_AGENT = (
+    f"Beintaskbot-Operator Python-urllib/{sys.version_info.major}.{sys.version_info.minor}"
+)
 READ_ENDPOINTS = {
     "accounts": ("/user/accounts", {"search"}),
     "account_info": ("/user/info", {"account"}),
@@ -81,7 +88,20 @@ def _operator_row(cur, tenant, *, lock=False):
     return cur.fetchone()
 
 
-def _public(row, *, pending_auth_received=False, pending_auth_received_at=None):
+def _pending_auth_state(cur, tenant, actor):
+    """Read only timestamps for the current and legacy pending-auth stores."""
+    cur.execute("""SELECT received_at FROM saas_beinsystems_operator_pending_auth_v2
+      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
+    current = cur.fetchone()
+    # Preserve visibility of legacy pending tokens without ever selecting their ciphertext.
+    cur.execute("""SELECT received_at FROM saas_beinsystems_operator_pending_auth
+      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
+    legacy = cur.fetchone()
+    return current, legacy
+
+
+def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
+            legacy_pending_auth_received=False):
     row = row or {}
     return {
         "provider": PROVIDER,
@@ -92,7 +112,9 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None):
         "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
         "api_ready": bool(api_base_url()),
         "pending_auth_received": bool(pending_auth_received),
+        "pending_auth_contract": AUTH_CONTRACT_VERSION if pending_auth_received else None,
         "pending_auth_access_confirmed": False if pending_auth_received else None,
+        "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
             if hasattr(pending_auth_received_at, "isoformat")
@@ -116,16 +138,14 @@ def status(profile):
         with conn.cursor() as cur:
             _, actor, current = _authorize(cur, profile, "view")
             row = _operator_row(cur, tenant)
-            pending = None
+            pending = legacy_pending = None
             if current.get("role") == "owner":
-                cur.execute("""SELECT received_at
-                  FROM saas_beinsystems_operator_pending_auth
-                  WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
-                pending = cur.fetchone()
+                pending, legacy_pending = _pending_auth_state(cur, tenant, actor)
     return _public(
         row,
         pending_auth_received=bool(pending),
         pending_auth_received_at=(pending or {}).get("received_at"),
+        legacy_pending_auth_received=bool(legacy_pending),
     )
 
 
@@ -177,7 +197,7 @@ def save_token(profile, token, *, verified=False):
 
 
 def stage_auth_token(profile, token):
-    """Encrypt a received JWT separately until a documented verifier exists."""
+    """Retain legacy pending tokens separately from the current auth contract."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -208,28 +228,57 @@ def stage_auth_token(profile, token):
             pending = cur.fetchone() or {}
             row = _operator_row(cur, tenant)
         conn.commit()
-    return _public(row, pending_auth_received=True,
-                   pending_auth_received_at=pending.get("received_at"))
+    return _public(row, legacy_pending_auth_received=True)
+
+
+def _auth_runtime_metadata():
+    """Describe this server process using the vendor's supported value set."""
+    if sys.platform == "win32":
+        platform_name = "win32"
+    elif sys.platform == "darwin":
+        platform_name = "darwin"
+    elif sys.platform.startswith("linux"):
+        platform_name = "linux"
+    else:
+        raise OperatorError("Серверная среда не поддерживается для входа Operator.", 503)
+
+    machine = runtime_platform.machine().casefold()
+    pointer_bits = struct.calcsize("P") * 8
+    if machine in {"x86_64", "amd64", "x64"}:
+        architecture = "x64" if pointer_bits == 64 else "ia32" if pointer_bits == 32 else None
+    elif machine in {"aarch64", "arm64"}:
+        architecture = "arm64" if pointer_bits == 64 else None
+    elif machine in {"i386", "i486", "i586", "i686", "x86", "ia32"}:
+        architecture = "ia32"
+    else:
+        architecture = None
+    if architecture not in {"x64", "arm64", "ia32"}:
+        raise OperatorError("Архитектура сервера не поддерживается для входа Operator.", 503)
+    return {"version": "2.36.24", "platform": platform_name, "arch": architecture}
 
 
 def _authenticate_operator(login, password, *, opener=None):
-    """Exchange credentials for a token without retaining the password."""
+    """Exchange credentials for a pending token using the confirmed auth contract."""
     username = str(login or "").strip()
-    original_username = username
     secret = str(password or "")
     if (not username or len(username) > 240
             or any(ord(char) < 32 for char in username)
             or not secret or len(secret) > 512):
         raise OperatorError("Укажите корректный логин и пароль Operator.")
 
-    payload = {"login": username, "password": secret}
+    payload = {
+        "login": username,
+        "password": secret,
+        "data": _auth_runtime_metadata(),
+    }
     request = Request(
         AUTH_LOGIN_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         method="POST",
         headers={
-            "Content-Type": "application/json", "Accept": "application/json",
-            "Origin": OPERATOR_WEB_ORIGIN, "Referer": OPERATOR_WEB_ORIGIN + "/",
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": AUTH_APPLICATION_USER_AGENT,
         },
     )
     transport = opener or build_opener(_NoRedirect())
@@ -239,12 +288,7 @@ def _authenticate_operator(login, password, *, opener=None):
             raw = response.read(MAX_AUTH_RESPONSE_BYTES + 1)
     except HTTPError as exc:
         if exc.code in (400, 401, 403):
-            detail = _auth_error_detail(
-                _read_auth_error(exc), original_username, username, secret)
-            message = f"Operator отклонил вход (HTTP {exc.code})."
-            if detail:
-                message += f" Ответ Operator: {detail}"
-            raise OperatorError(message, 401) from None
+            raise OperatorError(f"Operator отклонил вход (HTTP {exc.code}).", 401) from None
         if exc.code == 429:
             raise OperatorError("Operator ограничил попытки входа. Повторите позже.", 429) from None
         raise OperatorError("Сервис авторизации Operator временно недоступен.", 503) from None
@@ -256,61 +300,57 @@ def _authenticate_operator(login, password, *, opener=None):
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise OperatorError("Сервис авторизации Operator вернул неизвестный ответ.", 502) from None
-    data = result.get("data") if isinstance(result, dict) else None
-    candidates = (
-        result.get("token") if isinstance(result, dict) else None,
-        result.get("access_token") if isinstance(result, dict) else None,
-        data.get("token") if isinstance(data, dict) else None,
-    )
-    token = next((value for value in candidates
-                  if isinstance(value, str) and value.strip()), None)
-    if (not isinstance(result, dict) or result.get("success") is False
-            or not isinstance(token, str) or not token.strip()
+    if not isinstance(result, dict):
+        raise OperatorError("Сервис авторизации Operator вернул неизвестный ответ.", 502)
+    if result.get("success") is False:
+        # Do not return arbitrary provider text or any token-like field to the UI.
+        raise OperatorError("Operator отклонил вход.", 401)
+    if result.get("success") is not True:
+        raise OperatorError("Сервис авторизации Operator вернул неизвестный ответ.", 502)
+    data = result.get("data")
+    token = data.get("token") if isinstance(data, dict) else None
+    if (not isinstance(token, str) or not token.strip()
             or len(token) > 8192 or any(ord(char) < 32 for char in token)):
-        detail = _auth_error_detail(result, original_username, username, secret)
-        message = "Operator не выдал токен. Проверьте логин и пароль."
-        if detail:
-            message += f" Ответ Operator: {detail}"
-        raise OperatorError(message, 401)
+        raise OperatorError("Operator не выдал токен.", 502)
     return token.strip()
 
 
-def _read_auth_error(error):
-    """Read a bounded provider error body in memory; never log or persist it."""
+def stage_confirmed_auth_token(profile, token):
+    """Encrypt this confirmed auth-contract token separately from legacy pending tokens."""
+    tenant = _tenant(profile)
     try:
-        raw = error.read(MAX_AUTH_RESPONSE_BYTES + 1)
-        if len(raw) > MAX_AUTH_RESPONSE_BYTES:
-            return None
-        return json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-
-
-def _auth_error_detail(payload, *secrets):
-    """Expose a short provider error after removing submitted and returned secrets."""
-    if not isinstance(payload, dict):
-        return ""
-    detail = next((payload.get(key) for key in ("message", "error")
-                   if isinstance(payload.get(key), str) and payload.get(key).strip()), "")
-    detail = re.sub(r"[\x00-\x1f\x7f]+", " ", detail)
-    detail = " ".join(detail.split())
-    response_tokens = [
-        payload.get("token"), payload.get("access_token"),
-    ]
-    data = payload.get("data")
-    if isinstance(data, dict):
-        response_tokens.append(data.get("token"))
-    for secret in sorted(
-            {str(value or "") for value in (*secrets, *response_tokens)},
-            key=len, reverse=True):
-        if secret:
-            detail = re.sub(re.escape(secret), "[скрыто]", detail, flags=re.IGNORECASE)
-    detail = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [скрыто]", detail)
-    detail = re.sub(
-        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
-        "[токен скрыт]", detail,
-    )
-    return detail[:240]
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+    clean = str(token or "").strip()
+    if not clean or len(clean) > 8192 or any(ord(char) < 32 for char in clean):
+        raise OperatorError("Проверьте служебный токен Operator.")
+    encrypted = _fernet().encrypt(_json({
+        "tenant_id": tenant, "provider": PROVIDER,
+        "owner_telegram_id": actor, "purpose": "pending_auth_verification",
+        "auth_contract": AUTH_CONTRACT_VERSION, "token": clean,
+    }).encode("utf-8"))
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+            cur.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
+              (tenant_id,owner_telegram_id,token_ciphertext,received_at)
+              VALUES(%s::uuid,%s,%s,now())
+              ON CONFLICT(tenant_id,owner_telegram_id) DO UPDATE SET
+                token_ciphertext=EXCLUDED.token_ciphertext,received_at=now()
+              RETURNING received_at""", (tenant, actor, encrypted))
+            pending = cur.fetchone() or {}
+            _, legacy_pending = _pending_auth_state(cur, tenant, actor)
+            row = _operator_row(cur, tenant)
+        conn.commit()
+    return _public(row, pending_auth_received=True,
+                   pending_auth_received_at=pending.get("received_at"),
+                   legacy_pending_auth_received=bool(legacy_pending))
 
 
 def connect_with_password(profile, login, password):
@@ -343,7 +383,7 @@ def connect_with_password(profile, login, password):
     token = _authenticate_operator(login, password)
     # No API call is made with the new token until Operator documents a
     # read-only access check. The active connection remains untouched.
-    return stage_auth_token(profile, token)
+    return stage_confirmed_auth_token(profile, token)
 
 
 def disconnect(profile):
