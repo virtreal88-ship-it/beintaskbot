@@ -510,7 +510,9 @@ def test_active_account_company_creation_is_idempotent_and_rotation_scoped(monke
             patcher.setattr(company_import, "TenantPolicy", FullAccess)
 
             first = company_import.create_companies(profile)
-            assert first == {"checked": 3, "created": 1, "reused": 1, "manual_review": 1,\n                "name_collision_count": 1, "name_collision_accounts": ["name-collision"],\n                "name_collision_truncated": False}
+            assert first == {"checked": 3, "created": 1, "reused": 1, "manual_review": 1,
+                "name_collision_count": 1, "name_collision_accounts": ["name-collision"],
+                "name_collision_truncated": False}
             with connect() as db:
                 first_legacy = db.execute("""SELECT company_id::text AS company_id
                   FROM saas_beinsystems_operator_company_imports
@@ -534,7 +536,9 @@ def test_active_account_company_creation_is_idempotent_and_rotation_scoped(monke
                 "connection_instance_id": instance_two,
             })
             second = company_import.create_companies(profile)
-            assert second == {"checked": 2, "created": 1, "reused": 1, "manual_review": 0,\n                 "name_collision_count": 0, "name_collision_accounts": [],\n                 "name_collision_truncated": False}
+            assert second == {"checked": 2, "created": 1, "reused": 1, "manual_review": 0,
+                 "name_collision_count": 0, "name_collision_accounts": [],
+                 "name_collision_truncated": False}
             with connect() as db:
                 mapping = db.execute("""SELECT external_account,company_id::text AS company_id,
                     last_seen_generation FROM saas_beinsystems_operator_company_imports
