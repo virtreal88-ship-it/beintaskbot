@@ -95,6 +95,27 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(response.headers["X-Tenant-Auth-Source"], "operator")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
+    def test_integration_handler_reports_upstream_http_status_without_provider_body(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(
+            lambda _request: profile, "https://crm.example", MagicMock())
+        provider_error = operator.OperatorError(
+            "Operator отклонил служебную авторизацию (upstream HTTP 401).",
+            502, upstream_http_status=401)
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={"action": "test"})), \
+             patch.object(operator, "verify_connection", side_effect=provider_error):
+            response = asyncio.run(handler(request))
+        body = json.loads(response.text)
+        self.assertEqual(response.status, 502)
+        self.assertEqual(body["upstream_http_status"], 401)
+        self.assertIn("upstream HTTP 401", body["error"])
+        self.assertNotIn("synthetic-jwt", response.text)
+        self.assertNotIn("private provider detail", response.text)
+        self.assertEqual(response.headers["X-Tenant-Auth-Source"], "operator")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     def test_account_catalog_get_and_import_are_explicit_same_origin_actions(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         query = {"expected_tenant_id": TENANT, "expected_user_id": "7"}
@@ -213,6 +234,27 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIsNone(fake.request.get_header("Origin"))
         self.assertIsNone(fake.request.get_header("Referer"))
         self.assertEqual(fake.request.get_header("Accept"), "application/json")
+
+    def test_operator_read_auth_http_errors_keep_upstream_code_without_body(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        for upstream_status in (401, 403):
+            fake = FakeHTTPErrorOpener(upstream_status, {
+                "message": "private provider detail synthetic-login synthetic-password",
+                "token": "synthetic-jwt",
+            })
+            with self.subTest(upstream_status=upstream_status), \
+                 patch.dict("os.environ", {access.API_BASE_URL_ENV: base}):
+                with self.assertRaises(operator.OperatorError) as raised:
+                    operator._request_operator(
+                        "me", {}, token="synthetic-jwt", base_url=base, opener=fake)
+            self.assertEqual(raised.exception.status, 502)
+            self.assertEqual(raised.exception.upstream_http_status, upstream_status)
+            self.assertIn(f"upstream HTTP {upstream_status}", str(raised.exception))
+            for secret in ("private provider detail", "synthetic-login",
+                           "synthetic-password", "synthetic-jwt"):
+                self.assertNotIn(secret, str(raised.exception))
+            self.assertEqual(fake.request.full_url, base + "/user/me")
+            self.assertEqual(fake.request.get_method(), "GET")
 
     def test_operator_read_rejects_unapproved_api_host(self):
         fake = FakeOpener({"status": "success"})
