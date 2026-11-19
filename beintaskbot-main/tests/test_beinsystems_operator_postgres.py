@@ -49,13 +49,21 @@ def test_existing_rate_limit_table_accepts_auth_login_after_migration():
               WHERE tenant_id=%s::uuid""", (tenant_id,)).fetchone() == ("auth_login",)
             conn.execute("""INSERT INTO saas_beinsystems_operator_pending_auth
               (tenant_id,owner_telegram_id,token_ciphertext)
-              VALUES(%s::uuid,7,%s)""", (tenant_id, b"encrypted-only"))
+              VALUES(%s::uuid,7,%s)""", (tenant_id, b"legacy-encrypted"))
+            conn.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
+              (tenant_id,owner_telegram_id,token_ciphertext)
+              VALUES(%s::uuid,7,%s)""", (tenant_id, b"contract-encrypted"))
             assert conn.execute("""SELECT token_ciphertext
               FROM saas_beinsystems_operator_pending_auth WHERE tenant_id=%s::uuid""",
-              (tenant_id,)).fetchone() == (b"encrypted-only",)
+              (tenant_id,)).fetchone() == (b"legacy-encrypted",)
+            assert conn.execute("""SELECT token_ciphertext
+              FROM saas_beinsystems_operator_pending_auth_v2 WHERE tenant_id=%s::uuid""",
+              (tenant_id,)).fetchone() == (b"contract-encrypted",)
             conn.execute("DELETE FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=7",
                          (tenant_id,))
             assert conn.execute("""SELECT count(*) FROM saas_beinsystems_operator_pending_auth
+              WHERE tenant_id=%s::uuid""", (tenant_id,)).fetchone() == (0,)
+            assert conn.execute("""SELECT count(*) FROM saas_beinsystems_operator_pending_auth_v2
               WHERE tenant_id=%s::uuid""", (tenant_id,)).fetchone() == (0,)
         finally:
             conn.execute("SET search_path TO public")
