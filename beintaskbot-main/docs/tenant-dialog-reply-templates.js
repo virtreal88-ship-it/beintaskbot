@@ -55,7 +55,9 @@
     return fetch(url,options).then(async response=>{
       let payload;
       try{payload=await response.json();}catch{throw new Error(copy('error'));}
-      if(!response.ok||payload?.success!==true)throw new Error(payload?.error||copy('error'));
+      if(!response.ok||payload?.success!==true){
+        const error=new Error(payload?.error||copy('error'));error.status=response.status;throw error;
+      }
       return payload.result||{};
     });
   }
@@ -111,6 +113,7 @@
       state.available=result.available===true;state.loaded=true;state.error='';
     }catch(error){
       if(state!==mounted||serial!==state.loadSerial||identity()?.key!==state.identity)return;
+      if(error?.status===404){teardown();return;}
       state.templates=[];state.allowed=[];state.available=false;state.loaded=true;state.error=error?.message||copy('error');
     }finally{
       if(state===mounted&&serial===state.loadSerial){
