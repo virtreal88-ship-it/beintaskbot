@@ -32,6 +32,7 @@ def migrate(cur):
       FOREIGN KEY(tenant_id,channel_id,generation)
         REFERENCES saas_whatsapp_capture_generations(tenant_id,channel_id,generation))''')
     cur.execute('ALTER TABLE saas_whatsapp_native_routes ADD COLUMN IF NOT EXISTS legacy_fallback BOOLEAN NOT NULL DEFAULT FALSE')
+    cur.execute('ALTER TABLE saas_whatsapp_native_routes ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE')
     cur.execute('''DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='native_route_single_sender') THEN
       ALTER TABLE saas_whatsapp_native_routes ADD CONSTRAINT native_route_single_sender CHECK(NOT(enabled AND legacy_fallback));
       END IF; END $$''')

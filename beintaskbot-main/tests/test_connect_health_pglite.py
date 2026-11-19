@@ -149,4 +149,64 @@ class SQLTests(unittest.TestCase):
         self.db.query("UPDATE saas_tenant_members SET active=FALSE WHERE telegram_id=42")
         self.observe('disconnected');h.prepare();self.assertEqual(self.count(),[])
 
+    def native(self):
+        import tenant_whatsapp_native_health as n
+        self.db.query('CREATE TABLE saas_whatsapp_native_routes(tenant_id UUID,channel_id UUID,generation TEXT,enabled BOOLEAN,legacy_fallback BOOLEAN)')
+        self.db.query('CREATE TABLE saas_whatsapp_capture_generations(tenant_id UUID,channel_id UUID,generation TEXT,gateway_id UUID,account_jid TEXT,enabled BOOLEAN)')
+        self.db.query('CREATE TABLE saas_browser_call_sources(tenant_id UUID,channel_id UUID,gateway_id UUID,account_jid TEXT,enabled BOOLEAN)')
+        gateway=str(uuid4());account='994100000001@s.whatsapp.net'
+        self.db.query("INSERT INTO saas_whatsapp_native_routes VALUES(%s,%s,'g1',TRUE,FALSE)",(self.tenant,self.channel))
+        self.db.query("INSERT INTO saas_whatsapp_capture_generations VALUES(%s,%s,'g1',%s,%s,TRUE)",(self.tenant,self.channel,gateway,account))
+        self.db.query('INSERT INTO saas_browser_call_sources VALUES(%s,%s,%s,%s,TRUE)',(self.tenant,self.channel,gateway,account))
+        with self.db.cursor() as cur:origin=n.authority(cur,self.tenant,self.channel)
+        return n,origin
+
+    def native_sample(self,n,origin,status,*,age=0):
+        token=str(uuid4());now=datetime.now(timezone.utc)
+        self.db.query("INSERT INTO saas_connect_health(tenant_id,channel_id) VALUES(%s,%s) ON CONFLICT DO NOTHING",(self.tenant,self.channel))
+        self.db.query("UPDATE saas_connect_health SET state=state||%s::jsonb",(json.dumps({'nativePollToken':token}),))
+        data={'messaging_generation':'g1','account_jid':origin['account'],'connected':status=='connected','connection_state':'logged_out' if status=='logged_out' else status}
+        with patch.object(n,'_connect',lambda:self.db):
+            return n.apply((self.tenant,self.channel,origin,token,(now-timedelta(seconds=age)).isoformat()),data)
+
+    def test_native_outage_recovery_and_restart_dedupe(self):
+        n,origin=self.native()
+        self.assertTrue(self.native_sample(n,origin,'logged_out',age=100));h.prepare();h.prepare()
+        item=h.claim();self.assertTrue(item['send']);self.assertIn('QR',h.notice(item))
+        h.finish(item,SimpleNamespace(status='delivered',message_id=1))
+        self.native_sample(n,origin,'logged_out');h.prepare();self.assertIsNone(h.claim())
+        self.native_sample(n,origin,'connected');recovered=h.claim();self.assertTrue(recovered['send'])
+        h.finish(recovered,SimpleNamespace(status='delivered',message_id=2))
+        self.native_sample(n,origin,'connected');h.prepare();self.assertIsNone(h.claim())
+        self.assertEqual(len(self.count()),2)
+
+    def test_native_suppresses_legacy_pending_and_late_webhooks(self):
+        self.observe('disconnected');h.prepare()
+        n,origin=self.native()
+        self.assertFalse(h.claim()['send'])
+        self.assertFalse(self.signed_ingest(self.event()))
+        self.native_sample(n,origin,'connected');h.prepare();self.assertIsNone(h.claim())
+        self.assertEqual(self.db.query('SELECT state FROM saas_connect_health')[0]['state']['transport'],origin)
+
+    def test_native_unknown_and_stale_status_cannot_notify(self):
+        n,origin=self.native()
+        self.native_sample(n,origin,'disconnected',age=100)
+        self.db.query("UPDATE saas_connect_health SET state=state||%s::jsonb",(json.dumps({'nativeCheckedAt':(datetime.now(timezone.utc)-timedelta(minutes=5)).isoformat()}),))
+        h.prepare();self.assertEqual(self.count(),[])
+        self.assertEqual(n.observation(None,origin),('unknown','unconfirmed'))
+        self.assertEqual(n.observation({'connected':True,'messaging_generation':'old'},origin)[0],'unknown')
+
+    def test_native_late_sample_old_generation_and_revocation(self):
+        n,origin=self.native()
+        old={**origin,'generation':'old'}
+        self.assertFalse(self.native_sample(n,old,'disconnected',age=100))
+        self.db.query('UPDATE saas_connect_channels SET active=FALSE')
+        self.assertFalse(self.native_sample(n,origin,'disconnected',age=100))
+        h.prepare();self.assertEqual(self.count(),[])
+
+    def test_native_claim_rechecks_transport_before_send(self):
+        n,origin=self.native();self.native_sample(n,origin,'disconnected',age=100);h.prepare()
+        item=h.claim();self.assertTrue(h.revalidate(item))
+        self.native_sample(n,origin,'connected');self.assertFalse(h.revalidate(item))
+
 if __name__=='__main__':unittest.main()

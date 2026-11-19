@@ -64,6 +64,7 @@ class Supervisor:
         self.binary=binary;self.sources={};self.lock=asyncio.Lock();self.client=None;self.volume_lock=None
         self.stopping=False
         self.message_slots=asyncio.Semaphore(2)
+        self.avatar_slots=asyncio.Semaphore(2)
 
     async def start(self,app):
         # Linux volume fencing: two replicas/processes must never restore the
@@ -162,13 +163,14 @@ class Supervisor:
 
     def launch(self,source):
         entry=self.sources[source]
+        if entry['data'].get('disabled'):return
         if entry['task'] is not None and not entry['task'].done():return
         self.configure(source)
         entry['task']=asyncio.create_task(self.run_source(source))
 
     async def run_source(self,source):
         entry=self.sources[source];folder=self.root/source;data=entry['data']
-        while not self.stopping and entry['failures']<5:
+        while not self.stopping and not entry['data'].get('disabled') and entry['failures']<5:
             started=asyncio.get_running_loop().time()
             try:
                 entry['process']=await asyncio.create_subprocess_exec(self.binary,
@@ -180,7 +182,7 @@ class Supervisor:
             except OSError:
                 print('calls_engine_spawn_failed',flush=True)
             finally:entry['process']=None
-            if self.stopping:return
+            if self.stopping or entry['data'].get('disabled'):return
             if asyncio.get_running_loop().time()-started>300:entry['failures']=0
             entry['failures']+=1
             print('calls_engine_restarting',flush=True)
@@ -235,6 +237,8 @@ class Supervisor:
             payload=await request.json()
             if not isinstance(payload,dict):raise web.HTTPBadRequest(text='source_binding_invalid')
             generation=payload.pop('messaging_generation',None)
+            resume=payload.pop('resume',False)
+            if type(resume) is not bool:raise web.HTTPBadRequest(text='source_binding_invalid')
             if generation is not None and (not isinstance(generation,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',generation)):
                 raise web.HTTPBadRequest(text='native_messaging_configuration_invalid')
             spec=binding(payload)
@@ -251,6 +255,13 @@ class Supervisor:
                     # Existing devices require a separately fenced maintenance
                     # transition. Provision never restarts a live call engine.
                     raise web.HTTPConflict(text='source_messaging_transition_required')
+                if entry['data'].get('disabled'):
+                    if not resume:raise web.HTTPConflict(text='source_stopped')
+                    if entry.get('process') is not None or (entry.get('task') is not None and not entry['task'].done()):
+                        raise web.HTTPConflict(text='source_stop_unconfirmed')
+                    data={**entry['data'],'disabled':False}
+                    atomic_json(self.root/source/'source.json',data)
+                    entry['data']=data;entry['failures']=0
             else:
                 if len(self.sources)>=MAX_SOURCES:raise web.HTTPServiceUnavailable(text='calls_source_capacity')
                 if any(e['data']['binding']['account_jid']==spec['account_jid'] for e in self.sources.values()):
@@ -278,16 +289,22 @@ class Supervisor:
 
     async def status(self,request):
         source,entry=self.entry(request)
+        if entry['data'].get('disabled') and entry.get('process') is None and (entry.get('task') is None or entry['task'].done()):
+            return web.json_response({'stopped':True,'connected':False,'connection_state':'stopped',
+                'account_jid':entry['data']['binding']['account_jid'],
+                'messaging_generation':entry['data'].get('messaging',{}).get('generation')},headers={'Cache-Control':'no-store'})
         result=await self.engine(source,'/internal/status')
         result['messaging_generation']=entry['data'].get('messaging',{}).get('generation')
         return web.json_response(result,headers={'Cache-Control':'no-store'})
 
     async def messages(self,request):
         source,entry=self.entry(request)
+        if entry['data'].get('disabled'):raise web.HTTPConflict(text='source_stopped')
         data=entry['data'];cfg=data.get('messaging');b=data['binding']
         if not cfg:raise web.HTTPConflict(text='native_messaging_disabled')
-        if self.message_slots.locked():raise web.HTTPTooManyRequests(text='native_messaging_busy')
-        async with self.message_slots:
+        slots=self.avatar_slots if request.path.endswith('/avatar') else self.message_slots
+        if slots.locked():raise web.HTTPTooManyRequests(text='native_messaging_busy')
+        async with slots:
             return await self._messages(request,source,entry,cfg,b)
 
     async def _messages(self,request,source,entry,cfg,b):
@@ -299,7 +316,7 @@ class Supervisor:
         expected={'tenant':b['tenant_id'],'source':b['channel_id'],'account':b['account_jid'],'generation':cfg['generation']}
         if not isinstance(payload,dict) or payload.get('scope')!=expected:
             raise web.HTTPForbidden(text='native_message_scope_denied')
-        suffix=next((part for part in ('/media','/status','/group') if request.path.endswith(part)),'')
+        suffix=next((part for part in ('/media','/status','/group','/avatar') if request.path.endswith(part)),'')
         if self.client is None:raise web.HTTPServiceUnavailable(text='calls_service_unavailable')
         # No retries: a lost response may follow an accepted provider send.
         async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages'+suffix,
@@ -314,8 +331,43 @@ class Supervisor:
             return web.Response(body=b''.join(chunks),status=upstream.status,content_type=content_type,
                 headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'attachment'})
 
+
+    async def disconnect(self,request):
+        source,entry=self.entry(request)
+        payload=await request.json()
+        async with self.lock:
+            data=entry['data'];b=data['binding']
+            expected={'tenant':b['tenant_id'],'source':b['channel_id'],'account':b['account_jid'],
+                      'generation':data.get('messaging',{}).get('generation')}
+            if payload!={'scope':expected} or not expected['generation']:
+                raise web.HTTPForbidden(text='source_scope_denied')
+            if not data.get('disabled'):
+                state=await self.engine(source,'/internal/status')
+                diagnostics=state.get('diagnostics') or {};messages=state.get('messaging_diagnostics') or {}
+                if (any(type(diagnostics.get(k)) is not int or diagnostics[k]!=0 for k in
+                        ('active_registry_calls','provider_start_requested','audio_attached'))
+                        or any(type(messages.get(k)) is not int or messages[k]!=0 for k in ('unknown_sends','pending_events'))):
+                    raise web.HTTPConflict(text='source_operations_pending')
+                data={**data,'disabled':True}
+                atomic_json(self.root/source/'source.json',data);entry['data']=data
+            # Persist disabled BEFORE stopping. Crash/redeployment cannot restart
+            # this source. Retain device/journal/recordings for explicit resume.
+            process=entry.get('process');task=entry.get('task')
+            if process is not None and process.returncode is None:
+                process.terminate()
+            if task is not None and not task.done():
+                done,_=await asyncio.wait([task],timeout=10)
+                if not done:
+                    process=entry.get('process')
+                    if process is not None and process.returncode is None:process.kill()
+                    done,_=await asyncio.wait([task],timeout=5)
+                    if not done:raise web.HTTPServiceUnavailable(text='source_stop_unconfirmed')
+            if entry.get('process') is not None:raise web.HTTPServiceUnavailable(text='source_stop_unconfirmed')
+            return web.json_response({'stopped':True,'scope':expected},headers={'Cache-Control':'no-store'})
+
     async def audio(self,request):
         source,entry=self.entry(request)
+        if entry['data'].get('disabled'):raise web.HTTPConflict(text='source_stopped')
         provider=request.match_info['provider'];call=safe_uuid(request.match_info['call'])
         if not PROVIDER.fullmatch(provider):raise web.HTTPBadRequest(text='call_identity_invalid')
         data=entry['data'];upstream=None
@@ -368,10 +420,12 @@ def make_app(supervisor):
     app.router.add_get('/healthz',lambda r:web.json_response({'ok':True}))
     app.router.add_post('/v1/sources/{source}',supervisor.provision)
     app.router.add_get('/v1/sources/{source}',supervisor.status)
+    app.router.add_post('/v1/sources/{source}/disconnect',supervisor.disconnect)
     app.router.add_post('/v1/sources/{source}/messages',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/status',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/media',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/group',supervisor.messages)
+    app.router.add_post('/v1/sources/{source}/messages/avatar',supervisor.messages)
     app.router.add_get('/v1/sources/{source}/audio/{provider}/{call}',supervisor.audio)
     app.on_startup.append(supervisor.start);app.on_cleanup.append(supervisor.stop)
     return app

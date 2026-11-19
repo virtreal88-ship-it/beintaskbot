@@ -24,6 +24,13 @@ def handler(member,origin,logger):
                     result=await asyncio.to_thread(store.begin,profile,data['phone'],data['name'])
                 elif set(data)=={'action','source'} and data['action']=='activate':
                     result=await asyncio.to_thread(store.activate,profile,data['source'])
+                elif set(data)=={'action','source'} and data['action']=='resume':
+                    from tenant_whatsapp_source_control import resume
+                    result=await asyncio.to_thread(resume,profile,data['source'])
+                elif set(data)=={'action','sources'} and data['action'] in ('disconnect','disconnect_all'):
+                    from tenant_whatsapp_source_control import disconnect
+                    if data['action']=='disconnect' and (not isinstance(data['sources'],list) or len(data['sources'])!=1):raise ValueError()
+                    result=await asyncio.to_thread(disconnect,profile,data['sources'],all_sources=data['action']=='disconnect_all')
                 else:raise ValueError()
             return web.json_response({'success':True,'result':result},headers=HEADERS)
         except TenantLinearError as exc:

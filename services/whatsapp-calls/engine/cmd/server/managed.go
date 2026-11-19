@@ -56,6 +56,7 @@ func managedHandler(s *server, host, token string) http.Handler {
 				}
 			}
 			if len(infos) == 1 {
+				out["connection_state"] = infos[0].State
 				sess, _ := s.sessions.Get(infos[0].ID)
 				sess.mu.Lock()
 				auth := sess.auth
@@ -81,6 +82,10 @@ func managedHandler(s *server, host, token string) http.Handler {
 		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages/group" {
 			s.handleManagedGroup(w, r)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/avatar" {
+			s.handleManagedAvatar(w, r)
 			return
 		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages" {

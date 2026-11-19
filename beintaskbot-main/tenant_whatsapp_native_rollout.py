@@ -118,7 +118,7 @@ def staged(cur,tenant,source):
 def modes(cur,tenant):
     cur.execute("SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL AS ready")
     if not cur.fetchone()['ready']:return {}
-    cur.execute('''SELECT r.channel_id,r.enabled,s.account_jid,s.state,c.name FROM saas_whatsapp_native_routes r
+    cur.execute('''SELECT r.channel_id,r.enabled,r.paused,c.active,s.account_jid,s.state,c.name FROM saas_whatsapp_native_routes r
       JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
@@ -140,7 +140,7 @@ def activate(profile,source,generation):
           JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
           WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND r.generation=%s
             AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
-            AND s.enabled AND s.public_key<>'' AND NOT r.enabled AND NOT g.enabled
+            AND s.enabled AND s.public_key<>'' AND NOT r.enabled AND NOT r.paused AND NOT g.enabled
           FOR UPDATE OF r,g,s''',(tenant,source,generation))
         row=cur.fetchone()
         if not row:raise TenantLinearError('native_setup_changed',409)
@@ -152,6 +152,7 @@ def activate(profile,source,generation):
             raise TenantLinearError('native_pairing_unconfirmed',409)
         cur.execute("UPDATE saas_browser_call_sources SET state='ready',updated_at=now() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid",(tenant,source))
         cur.execute("UPDATE saas_connect_channels SET active=TRUE,status='connected',updated_at=now() WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(tenant,source))
+        cur.execute("UPDATE saas_connect_conversations SET avatar_status='',avatar_checked_at=NULL WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND avatar_status IN ('unavailable','loading')",(tenant,source))
         cur.execute('UPDATE saas_whatsapp_capture_generations SET enabled=TRUE,projection_enabled=TRUE WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s',(tenant,source,generation))
         cur.execute('UPDATE saas_whatsapp_native_routes SET enabled=TRUE WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND generation=%s',(tenant,source,generation))
     return {'source':source,'generation':generation,'state':'active'}

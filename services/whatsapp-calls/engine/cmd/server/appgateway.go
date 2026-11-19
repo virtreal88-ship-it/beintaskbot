@@ -60,6 +60,7 @@ type appResult struct {
 type appGateway struct {
 	providerDiagnostics labDiagnostics
 	groups              *managedGroups
+	avatars             managedAvatars
 	messages            *unified.Journal
 	server              *server
 	cfg                 appGatewayConfig

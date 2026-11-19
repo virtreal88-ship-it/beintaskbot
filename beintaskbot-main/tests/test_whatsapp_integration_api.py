@@ -3,6 +3,7 @@ from unittest.mock import Mock
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 import tenant_whatsapp_integration as store
+import tenant_whatsapp_source_control as control
 from tenant_whatsapp_integration_api import handler
 
 
@@ -22,4 +23,26 @@ def test_origin_identity_and_exact_mutation_schema(monkeypatch):
             begin.assert_not_called()
             assert (await client.post(url,json=data,headers={'Origin':'https://app.invalid'})).status==200
             begin.assert_called_once_with(profile,data['phone'],data['name'])
+    asyncio.run(run())
+
+
+def test_disconnect_controls_keep_origin_and_identity_guards(monkeypatch):
+    stop=Mock(return_value={'stopped':['source']});resume=Mock(return_value={'state':'pairing'})
+    monkeypatch.setattr(control,'disconnect',stop);monkeypatch.setattr(control,'resume',resume)
+    profile={'tenant_id':'tenant-a','telegram_id':11}
+    async def run():
+        app=web.Application();app.router.add_post('/whatsapp',handler(lambda _:profile,'https://app.invalid',Mock()))
+        async with TestClient(TestServer(app)) as client:
+            url='/whatsapp?expected_tenant_id=tenant-a&expected_user_id=11'
+            headers={'Origin':'https://app.invalid'}
+            for data in ({'action':'disconnect','sources':['source']},{'action':'disconnect_all','sources':['source']},{'action':'resume','source':'source'}):
+                assert (await client.post(url,json=data,headers={'Origin':'https://foreign.invalid'})).status==403
+                assert (await client.post(url.replace('tenant-a','tenant-b'),json=data,headers=headers)).status==409
+            stop.assert_not_called();resume.assert_not_called()
+            assert (await client.post(url,json={'action':'disconnect','sources':['a','b']},headers=headers)).status==400
+            for action in ('disconnect','disconnect_all'):
+                assert (await client.post(url,json={'action':action,'sources':['source']},headers=headers)).status==200
+                stop.assert_called_with(profile,['source'],all_sources=action=='disconnect_all')
+            assert (await client.post(url,json={'action':'resume','source':'source'},headers=headers)).status==200
+            resume.assert_called_once_with(profile,'source')
     asyncio.run(run())

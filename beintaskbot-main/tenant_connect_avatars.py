@@ -27,6 +27,8 @@ def _image_mime(body):
 
 
 async def _fetch(route):
+    if route.get('native'):
+        return await _fetch_native(route)
     origin = urlsplit(CONNECT_URL)
     if (origin.scheme != 'https' or not origin.hostname or origin.username or origin.password
             or origin.query or origin.fragment or origin.path not in {'', '/'} or origin.port not in {None, 443}):
@@ -101,12 +103,13 @@ async def get_avatar(profile, params):
                 conn.commit()
     try:
         body, mime = await _fetch(route)
-    except TenantLinearError:
+    except TenantLinearError as error:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute('''UPDATE saas_connect_conversations SET avatar_status='unavailable'
+                cur.execute('''UPDATE saas_connect_conversations SET avatar_status=%s,
+                    avatar_checked_at=CASE WHEN %s THEN avatar_checked_at ELSE NULL END
                   WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
-                    AND avatar_status='loading' ''',(tenant,route['channel_id'],route['conversation_id']))
+                    AND avatar_status='loading' ''',('unavailable' if error.status==404 else '',error.status==404,tenant,route['channel_id'],route['conversation_id']))
         raise
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -117,10 +120,35 @@ async def get_avatar(profile, params):
                 params.get('conversation_id', ''), params.get('channel_id', ''), params.get('lead_id'))
             latest = connect_route(cur, current_tenant, current['lead_id'])
             if (current_tenant != tenant or not latest or
-                    any(latest.get(key) != route.get(key) for key in ('channel_id','conversation_id','api_key'))):
+                    any(latest.get(key) != route.get(key) for key in ('channel_id','conversation_id','api_key','native'))):
                 raise TenantLinearError('WhatsApp-kanal artıq əlçatan deyil.', 404)
             cur.execute('''UPDATE saas_connect_conversations SET avatar_status='available',updated_at=now()
               WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
                 AND avatar_status IS DISTINCT FROM 'available' ''',
               (tenant, route['channel_id'], route['conversation_id']))
     return body, mime
+
+
+async def _fetch_native(route):
+    from tenant_call_sources import service
+    url,token=service()
+    binding=route['native']
+    payload={'scope':binding['scope'],'chat':route['conversation_id']}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15,connect=4),
+                auto_decompress=False,trust_env=False) as session:
+            async with session.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/avatar',
+                    json=payload,headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'},
+                    allow_redirects=False) as response:
+                if response.status==404:raise TenantLinearError('WhatsApp fotosu mövcud deyil.',404)
+                if response.status!=200 or response.headers.get('Content-Encoding','identity')!='identity':raise ValueError()
+                chunks=[];size=0
+                async for chunk in response.content.iter_chunked(32768):
+                    size+=len(chunk)
+                    if size>MAX_AVATAR_BYTES:raise ValueError()
+                    chunks.append(chunk)
+                body=b''.join(chunks);mime=_image_mime(body)
+                if not mime or mime not in IMAGE_TYPES:raise ValueError()
+                return body,mime
+    except TenantLinearError:raise
+    except Exception:raise TenantLinearError('WhatsApp fotosu hazırda yüklənmədi.',502) from None
