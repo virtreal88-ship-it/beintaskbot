@@ -8,6 +8,7 @@ from collections.abc import Callable
 from aiohttp import web
 
 import tenant_beinsystems_operator as operator
+import tenant_beinsystems_operator_company_import as company_import
 from tenant_beinsystems_operator_access import is_operator_workspace
 from tenant_linear_policy import TenantLinearError
 
@@ -119,6 +120,7 @@ def accounts_handler(member: Callable, origin: str, logger):
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
+        action = ""
         try:
             if request.method == "GET":
                 _context(dict(request.query), profile)
@@ -126,11 +128,15 @@ def accounts_handler(member: Callable, origin: str, logger):
                     operator.imported_accounts, profile, search=request.query.get("search", ""))
                 return _json_response({"accounts": rows})
             data = await _body(request, profile, origin)
+            action = str(data.get("action") or "").strip().lower()
             if data == {"action": "import"}:
                 result = await asyncio.to_thread(operator.import_accounts, profile)
                 return _json_response({"imported": result["imported"],
                     "activated": result["activated"], "integration": result["status"],
                     "identity": result["identity"]})
+            if data == {"action": "create_companies"}:
+                result = await asyncio.to_thread(company_import.create_companies, profile)
+                return _json_response({"company_import": result})
             if set(data) != {"search"}:
                 raise operator.OperatorError("Укажите строку поиска или действие import.")
             response = await asyncio.to_thread(operator.read, profile, "accounts", data)
@@ -141,7 +147,10 @@ def accounts_handler(member: Callable, origin: str, logger):
                                      status=error.status,
                                      headers={"Cache-Control": "no-store"})
         except Exception:
-            logger.exception("Operator account request failed")
+            if action == "create_companies":
+                logger.error("Operator company creation failed")
+            else:
+                logger.exception("Operator account request failed")
             return web.json_response({"success": False, "error": "Список аккаунтов Operator временно недоступен."},
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint

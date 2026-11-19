@@ -6,7 +6,7 @@ const dom=new JSDOM('<!doctype html><div id="integrationSettingsHost"></div>',{
   url:'https://beintaskbot.test/app?view=integrations',runScripts:'outside-only',
 });
 const {window}=dom;
-let viewDemand,requests=[];
+let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
@@ -14,7 +14,7 @@ let employeeLinks=[];
 let dialogBinding={company_id:null,company_name:null,can_manage:true};
 let companySearches=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
-window.confirm=()=>true;
+window.confirm=message=>{confirmMessages.push(message);return true;};
 window.fetch=async(path,options={})=>{
   requests.push({path,options});
   let result;
@@ -40,6 +40,10 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='create_companies'){
+    companyImports.push(JSON.parse(options.body));
+    result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1}};
+  }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
     mockIntegration={...mockIntegration,pending_auth_me_verified:true};
     result={success:true,integration:{...mockIntegration},
@@ -195,6 +199,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(!authPanel.querySelector('[data-token]'),'the API token remains server-side');
   assert(authPanel.querySelector('[data-test]'),'the documented /user/me check is available');
   assert(authPanel.querySelector('[data-import]'),'full account import is an explicit owner action');
+  assert(authPanel.querySelector('[data-create-companies]')?.disabled,
+    'company creation stays disabled while only a pending token exists');
 
   // A fresh render/reload reads the durable pending state and shows the result without repeating login.
   await viewDemand.activate(profile);
@@ -235,7 +241,18 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(authPanel.textContent.includes('Импортировано account ID: 137'));
   assert(requests.some(row=>row.path==='/api/platform/operator/accounts'
     &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='import'));
-  assert(!requests.some(row=>/^https?:/.test(row.path)),'import uses the same-origin backend only');
+  const createCompanies=authPanel.querySelector('[data-create-companies]');
+  assert(createCompanies&&!createCompanies.disabled,'the separate company action is enabled only after the active connection is established');
+  await createCompanies.onclick({currentTarget:createCompanies});
+  assert.equal(companyImports.length,1);
+  assert.deepEqual(companyImports[0],{
+    action:'create_companies',expected_tenant_id:profile.member.tenant_id,
+    expected_user_id:profile.member.telegram_id,
+  });
+  assert(confirmMessages.at(-1).includes('свежему списку активного Operator'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('создано компаний: 2'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('ручная проверка: 1'));
+  assert(!requests.some(row=>/^https?:/.test(row.path)),'all Operator reads and local company creation use the same-origin backend only');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);

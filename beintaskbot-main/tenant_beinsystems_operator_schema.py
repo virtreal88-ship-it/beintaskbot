@@ -125,6 +125,27 @@ def migrate_operator_identity_links(cur) -> None:
       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY(tenant_id,external_account)
     )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_company_imports (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      external_account TEXT NOT NULL CHECK(external_account<>'' AND length(external_account)<=240),
+      company_id UUID NOT NULL,
+      created_by BIGINT NOT NULL CHECK(created_by>0),
+      updated_by BIGINT NOT NULL CHECK(updated_by>0),
+      last_seen_connection_instance_id UUID NOT NULL,
+      last_seen_generation TEXT NOT NULL CHECK(last_seen_generation<>''),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,external_account),
+      FOREIGN KEY(tenant_id,company_id)
+        REFERENCES saas_crm_native_companies(tenant_id,id) ON DELETE RESTRICT,
+      FOREIGN KEY(tenant_id,created_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+      FOREIGN KEY(tenant_id,updated_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+    )''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_company_import_lookup_idx
+      ON saas_beinsystems_operator_company_imports(tenant_id,company_id)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       channel_id UUID NOT NULL,
