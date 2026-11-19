@@ -96,7 +96,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     &&row.options.method==='POST').at(-1);
   assert.deepEqual(JSON.parse(bindingPost.options.body),{
     channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',company_id:'company-synthetic',
-    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:String(profile.member.telegram_id),
   });
   dialogBinding={company_id:'company-synthetic',company_name:'Synthetic company',can_manage:false};
   window.document.dispatchEvent(new window.CustomEvent('tenant-beinsystems-dialog-card',{detail:{
