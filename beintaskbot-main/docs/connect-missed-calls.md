@@ -31,6 +31,18 @@ become read-cursor targets. A first-visible conversation uses its latest
 ordinary incoming/outgoing message as the baseline, so a newer missed call
 remains unread even when it is the conversation's first displayed call event.
 
+The source-bound WhatsApp call engine reports incoming call lifecycle through
+its ordered gateway snapshots. When a provider-confirmed `ended` snapshot closes
+an inbound call that no employee claimed, the worker inserts the equivalent
+`call_missed` timeline item using the existing tenant/channel/conversation/lead
+binding. The item uses a stable call-derived ID and external key, so replayed
+snapshots cannot duplicate it. Calls claimed by an employee (including calls
+they reject) and outbound calls do not become missed-call items. This makes
+native-engine missed calls use the same unread and open-chat read cursor as
+Connect call events; read state does not alter the dialog's "does not require an
+answer" lifecycle state. No schema change or extra message to the customer is
+involved.
+
 ## Rejected incoming calls
 
 `call.rejected` uses the same signed source-local envelope, with

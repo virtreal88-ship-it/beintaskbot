@@ -423,8 +423,24 @@ def sync(c,data):
             for item in ended:
                 if item['state']!='ended':continue
                 cur.execute('''UPDATE saas_browser_calls SET state='ended',ended_at=COALESCE(ended_at,now()),updated_at=now()
-                  WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND provider_id=%s AND peer_jid=%s''',
+                  WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND provider_id=%s AND peer_jid=%s
+                    AND state NOT IN ('ended','failed')
+                  RETURNING id,tenant_id,channel_id,conversation_id,lead_id,direction,actor_id,created_at''',
                   (c['tenant_id'],c['gateway_id'],boot,item['provider_id'],item['peer_jid']))
+                ended_call=cur.fetchone()
+                if ended_call and ended_call['direction']=='inbound' and ended_call['actor_id'] is None:
+                    # A live inbound call that ends without an employee claiming
+                    # it is a missed-call timeline event. The deterministic ID
+                    # and unique external key make provider retries idempotent.
+                    missed_id=uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot:browser-call-missed:'+str(ended_call['id']))
+                    external_id='browser-call-missed:'+str(ended_call['id'])
+                    cur.execute('''INSERT INTO saas_crm_messages
+                      (id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,happened_at,raw,created_at)
+                      VALUES(%s::uuid,%s::uuid,%s,%s,'system','connect:'||%s::text,'','','call_missed',%s,
+                        '{"isVideo":false,"call_source":"whatsapp_calls"}'::jsonb,clock_timestamp())
+                      ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+                      (str(missed_id),str(ended_call['tenant_id']),int(ended_call['lead_id']),external_id,
+                       str(ended_call['channel_id']),ended_call['created_at']))
             for item in active:
                 if item['state']=='ended':continue
                 cur.execute('SELECT * FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND provider_id=%s FOR UPDATE',(c['tenant_id'],c['gateway_id'],item['provider_id']))

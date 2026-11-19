@@ -75,6 +75,36 @@ def test_missed_call_is_unread_and_opening_its_chat_marks_only_missed_call_read(
     assert next(r for r in after_first_open['dialogs'] if r['lead_id']==44)['unread_count']==0
 
 
+def test_missed_call_before_unrelated_system_event_reads_without_404_and_keeps_no_reply_status(active):
+    baseline=message(active,510)
+    dialogs.listing(PROFILE,lifecycle='all')
+    active.execute('''INSERT INTO saas_dialog_workflows
+      (tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at)
+      VALUES(%s::uuid,%s::uuid,'client',%s::uuid,'dismissed',11,1,clock_timestamp())''',
+      (A,CA,str(uuid.uuid4())))
+    active.commit()
+    missed=message(active,511,direction='system',message_type='call_missed')
+    later_system=message(active,512,direction='system',message_type='unrelated_system_event')
+
+    snapshot=dialogs.listing(PROFILE,lifecycle='completed',channel='connect:'+CA)
+    row=next(r for r in snapshot['dialogs'] if r['lead_id']==41)
+    assert row['unread_count']==1 and row['lifecycle']['state']=='dismissed'
+    page=dialogs.history(PROFILE,'connect',41,CA,'client')
+    assert {m['id'] for m in page['messages']} >= {missed,later_system}
+    assert page['read_through_message_id']==missed
+
+    # The read cursor targets the missed call. A later unrelated system event
+    # must neither produce the #786 "message not found" 404 nor be consumed.
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+        conversation_id='client',message_id=page['read_through_message_id']))
+    refreshed=dialogs.listing(PROFILE,lifecycle='completed',channel='connect:'+CA)
+    row=next(r for r in refreshed['dialogs'] if r['lead_id']==41)
+    assert row['unread_count']==0 and row['lifecycle']['state']=='dismissed'
+    reloaded=dialogs.history(PROFILE,'connect',41,CA,'client')
+    assert {m['id'] for m in reloaded['messages']} >= {missed,later_system}
+    assert reloaded['dialog']['lifecycle']['state']=='dismissed'
+
+
 def test_preview_exact_inbound_token_and_no_read_or_lifecycle_writes(active, monkeypatch):
     older=message(active,1)
     latest=message(active,2)
