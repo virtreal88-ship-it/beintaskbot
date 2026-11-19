@@ -28,7 +28,9 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
    return{ok:true,json:async()=>({success:true,result:{id:'t2',name:body.name,body:body.body,visibility:body.visibility,version:1,can_edit:true}})};
  };
  const script=read('docs/tenant-dialog-reply-templates.js');
- w.eval(script);await tick();
+ w.eval(script);
+ assert.equal(w.document.querySelector('#operatorReplyTemplatesOpen')?.hidden,true,'pilot control stays hidden until the server confirms workspace eligibility');
+ await tick();
  const input=w.document.getElementById('chatText'),button=w.document.getElementById('operatorReplyTemplatesOpen');
  assert.ok(button,'template control is attached to the existing composer');
  assert.equal(calls.length,1,'templates are loaded once for the current tenant');
