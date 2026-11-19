@@ -3,6 +3,7 @@ import json
 import uuid
 
 from tenant_linear_policy import TenantLinearError
+from tenant_beinsystems_operator_access import is_operator_workspace
 
 STATUSES = frozenset({"online", "lunch", "away"})
 
@@ -38,7 +39,10 @@ def migrate(cur):
 
 
 def is_online(cur, tenant, employee, *, lock=False):
-    """Read one active employee's status; lock in membership-then-status order."""
+    """Apply the Online gate only to the explicitly configured Operator workspace."""
+    if not is_operator_workspace(tenant):
+        # No presence feature existed for other workspaces; preserve their old behavior.
+        return True
     clause = " FOR SHARE" if lock else ""
     cur.execute("""SELECT 1 FROM saas_tenant_members
       WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE""" + clause,
@@ -62,6 +66,9 @@ def get_status(profile):
                         "can_update": False}
             from tenant_operator_access import access
             tenant, employee, policy = access(cur, profile, "dialogs")
+            if not is_operator_workspace(tenant):
+                return {"available": False, "status": "away", "configured": False,
+                        "can_update": False}
             cur.execute("""SELECT p.status FROM saas_dialog_employee_presence p
               WHERE p.tenant_id=%s::uuid AND p.employee_id=%s""",
               (tenant, employee))
@@ -86,6 +93,8 @@ def set_status(profile, payload):
                 raise TenantLinearError("Статусы сотрудников ещё не активированы.", 409)
             from tenant_operator_access import access
             tenant, employee, _policy = access(cur, profile, "dialogs", "update")
+            if not is_operator_workspace(tenant):
+                raise TenantLinearError("Статусы сотрудников недоступны в этом workspace.", 403)
             # Serialize status changes with recipient checks, which lock this
             # membership row first. Inactive members cannot update stale sessions.
             cur.execute("""SELECT 1 FROM saas_tenant_members
