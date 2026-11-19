@@ -44,9 +44,12 @@ READ_ENDPOINTS = {
 
 
 class OperatorError(TenantPlatformError):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, *, upstream_http_status=None):
         super().__init__(message)
         self.status = status
+        self.upstream_http_status = (
+            upstream_http_status if upstream_http_status in (401, 403) else None
+        )
 
 
 def _tenant(profile):
@@ -498,7 +501,13 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         code = getattr(exc, "code", None)
         if code in (401, 403):
-            raise OperatorError("Operator отклонил служебную авторизацию.") from None
+            # Keep this as a local gateway failure; expose only the allowlisted
+            # upstream status, never the provider body or token.
+            raise OperatorError(
+                f"Operator отклонил служебную авторизацию (upstream HTTP {code}).",
+                502,
+                upstream_http_status=code,
+            ) from None
         raise OperatorError("Operator временно не ответил.") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise OperatorError("Ответ Operator превышает допустимый размер.")

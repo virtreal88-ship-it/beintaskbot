@@ -99,14 +99,14 @@ def integration_handler(member: Callable, origin: str, logger):
                                    **({"verification": verification} if verification else {})})
         except operator.OperatorError as error:
             headers = {"Cache-Control": "no-store"}
-            if error.status == 401:
-                # The auth failure came from Operator's SSO/API, not from the
-                # Beintaskbot session. The shared browser coordinator uses this
-                # marker to keep the current workspace and settings panel alive.
+            if error.status == 401 or error.upstream_http_status in (401, 403):
+                # Provider-side auth failures must not be mistaken for a
+                # Beintaskbot session failure by the shared browser coordinator.
                 headers["X-Tenant-Auth-Source"] = "operator"
-            return web.json_response({"success": False, "error": str(error)},
-                                     status=error.status,
-                                     headers=headers)
+            body = {"success": False, "error": str(error)}
+            if error.upstream_http_status in (401, 403):
+                body["upstream_http_status"] = error.upstream_http_status
+            return web.json_response(body, status=error.status, headers=headers)
         except Exception:
             logger.exception("Operator integration settings failed")
             return web.json_response({"success": False, "error": "Не удалось обновить подключение Operator."},
