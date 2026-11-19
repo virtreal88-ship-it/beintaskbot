@@ -84,6 +84,13 @@ def test_new_source_can_send_without_connect_integration(setup):
     with db.cursor() as cur:
         route=transport.connect_route(cur,A,rows[0]['lead_id'])
         assert route['native']['scope']['source']==source
+        from tenant_operator_access import access
+        from tenant_operator_dialogs import projection
+        _,_,policy=access(cur,PROFILE,'dialogs')
+        sql,scopes=projection(cur,policy)
+        cur.execute(sql+' SELECT connected FROM visible WHERE provider=%s AND channel_id=%s',(A,A,*scopes,False,'connect',source))
+        visible=cur.fetchall()
+        assert visible and all(row['connected'] for row in visible)
     db.commit()
 
 
