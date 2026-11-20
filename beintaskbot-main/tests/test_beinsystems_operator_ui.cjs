@@ -218,7 +218,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await testButton.onclick({currentTarget:testButton});
   await new Promise(resolve=>setTimeout(resolve,0));
   assert(authPanel.querySelector('[data-message]').textContent.includes('Доступ к /user/accounts подтверждён'));
-  assert(authPanel.querySelector('[data-message]').textContent.includes('токен остаётся pending'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('JWT остаётся pending'));
   assert(!authPanel.querySelector('[data-message]').textContent.includes('synthetic-account'),
     'the probe response does not reveal the queried account');
   assert.equal(mockIntegration.status,'not_connected','a bounded accounts probe does not activate the pending token');
