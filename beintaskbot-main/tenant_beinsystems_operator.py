@@ -461,8 +461,8 @@ def stage_confirmed_auth_token(profile, token):
                    legacy_pending_auth_received=bool(legacy_pending))
 
 
-def connect_with_password(profile, login, password):
-    """Receive and encrypt an Operator JWT without activating an unverified token."""
+def _authenticate_operator_for_owner(profile, login, password):
+    """Authenticate only after a fresh owner check and the normal login rate limit."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -488,11 +488,52 @@ def connect_with_password(profile, login, password):
                 raise OperatorError("Слишком много попыток подключения. Повторите через минуту.", 429)
         conn.commit()
 
-    token = _authenticate_operator(login, password)
-    # No API call is made with the new token until Operator documents a
-    # read-only access check. The active connection remains untouched.
+    return tenant, actor, _authenticate_operator(login, password)
+
+
+def connect_with_password(profile, login, password):
+    """Receive and encrypt an Operator JWT without activating an unverified token."""
+    _tenant_id, _actor, token = _authenticate_operator_for_owner(profile, login, password)
     return stage_confirmed_auth_token(profile, token)
 
+
+def login_and_read_accounts(profile, login, password, search):
+    """Use a fresh in-memory JWT for one bounded, owner-only accounts read.
+
+    The token is never staged or activated by this diagnostic. A failed login or
+    accounts request leaves the active and pending credentials unchanged.
+    """
+    if not isinstance(search, str):
+        raise OperatorError("Укажите строку поиска аккаунта Operator.")
+    query = search.strip()
+    if len(query) < 4:
+        raise OperatorError("Поиск Operator требует не менее четырёх символов.")
+    if len(query) > 120:
+        raise OperatorError("Слишком длинный поисковый запрос.")
+
+    tenant, actor, token = _authenticate_operator_for_owner(profile, login, password)
+    _assert_current_operator_owner(tenant, actor)
+    _record_operator_read(profile, "accounts", {"search": query})
+    # Recheck after audit/rate-limit work and immediately before the external call.
+    _assert_current_operator_owner(tenant, actor)
+    response = _request_operator(
+        "accounts", {"search": query, "limit": 10},
+        token=token, base_url=api_base_url())
+    accounts = _accounts_login_search_payload(response, limit=10)
+    _assert_current_operator_owner(tenant, actor)
+
+    account_read = bool(accounts)
+    match_found = any(account.casefold() == query.casefold() for account in accounts)
+    return {
+        "source": "fresh_login",
+        "request_accepted": True,
+        "access_confirmed": account_read,
+        "account_read": account_read,
+        "result_count": len(accounts),
+        "match_found": match_found,
+        "accounts": accounts,
+        "token_stored": False,
+    }
 
 def disconnect(profile):
     tenant = _tenant(profile)
@@ -1215,6 +1256,32 @@ def accounts_list_payload(response):
         if account and len(account) <= 240 and not any(ord(char) < 32 for char in account):
             result.append({"account": account})
     return result
+
+
+def _accounts_login_search_payload(response, *, limit):
+    """Expose only account IDs from a bounded fresh-login search result."""
+    if not isinstance(response, dict):
+        raise OperatorError("Operator вернул неизвестный формат списка аккаунтов.")
+    if response.get("success") is False or str(response.get("status") or "").casefold() == "error":
+        raise OperatorError("Operator сообщил об ошибке списка аккаунтов.")
+    values = response.get("data")
+    if not isinstance(values, list):
+        raise OperatorError("Operator вернул неизвестный формат списка аккаунтов.")
+    if len(values) > limit:
+        raise OperatorError("Operator вернул больше записей, чем запрошено.")
+    accounts = []
+    for row in values:
+        if not isinstance(row, dict):
+            raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+        account = row.get("account")
+        if not isinstance(account, str):
+            raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+        account = account.strip()
+        if (not account or len(account) > 240
+                or any(ord(char) < 32 for char in account)):
+            raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+        accounts.append(account)
+    return accounts
 
 
 def _accounts_access_probe_payload(response):
