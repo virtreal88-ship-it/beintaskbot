@@ -4,7 +4,7 @@ import json
 
 from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
-from tenant_dialog_reply_templates import list_templates, mutate_template
+from tenant_dialog_reply_templates import feature_ready, list_templates, mutate_template
 from tenant_linear_policy import TenantLinearError
 from tenant_beinsystems_operator_access import is_operator_workspace
 
@@ -16,7 +16,8 @@ def handler(member_from_request, origin, logger):
             profile = member_from_request(request)
             if not profile:
                 raise TenantLinearError("Нет доступа.", 403)
-            if not is_operator_workspace(profile.get("tenant_id")):
+            if (not is_operator_workspace(profile.get("tenant_id"))
+                    or not feature_ready(profile)):
                 raise TenantLinearError("Шаблоны недоступны для этого workspace.", 404)
             if request.method == "GET":
                 _expected(request.query, profile)

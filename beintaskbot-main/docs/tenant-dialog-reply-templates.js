@@ -228,7 +228,7 @@
   }
   async function attach(){
     const actions=document.querySelector('.tc-legacy-composer .operator-composer-actions'),input=document.querySelector('.tc-legacy-composer #chatText'),owner=identity();
-    if(!actions||!input||!owner){teardown();return;}
+    if(!actions||!input||!owner||window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates!==true){teardown();return;}
     if(mounted?.actions===actions&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
     const root=actions.closest('.operator-composer')||actions.parentElement;
@@ -245,6 +245,7 @@
   }
   document.addEventListener('tenant-chat-attachments-ready',()=>{void attach();});
   document.addEventListener('tenant-profile',event=>{
+    if(event.detail?.capabilities?.dialog_reply_templates!==true){teardown();return;}
     if(!mounted){void attach();return;}
     const next=event.detail?.member;
     const key=next?.tenant_id!=null&&next?.telegram_id!=null?String(next.tenant_id)+':'+String(next.telegram_id):'';

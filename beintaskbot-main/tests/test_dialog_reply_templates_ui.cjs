@@ -5,7 +5,7 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
 (async()=>{
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'});
  const w=dom.window,tenantA='00000000-0000-4000-8000-000000000101',tenantB='00000000-0000-4000-8000-000000000102';
- const profile=tenant=>({member:{tenant_id:tenant,telegram_id:33,role:'worker',active:true,permissions:['dialogs']},capabilities:{modules:{dialogs:true}}});
+ const profile=tenant=>({member:{tenant_id:tenant,telegram_id:33,role:'worker',active:true,permissions:['dialogs']},capabilities:{modules:{dialogs:true},dialog_reply_templates:tenant===tenantA}});
  w.tenantProfileSnapshot=profile(tenantA);w.tenantI18n={language:'en'};
  const composer=w.document.createElement('div');composer.className='tc-legacy-composer operator-composer';
  const chat=w.document.createElement('textarea');chat.id='chatText';composer.append(chat);
@@ -74,9 +74,10 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.equal(body.body,'Please share a suitable time.');
  assert.ok(!Object.keys(body).some(key=>/message|conversation|operator/i.test(key)),'request contains template metadata only');
  assert.equal(sent,0,'creating a template never sends a customer message');
+ const callsBeforeDisabledTenant=calls.length;
  w.tenantProfileSnapshot=profile(tenantB);
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:w.tenantProfileSnapshot}));await tick();await tick();
- assert.ok(calls.some(call=>call.method==='GET'&&call.url.includes(tenantB)),'tenant changes reload only that tenant');
+ assert.equal(calls.length,callsBeforeDisabledTenant,'templates feature is disabled for the next tenant and emits no API request');
  assert.equal(w.document.querySelector('#operatorReplyTemplatesOpen'),null,'pilot control is hidden outside the configured BeinSystems workspace');
  input.value='welcome';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();
  assert.equal(w.document.querySelector('.operator-reply-template-suggestions button'),null,'old tenant templates are cleared');

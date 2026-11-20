@@ -1,5 +1,6 @@
 """Tenant-local reply templates with membership-scoped visibility and no provider IO."""
 import json
+import os
 import uuid
 
 from tenant_linear_policy import TenantLinearError
@@ -8,6 +9,19 @@ TABLE = "saas_dialog_reply_templates"
 VISIBILITIES = frozenset({"personal", "team", "shared"})
 MAX_NAME = 120
 MAX_BODY = 4000
+
+
+def feature_ready(profile):
+    """Server gate: explicit opt-in, exact pilot tenant, and initialized schema."""
+    if os.environ.get("DIALOG_REPLY_TEMPLATES_ENABLED", "").lower() != "true":
+        return False
+    from tenant_beinsystems_operator_access import is_operator_workspace
+    if not is_operator_workspace(profile.get("tenant_id")):
+        return False
+    from tenant_platform import _connect
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            return _schema_ready(cur)
 
 
 def migrate(cur):

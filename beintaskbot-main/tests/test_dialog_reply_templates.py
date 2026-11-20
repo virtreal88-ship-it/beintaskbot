@@ -280,6 +280,7 @@ def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
     pilot_checks=[]
     monkeypatch.setattr(api, "is_operator_workspace",
                         lambda tenant: pilot_checks.append(tenant) or tenant == TENANT)
+    monkeypatch.setattr(api, "feature_ready", lambda _profile: True)
     monkeypatch.setattr(api,"mutate_template",lambda *_: called.append(True))
     handler=api.handler(lambda _request:profile,"https://crm.test",Mock())
     body=json.dumps({"action":"create","expected_tenant_id":OTHER,
@@ -306,6 +307,7 @@ def test_templates_api_is_limited_to_configured_beinsystems_workspace(monkeypatc
     calls = []
     monkeypatch.setattr(api, "is_operator_workspace",
                         lambda tenant: str(tenant) == TENANT)
+    monkeypatch.setattr(api, "feature_ready", lambda profile: str(profile.get("tenant_id")) == TENANT)
     monkeypatch.setattr(api, "list_templates",
                         lambda profile: calls.append(("list", profile["tenant_id"])
                             ) or {"available": True, "templates": [], "allowed_visibility": []})

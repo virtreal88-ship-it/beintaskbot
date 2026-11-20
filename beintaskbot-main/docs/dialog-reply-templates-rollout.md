@@ -4,7 +4,9 @@ This pilot is limited to the single UUID-configured BeinSystems workspace throug
 
 ## Preflight
 
-`tenant_dialog_reply_templates.migrate(cursor)` is an additive, idempotent schema migration. Run it only through the reviewed tenant database preflight with the approved backup and recovery procedure. The request handler fails closed until the table exists; it never performs DDL. This PR does not run a production migration or deploy the feature.
+`tenant_dialog_reply_templates.migrate(cursor)` is an additive, idempotent schema migration. Run it only through a separately reviewed tenant database preflight with an approved backup and recovery procedure. This repository does not provide an approved live procedure for this migration. The explicit server gate defaults off and requires both the exact pilot workspace and the initialized table; the request handler never performs DDL. This PR does not run a production migration or deploy the feature.
+
+Proposed sequence, not an approved live procedure: obtain owner approval and a verified recoverable backup; in a short tenant-scoped transaction apply the additive migration, verify the table/index, and commit; enable `DIALOG_REPLY_TEMPLATES_ENABLED=true` only after the migration is confirmed. Roll back the application by disabling that setting while retaining the additive table. Do not drop the table as part of application rollback. No new backup service or data export is part of this proposal.
 
 The migration creates `saas_dialog_reply_templates` and an index for active visibility scopes. It does not alter memberships, existing CRM records, customer conversations, or messages.
 
@@ -25,3 +27,5 @@ The migration creates `saas_dialog_reply_templates` and an index for active visi
 ## Tests
 
 Synthetic tests cover scope isolation, tenant binding, stale versions, idempotent retries, department-preserving edits and transitions, route wiring, and that typing/insertion/management do not call a message endpoint or store drafts locally.
+
+The dedicated disposable PostgreSQL CI test runs the actual migration twice, checks synthetic tenant/department CRUD and rollback, and drops its isolated schema. The profile capability is false unless the server opt-in is true, the configured pilot tenant matches, and the schema exists; the browser does not mount or call template endpoints when false.
