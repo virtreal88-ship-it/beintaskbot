@@ -354,6 +354,7 @@ def test_lifecycle_hides_consultation_bell_content_without_owner_exception(ready
         lifecycle.migrate(cur)
         from tenant_dialog_rollout import transition
         transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    local.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s::uuid,33,'online',33)",(A,))
     local.commit()
     monkeypatch.setattr(tenant_platform,'_connect',lambda:local)
     lifecycle.mutate({'tenant_id':A,'telegram_id':33},dict(provider='connect',channel_id=CA,
