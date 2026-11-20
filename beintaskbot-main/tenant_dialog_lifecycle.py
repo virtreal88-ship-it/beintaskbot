@@ -232,11 +232,12 @@ def note_inbound_call(cur, tenant, channel, conversation, call_id):
     # Keep message history, completed episodes and manually paused AI untouched.
 
 
-def _targets(cur, tenant, policy, channel, actor):
+def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True):
     from tenant_scoped_access_store import read_access_profile
     from tenant_policy import TenantPolicy
     from tenant_dialog_access import require_source
-    from tenant_dialog_presence import is_online
+    from tenant_dialog_presence import is_online, routing_enabled
+    routing = filter_presence and routing_enabled(cur,tenant)
     cur.execute('SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id', (tenant,))
     members=cur.fetchall(); result=[]
     for member in members:
@@ -250,7 +251,7 @@ def _targets(cur, tenant, policy, channel, actor):
             require_source(cur,tenant,p,'connect',channel,'view')
             require_source(cur,tenant,p,'connect',channel,'update')
         except TenantLinearError: continue
-        if not is_online(cur,tenant,target,lock=True): continue
+        if routing and not is_online(cur,tenant,target,lock=True,_routing=routing): continue
         result.append({'employee_id':target,'name':member.get('display_name') or str(target)})
     return result
 
@@ -346,20 +347,21 @@ def _mutate_once(profile, payload):
             if action in {'accept','start','dismiss'} and not acceptance_enabled(cur, tenant):
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
-            if action in {'accept','start'}:
-                from tenant_dialog_presence import is_online
-                if not is_online(cur,tenant,actor,lock=True):
-                    raise TenantLinearError('Установите статус «Онлайн», чтобы принять диалог.',403)
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
+            from tenant_dialog_presence import is_online
             target = None
+            eligible = True
+            if action in {'accept','start'}:
+                eligible = is_online(cur,tenant,actor,lock=True)
             if action == 'transfer':
                 target=payload.get('target_employee_id')
                 # Preserve all existing locked membership/source checks, but
                 # acquire them BEFORE the route lock to avoid lock inversion.
-                if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor)}:
+                if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor,filter_presence=False)}:
                     raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
+                eligible = is_online(cur,tenant,target,lock=True)
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)
@@ -372,6 +374,13 @@ def _mutate_once(profile, payload):
                 if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
                 require_access(cur,tenant,actor,'connect',channel,conversation,'view')
                 return receipt['result']
+            # Keep membership/presence locks acquired BEFORE the route lock,
+            # but only new mutations require Online. A retry still needs the
+            # same actor, identical payload and current view authorization.
+            if not eligible:
+                message = ('Сотрудник сейчас не в статусе «Онлайн».' if action=='transfer' else
+                           'Установите статус «Онлайн», чтобы принять диалог.')
+                raise TenantLinearError(message,403)
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             if action=='dismiss':

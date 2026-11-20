@@ -7,14 +7,16 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
 (async()=>{
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
  const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
- let status='away',getCalls=0,postBody=null;
+ let status=null,routingEnforced=false,getCalls=0,postBody=null;
  w.tenantProfileSnapshot=profile;
  w.fetch=async(url,options={})=>{
   const value=String(url);
   if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   if(value.includes('/dialogs/presence')){
-   if(options.method==='POST'){postBody=JSON.parse(options.body);status=postBody.status;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:true}})};}
-   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:status!=='away',can_update:true}})};
+   if(options.method==='POST'){postBody=JSON.parse(options.body);status=postBody.status;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:true,routing_enforced:routingEnforced}})};}
+   const query=new URL(value,w.location.origin).searchParams;
+   assert.equal(query.get('expected_tenant_id'),tenant);assert.equal(query.get('expected_user_id'),'33');
+   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:status!==null,can_update:true,routing_enforced:routingEnforced}})};
   }
   if(value.includes('/dialogs?'))return{ok:true,json:async()=>({success:true,result:{dialogs:[row],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],attention_count:0,unread_count:0,total_count:1,next_offset:null}})};
   throw Error('Unexpected request '+value);
@@ -30,10 +32,11 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  assert.equal(toggleEvents,1,'the test emits one opening toggle when JSDOM omits the native details event');
  assert.ok(button&&!button.hidden,'current employee status is available in the tools menu');
  assert.equal(getCalls,1,'the menu loads one tenant-scoped status snapshot');
- assert.match(button.textContent,/Away|Отошёл|Kənarda/);
+ assert.match(button.textContent,/Not set|Не выбран|Seçilməyib/);
  button.click();await tick();
  assert.ok(w.document.getElementById('operatorPresenceModal'),'status control opens an accessible dialog');
- const select=w.document.getElementById('operatorPresenceSelect');select.value='online';
+ assert.match(w.document.getElementById('operatorPresenceModal').textContent,/does not affect|не влияет|təsir etmir/);
+ const select=w.document.getElementById('operatorPresenceSelect');assert.equal(select.value,'');select.value='online';
  w.document.getElementById('operatorPresenceModal').querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
  assert.equal(postBody.status,'online');
  assert.equal(postBody.expected_tenant_id,tenant);assert.equal(postBody.expected_user_id,33);
@@ -41,6 +44,9 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  assert.match(button.textContent,/Online|Онлайн|Onlayn/);
  assert.equal(w.document.getElementById('operatorPresenceModal'),null,'successful update closes the dialog');
  assert.ok(getCalls>=1,'status is read from the tenant-scoped server endpoint');
+ routingEnforced=true;menu.open=true;menu.dispatchEvent(new w.Event('toggle'));await tick();
+ button.click();await tick();
+ assert.match(w.document.getElementById('operatorPresenceModal').textContent,/Only employees|Только сотрудники|Yalnız/);
  const denied=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),dw=denied.window;
  dw.tenantProfileSnapshot={member:{tenant_id:tenant,telegram_id:55,role:'worker',permissions:[],active:true},capabilities:{modules:{dialogs:false}}};
  dw.fetch=async()=>({ok:true,json:async()=>dw.tenantProfileSnapshot});

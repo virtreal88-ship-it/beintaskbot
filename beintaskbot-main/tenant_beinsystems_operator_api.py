@@ -8,6 +8,7 @@ from collections.abc import Callable
 from aiohttp import web
 
 import tenant_beinsystems_operator as operator
+import tenant_beinsystems_operator_company_import as company_import
 from tenant_beinsystems_operator_access import is_operator_workspace
 from tenant_linear_policy import TenantLinearError
 
@@ -87,8 +88,29 @@ def integration_handler(member: Callable, origin: str, logger):
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
-            elif action == "test" and set(data) == {"action"}:
-                verification = await asyncio.to_thread(operator.verify_connection, profile)
+            elif action == "directory_search" and set(data) == {"action", "search"}:
+                directory = await asyncio.to_thread(
+                    operator.search_authenticated_operator_account, profile, data["search"])
+                directory["accounts_only_ready"] = bool(
+                    (await asyncio.to_thread(operator.status, profile)).get("accounts_only_ready"))
+                return _json_response({"directory": directory})
+            elif action == "prepare_accounts_capability" and set(data) == {
+                    "action", "candidate_received_at"}:
+                confirmation = await asyncio.to_thread(
+                    company_import.prepare_accounts_capability, profile,
+                    data["candidate_received_at"])
+                return _json_response({"accounts_only_confirmation": confirmation})
+            elif action == "confirm_accounts_capability" and set(data) == {
+                    "action", "acknowledged_identifier", "candidate_received_at"}:
+                capability = await asyncio.to_thread(
+                    company_import.confirm_accounts_capability, profile,
+                    acknowledged_identifier=data["acknowledged_identifier"],
+                    candidate_received_at=data["candidate_received_at"])
+                value = await asyncio.to_thread(operator.status, profile)
+                return _json_response({"accounts_only": capability, "integration": value})
+            elif action == "test" and set(data) == {"action", "search"}:
+                verification = await asyncio.to_thread(
+                    operator.verify_accounts_access, profile, data["search"])
                 value = await asyncio.to_thread(operator.status, profile)
             elif action == "disconnect" and set(data) == {"action"}:
                 value = await asyncio.to_thread(operator.disconnect, profile)
@@ -98,14 +120,16 @@ def integration_handler(member: Callable, origin: str, logger):
                                    **({"verification": verification} if verification else {})})
         except operator.OperatorError as error:
             headers = {"Cache-Control": "no-store"}
-            if error.status == 401:
-                # The auth failure came from Operator's SSO/API, not from the
-                # Beintaskbot session. The shared browser coordinator uses this
-                # marker to keep the current workspace and settings panel alive.
+            if error.status == 401 or error.upstream_http_status in (401, 403):
+                # Provider-side auth failures must not be mistaken for a
+                # Beintaskbot session failure by the shared browser coordinator.
                 headers["X-Tenant-Auth-Source"] = "operator"
-            return web.json_response({"success": False, "error": str(error)},
-                                     status=error.status,
-                                     headers=headers)
+            body = {"success": False, "error": str(error)}
+            if error.upstream_http_status in (401, 403):
+                body["upstream_http_status"] = error.upstream_http_status
+            if error.upstream_error_code:
+                body["upstream_error_code"] = error.upstream_error_code
+            return web.json_response(body, status=error.status, headers=headers)
         except Exception:
             logger.exception("Operator integration settings failed")
             return web.json_response({"success": False, "error": "Не удалось обновить подключение Operator."},
@@ -119,6 +143,7 @@ def accounts_handler(member: Callable, origin: str, logger):
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
+        action = ""
         try:
             if request.method == "GET":
                 _context(dict(request.query), profile)
@@ -126,11 +151,19 @@ def accounts_handler(member: Callable, origin: str, logger):
                     operator.imported_accounts, profile, search=request.query.get("search", ""))
                 return _json_response({"accounts": rows})
             data = await _body(request, profile, origin)
+            action = str(data.get("action") or "").strip().lower()
             if data == {"action": "import"}:
                 result = await asyncio.to_thread(operator.import_accounts, profile)
                 return _json_response({"imported": result["imported"],
                     "activated": result["activated"], "integration": result["status"],
                     "identity": result["identity"]})
+            if data == {"action": "create_companies"}:
+                result = await asyncio.to_thread(company_import.create_companies, profile)
+                return _json_response({"company_import": result})
+            if set(data) == {"action", "account_id"} and data.get("action") == "add_account_company":
+                result = await asyncio.to_thread(
+                    company_import.add_selected_account_company, profile, data["account_id"])
+                return _json_response({"account_company": result})
             if set(data) != {"search"}:
                 raise operator.OperatorError("Укажите строку поиска или действие import.")
             response = await asyncio.to_thread(operator.read, profile, "accounts", data)
@@ -141,7 +174,10 @@ def accounts_handler(member: Callable, origin: str, logger):
                                      status=error.status,
                                      headers={"Cache-Control": "no-store"})
         except Exception:
-            logger.exception("Operator account request failed")
+            if action == "create_companies":
+                logger.error("Operator company creation failed")
+            else:
+                logger.exception("Operator account request failed")
             return web.json_response({"success": False, "error": "Список аккаунтов Operator временно недоступен."},
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint

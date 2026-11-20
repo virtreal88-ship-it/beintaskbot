@@ -15,6 +15,7 @@ import tenant_dialog_lifecycle as lifecycle
 def episodes(db, monkeypatch, request):
     import tenant_platform
     monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', A)
+    monkeypatch.setenv('TENANT_DIALOG_PRESENCE_ROUTING_ENABLED', 'true')
     monkeypatch.setattr(tenant_platform, '_connect', lambda: db)
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db)
@@ -123,6 +124,8 @@ def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     transfer=payload('transfer',1,target_employee_id=11)
     result=lifecycle.mutate({'tenant_id':A,'telegram_id':33},transfer)
     assert result['lifecycle']['operator_id']==11
+    from tenant_dialog_presence import set_status
+    set_status(PROFILE,{'status':'away'})
     # Idempotency never grants the former operator access after transfer.
     with pytest.raises(TenantLinearError) as replay:
         lifecycle.mutate({'tenant_id':A,'telegram_id':33},transfer)
@@ -141,7 +144,7 @@ def test_employee_presence_is_self_scoped_and_tenant_isolated(episodes):
     import tenant_dialog_presence as presence
     own={'tenant_id':A,'telegram_id':33}
     status=presence.get_status(own)
-    assert status['available'] and status['can_update']
+    assert status['available'] and status['can_update'] and status['routing_enforced']
     assert status['status']=='online' and status['configured']
     presence.set_status(own,{'status':'lunch'})
     assert presence.get_status(own)['status']=='lunch'
@@ -153,7 +156,7 @@ def test_employee_presence_is_self_scoped_and_tenant_isolated(episodes):
         other=presence.get_status({'tenant_id':B,'telegram_id':33})
     except TenantLinearError:
         other=None
-    assert other is None or other['status']=='away'
+    assert other is None or other['status'] is None
 
 
 def test_stale_transfer_candidate_is_rejected_and_assignment_is_preserved(episodes):
@@ -448,7 +451,8 @@ def test_presence_gate_is_limited_to_configured_beinsystems_workspace(episodes):
     other = {'tenant_id': B, 'telegram_id': 22}
     status = presence.get_status(other)
     assert status == {
-        'available': False, 'status': 'away', 'configured': False, 'can_update': False
+        'available': False, 'status': None, 'configured': False, 'can_update': False,
+        'routing_enforced': False,
     }
     with pytest.raises(TenantLinearError) as disabled:
         presence.set_status(other, {'status': 'online'})
@@ -485,7 +489,8 @@ def test_beinsystems_employee_without_presence_can_set_online_then_accept(episod
     episodes.commit()
     initial = presence.get_status(employee)
     assert initial['available'] is True
-    assert initial['status'] == 'away'
+    assert initial['status'] is None
+    assert initial['routing_enforced'] is True
     assert initial['configured'] is False
     with pytest.raises(TenantLinearError) as offline:
         lifecycle.mutate(employee, payload())
@@ -495,6 +500,89 @@ def test_beinsystems_employee_without_presence_can_set_online_then_accept(episod
     saved = presence.set_status(employee, {'status': 'online'})
     assert saved['status'] == 'online'
     assert presence.get_status(employee)['status'] == 'online'
-    accepted = lifecycle.mutate(employee, payload())
+    request = payload()
+    accepted = lifecycle.mutate(employee, request)
     assert accepted['lifecycle']['state'] == 'accepted'
+    presence.set_status(employee, {'status': 'lunch'})
+    assert lifecycle.mutate(employee, request) == accepted
     assert state(episodes)['operator_id'] == 33
+
+def test_off_preserves_claim_and_transfer_without_presence_table(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+
+    monkeypatch.delenv(presence.ROUTING_ENV)
+    episodes.execute('DROP TABLE saas_dialog_employee_presence')
+    episodes.commit()
+    response=presence.get_status(PROFILE)
+    assert not response['available'] and not response['routing_enforced']
+    with pytest.raises(TenantLinearError) as unmigrated:
+        presence.set_status(PROFILE, {'status':'online'})
+    assert unmigrated.value.status==409
+
+    with monkeypatch.context() as routing_only:
+        def unexpected(_):
+            pytest.fail('Off mode must not even look up the presence table')
+        routing_only.setattr(presence, '_available', unexpected)
+        with episodes.cursor() as cur:
+            result=lifecycle.decorate(cur,A,11,{'provider':'connect','channel_id':CA,
+                'conversation_id':'client','lead_id':41,'can_send':True},details=False,
+                _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True)
+            assert result['lifecycle']['can_accept'] is True
+        episodes.commit()
+        command()
+        assert command('transfer',1,target_employee_id=33)['lifecycle']['operator_id']==33
+        command('close',2,actor=33)
+        assert command('start',3,actor=33)['lifecycle']['operator_id']==33
+
+    # Even a prematurely configured switch must not issue undefined-table SQL.
+    monkeypatch.setenv(presence.ROUTING_ENV, 'true')
+    assert not presence.get_status(PROFILE)['routing_enforced']
+    assert command('transfer',4,actor=33,target_employee_id=11)['lifecycle']['operator_id']==11
+
+
+def test_enrollment_is_ready_while_routing_off(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+
+    monkeypatch.delenv(presence.ROUTING_ENV)
+    employee={'tenant_id':A,'telegram_id':33}
+    episodes.execute('DELETE FROM saas_dialog_employee_presence')
+    with episodes.cursor() as cur:
+        lifecycle.migrate(cur)
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_employee_presence')[0]['n']==0
+    episodes.commit()
+    assert presence.get_status(employee)=={'available':True,'status':None,'configured':False,
+        'can_update':True,'routing_enforced':False}
+    assert not presence.set_status(employee, {'status':'lunch'})['routing_enforced']
+    assert presence.get_status(employee)['status']=='lunch'
+    command(actor=11)
+    assert command('transfer',1,target_employee_id=33)['lifecycle']['operator_id']==33
+    monkeypatch.setenv(presence.ROUTING_ENV, 'true')
+    assert presence.get_status(employee)['routing_enforced']
+    with episodes.cursor() as cur:
+        lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
+    episodes.commit()
+    assert command('close',2,actor=33)['lifecycle']['state']=='closed'
+    with pytest.raises(TenantLinearError) as blocked:
+        command('start',3,actor=33)
+    assert blocked.value.status==403
+
+
+def test_no_eligible_employee_leaves_inbound_waiting(episodes):
+    import tenant_dialog_presence as presence
+
+    # First close a previous episode, then a genuinely new inbound reopens it.
+    command()
+    command('close',1)
+    presence.set_status(PROFILE, {'status':'away'})
+    presence.set_status({'tenant_id':A,'telegram_id':33}, {'status':'lunch'})
+    with episodes.cursor() as cur:
+        lifecycle.note_inbound(cur,A,CA,'client',str(uuid.uuid4()),'2099-01-01T00:00:00Z')
+    episodes.commit()
+    for actor in (11,33):
+        with pytest.raises(TenantLinearError) as blocked:
+            command(revision=3,actor=actor)
+        assert blocked.value.status==403
+    waiting=state(episodes)
+    assert waiting['state']=='waiting' and waiting['operator_id'] is None
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==1
+    episodes.commit()

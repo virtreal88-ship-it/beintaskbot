@@ -16,7 +16,10 @@ def projection(history_db,monkeypatch):
     d=history_db
     import tenant_platform
     monkeypatch.setattr(tenant_platform,'_connect',lambda:d)
+    monkeypatch.setattr(dialogs,'_connect',lambda:d)
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
+    monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID',A)
+    monkeypatch.setenv('TENANT_DIALOG_PRESENCE_ROUTING_ENABLED','true')
     with d.cursor() as cur:lifecycle.migrate(cur)
     for actor in (33,44):
         d.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,%s,'operator','Synthetic operator','[\"dialogs\",\"support\"]'::jsonb)",(A,actor))
@@ -75,7 +78,17 @@ def test_claim_and_transfer_filter_copies_before_group_dedup(projection):
     assert denied.value.status==404
     assert_copy(read(44,CA),'outgoing',[CA,CB])
     assert_copy(read(33,CB),'incoming',[CB])
+    def listed(actor):
+        return {dialog['channel_id'] for dialog in
+                dialogs.listing({'tenant_id':A,'telegram_id':actor},channel='connect:'+CA)['dialogs']
+                if dialog['conversation_id']==G}
+
+    assert CA in listed(44)
     change(44,'transfer',1,target_employee_id=11)
+    assert CA not in listed(44)
+    from tenant_dialog_presence import set_status
+    set_status({'tenant_id':A,'telegram_id':11},{'status':'lunch'})
+    assert CA in listed(11)
     assert_copy(read(11,CA),'outgoing',[CA,CB])
     assert_copy(read(44,CB),'incoming',[CB])
     with pytest.raises(TenantLinearError) as former:read(44,CA)

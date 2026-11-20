@@ -125,6 +125,58 @@ def migrate_operator_identity_links(cur) -> None:
       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY(tenant_id,external_account)
     )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_company_imports (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      external_account TEXT NOT NULL CHECK(external_account<>'' AND length(external_account)<=240),
+      company_id UUID NOT NULL,
+      created_by BIGINT NOT NULL CHECK(created_by>0),
+      updated_by BIGINT NOT NULL CHECK(updated_by>0),
+      last_seen_connection_instance_id UUID NOT NULL,
+      last_seen_generation TEXT NOT NULL CHECK(last_seen_generation<>''),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,external_account),
+      FOREIGN KEY(tenant_id,created_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+      FOREIGN KEY(tenant_id,updated_by)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+    )''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_company_import_lookup_idx
+      ON saas_beinsystems_operator_company_imports(tenant_id,company_id)''')
+    # A pending JWT may be explicitly approved for narrowly scoped, one-account
+    # CRM additions without becoming the generic Operator integration. The JWT
+    # remains only in the existing encrypted pending-auth row.
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_accounts_capabilities (
+      tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      owner_telegram_id BIGINT NOT NULL CHECK(owner_telegram_id>0),
+      candidate_received_at TIMESTAMPTZ NOT NULL,
+      operator_identifier_fingerprint TEXT NOT NULL
+        CHECK(operator_identifier_fingerprint ~ '^[0-9a-f]{64}$'),
+      connection_generation TEXT NOT NULL CHECK(connection_generation<>''),
+      connection_instance_id UUID NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      FOREIGN KEY(tenant_id,owner_telegram_id)
+        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
+    )''')
+    # The Operator identity migration is also exercised on isolated databases that
+    # may not have the native CRM schema yet. Install the tenant-scoped foreign
+    # key as soon as that table exists; normal app migration order creates it
+    # before reaching this point.
+    cur.execute('''DO $operator_company_import$ BEGIN
+      IF to_regclass('saas_crm_native_companies') IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+           WHERE conrelid='saas_beinsystems_operator_company_imports'::regclass
+             AND conname='saas_operator_company_import_company_fk'
+         ) THEN
+        ALTER TABLE saas_beinsystems_operator_company_imports
+          ADD CONSTRAINT saas_operator_company_import_company_fk
+          FOREIGN KEY(tenant_id,company_id)
+          REFERENCES saas_crm_native_companies(tenant_id,id) ON DELETE RESTRICT;
+      END IF;
+    END; $operator_company_import$;''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       channel_id UUID NOT NULL,

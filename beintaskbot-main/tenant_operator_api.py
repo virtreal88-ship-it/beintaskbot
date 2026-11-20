@@ -39,6 +39,7 @@ def handler(member_from_request,origin,logger,resource):
                     from tenant_saved_only_copilot import preflight
                     result=await asyncio.to_thread(preflight,profile,dict(query))
                 elif resource=='presence':
+                    _expected(query,profile)
                     result=await asyncio.to_thread(presence_status,profile)
                 elif resource=='view_preferences':
                     result=await asyncio.to_thread(dialog_view_preferences,profile)

@@ -16,7 +16,7 @@
     evidence: 'Основание ручной проверки', confirm: 'Подтвердить связь',
     linked: 'Связь подтверждена', waiting: 'Проверка…',
     userWarning: 'Связь с ERP-пользователем подтверждается вручную по паре account + login.',
-    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Новый токен остаётся pending до проверки /user/me и чтения /user/accounts; ошибочный кандидат не меняет действующее подключение.',
+    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Проверка читает не больше одной записи из /user/accounts. Она не подтверждает способ входа; pending JWT не активируется и не меняет действующее подключение.',
     contract: 'Создание тикетов и публичные ссылки включатся после подтверждения контрактов Operator.',
     employeeLink: 'Пользователь Operator выбирается из ответа API и связывается с сотрудником Beintaskbot по паре account + login. Документация пока не описывает отдельный стабильный user ID. Сервисные вызовы остаются под ограниченным SSO-пользователем подключения; Beintaskbot отдельно фиксирует сотрудника, который подтвердил связь.',
   };
@@ -71,21 +71,29 @@
     const renderStatus = () => {
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
+      if (state.accounts_only_ready) parts.push('Подключено для аккаунтов: подтверждение разрешает попытку, доступ Operator к account проверяется отдельно');
       if (state.pending_auth_received) {
-        if (state.pending_auth_access_confirmed === true) parts.push('Доступ к accounts подтверждён');
-        else if (state.pending_auth_me_verified === true) parts.push('JWT принят; доступ к accounts ещё не подтверждён');
-        else parts.push('JWT получен; доступ ещё не подтверждён');
+        if (state.pending_auth_access_confirmed === true) parts.push('У pending-кандидата есть отметка предыдущей проверки /user/accounts; конкретный результат здесь не указан');
+        else parts.push('JWT сохранён как pending; чтение account не подтверждено');
       }
       status.textContent = parts.join(' · ');
       const testButton=connection.querySelector('[data-test]');
       if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
+      const createCompaniesButton=connection.querySelector('[data-create-companies]');
+      if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Каждый Operator account можно связать с CRM-компанией только вручную через существующую форму.</p><div data-catalog aria-live="polite"></div>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-accounts-capability aria-live="polite"></div><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт запрашивает список /user/accounts и сохраняет полученные account ID; полнота выдачи Operator не проверена. Пропавшие записи не удаляются, данные в Operator не отправляются.</p><p>Создание компаний — отдельное подтверждаемое действие по account ID, полученному из запроса /user/accounts текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
+      testControl.textContent = 'Проверить доступ к accounts';
+      const testDescription = Array.from(connection.querySelectorAll('p'))
+        .find(item => item.textContent.includes('/user/me'));
+      if (testDescription) testDescription.textContent =
+        'Проверка отправляет поиск с лимитом 1 в /user/accounts. Для pending JWT это проверка только чтения accounts, а не способа входа. Без результата чтение конкретного account не подтверждается; импорт и активация не выполняются.';
       testControl.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const authForm = $(connection, '[data-operator-auth-form]');
+      $(connection, '[data-operator-login]').placeholder = 'user@account';
       const authMessage = $(connection, '[data-auth-message]');
       const saveButton = $(connection, '[data-save]');
       const showAuthMessage = (value, reveal = false) => {
@@ -94,20 +102,94 @@
         authMessage.focus({preventScroll: true});
         authMessage.scrollIntoView?.({block: 'nearest'});
       };
+      const capabilityHost=$(connection,'[data-accounts-capability]');
+      const renderAccountsCapability=()=>{
+        capabilityHost.replaceChildren();
+        if(state.accounts_only_ready){
+          const label=document.createElement('p');
+          label.textContent='Подключено для аккаунтов. Подтверждение разрешает только попытку добавления; доступ Operator к выбранному account проверяется отдельно и может не подтвердиться. Остальные функции Operator не активированы.';
+          capabilityHost.append(label);return;
+        }
+        if(!state.pending_auth_received||state.connected||state.configured)return;
+        const prepare=document.createElement('button');prepare.type='button';
+        prepare.textContent='Проверить личность для аккаунтного доступа';
+        const note=document.createElement('p');
+        note.textContent='Отдельное подтверждение владельца разрешит только попытку ручного добавления одного account в CRM на 24 часа. Доступ Operator к выбранному account отдельно проверяется при добавлении и может не подтвердиться. Общая связь Operator не активируется.';
+        capabilityHost.append(note,prepare);
+        prepare.onclick=async()=>{
+          prepare.disabled=true;message.textContent=text.waiting;
+          try{
+            const preview=await request('/api/platform/integrations/beinsystems-operator',{
+              action:'prepare_accounts_capability',candidate_received_at:state.pending_auth_received_at});
+            if(current!==revision)return;
+            const confirmation=preview.accounts_only_confirmation||{};
+            const prompt=document.createElement('section');
+            const identity=document.createElement('p');
+            identity.textContent='Проверенный Operator identity: '+String(confirmation.identifier||'');
+            const confirm=document.createElement('button');confirm.type='button';
+            confirm.textContent='Подтверждаю эту учётную запись для добавления аккаунтов';
+            const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отмена';
+            cancel.onclick=()=>prompt.remove();
+            confirm.onclick=async()=>{
+              confirm.disabled=true;message.textContent=text.waiting;
+              try{
+                const saved=await request('/api/platform/integrations/beinsystems-operator',{
+                  action:'confirm_accounts_capability',
+                  acknowledged_identifier:confirmation.identifier,
+                  candidate_received_at:confirmation.candidate_received_at,
+                });
+                if(current!==revision)return;
+                if(saved.integration){state=saved.integration;renderStatus();renderAccountsCapability();}
+                message.textContent='Доступ подключён только для аккаунтов на 24 часа.';
+              }catch(error){if(current===revision)message.textContent=error.message;}
+              finally{if(current===revision)confirm.disabled=false;}
+            };
+            prompt.append(identity,confirm,cancel);capabilityHost.replaceChildren(note,prompt);
+            message.textContent='Проверьте учётную запись Operator перед подтверждением.';
+          }catch(error){if(current===revision)message.textContent=error.message;}
+          finally{if(current===revision)prepare.disabled=false;}
+        };
+      };
+      renderAccountsCapability();
       if (state.pending_auth_received) showAuthMessage(text.tokenPending);
       const run = async (button, fn) => {
         button.disabled = true; message.textContent = text.waiting;
         try { const result = await fn(); if (current !== revision) return;
-          if (result?.integration) { state = result.integration; renderStatus(); }
-          if (result?.verification) {
-            message.textContent = 'JWT Operator принят. Профиль: '+result.verification.identifier+
-              ' · роль провайдера: '+result.verification.role+
-              '. Эта роль не меняет права Beintaskbot; доступ к accounts проверяется отдельно.';
+          if (result?.integration) { state = result.integration; renderStatus(); renderAccountsCapability(); }
+          if (result?.verification?.request_accepted === true) {
+            const accountRead = result.verification.account_read === true;
+            const outcome = accountRead
+              ? 'Operator принял запрос /user/accounts и вернул одну запись; чтение account подтверждено.'
+              : 'Operator принял запрос /user/accounts, совпадений нет; чтение конкретного account не подтверждено.';
+            const exactMatch = accountRead
+              ? (result.verification.match_found === true
+                ? ' Точное совпадение найдено.' : ' Точного совпадения нет.')
+              : '';
+            const sourceNote = result.verification.source === 'pending'
+              ? ' Использован сохранённый pending JWT; это проверка только доступа к accounts, не подтверждение нового способа входа. JWT остаётся pending; действующее подключение не менялось.'
+              : ' Проверено действующее подключение; pending JWT и способ нового входа не проверялись. Подключение не менялось.';
+            message.textContent = outcome+exactMatch+sourceNote;
           } else if (Number.isInteger(result?.imported)) {
             message.textContent = 'Импортировано account ID: '+result.imported+
               (result.activated ? '. Доступ к /user/me и /user/accounts подтверждён; подключение активировано.'
                 : '. Существующее подключение сохранено.');
             void loadCatalog();
+          } else if (result?.company_import) {
+            const counts=result.company_import;
+            const collisionCount=Number.isFinite(Number(counts.name_collision_count))
+              ? Math.max(0,Number(counts.name_collision_count)) : 0;
+            const collisionAccounts=(Array.isArray(counts.name_collision_accounts)
+              ? counts.name_collision_accounts : []).slice(0,20)
+              .map(account=>String(account).slice(0,240)).filter(Boolean);
+            const collisionDetails=collisionCount
+              ? ' Совпадение названия, требуется ручная проверка ('+collisionCount+')'+
+                (collisionAccounts.length ? ': '+collisionAccounts.join(', ') : '')+
+                (counts.name_collision_truncated ? ' …' : '')+'.'
+              : '';
+            message.textContent='Проверено аккаунтов: '+counts.checked+
+              ' · создано компаний: '+counts.created+
+              ' · повторно связано: '+counts.reused+
+              ' · ручная проверка: '+counts.manual_review+'.'+collisionDetails;
           } else {
             message.textContent = result?.integration?.pending_auth_received
               ? text.tokenPending : (result?.message || 'Готово.');
@@ -135,7 +217,7 @@
           password = '';
           const result = await pending;
           if (current !== revision) return;
-          if (result?.integration) { state = result.integration; renderStatus(); }
+          if (result?.integration) { state = result.integration; renderStatus(); renderAccountsCapability(); }
           if (result?.integration?.pending_auth_received === true) showAuthMessage(text.tokenPending, true);
           else showAuthMessage('Сервер не подтвердил получение JWT. Действующее подключение не изменено.', true);
         } catch (error) {
@@ -169,10 +251,18 @@
         } catch(error) { if(current===revision&&requestId===catalogRevision)host.textContent=error.message; }
       };
       void loadCatalog();
-      $(panel,'[data-test]').onclick = event => run(event.currentTarget, async () =>
-        request('/api/platform/integrations/beinsystems-operator',{action:'test'}));
+      $(panel,'[data-test]').onclick = event => run(event.currentTarget, async () => {
+        const search = $(panel,'[data-search]').value.trim();
+        if (search.length < 4) throw new Error('Введите не менее четырёх символов известного account.');
+        return request('/api/platform/integrations/beinsystems-operator',{action:'test',search});
+      });
       $(panel,'[data-import]').onclick = event => run(event.currentTarget, async () =>
         request('/api/platform/operator/accounts',{action:'import'}));
+      $(panel,'[data-create-companies]').onclick = event => run(event.currentTarget, async () => {
+        if(!(state.connected||state.configured))throw new Error('Сначала проверьте действующее подключение Operator.');
+        if(!window.confirm('Создать недостающие CRM-компании по свежему списку активного Operator? Совпадения названия отправятся на ручную проверку.'))return {message:'Отменено.'};
+        return request('/api/platform/operator/accounts',{action:'create_companies'});
+      });
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});
@@ -246,20 +336,77 @@
         finally { button.disabled=false; }
       };
     }
+    let directoryRevision=0;
     $(panel,'[data-search-button]').onclick = async event => {
-      const button=event.currentTarget, value=$(panel,'[data-search]').value.trim(), results=$(panel,'[data-results]');
+      const button=event.currentTarget, rawValue=$(panel,'[data-search]').value,
+        value=rawValue.trim(), results=$(panel,'[data-results]');
+      const requestId=++directoryRevision;
+      if(data.member.role==='owner'){
+        results.replaceChildren();
+        if(rawValue.length>120||value.length<4||value.length>120||/[\u0000-\u001f\u007f]/.test(rawValue)){
+          results.textContent='Введите от 4 до 120 символов без управляющих знаков.';return;
+        }
+        button.disabled=true;message.textContent=text.waiting;
+        try{
+          const found=await request('/api/platform/integrations/beinsystems-operator',
+            {action:'directory_search',search:value});
+          if(current!==revision||requestId!==directoryRevision)return;
+          const result=found.directory||{};
+          if(result.account_id){
+            if(result.source==='active'){
+              const item=document.createElement('button');item.type='button';item.textContent=result.account_id;
+              item.setAttribute('aria-label','Выбрать account ID '+result.account_id);
+              item.onclick=()=>{$(panel,'[data-account]').value=result.account_id;};results.append(item);
+            }else{
+              const line=document.createElement('p');line.append(document.createTextNode('Account ID: '));
+              const id=document.createElement('code');id.textContent=result.account_id;line.append(id);results.append(line);
+            }
+            if(result.exact_match===true&&(result.source==='active'||result.accounts_only_ready===true)){
+              const add=document.createElement('button');add.type='button';
+              add.textContent='Добавить этот account в CRM';
+              add.onclick=async()=>{
+                add.disabled=true;message.textContent=text.waiting;
+                try{
+                  const saved=await request('/api/platform/operator/accounts',{
+                    action:'add_account_company',account_id:result.account_id});
+                  if(current!==revision||requestId!==directoryRevision)return;
+                  const outcome=saved.account_company||{};
+                  if(outcome.status==='manual_review'){
+                    message.textContent='Для account требуется ручная проверка: локальная компания уже существует или связь неоднозначна. Новая запись и переназначение не выполнялись.';
+                  }else if(outcome.status==='create'){
+                    message.textContent='CRM-компания создана. Её название — только account ID; телефон, email и описание оставлены пустыми. Данные в Operator не изменялись.';
+                  }else if(outcome.status==='reuse'||outcome.status==='bind'){
+                    message.textContent='Существующая CRM-компания сохранена без изменения её полей.';
+                  }else{
+                    message.textContent='Не удалось определить результат добавления. Проверьте компанию в CRM перед повторной попыткой.';
+                  }
+                }catch(error){if(current===revision&&requestId===directoryRevision)message.textContent=error.message;}
+                finally{if(current===revision&&requestId===directoryRevision)add.disabled=false;}
+              };
+              results.append(add);
+            }
+            const note=document.createElement('p');note.textContent='Показана одна запись максимум. Результат не является полным каталогом.';results.append(note);
+            message.textContent='Проверка /user/me пройдена; использовано '+(result.source==='active'?'активное подключение':'pending JWT')+'.';
+          }else{
+            results.textContent='Совпадений не найдено. Проверка /user/me пройдена; показанная строка поиска не охватывает весь каталог.';
+            message.textContent='Использовано '+(result.source==='active'?'активное подключение':'pending JWT')+'.';
+          }
+        }catch(error){if(current===revision&&requestId===directoryRevision){results.textContent='';message.textContent=error.message;}}
+        finally{if(current===revision&&requestId===directoryRevision)button.disabled=false;}
+        return;
+      }
       button.disabled=true;message.textContent=text.waiting;
       try {
         const found=await request('/api/platform/operator/accounts',{search:value});
-        if(current!==revision)return;
+        if(current!==revision||requestId!==directoryRevision)return;
         results.replaceChildren();
         for(const row of found.accounts||[]){
           const item=document.createElement('button');item.type='button';item.textContent=row.account;
           item.onclick=()=>{$(panel,'[data-account]').value=row.account;};results.append(item);
         }
         message.textContent=(found.accounts||[]).length?'':'Аккаунты не найдены.';
-      } catch(error) { if(current===revision)message.textContent=error.message; }
-      finally { button.disabled=false; }
+      } catch(error) { if(current===revision&&requestId===directoryRevision)message.textContent=error.message; }
+      finally { if(current===revision&&requestId===directoryRevision)button.disabled=false; }
     };
     $(panel,'[data-account-info]').onclick = async event => {
       const button=event.currentTarget, target=$(panel,'[data-account-data]');

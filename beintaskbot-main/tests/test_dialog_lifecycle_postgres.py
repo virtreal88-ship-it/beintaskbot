@@ -93,17 +93,19 @@ def test_native_transfer_races_recipient_going_away_without_losing_owner(episode
     mutate({'tenant_id':A,'telegram_id':33},payload('accept'))
     transfer=payload('transfer',1,target_employee_id=11)
     values=race(episodes,[(33,transfer,'mutate'),(11,{'status':'away'},'presence')])
-    assert any(value[0]=='ok' for value in values)
+    assert sum(value[0]=='ok' and value[1].get('status')=='away' for value in values)==1
+    result=next(value for value in values if value[0]!='ok' or 'lifecycle' in value[1])
     assert get_status({'tenant_id':A,'telegram_id':11})['status']=='away'
     current=episodes.execute("SELECT operator_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['operator_id']
     episode=episodes.execute("SELECT operator_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['operator_id']
     assert episode==current
     with episodes.cursor() as cur:
         if current==11:
+            assert result[0]=='ok' and result[1]['lifecycle']['operator_id']==11
             require_access(cur,A,11,'connect',CA,'client','update')
             with pytest.raises(TenantLinearError):require_access(cur,A,33,'connect',CA,'client','update')
         else:
-            assert current==33
+            assert current==33 and result==('denied',403)
             require_access(cur,A,33,'connect',CA,'client','update')
     episodes.commit()
 

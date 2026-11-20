@@ -276,16 +276,18 @@
     finally{if(!same()){$('operatorCreateCaseModal')?.remove();button.disabled=false;}}
   }
 
-  let currentPresence='away',presenceAvailable=false;
+  let currentPresence=null,presenceAvailable=false,presenceRoutingEnforced=false;
   const presenceStates=['online','lunch','away'];
   const presenceText=key=>({
     button:{ru:'Статус: {status}',az:'Status: {status}',en:'Status: {status}'},
     online:{ru:'Онлайн',az:'Onlayn',en:'Online'},
     lunch:{ru:'Обед',az:'Nahar',en:'Lunch'},
     away:{ru:'Отошёл',az:'Kənarda',en:'Away'},
+    unset:{ru:'Не выбран',az:'Seçilməyib',en:'Not set'},
     title:{ru:'Статус сотрудника',az:'Əməkdaşın statusu',en:'Employee status'},
     choose:{ru:'Выберите статус',az:'Status seçin',en:'Choose a status'},
     hint:{ru:'Только сотрудники со статусом «Онлайн» получают новые диалоги и передачи. Смена статуса не меняет уже назначенные диалоги.',az:'Yalnız «Onlayn» statusunda olan əməkdaşlar yeni dialoq və ötürmələr alır. Statusun dəyişməsi artıq təyin olunmuş dialoqları dəyişmir.',en:'Only employees marked Online receive new dialogues and transfers. Changing status does not alter dialogues already assigned to you.'},
+    setupHint:{ru:'Вы можете выбрать статус заранее. Пока статус не влияет на получение новых диалогов и передач.',az:'Statusu əvvəlcədən seçə bilərsiniz. Hələlik status yeni dialoqların qəbulu və ötürülməsinə təsir etmir.',en:'You can set your status now. It does not affect new dialogues or transfers yet.'},
     save:{ru:'Сохранить',az:'Yadda saxla',en:'Save'},
     cancel:{ru:'Отмена',az:'Ləğv et',en:'Cancel'},
     saving:{ru:'Сохраняю…',az:'Saxlanılır…',en:'Saving…'},
@@ -294,19 +296,20 @@
   }[key]?.[i18n.language]||key);
   function paintPresenceButton(){
     const button=$('operatorPresenceOpen');
-    if(button)button.textContent=presenceText('button').replace('{status}',presenceText(currentPresence));
+    if(button)button.textContent=presenceText('button').replace('{status}',presenceText(currentPresence||'unset'));
   }
   async function loadPresenceStatus(){
     const button=$('operatorPresenceOpen');
-    if(!button)return;
+    if(!button||!member)return;
     const owner=identity(member);
+    const query=new URLSearchParams({expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
     try{
-      const result=await api('dialogs/presence');
+      const result=await api('dialogs/presence?'+query);
       if(owner!==identity(member))return;
-      if(result?.available!==true||result.can_update!==true||!presenceStates.includes(result.status)){
+      if(result?.available!==true||result.can_update!==true||(result.status!==null&&!presenceStates.includes(result.status))){
         presenceAvailable=false;button.hidden=true;return;
       }
-      currentPresence=result.status;presenceAvailable=true;button.hidden=false;paintPresenceButton();
+      currentPresence=result.status;presenceRoutingEnforced=result.routing_enforced===true;presenceAvailable=true;button.hidden=false;paintPresenceButton();
     }catch{
       if(owner===identity(member)){presenceAvailable=false;button.hidden=true;}
     }
@@ -324,9 +327,10 @@
     const label=document.createElement('label'),labelText=document.createElement('span');
     labelText.textContent=presenceText('choose');
     const select=document.createElement('select');select.id='operatorPresenceSelect';select.required=true;
+    const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=presenceText('choose');placeholder.disabled=true;select.append(placeholder);
     for(const status of presenceStates){const option=document.createElement('option');option.value=status;option.textContent=presenceText(status);select.append(option);}
-    select.value=currentPresence;label.append(labelText,select);
-    const hint=document.createElement('p');hint.className='sub';hint.textContent=presenceText('hint');
+    select.value=currentPresence||'';label.append(labelText,select);
+    const hint=document.createElement('p');hint.className='sub';hint.textContent=presenceText(presenceRoutingEnforced?'hint':'setupHint');
     const feedback=document.createElement('p');feedback.id='operatorPresenceFeedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');
     const actions=document.createElement('div');actions.className='operator-complete-actions';
     const save=document.createElement('button');save.type='submit';save.className='primary';save.textContent=presenceText('save');
@@ -358,7 +362,7 @@
         const result=await api('dialogs/presence','POST',{status:select.value});
         if(owner!==identity(member)){close();return;}
         if(result?.available!==true||!presenceStates.includes(result.status))throw new Error(presenceText('error'));
-        currentPresence=result.status;presenceAvailable=true;paintPresenceButton();
+        currentPresence=result.status;presenceRoutingEnforced=result.routing_enforced===true;presenceAvailable=true;paintPresenceButton();
         const notice=$('operatorPresenceNotice');if(notice)notice.textContent=presenceText('saved');
         close();void refresh();
       }catch(error){
@@ -675,7 +679,7 @@
     $('operatorPresenceOpen').onclick=()=>{if(!presenceAvailable)return;$('operatorToolsMenu').open=false;openPresenceModal();};
     $('operatorToolsMenu').addEventListener('toggle',()=>{if($('operatorToolsMenu').open)void loadPresenceStatus();});
     document.addEventListener('tenant-language',paintPresenceButton);
-    document.addEventListener('tenant-profile',()=>{presenceAvailable=false;currentPresence='away';const button=$('operatorPresenceOpen');if(button)button.hidden=true;if($('operatorToolsMenu')?.open)void loadPresenceStatus();});
+    document.addEventListener('tenant-profile',()=>{presenceAvailable=false;currentPresence=null;presenceRoutingEnforced=false;const button=$('operatorPresenceOpen');if(button)button.hidden=true;if($('operatorToolsMenu')?.open)void loadPresenceStatus();});
     // This is an explicit browser permission only; Web Push enrollment remains in profile settings.
     $('operatorNotificationToggle').onclick=requestBrowserNoticePermission;updateBrowserNoticeButton();
     $('operatorSoundToggle').onclick=async()=>{if(!soundEnabled){soundEnabled=true;await unlockMessageSound();}else if(!soundUnlocked){await unlockMessageSound();}else soundEnabled=false;try{localStorage.setItem(soundPrefKey(),soundEnabled?'on':'off');}catch{}updateSoundButton();};
