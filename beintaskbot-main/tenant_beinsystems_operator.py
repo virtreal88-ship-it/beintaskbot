@@ -576,10 +576,17 @@ def _operator_upstream_auth_error(status, headers):
     )
 
 
+class _NoRedirectRequestsSession(requests.Session):
+    """Prevent Requests from prefetching response bodies while resolving redirects."""
+
+    def get_redirect_target(self, response):
+        return None
+
+
 def _request_accounts_with_requests(url, payload, token):
     """Use the confirmed requests transport for the documented accounts read."""
     try:
-        with requests.Session() as session:
+        with _NoRedirectRequestsSession() as session:
             # Keep the verified direct TLS path used by the successful control.
             session.trust_env = False
             with session.post(
