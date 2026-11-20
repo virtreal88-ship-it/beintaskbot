@@ -1,0 +1,6 @@
+# Python virtual environment created by .cursor/install.sh
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
