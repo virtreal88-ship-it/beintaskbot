@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import requests
 import sys
 import uuid
 from urllib.error import HTTPError, URLError
@@ -558,6 +559,64 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def _operator_upstream_auth_error(status, headers):
+    challenge_code = _bearer_challenge_error_code(headers, status)
+    if challenge_code == "invalid_token":
+        message = "Upstream Bearer challenge invalid_token (HTTP 401)."
+    elif challenge_code == "insufficient_scope":
+        message = ("Upstream Bearer challenge insufficient_scope "
+                   "(HTTP 403; доступ к чтению не подтверждён).")
+    else:
+        message = (
+            f"Operator отклонил служебную авторизацию (upstream HTTP {status}).")
+    # The provider body and all unrecognized header text remain private.
+    return OperatorError(
+        message, 502, upstream_http_status=status,
+        upstream_error_code=challenge_code,
+    )
+
+
+class _NoRedirectRequestsSession(requests.Session):
+    """Prevent Requests from prefetching response bodies while resolving redirects."""
+
+    def get_redirect_target(self, response):
+        return None
+
+
+def _request_accounts_with_requests(url, payload, token):
+    """Use the confirmed requests transport for the documented accounts read."""
+    try:
+        with _NoRedirectRequestsSession() as session:
+            # Keep the verified direct TLS path used by the successful control.
+            session.trust_env = False
+            with session.post(
+                url,
+                json=payload,
+                headers={"Authorization": "Bearer " + str(token)},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
+                stream=True,
+                verify=True,
+            ) as response:
+                status = int(response.status_code)
+                if status in (401, 403):
+                    raise _operator_upstream_auth_error(status, response.headers)
+                if not 200 <= status < 300:
+                    raise OperatorError("Operator временно не ответил.")
+                raw = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    if len(raw) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise OperatorError("Ответ Operator превышает допустимый размер.")
+                    raw.extend(chunk)
+                return bytes(raw)
+    except OperatorError:
+        raise
+    except requests.RequestException:
+        raise OperatorError("Operator временно не ответил.") from None
+
+
 def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     """Call one allowlisted documented read method; never follows redirects."""
     if endpoint not in READ_ENDPOINTS:
@@ -592,38 +651,28 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     base = str(base_url or approved_base).rstrip("/")
     if not approved_base or base != approved_base or base != OPERATOR_API_BASE_URL:
         raise OperatorError("Адрес Operator API не настроен.")
-    method = "GET" if endpoint == "me" else "POST"
-    body = None if method == "GET" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = Request(base + path, data=body, method=method, headers={
-        "Authorization": "Bearer " + str(token),
-        "Content-Type": "application/json", "Accept": "application/json",
-    })
-    transport = opener or build_opener(_NoRedirect())
-    try:
-        response = transport.open(request, timeout=REQUEST_TIMEOUT_SECONDS)
-        with response:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        code = getattr(exc, "code", None)
-        if code in (401, 403):
-            challenge_code = _bearer_challenge_error_code(
-                getattr(exc, "headers", None), code)
-            if challenge_code == "invalid_token":
-                message = "Upstream Bearer challenge invalid_token (HTTP 401)."
-            elif challenge_code == "insufficient_scope":
-                message = ("Upstream Bearer challenge insufficient_scope "
-                           "(HTTP 403; доступ к чтению не подтверждён).")
-            else:
-                message = (
-                    f"Operator отклонил служебную авторизацию (upstream HTTP {code}).")
-            # The provider body and all unrecognized header text remain private.
-            raise OperatorError(
-                message, 502, upstream_http_status=code,
-                upstream_error_code=challenge_code,
-            ) from None
-        raise OperatorError("Operator временно не ответил.") from None
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise OperatorError("Ответ Operator превышает допустимый размер.")
+    if endpoint == "accounts":
+        raw = _request_accounts_with_requests(base + path, payload, token)
+    else:
+        method = "GET" if endpoint == "me" else "POST"
+        body = None if method == "GET" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = Request(base + path, data=body, method=method, headers={
+            "Authorization": "Bearer " + str(token),
+            "Content-Type": "application/json", "Accept": "application/json",
+        })
+        transport = opener or build_opener(_NoRedirect())
+        try:
+            response = transport.open(request, timeout=REQUEST_TIMEOUT_SECONDS)
+            with response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            code = getattr(exc, "code", None)
+            if code in (401, 403):
+                raise _operator_upstream_auth_error(
+                    code, getattr(exc, "headers", None)) from None
+            raise OperatorError("Operator временно не ответил.") from None
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise OperatorError("Ответ Operator превышает допустимый размер.")
     try:
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
