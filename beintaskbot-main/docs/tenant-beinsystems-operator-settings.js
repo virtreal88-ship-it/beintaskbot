@@ -71,7 +71,7 @@
     const renderStatus = () => {
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
-      if (state.accounts_only_ready) parts.push('Подключено для аккаунтов');
+      if (state.accounts_only_ready) parts.push('Подключено для аккаунтов: подтверждение разрешает попытку, доступ Operator к account проверяется отдельно');
       if (state.pending_auth_received) {
         if (state.pending_auth_access_confirmed === true) parts.push('У pending-кандидата есть отметка предыдущей проверки /user/accounts; конкретный результат здесь не указан');
         else parts.push('JWT сохранён как pending; чтение account не подтверждено');
@@ -84,7 +84,7 @@
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-accounts-capability aria-live="polite"></div><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Создание компаний — отдельное подтверждаемое действие только из свежего списка текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-accounts-capability aria-live="polite"></div><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт запрашивает список /user/accounts и сохраняет полученные account ID; полнота выдачи Operator не проверена. Пропавшие записи не удаляются, данные в Operator не отправляются.</p><p>Создание компаний — отдельное подтверждаемое действие по account ID, полученному из запроса /user/accounts текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
       testControl.textContent = 'Проверить доступ к accounts';
       const testDescription = Array.from(connection.querySelectorAll('p'))
@@ -107,14 +107,14 @@
         capabilityHost.replaceChildren();
         if(state.accounts_only_ready){
           const label=document.createElement('p');
-          label.textContent='Подключено для аккаунтов. Разрешено добавлять аккаунты в CRM по одному; остальные функции Operator не активированы.';
+          label.textContent='Подключено для аккаунтов. Подтверждение разрешает только попытку добавления; доступ Operator к выбранному account проверяется отдельно и может не подтвердиться. Остальные функции Operator не активированы.';
           capabilityHost.append(label);return;
         }
         if(!state.pending_auth_received||state.connected||state.configured)return;
         const prepare=document.createElement('button');prepare.type='button';
         prepare.textContent='Проверить личность для аккаунтного доступа';
         const note=document.createElement('p');
-        note.textContent='Отдельное подтверждение владельца разрешит только ручное добавление одного проверенного account в CRM на 24 часа. Общая связь Operator не активируется.';
+        note.textContent='Отдельное подтверждение владельца разрешит только попытку ручного добавления одного account в CRM на 24 часа. Доступ Operator к выбранному account отдельно проверяется при добавлении и может не подтвердиться. Общая связь Operator не активируется.';
         capabilityHost.append(note,prepare);
         prepare.onclick=async()=>{
           prepare.disabled=true;message.textContent=text.waiting;
@@ -373,10 +373,12 @@
                   const outcome=saved.account_company||{};
                   if(outcome.status==='manual_review'){
                     message.textContent='Для account требуется ручная проверка: локальная компания уже существует или связь неоднозначна. Новая запись и переназначение не выполнялись.';
-                  }else if(outcome.status==='created'){
+                  }else if(outcome.status==='create'){
                     message.textContent='CRM-компания создана. Её название — только account ID; телефон, email и описание оставлены пустыми. Данные в Operator не изменялись.';
-                  }else{
+                  }else if(outcome.status==='reuse'||outcome.status==='bind'){
                     message.textContent='Существующая CRM-компания сохранена без изменения её полей.';
+                  }else{
+                    message.textContent='Не удалось определить результат добавления. Проверьте компанию в CRM перед повторной попыткой.';
                   }
                 }catch(error){if(current===revision&&requestId===directoryRevision)message.textContent=error.message;}
                 finally{if(current===revision&&requestId===directoryRevision)add.disabled=false;}

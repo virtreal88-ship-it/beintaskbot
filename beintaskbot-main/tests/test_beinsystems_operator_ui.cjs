@@ -11,7 +11,7 @@ let mockIntegration={status:'connected',connected:true,configured:true,api_ready
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
 let probeMode='empty';
-let directorySource='pending',directoryReady=false;
+let directorySource='pending',directoryReady=false,companyAddOutcome='create';
 let employeeLinks=[];
 let dialogBinding={company_id:null,company_name:null,can_manage:true};
 let companySearches=[];
@@ -50,7 +50,7 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/accounts'&&options.method==='POST'
       &&JSON.parse(options.body).action==='add_account_company'){
-    result={success:true,account_company:{status:'created',
+    result={success:true,account_company:{status:companyAddOutcome,
       account_id:JSON.parse(options.body).account_id,source:directorySource,
       company:{id:'company-created',name:JSON.parse(options.body).account_id}}};
   }
@@ -292,6 +292,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await capabilityConfirm.onclick();
   await new Promise(resolve=>setTimeout(resolve,0));
   assert(authPanel.querySelector('[data-accounts-capability]').textContent.includes('Подключено для аккаунтов'));
+  assert(authPanel.querySelector('[data-accounts-capability]').textContent.includes('попытку добавления'));
   assert.equal(mockIntegration.connected,false,'the accounts capability never marks generic Operator connected');
   assert.equal(mockIntegration.status,'not_connected');
   assert(authPanel.querySelector('[data-status]').textContent.includes('Подключено для аккаунтов'));
@@ -303,10 +304,30 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await pendingAdd.onclick();
   await new Promise(resolve=>setTimeout(resolve,0));
   assert(authPanel.querySelector('[data-message]').textContent.includes('название — только account ID'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('CRM-компания создана'),
+    'the backend outcome "create" is reported as creation');
   assert(requests.some(row=>row.path==='/api/platform/operator/accounts'&&row.options.method==='POST'
     &&JSON.parse(row.options.body).action==='add_account_company'));
   assert(!requests.some(row=>row.path==='/api/platform/operator/accounts'&&row.options.method==='POST'
     &&JSON.parse(row.options.body).action==='import'),'one-account creation does not call full import');
+  companyAddOutcome='reuse';
+  await pendingAdd.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('Существующая CRM-компания сохранена'));
+  companyAddOutcome='bind';
+  await pendingAdd.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('Существующая CRM-компания сохранена'));
+  companyAddOutcome='manual_review';
+  await pendingAdd.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('ручная проверка'));
+  companyAddOutcome='unexpected';
+  await pendingAdd.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('Не удалось определить результат'));
+  assert(!authPanel.querySelector('[data-message]').textContent.includes('CRM-компания создана'));
+  companyAddOutcome='create';
   directorySource='active';
   await directoryButton.onclick({currentTarget:directoryButton});
   await new Promise(resolve=>setTimeout(resolve,0));

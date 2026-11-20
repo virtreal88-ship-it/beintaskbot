@@ -770,7 +770,7 @@ def accounts_import_payload(response):
     if (not isinstance(response, dict)
             or str(response.get("status") or "").strip().casefold() != "success"
             or not isinstance(response.get("data"), list)):
-        raise OperatorError("Operator не вернул полный список доступных аккаунтов.")
+        raise OperatorError("Operator не вернул список доступных аккаунтов.")
     values = response["data"]
     if len(values) > 10000:
         raise OperatorError("Список аккаунтов превышает безопасный предел импорта.")

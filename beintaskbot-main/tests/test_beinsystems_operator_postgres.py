@@ -151,6 +151,169 @@ def operator_context_sql(monkeypatch):
             conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
+def test_pending_accounts_capability_adds_one_exact_local_company_and_disconnect_revokes(monkeypatch):
+    """Exercise the grant/write lifecycle in an empty disposable real PostgreSQL schema."""
+    from cryptography.fernet import Fernet
+    from psycopg.conninfo import conninfo_to_dict
+    from psycopg.rows import dict_row
+    import tenant_beinsystems_operator as operator
+    import tenant_beinsystems_operator_company_import as company_import
+    import tenant_platform_schema
+
+    dsn = os.environ.get("BEINTASKBOT_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("Set BEINTASKBOT_TEST_POSTGRES_DSN to an isolated PostgreSQL database")
+    if conninfo_to_dict(dsn).get("host") not in {"localhost", "127.0.0.1", "::1"}:
+        pytest.fail("Local test server only")
+
+    schema = "operator_selected_company_" + uuid.uuid4().hex
+    tenant, actor = str(uuid.uuid4()), 73
+    token = "synthetic-pending-jwt"
+    key = Fernet.generate_key().decode("ascii")
+    profile = {"tenant_id": tenant, "telegram_id": actor, "role": "owner", "active": True}
+
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+        try:
+            admin.execute(f'SET search_path TO "{schema}"')
+            # Bootstrap only the tenant and membership required by the real app migration.
+            admin.execute("""CREATE TABLE saas_tenants (
+              id uuid PRIMARY KEY,slug text NOT NULL UNIQUE,name text NOT NULL,
+              industry text NOT NULL DEFAULT '',status text NOT NULL DEFAULT 'active',
+              owner_telegram_id bigint NOT NULL,modules jsonb NOT NULL DEFAULT '{}'::jsonb,
+              notification_rules jsonb NOT NULL DEFAULT '{}'::jsonb,
+              onboarding jsonb NOT NULL DEFAULT '{}'::jsonb,
+              created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())""")
+            admin.execute("""CREATE TABLE saas_tenant_members (
+              tenant_id uuid NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              telegram_id bigint NOT NULL,display_name text NOT NULL DEFAULT '',
+              role text NOT NULL,permissions jsonb NOT NULL DEFAULT '[]'::jsonb,
+              active boolean NOT NULL DEFAULT true,invited_by bigint NULL,
+              created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,telegram_id))""")
+            admin.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,'synthetic','Synthetic','active',%s)",
+                          (tenant, actor))
+            admin.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role) VALUES(%s::uuid,%s,'owner')",
+                          (tenant, actor))
+            capability_relation = f"{schema}.saas_beinsystems_operator_accounts_capabilities"
+            assert admin.execute("SELECT to_regclass(%s) AS relation",
+                                 (capability_relation,)).fetchone()[0] is None
+
+            def connect_test_schema():
+                return psycopg.connect(dsn, row_factory=dict_row,
+                                       options=f"-c search_path={schema},public")
+
+            monkeypatch.setenv("DATABASE_URL", dsn)
+            monkeypatch.setenv("TENANT_ENCRYPTION_KEY", key)
+            monkeypatch.setenv(operator.WORKSPACE_ENV, tenant)
+            monkeypatch.setattr(tenant_platform_schema, "_schema_ready", False)
+            monkeypatch.setattr(operator, "_connect", connect_test_schema)
+            # Run the real additive app migration against the initially absent tables.
+            with connect_test_schema() as conn:
+                operator._ensure_schema(conn)
+            with connect_test_schema() as check:
+                assert check.execute("SELECT to_regclass(%s) AS relation",
+                                     (capability_relation,)).fetchone()["relation"]
+                check.execute("""INSERT INTO saas_tenant_integrations
+                  (tenant_id,provider,status,account_domain,metadata,secrets)
+                  VALUES(%s::uuid,%s,'not_connected','', '{}'::jsonb,NULL)""",
+                  (tenant, operator.PROVIDER))
+                envelope = operator._json({
+                    "tenant_id": tenant, "provider": operator.PROVIDER,
+                    "owner_telegram_id": actor, "purpose": "pending_auth_verification",
+                    "auth_contract": operator.AUTH_CONTRACT_VERSION, "token": token,
+                })
+                check.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
+                  (tenant_id,owner_telegram_id,token_ciphertext)
+                  VALUES(%s::uuid,%s,%s)""",
+                  (tenant, actor, operator._fernet().encrypt(envelope.encode("utf-8"))))
+
+            calls = []
+            def provider(endpoint, payload, **kwargs):
+                calls.append((endpoint, payload, kwargs))
+                assert kwargs["token"] == token
+                if endpoint == "me":
+                    assert payload == {} and kwargs["requests_me"] is True
+                    return {"status": "success", "data": {
+                        "identifier": "owner@synthetic.test", "role": "superadmin",
+                        "partnerPin": "never-display"}}
+                assert endpoint == "accounts"
+                assert payload == {"search": payload["search"], "limit": 1}
+                return {"status": "success", "data": [{"account": payload["search"],
+                    "email": "private@synthetic.test", "name": "private-name"}]}
+
+            monkeypatch.setattr(operator, "_request_operator", provider)
+
+            preview = company_import.prepare_accounts_capability(profile)
+            assert set(preview) == {"identifier", "candidate_received_at"}
+            confirmation = company_import.confirm_accounts_capability(
+                profile, acknowledged_identifier=preview["identifier"],
+                candidate_received_at=preview["candidate_received_at"])
+            assert confirmation == {"ready": True, "label": "accounts_only",
+                                    "expires_in_hours": 24}
+            state = operator.status(profile)
+            assert state["status"] == "not_connected" and not state["connected"]
+            assert state["accounts_only_ready"] is True
+
+            created = company_import.add_selected_account_company(profile, "Synthetic Account")
+            assert created["status"] == "create"
+            assert created["source"] == "accounts_only"
+            company_id = created["company"]["id"]
+            with connect_test_schema() as check:
+                check.execute("""UPDATE saas_crm_native_companies SET
+                  phone='manual-phone',email='manual@crm.test',description='manual description'
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid""", (tenant, company_id))
+            reused = company_import.add_selected_account_company(profile, "Synthetic Account")
+            assert reused["status"] == "reuse" and reused["company"]["id"] == company_id
+            with connect_test_schema() as check:
+                rows = check.execute("""SELECT id::text,name,phone,email,description
+                  FROM saas_crm_native_companies WHERE tenant_id=%s::uuid""", (tenant,)).fetchall()
+                assert rows == [{"id": company_id, "name": "Synthetic Account",
+                    "phone": "manual-phone", "email": "manual@crm.test",
+                    "description": "manual description"}]
+                assert check.execute("""SELECT count(*) FROM saas_beinsystems_operator_company_imports
+                  WHERE tenant_id=%s::uuid AND external_account='Synthetic Account'""",
+                  (tenant,)).fetchone()["count"] == 1
+
+                # Case-insensitive name collision is a review outcome, never a second company.
+                check.execute("""INSERT INTO saas_crm_native_companies
+                  (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
+                  VALUES(%s::uuid,%s::uuid,'CASE VARIANT','keep-phone','keep@email.test','keep',NULL,%s)""",
+                  (str(uuid.uuid4()), tenant, actor))
+            collision = company_import.add_selected_account_company(profile, "case variant")
+            assert collision["status"] == "manual_review"
+            assert collision["reason"] == "name_collision"
+            with connect_test_schema() as check:
+                assert check.execute("""SELECT count(*) FROM saas_crm_native_companies
+                  WHERE tenant_id=%s::uuid""", (tenant,)).fetchone()["count"] == 2
+                assert check.execute("""SELECT count(*) FROM saas_beinsystems_operator_company_imports
+                  WHERE tenant_id=%s::uuid AND external_account='case variant'""",
+                  (tenant,)).fetchone()["count"] == 0
+
+            requests_before_disconnect = len(calls)
+            operator.disconnect(profile)
+            assert len(calls) == requests_before_disconnect
+            with connect_test_schema() as check:
+                assert check.execute("""SELECT count(*) FROM saas_beinsystems_operator_accounts_capabilities
+                  WHERE tenant_id=%s::uuid""", (tenant,)).fetchone()["count"] == 0
+                assert check.execute("""SELECT count(*) FROM saas_beinsystems_operator_pending_auth_v2
+                  WHERE tenant_id=%s::uuid""", (tenant,)).fetchone()["count"] == 0
+                assert check.execute("""SELECT count(*) FROM saas_crm_native_companies
+                  WHERE tenant_id=%s::uuid""", (tenant,)).fetchone()["count"] == 2
+            with pytest.raises(operator.OperatorError):
+                company_import.add_selected_account_company(profile, "Synthetic Account")
+            assert len(calls) == requests_before_disconnect
+            assert all((call[1].get("limit") == 1) for call in calls if call[0] == "accounts")
+            public_results = (preview, confirmation, created, reused, collision)
+            assert all("partnerPin" not in repr(result)
+                       and "private@synthetic.test" not in repr(result)
+                       and "private-name" not in repr(result)
+                       for result in public_results)
+        finally:
+            admin.execute("SET search_path TO public")
+            admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+
+
 @pytest.mark.parametrize('invalid',[None,'','not-a-uuid',{},'00000000-0000-0000-0000'])
 def test_invalid_instance_is_unlinked_but_authorized_history_is_stale(operator_context_sql,invalid):
     f=operator_context_sql; metadata=f['metadata']
