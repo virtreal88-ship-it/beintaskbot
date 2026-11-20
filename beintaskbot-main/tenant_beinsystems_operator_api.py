@@ -88,6 +88,12 @@ def integration_handler(member: Callable, origin: str, logger):
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
+            elif action == "login_check" and set(data) == {
+                    "action", "login", "password", "search"}:
+                verification = await asyncio.to_thread(
+                    operator.login_and_read_accounts, profile, data["login"],
+                    data["password"], data["search"])
+                value = await asyncio.to_thread(operator.status, profile)
             elif action == "test" and set(data) == {"action", "search"}:
                 verification = await asyncio.to_thread(
                     operator.verify_accounts_access, profile, data["search"])
