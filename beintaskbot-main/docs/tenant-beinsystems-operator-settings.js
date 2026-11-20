@@ -286,20 +286,47 @@
         finally { button.disabled=false; }
       };
     }
+    let directoryRevision=0;
     $(panel,'[data-search-button]').onclick = async event => {
-      const button=event.currentTarget, value=$(panel,'[data-search]').value.trim(), results=$(panel,'[data-results]');
+      const button=event.currentTarget, rawValue=$(panel,'[data-search]').value,
+        value=rawValue.trim(), results=$(panel,'[data-results]');
+      const requestId=++directoryRevision;
+      if(data.member.role==='owner'){
+        results.replaceChildren();
+        if(rawValue.length>120||value.length<4||value.length>120||/[\u0000-\u001f\u007f]/.test(rawValue)){
+          results.textContent='Введите от 4 до 120 символов без управляющих знаков.';return;
+        }
+        button.disabled=true;message.textContent=text.waiting;
+        try{
+          const found=await request('/api/platform/integrations/beinsystems-operator',
+            {action:'directory_search',search:value});
+          if(current!==revision||requestId!==directoryRevision)return;
+          const result=found.directory||{};
+          if(result.account_id){
+            const line=document.createElement('p');line.append(document.createTextNode('Account ID: '));
+            const id=document.createElement('code');id.textContent=result.account_id;line.append(id);results.append(line);
+            const note=document.createElement('p');note.textContent='Показана одна запись максимум. Результат не является полным каталогом.';results.append(note);
+            message.textContent='Проверка /user/me пройдена; использовано '+(result.source==='active'?'активное подключение':'pending JWT')+'.';
+          }else{
+            results.textContent='Совпадений не найдено. Проверка /user/me пройдена; показанная строка поиска не охватывает весь каталог.';
+            message.textContent='Использовано '+(result.source==='active'?'активное подключение':'pending JWT')+'.';
+          }
+        }catch(error){if(current===revision&&requestId===directoryRevision){results.textContent='';message.textContent=error.message;}}
+        finally{if(current===revision&&requestId===directoryRevision)button.disabled=false;}
+        return;
+      }
       button.disabled=true;message.textContent=text.waiting;
       try {
         const found=await request('/api/platform/operator/accounts',{search:value});
-        if(current!==revision)return;
+        if(current!==revision||requestId!==directoryRevision)return;
         results.replaceChildren();
         for(const row of found.accounts||[]){
           const item=document.createElement('button');item.type='button';item.textContent=row.account;
           item.onclick=()=>{$(panel,'[data-account]').value=row.account;};results.append(item);
         }
         message.textContent=(found.accounts||[]).length?'':'Аккаунты не найдены.';
-      } catch(error) { if(current===revision)message.textContent=error.message; }
-      finally { button.disabled=false; }
+      } catch(error) { if(current===revision&&requestId===directoryRevision)message.textContent=error.message; }
+      finally { if(current===revision&&requestId===directoryRevision)button.disabled=false; }
     };
     $(panel,'[data-account-info]').onclick = async event => {
       const button=event.currentTarget, target=$(panel,'[data-account-data]');

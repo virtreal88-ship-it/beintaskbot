@@ -14,6 +14,7 @@ let probeMode='empty';
 let employeeLinks=[];
 let dialogBinding={company_id:null,company_name:null,can_manage:true};
 let companySearches=[];
+let holdDirectory=false,directoryResolvers=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
 window.confirm=message=>{confirmMessages.push(message);return true;};
 window.fetch=async(path,options={})=>{
@@ -62,6 +63,11 @@ window.fetch=async(path,options={})=>{
       mockIntegration={...mockIntegration,pending_auth_access_confirmed:probeMode==='pending'};
     }
     result={success:true,integration:{...mockIntegration},verification};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='directory_search'){
+    if(holdDirectory)return await new Promise(resolve=>directoryResolvers.push(resolve));
+    result={success:true,directory:{source:'pending',account_id:'synthetic-account-id',result_count:1,
+      identity:'private-identity',role:'superadmin',email:'private@example.test'}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='import'){
     mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
@@ -241,6 +247,35 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(mockIntegration.connected,false);
   assert.equal(mockIntegration.pending_auth_access_confirmed,false,
     'an empty successful list does not persist account-read confirmation');
+
+  authPanel.querySelector('[data-search]').value='synthetic-account';
+  const directoryButton=authPanel.querySelector('[data-search-button]');
+  await directoryButton.onclick({currentTarget:directoryButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const directoryResults=authPanel.querySelector('[data-results]').textContent;
+  assert(directoryResults.includes('synthetic-account-id'));
+  assert(directoryResults.includes('one record')||directoryResults.includes('одна запись'));
+  assert(!authPanel.textContent.includes('private@example.test'));
+  assert(!authPanel.textContent.includes('superadmin'));
+  assert.equal(mockIntegration.status,'not_connected','directory lookup does not activate pending credentials');
+  assert.equal(requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
+    &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='directory_search').length,1);
+  holdDirectory=true;
+  authPanel.querySelector('[data-search]').value='first-query';
+  const staleSearch=directoryButton.onclick({currentTarget:directoryButton});
+  authPanel.querySelector('[data-search]').value='second-query';
+  const currentSearch=directoryButton.onclick({currentTarget:directoryButton});
+  assert.equal(directoryResolvers.length,2);
+  directoryResolvers[1]({ok:true,json:async()=>({success:true,directory:{source:'active',
+    account_id:'second-result',result_count:1}})});
+  await currentSearch;
+  directoryResolvers[0]({ok:true,json:async()=>({success:true,directory:{source:'pending',
+    account_id:'stale-result',result_count:1}})});
+  await staleSearch;
+  holdDirectory=false;
+  assert(authPanel.querySelector('[data-results]').textContent.includes('second-result'));
+  assert(!authPanel.querySelector('[data-results]').textContent.includes('stale-result'));
+  authPanel.querySelector('[data-search]').value='synthetic-account';
 
   probeMode='pending';
   await testButton.onclick({currentTarget:testButton});
