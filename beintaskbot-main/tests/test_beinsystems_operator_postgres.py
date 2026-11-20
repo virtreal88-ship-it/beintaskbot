@@ -157,6 +157,7 @@ def test_pending_accounts_capability_adds_one_exact_local_company_and_disconnect
     from psycopg.conninfo import conninfo_to_dict
     from psycopg.rows import dict_row
     import tenant_beinsystems_operator as operator
+    import tenant_beinsystems_operator_access as operator_access
     import tenant_beinsystems_operator_company_import as company_import
     import tenant_platform_schema
 
@@ -205,7 +206,7 @@ def test_pending_accounts_capability_adds_one_exact_local_company_and_disconnect
 
             monkeypatch.setenv("DATABASE_URL", dsn)
             monkeypatch.setenv("TENANT_ENCRYPTION_KEY", key)
-            monkeypatch.setenv(operator.WORKSPACE_ENV, tenant)
+            monkeypatch.setenv(operator_access.WORKSPACE_ENV, tenant)
             monkeypatch.setattr(tenant_platform_schema, "_schema_ready", False)
             monkeypatch.setattr(operator, "_connect", connect_test_schema)
             # Run the real additive app migration against the initially absent tables.
