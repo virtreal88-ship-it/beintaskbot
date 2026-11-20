@@ -11,7 +11,7 @@ let mockIntegration={status:'connected',connected:true,configured:true,api_ready
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
 let probeMode='empty';
-let directorySource='pending';
+let directorySource='pending',directoryReady=false;
 let employeeLinks=[];
 let dialogBinding={company_id:null,company_name:null,can_manage:true};
 let companySearches=[];
@@ -48,6 +48,12 @@ window.fetch=async(path,options={})=>{
     result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,
       name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
   }
+  else if(path==='/api/platform/operator/accounts'&&options.method==='POST'
+      &&JSON.parse(options.body).action==='add_account_company'){
+    result={success:true,account_company:{status:'created',
+      account_id:JSON.parse(options.body).account_id,source:directorySource,
+      company:{id:'company-created',name:JSON.parse(options.body).account_id}}};
+  }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
     let verification;
     if(probeMode==='empty'){
@@ -68,7 +74,18 @@ window.fetch=async(path,options={})=>{
   else if(options.method==='POST'&&JSON.parse(options.body).action==='directory_search'){
     if(holdDirectory)return await new Promise(resolve=>directoryResolvers.push(resolve));
     result={success:true,directory:{source:directorySource,account_id:'synthetic-account-id',result_count:1,
+      exact_match:true,accounts_only_ready:directoryReady,
       identity:'private-identity',role:'superadmin',email:'private@example.test'}};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='prepare_accounts_capability'){
+    result={success:true,accounts_only_confirmation:{identifier:'owner@synthetic.test',
+      candidate_received_at:'2026-11-18T22:00:00+00:00'}};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_accounts_capability'){
+    directoryReady=true;
+    mockIntegration={...mockIntegration,accounts_only_ready:true};
+    result={success:true,accounts_only:{ready:true,label:'accounts_only',expires_in_hours:24},
+      integration:{...mockIntegration}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='import'){
     mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
@@ -265,6 +282,31 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(mockIntegration.status,'not_connected','directory lookup does not activate pending credentials');
   assert.equal(requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
     &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='directory_search').length,1);
+  const capabilityPrepare=authPanel.querySelector('[data-accounts-capability] button');
+  assert(capabilityPrepare,'pending credentials require an explicit separate identity check before a company action appears');
+  await capabilityPrepare.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-accounts-capability]').textContent.includes('owner@synthetic.test'));
+  const capabilityConfirm=authPanel.querySelector('[data-accounts-capability] button');
+  assert(capabilityConfirm.textContent.includes('Подтверждаю'));
+  await capabilityConfirm.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-accounts-capability]').textContent.includes('Подключено для аккаунтов'));
+  assert.equal(mockIntegration.connected,false,'the accounts capability never marks generic Operator connected');
+  assert.equal(mockIntegration.status,'not_connected');
+  assert(authPanel.querySelector('[data-status]').textContent.includes('Подключено для аккаунтов'));
+  await directoryButton.onclick({currentTarget:directoryButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const pendingAdd=[...authPanel.querySelectorAll('[data-results] button')]
+    .find(button=>button.textContent.includes('Добавить этот account'));
+  assert(pendingAdd,'only the explicit, identity-bound accounts capability offers one-account creation');
+  await pendingAdd.onclick();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('название — только account ID'));
+  assert(requests.some(row=>row.path==='/api/platform/operator/accounts'&&row.options.method==='POST'
+    &&JSON.parse(row.options.body).action==='add_account_company'));
+  assert(!requests.some(row=>row.path==='/api/platform/operator/accounts'&&row.options.method==='POST'
+    &&JSON.parse(row.options.body).action==='import'),'one-account creation does not call full import');
   directorySource='active';
   await directoryButton.onclick({currentTarget:directoryButton});
   await new Promise(resolve=>setTimeout(resolve,0));

@@ -91,7 +91,23 @@ def integration_handler(member: Callable, origin: str, logger):
             elif action == "directory_search" and set(data) == {"action", "search"}:
                 directory = await asyncio.to_thread(
                     operator.search_authenticated_operator_account, profile, data["search"])
+                directory["accounts_only_ready"] = bool(
+                    (await asyncio.to_thread(operator.status, profile)).get("accounts_only_ready"))
                 return _json_response({"directory": directory})
+            elif action == "prepare_accounts_capability" and set(data) == {
+                    "action", "candidate_received_at"}:
+                confirmation = await asyncio.to_thread(
+                    company_import.prepare_accounts_capability, profile,
+                    data["candidate_received_at"])
+                return _json_response({"accounts_only_confirmation": confirmation})
+            elif action == "confirm_accounts_capability" and set(data) == {
+                    "action", "acknowledged_identifier", "candidate_received_at"}:
+                capability = await asyncio.to_thread(
+                    company_import.confirm_accounts_capability, profile,
+                    acknowledged_identifier=data["acknowledged_identifier"],
+                    candidate_received_at=data["candidate_received_at"])
+                value = await asyncio.to_thread(operator.status, profile)
+                return _json_response({"accounts_only": capability, "integration": value})
             elif action == "test" and set(data) == {"action", "search"}:
                 verification = await asyncio.to_thread(
                     operator.verify_accounts_access, profile, data["search"])
@@ -144,6 +160,10 @@ def accounts_handler(member: Callable, origin: str, logger):
             if data == {"action": "create_companies"}:
                 result = await asyncio.to_thread(company_import.create_companies, profile)
                 return _json_response({"company_import": result})
+            if set(data) == {"action", "account_id"} and data.get("action") == "add_account_company":
+                result = await asyncio.to_thread(
+                    company_import.add_selected_account_company, profile, data["account_id"])
+                return _json_response({"account_company": result})
             if set(data) != {"search"}:
                 raise operator.OperatorError("Укажите строку поиска или действие import.")
             response = await asyncio.to_thread(operator.read, profile, "accounts", data)

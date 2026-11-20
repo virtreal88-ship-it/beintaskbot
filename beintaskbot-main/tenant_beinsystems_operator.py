@@ -222,9 +222,20 @@ def _pending_auth_state(cur, tenant, actor):
     return current, legacy
 
 
+def _revoke_accounts_capability(cur, tenant):
+    cur.execute("""DELETE FROM saas_beinsystems_operator_accounts_capabilities
+      WHERE tenant_id=%s::uuid""", (tenant,))
+
+
+def _lock_accounts_capability_scope(cur, tenant):
+    """Serialize candidate replacement/revocation with one-account grants and writes."""
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (str(tenant) + ":operator-accounts-capability",))
+
+
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
             pending_auth_me_verified=False, pending_auth_accounts_access_verified=False,
-            legacy_pending_auth_received=False):
+            legacy_pending_auth_received=False, accounts_only_ready=False):
     row = row or {}
     return {
         "provider": PROVIDER,
@@ -243,6 +254,7 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "pending_auth_me_verified": bool(pending_auth_me_verified),
         "pending_auth_accounts_access_verified": bool(pending_auth_accounts_access_verified),
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
+        "accounts_only_ready": bool(accounts_only_ready),
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
             if hasattr(pending_auth_received_at, "isoformat")
@@ -267,8 +279,15 @@ def status(profile):
             _, actor, current = _authorize(cur, profile, "view")
             row = _operator_row(cur, tenant)
             pending = legacy_pending = None
+            accounts_only_ready = False
             if current.get("role") == "owner":
                 pending, legacy_pending = _pending_auth_state(cur, tenant, actor)
+                if pending:
+                    cur.execute("""SELECT 1 FROM saas_beinsystems_operator_accounts_capabilities
+                      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s
+                        AND candidate_received_at=%s AND expires_at>now()""",
+                      (tenant, actor, pending.get("received_at")))
+                    accounts_only_ready = cur.fetchone() is not None
     return _public(
         row,
         pending_auth_received=bool(pending),
@@ -276,6 +295,7 @@ def status(profile):
         pending_auth_me_verified=bool((pending or {}).get("me_verified_at")),
         pending_auth_accounts_access_verified=bool((pending or {}).get("accounts_access_verified_at")),
         legacy_pending_auth_received=bool(legacy_pending),
+        accounts_only_ready=accounts_only_ready,
     )
 
 
@@ -305,9 +325,13 @@ def save_token(profile, token, *, verified=False):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _lock_accounts_capability_scope(cur, tenant)
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Настроить Operator может только владелец BeinSystems.")
+            _revoke_accounts_capability(cur, tenant)
+            cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth_v2
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
             cur.execute(
                 """INSERT INTO saas_tenant_integrations
                   (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
@@ -441,9 +465,13 @@ def stage_confirmed_auth_token(profile, token):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _lock_accounts_capability_scope(cur, tenant)
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Подключить Operator может только владелец BeinSystems.")
+            _revoke_accounts_capability(cur, tenant)
+            cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth_v2
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
             cur.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
               (tenant_id,owner_telegram_id,token_ciphertext,received_at,me_verified_at,
                accounts_access_verified_at,verified_identifier,verified_role,activated_at)
@@ -507,9 +535,13 @@ def disconnect(profile):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _lock_accounts_capability_scope(cur, tenant)
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Отключить Operator может только владелец BeinSystems.")
+            _revoke_accounts_capability(cur, tenant)
+            cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth_v2
+              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
             cur.execute("""DELETE FROM saas_beinsystems_operator_pending_auth
               WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
             cur.execute(
@@ -915,7 +947,8 @@ def search_authenticated_operator_account(profile, search):
     accounts = _accounts_access_probe_payload(response)
     _operator_directory_fence(profile, tenant, actor, source, credentials)
     return {"source": source, "account_id": accounts[0] if accounts else None,
-            "result_count": len(accounts)}
+            "result_count": len(accounts),
+            "exact_match": bool(accounts and accounts[0].casefold() == query.casefold())}
 
 
 def verify_accounts_access(profile, search):
@@ -1091,6 +1124,7 @@ def _activate_candidate_if_unconfigured(cur, tenant, actor, token):
       (tenant, PROVIDER, api_base_url(), _json(metadata), encrypted))
     activated = cur.fetchone() is not None
     if activated:
+        _revoke_accounts_capability(cur, tenant)
         cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
           SET activated_at=now(),accounts_access_verified_at=now()
           WHERE tenant_id=%s::uuid AND owner_telegram_id=%s""", (tenant, actor))
@@ -1136,6 +1170,8 @@ def import_accounts(profile):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            if candidate:
+                _lock_accounts_capability_scope(cur, tenant)
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
                 raise OperatorError("Импортировать аккаунты Operator может только владелец.")
@@ -1149,6 +1185,7 @@ def import_accounts(profile):
               (str(uuid.uuid4()), tenant, actor, _json({"imported_count": len(accounts)})))
             activated = False
             if candidate:
+                _revoke_accounts_capability(cur, tenant)
                 cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
                   SET me_verified_at=COALESCE(me_verified_at,now()),accounts_access_verified_at=now(),
                       verified_identifier=%s,verified_role=%s
