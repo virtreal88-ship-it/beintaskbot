@@ -10,6 +10,7 @@ let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
+let probeMode='empty';
 let employeeLinks=[];
 let dialogBinding={company_id:null,company_name:null,can_manage:true};
 let companySearches=[];
@@ -46,9 +47,21 @@ window.fetch=async(path,options={})=>{
       name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
-    mockIntegration={...mockIntegration,pending_auth_access_confirmed:true};
-    result={success:true,integration:{...mockIntegration},
-      verification:{source:'pending',access_confirmed:true,match_found:true}};
+    let verification;
+    if(probeMode==='empty'){
+      verification={source:'pending',request_accepted:true,access_confirmed:false,
+        account_read:false,result_count:0,match_found:false};
+    }else if(probeMode==='active'){
+      verification={source:'active',request_accepted:true,access_confirmed:true,
+        account_read:true,result_count:1,match_found:true};
+    }else{
+      verification={source:'pending',request_accepted:true,access_confirmed:true,
+        account_read:true,result_count:1,match_found:true};
+    }
+    if(verification.account_read){
+      mockIntegration={...mockIntegration,pending_auth_access_confirmed:probeMode==='pending'};
+    }
+    result={success:true,integration:{...mockIntegration},verification};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='import'){
     mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
@@ -217,13 +230,38 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   authPanel.querySelector('[data-search]').value='synthetic-account';
   await testButton.onclick({currentTarget:testButton});
   await new Promise(resolve=>setTimeout(resolve,0));
-  assert(authPanel.querySelector('[data-message]').textContent.includes('Доступ к /user/accounts подтверждён'));
-  assert(authPanel.querySelector('[data-message]').textContent.includes('JWT остаётся pending'));
-  assert(!authPanel.querySelector('[data-message]').textContent.includes('synthetic-account'),
+  const probeMessage=()=>authPanel.querySelector('[data-message]').textContent;
+  assert(probeMessage().includes('Operator принял запрос /user/accounts, совпадений нет'));
+  assert(probeMessage().includes('чтение конкретного account не подтверждено'));
+  assert(probeMessage().includes('сохранённый pending JWT'));
+  assert(probeMessage().includes('не подтверждение нового способа входа'));
+  assert(!probeMessage().includes('synthetic-account'),
     'the probe response does not reveal the queried account');
   assert.equal(mockIntegration.status,'not_connected','a bounded accounts probe does not activate the pending token');
   assert.equal(mockIntegration.connected,false);
+  assert.equal(mockIntegration.pending_auth_access_confirmed,false,
+    'an empty successful list does not persist account-read confirmation');
+
+  probeMode='pending';
+  await testButton.onclick({currentTarget:testButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(probeMessage().includes('вернул одну запись; чтение account подтверждено'));
+  assert(probeMessage().includes('Точное совпадение найдено'));
   assert.equal(mockIntegration.pending_auth_access_confirmed,true);
+
+  mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
+    pending_auth_received:false,pending_auth_access_confirmed:null};
+  probeMode='active';
+  await testButton.onclick({currentTarget:testButton});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert(probeMessage().includes('Проверено действующее подключение'));
+  assert(probeMessage().includes('pending JWT и способ нового входа не проверялись'));
+  assert(!probeMessage().includes('Использован сохранённый pending JWT'),
+    'an active result is not labelled as a pending-token check');
+
+  mockIntegration={status:'not_connected',connected:false,configured:false,api_ready:false,
+    pending_auth_received:true,pending_auth_access_confirmed:false};
+  probeMode='pending';
   const testPost=requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
     &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='test').at(-1);
   assert(testPost,'the bounded account-access check is explicitly invoked');
