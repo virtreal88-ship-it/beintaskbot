@@ -61,6 +61,60 @@ class FakeHTTPErrorOpener:
             request.full_url, self.status, "Unauthorized", self.headers, self.response)
 
 
+class FakeRequestsResponse:
+    def __init__(self, payload=None, *, status_code=200, headers=None, chunks=None):
+        if isinstance(payload, bytes):
+            body = payload
+        elif payload is None:
+            body = b""
+        else:
+            body = json.dumps(payload).encode("utf-8")
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.chunks = list(chunks) if chunks is not None else ([body] if body else [])
+        self.iterated = False
+        self.chunk_size = None
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+        return False
+
+    def iter_content(self, chunk_size):
+        self.iterated = True
+        self.chunk_size = chunk_size
+        yield from self.chunks
+
+    def close(self):
+        self.closed = True
+
+
+class FakeRequestsSession:
+    def __init__(self, response):
+        self.response = response
+        self.trust_env = True
+        self.url = None
+        self.kwargs = None
+        self.post_calls = 0
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+        return False
+
+    def post(self, url, **kwargs):
+        self.url = url
+        self.kwargs = kwargs
+        self.post_calls += 1
+        return self.response
+
+
 class FakeCursor:
     def __init__(self):
         self.sql = []
@@ -248,22 +302,30 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             with patch.dict("os.environ", {access.API_BASE_URL_ENV: value}):
                 self.assertEqual(access.api_base_url(), approved)
 
-    def test_read_adapter_uses_approved_host_headers_and_bearer(self):
-        fake = FakeOpener({"status": "success", "data": [{"account": "client-1"}]})
+    def test_read_adapter_uses_approved_host_requests_json_and_bearer(self):
+        response = FakeRequestsResponse({"status": "success", "data": [{"account": "client-1"}]})
+        fake = FakeRequestsSession(response)
         base = "https://operator-api.beinsystems.az/v1"
-        result = operator._request_operator(
-            "accounts", {"search": "client", "limit": 1}, token="secret-jwt",
-            base_url=base, opener=fake)
+        with patch.object(operator.requests, "Session", return_value=fake) as session, \
+             patch.object(operator, "build_opener") as urllib_opener:
+            result = operator._request_operator(
+                "accounts", {"search": "client", "limit": 1}, token="synthetic-jwt",
+                base_url=base)
         self.assertEqual(result["data"][0]["account"], "client-1")
-        self.assertEqual(fake.request.full_url, base + "/user/accounts")
-        self.assertEqual(fake.request.get_method(), "POST")
-        self.assertEqual(fake.request.get_header("Authorization"), "Bearer secret-jwt")
-        self.assertIsNone(fake.request.get_header("Origin"))
-        self.assertIsNone(fake.request.get_header("Referer"))
-        self.assertEqual(fake.request.get_header("Content-type"), "application/json")
-        self.assertIsNone(fake.request.get_header("User-agent"))
-        self.assertEqual(json.loads(fake.request.data), {"search": "client", "limit": 1})
-        self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
+        session.assert_called_once_with()
+        urllib_opener.assert_not_called()
+        self.assertEqual(fake.url, base + "/user/accounts")
+        self.assertEqual(fake.kwargs["json"], {"search": "client", "limit": 1})
+        self.assertEqual(fake.kwargs["headers"], {"Authorization": "Bearer synthetic-jwt"})
+        self.assertEqual(fake.kwargs["timeout"], operator.REQUEST_TIMEOUT_SECONDS)
+        self.assertFalse(fake.kwargs["allow_redirects"])
+        self.assertTrue(fake.kwargs["stream"])
+        self.assertTrue(fake.kwargs["verify"])
+        self.assertNotIn("User-Agent", fake.kwargs["headers"])
+        self.assertFalse(fake.trust_env)
+        self.assertTrue(fake.closed)
+        self.assertTrue(response.closed)
+        self.assertEqual(response.chunk_size, 64 * 1024)
 
     def test_me_read_uses_confirmed_get_host_path_and_bearer_only(self):
         fake = FakeOpener({"status":"success","data":{
@@ -316,21 +378,77 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             (403, {"WWW-Authenticate": 'Basic realm="private-detail"'}, None),
         )
         for status, headers, expected_code in cases:
-            fake = FakeHTTPErrorOpener(status, {
-                "detail": "private provider body synthetic-jwt",
-            }, headers=headers)
+            response = FakeRequestsResponse(
+                {"detail": "private provider body synthetic-jwt"},
+                status_code=status, headers=headers)
+            fake = FakeRequestsSession(response)
             with self.subTest(status=status, expected_code=expected_code), \
-                 patch.dict("os.environ", {access.API_BASE_URL_ENV: base}):
+                 patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
+                 patch.object(operator.requests, "Session", return_value=fake):
                 with self.assertRaises(operator.OperatorError) as raised:
                     operator._request_operator(
                         "accounts", {"search": "synthetic-account", "limit": 1},
-                        token="synthetic-jwt", base_url=base, opener=fake)
+                        token="synthetic-jwt", base_url=base)
             self.assertEqual(raised.exception.upstream_error_code, expected_code)
             self.assertEqual(raised.exception.upstream_http_status, status)
             self.assertNotIn("private provider body", str(raised.exception))
             self.assertNotIn("synthetic-jwt", str(raised.exception))
             self.assertNotIn("private-detail", str(raised.exception))
             self.assertNotIn("error_description", str(raised.exception))
+            self.assertFalse(response.iterated)
+            self.assertTrue(response.closed)
+
+    def test_accounts_request_does_not_follow_redirects(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        response = FakeRequestsResponse(
+            {"detail": "private redirect response"}, status_code=302,
+            headers={"Location": "https://attacker.example/"})
+        fake = FakeRequestsSession(response)
+        with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
+             patch.object(operator.requests, "Session", return_value=fake):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._request_operator(
+                    "accounts", {"search": "synthetic-account", "limit": 1},
+                    token="synthetic-jwt", base_url=base)
+        self.assertEqual(fake.post_calls, 1)
+        self.assertFalse(fake.kwargs["allow_redirects"])
+        self.assertFalse(response.iterated)
+        self.assertNotIn("private redirect response", str(raised.exception))
+        self.assertNotIn("attacker.example", str(raised.exception))
+
+    def test_accounts_request_bounds_streamed_response_and_closes_it(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        response = FakeRequestsResponse(
+            chunks=[b"123456", b"78901"])
+        fake = FakeRequestsSession(response)
+        with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
+             patch.object(operator, "MAX_RESPONSE_BYTES", 10), \
+             patch.object(operator.requests, "Session", return_value=fake):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._request_operator(
+                    "accounts", {"search": "synthetic-account", "limit": 1},
+                    token="synthetic-jwt", base_url=base)
+        self.assertIn("допустимого размера", str(raised.exception))
+        self.assertTrue(response.closed)
+        self.assertTrue(fake.closed)
+        self.assertEqual(response.chunk_size, 64 * 1024)
+
+    def test_accounts_transport_failure_is_generic_and_does_not_fallback(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        fake = FakeRequestsSession(FakeRequestsResponse())
+        fake.post = MagicMock(side_effect=operator.requests.ConnectionError(
+            "private transport detail synthetic-jwt"))
+        with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
+             patch.object(operator.requests, "Session", return_value=fake), \
+             patch.object(operator, "build_opener") as urllib_opener:
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._request_operator(
+                    "accounts", {"search": "synthetic-account", "limit": 1},
+                    token="synthetic-jwt", base_url=base)
+        self.assertEqual(str(raised.exception), "Operator временно не ответил.")
+        self.assertNotIn("private transport detail", str(raised.exception))
+        self.assertNotIn("synthetic-jwt", str(raised.exception))
+        urllib_opener.assert_not_called()
 
     def test_operator_read_rejects_unapproved_api_host(self):
         fake = FakeOpener({"status": "success"})
