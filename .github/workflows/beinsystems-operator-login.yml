@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/beinsystems-operator-login.yml'
       - 'beintaskbot-main/tenant_beinsystems_operator.py'
+      - 'beintaskbot-main/tenant_beinsystems_operator_company_import.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_access.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_schema.py'
