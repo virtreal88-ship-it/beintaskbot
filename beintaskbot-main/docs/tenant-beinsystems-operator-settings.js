@@ -16,7 +16,7 @@
     evidence: 'Основание ручной проверки', confirm: 'Подтвердить связь',
     linked: 'Связь подтверждена', waiting: 'Проверка…',
     userWarning: 'Связь с ERP-пользователем подтверждается вручную по паре account + login.',
-    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Новый токен остаётся pending до проверки /user/me и чтения /user/accounts; ошибочный кандидат не меняет действующее подключение.',
+    authPending: 'Пароль отправляется по HTTPS только для получения JWT и не сохраняется. Доступ проверяется поиском одного результата через /user/accounts; токен остаётся pending и не меняет действующее подключение.',
     contract: 'Создание тикетов и публичные ссылки включатся после подтверждения контрактов Operator.',
     employeeLink: 'Пользователь Operator выбирается из ответа API и связывается с сотрудником Beintaskbot по паре account + login. Документация пока не описывает отдельный стабильный user ID. Сервисные вызовы остаются под ограниченным SSO-пользователем подключения; Beintaskbot отдельно фиксирует сотрудника, который подтвердил связь.',
   };
@@ -73,8 +73,7 @@
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
       if (state.pending_auth_received) {
         if (state.pending_auth_access_confirmed === true) parts.push('Доступ к accounts подтверждён');
-        else if (state.pending_auth_me_verified === true) parts.push('JWT принят; доступ к accounts ещё не подтверждён');
-        else parts.push('JWT получен; доступ ещё не подтверждён');
+        else parts.push('JWT получен; доступ к accounts не подтверждён');
       }
       status.textContent = parts.join(' · ');
       const testButton=connection.querySelector('[data-test]');
@@ -86,8 +85,14 @@
     if (data.member.role === 'owner') {
       connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Создание компаний — отдельное подтверждаемое действие только из свежего списка текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
+      testControl.textContent = 'Проверить доступ к accounts';
+      const testDescription = Array.from(connection.querySelectorAll('p'))
+        .find(item => item.textContent.includes('/user/me'));
+      if (testDescription) testDescription.textContent =
+        'Проверка отправляет поиск с лимитом 1 в /user/accounts и не импортирует список, не активирует JWT и не меняет действующее подключение. Введите известный account в поле поиска ниже.';
       testControl.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const authForm = $(connection, '[data-operator-auth-form]');
+      $(connection, '[data-operator-login]').placeholder = 'user@account';
       const authMessage = $(connection, '[data-auth-message]');
       const saveButton = $(connection, '[data-save]');
       const showAuthMessage = (value, reveal = false) => {
@@ -101,10 +106,14 @@
         button.disabled = true; message.textContent = text.waiting;
         try { const result = await fn(); if (current !== revision) return;
           if (result?.integration) { state = result.integration; renderStatus(); }
-          if (result?.verification) {
-            message.textContent = 'JWT Operator принят. Профиль: '+result.verification.identifier+
-              ' · роль провайдера: '+result.verification.role+
-              '. Эта роль не меняет права Beintaskbot; доступ к accounts проверяется отдельно.';
+          if (result?.verification?.access_confirmed === true) {
+            const exactMatch = result.verification.match_found === true
+              ? ' Точное совпадение найдено.' : ' Точного совпадения в одном результате нет.';
+            message.textContent = 'Доступ к /user/accounts подтверждён; проверен максимум один результат поиска.'+
+              exactMatch+
+              (result.verification.source === 'pending'
+                ? ' JWT остаётся pending и действующее подключение не менялось.'
+                : ' Текущее подключение осталось без изменений.');
           } else if (Number.isInteger(result?.imported)) {
             message.textContent = 'Импортировано account ID: '+result.imported+
               (result.activated ? '. Доступ к /user/me и /user/accounts подтверждён; подключение активировано.'
@@ -187,8 +196,11 @@
         } catch(error) { if(current===revision&&requestId===catalogRevision)host.textContent=error.message; }
       };
       void loadCatalog();
-      $(panel,'[data-test]').onclick = event => run(event.currentTarget, async () =>
-        request('/api/platform/integrations/beinsystems-operator',{action:'test'}));
+      $(panel,'[data-test]').onclick = event => run(event.currentTarget, async () => {
+        const search = $(panel,'[data-search]').value.trim();
+        if (search.length < 4) throw new Error('Введите не менее четырёх символов известного account.');
+        return request('/api/platform/integrations/beinsystems-operator',{action:'test',search});
+      });
       $(panel,'[data-import]').onclick = event => run(event.currentTarget, async () =>
         request('/api/platform/operator/accounts',{action:'import'}));
       $(panel,'[data-create-companies]').onclick = event => run(event.currentTarget, async () => {
