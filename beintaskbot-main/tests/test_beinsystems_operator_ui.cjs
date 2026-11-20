@@ -46,9 +46,9 @@ window.fetch=async(path,options={})=>{
       name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
-    mockIntegration={...mockIntegration,pending_auth_me_verified:true};
+    mockIntegration={...mockIntegration,pending_auth_access_confirmed:true};
     result={success:true,integration:{...mockIntegration},
-      verification:{identifier:'synthetic.operator',role:'superadmin',source:'pending'}};
+      verification:{source:'pending',access_confirmed:true,match_found:true}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='import'){
     mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
@@ -179,13 +179,13 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   save.click();
   assert.equal(authPosts().length,0,'native required validation blocks empty credentials');
   assert.equal(authForm.checkValidity(),false);
-  authLogin.value='synthetic-login';
+  authLogin.value='synthetic-user@synthetic-account';
   authPassword.value='synthetic-password';
   save.click();
   await new Promise(resolve=>setTimeout(resolve,0));
   const posted=JSON.parse(authPosts().at(-1).options.body);
   assert.deepEqual(posted,{
-    action:'login',login:'synthetic-login',password:'synthetic-password',
+    action:'login',login:'synthetic-user@synthetic-account',password:'synthetic-password',
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
   });
   assert.equal(authPassword.value,'','password input is cleared immediately after submission');
@@ -198,7 +198,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(window.document.activeElement,authMessage,'success focuses the visible auth result');
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert(!authPanel.querySelector('[data-token]'),'the API token remains server-side');
-  assert(authPanel.querySelector('[data-test]'),'the documented /user/me check is available');
+  assert(authPanel.querySelector('[data-test]'),'the bounded account-access check is available');
   assert(authPanel.querySelector('[data-import]'),'full account import is an explicit owner action');
   assert(authPanel.querySelector('[data-create-companies]')?.disabled,
     'company creation stays disabled while only a pending token exists');
@@ -209,23 +209,36 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(authPanel.querySelector('[data-auth-message]').textContent.includes('JWT получен и зашифрован отдельно'));
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert.equal(authPosts().length,1,'a reload does not resubmit credentials');
+  authPanel.querySelector('[data-search]').value='synthetic-account';
   const testButton=authPanel.querySelector('[data-test]');
+  const testPostCount=()=>requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
+    &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='test').length;
+  await testButton.onclick({currentTarget:testButton});
+  assert.equal(testPostCount(),0,'a missing known-account search does not call the backend');
+  authPanel.querySelector('[data-search]').value='synthetic-account';
   await testButton.onclick({currentTarget:testButton});
   await new Promise(resolve=>setTimeout(resolve,0));
-  assert(authPanel.textContent.includes('synthetic.operator'));
-  assert(authPanel.textContent.includes('superadmin'));
-  assert(authPanel.textContent.includes('не меняет права Beintaskbot'));
-  assert.equal(mockIntegration.status,'not_connected','/user/me alone does not activate the pending token');
+  assert(authPanel.querySelector('[data-message]').textContent.includes('Доступ к /user/accounts подтверждён'));
+  assert(authPanel.querySelector('[data-message]').textContent.includes('токен остаётся pending'));
+  assert(!authPanel.querySelector('[data-message]').textContent.includes('synthetic-account'),
+    'the probe response does not reveal the queried account');
+  assert.equal(mockIntegration.status,'not_connected','a bounded accounts probe does not activate the pending token');
+  assert.equal(mockIntegration.connected,false);
+  assert.equal(mockIntegration.pending_auth_access_confirmed,true);
   const testPost=requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
     &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='test').at(-1);
-  assert(testPost,'the documented identity check is explicitly invoked');
+  assert(testPost,'the bounded account-access check is explicitly invoked');
+  assert.deepEqual(JSON.parse(testPost.options.body),{
+    action:'test',search:'synthetic-account',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+  });
 
   // Provider errors appear next to the submit action.
   loginMode='error';
   const errorLogin=authPanel.querySelector('[data-operator-login]');
   const errorPassword=authPanel.querySelector('[data-operator-password]');
   const errorSave=authPanel.querySelector('[data-save]');
-  errorLogin.value='synthetic-login';
+  errorLogin.value='synthetic-user@synthetic-account';
   errorPassword.value='synthetic-password';
   errorSave.click();
   await new Promise(resolve=>setTimeout(resolve,0));
