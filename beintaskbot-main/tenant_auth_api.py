@@ -366,8 +366,12 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
             capabilities = context.capabilities(profile)
             if context.dialog_reply_templates_ready:
-                capabilities["dialog_reply_templates"] = await asyncio.to_thread(
-                    context.dialog_reply_templates_ready, profile)
+                try:
+                    capabilities["dialog_reply_templates"] = await asyncio.to_thread(
+                        context.dialog_reply_templates_ready, profile)
+                except Exception as error:
+                    context.logger.warning("Reply template readiness probe failed (%s)", type(error).__name__)
+                    capabilities["dialog_reply_templates"] = False
             members = await asyncio.to_thread(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
             ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []

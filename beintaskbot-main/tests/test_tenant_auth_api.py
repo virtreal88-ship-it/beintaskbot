@@ -262,6 +262,15 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         response = await self.api["me"](Request())
         self.assertEqual(payload(response)["members"], [])
 
+    async def test_me_fails_closed_only_for_templates_when_readiness_probe_fails(self):
+        def unavailable(_profile):
+            raise RuntimeError("synthetic schema probe failure")
+        api = handlers(replace(self.context, dialog_reply_templates_ready=unavailable))
+        response = await api["me"](Request())
+        self.assertEqual(response.status, 200)
+        self.assertFalse(payload(response)["capabilities"]["dialog_reply_templates"])
+        self.assertEqual(payload(response)["members"], [{"telegram_id": 7}])
+
     async def test_me_uses_employee_manage_capability_not_hardcoded_roles(self):
         self.profile["role"] = "manager"
         context = replace(self.context, capabilities=lambda _profile: {"can_manage_employees": True})

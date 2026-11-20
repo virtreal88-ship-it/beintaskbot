@@ -16,8 +16,14 @@ def handler(member_from_request, origin, logger):
             profile = member_from_request(request)
             if not profile:
                 raise TenantLinearError("Нет доступа.", 403)
-            if (not is_operator_workspace(profile.get("tenant_id"))
-                    or not feature_ready(profile)):
+            if not is_operator_workspace(profile.get("tenant_id")):
+                raise TenantLinearError("Шаблоны недоступны для этого workspace.", 404)
+            try:
+                ready = await asyncio.to_thread(feature_ready, profile)
+            except Exception as error:
+                logger.warning("Reply template readiness probe failed (%s)", type(error).__name__)
+                ready = False
+            if not ready:
                 raise TenantLinearError("Шаблоны недоступны для этого workspace.", 404)
             if request.method == "GET":
                 _expected(request.query, profile)

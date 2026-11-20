@@ -18,6 +18,7 @@ The migration creates `saas_dialog_reply_templates` and an index for active visi
 - Template view and update scope currently derive from the existing `dialogs` view/update policy. There are no separate configurable template permissions. Whether to introduce distinct template capabilities is an open policy decision; it requires a separately reviewed rights model before any permission changes.
 - A team edit that keeps `team` visibility retains the row's original department, including for an all-scope editor with no department. Only the author can change visibility; transitions to `team` use the editor's current department and require one.
 - An idempotent create retry rechecks current view access before returning an existing row, so a former department member cannot retrieve old team text through the replay path.
+- Template author/editor and department foreign keys use the database's default restrictive delete behavior. The supported member and department APIs archive/deactivate records; source review found no hard-delete flow. This intentionally prevents identity/department removal from silently deleting or orphaning template content.
 - The API rechecks active tenant membership and current dialog permissions on each request.
 - Typing filters already loaded tenant-scoped template text in memory. It does not send the draft to the server.
 - Selecting a suggestion only inserts text into the existing editable composer. Sending remains an explicit action in the existing composer.
