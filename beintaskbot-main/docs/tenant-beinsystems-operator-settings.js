@@ -83,7 +83,7 @@
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Создание компаний — отдельное подтверждаемое действие только из свежего списка текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><p class="sub">Для проверки свежего входа укажите известный account в поле поиска ниже; JWT не сохраняется.</p><button type="button" data-login-check>Войти и проверить accounts</button><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт считывает весь список /user/accounts, сохраняет только account ID, не удаляет пропавшие записи и не отправляет данные наружу.</p><p>Создание компаний — отдельное подтверждаемое действие только из свежего списка текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
       testControl.textContent = 'Проверить доступ к accounts';
       const testDescription = Array.from(connection.querySelectorAll('p'))
@@ -176,6 +176,59 @@
           password = '';
           passwordInput.value = '';
           if (current === revision) saveButton.disabled = false;
+        }
+      });
+      const loginCheckButton = $(authForm, '[data-login-check]');
+      loginCheckButton.addEventListener('click', async () => {
+        const login = $(authForm, '[data-operator-login]').value.trim();
+        const passwordInput = $(authForm, '[data-operator-password]');
+        let password = passwordInput.value;
+        passwordInput.value = '';
+        const search = $(panel, '[data-search]').value.trim();
+        if (!login || !password) {
+          password = '';
+          showAuthMessage('Введите логин и пароль оператора.', true);
+          return;
+        }
+        if (search.length < 4 || search.length > 120) {
+          password = '';
+          showAuthMessage('Введите известный account в поле поиска ниже.', true);
+          return;
+        }
+        saveButton.disabled = true;
+        loginCheckButton.disabled = true;
+        showAuthMessage('Проверяю свежий вход и чтение accounts…');
+        try {
+          const pending = request('/api/platform/integrations/beinsystems-operator', {
+            action: 'login_check', login, password, search,
+          });
+          password = '';
+          const result = await pending;
+          if (current !== revision) return;
+          if (result?.integration) { state = result.integration; renderStatus(); }
+          const verification = result?.verification;
+          if (verification?.source !== 'fresh_login'
+              || verification?.request_accepted !== true) {
+            throw new Error('Operator не подтвердил чтение accounts.');
+          }
+          const accounts = Array.isArray(verification.accounts)
+            ? verification.accounts.slice(0, 10)
+              .map(account => String(account).slice(0, 240)).filter(Boolean)
+            : [];
+          const tokenNote = ' JWT использован только в памяти; активное подключение и pending JWT не менялись.';
+          showAuthMessage(accounts.length
+            ? 'Свежий вход прочитал accounts: '+accounts.join(', ')+'.'+tokenNote
+            : 'Запрос принят, но аккаунтов по этому поиску не найдено; конкретное чтение не подтверждено.'+tokenNote,
+            true);
+        } catch (error) {
+          if (current === revision) showAuthMessage(error.message, true);
+        } finally {
+          password = '';
+          passwordInput.value = '';
+          if (current === revision) {
+            saveButton.disabled = false;
+            loginCheckButton.disabled = false;
+          }
         }
       });
       let catalogRevision=0;
