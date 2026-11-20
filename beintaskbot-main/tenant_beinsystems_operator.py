@@ -46,12 +46,125 @@ READ_ENDPOINTS = {
 }
 
 
+_UPSTREAM_BEARER_ERROR_STATUS = {
+    "invalid_token": 401,
+    "insufficient_scope": 403,
+}
+_AUTH_PARAM_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+
+
+def _bearer_challenge_error_code(headers, status):
+    """Return only a recognized Bearer error code; never expose challenge text."""
+    if status not in (401, 403) or headers is None:
+        return None
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        values = get_all("WWW-Authenticate") or []
+    else:
+        get_value = getattr(headers, "get", None)
+        value = get_value("WWW-Authenticate") if callable(get_value) else None
+        values = [value] if value is not None else []
+    if isinstance(values, str):
+        values = [values]
+
+    for raw in values:
+        if not isinstance(raw, str) or len(raw) > 2048:
+            continue
+        if any((ord(char) < 32 and char != "\t") or ord(char) == 127 for char in raw):
+            continue
+        scheme = re.match(r"(?i)^Bearer[ \t]+", raw)
+        if not scheme:
+            continue
+        rest = raw[scheme.end():]
+        position = 0
+        error_value = None
+        error_seen = False
+        valid = True
+        while position < len(rest):
+            while position < len(rest) and rest[position] in " \t":
+                position += 1
+            key_match = _AUTH_PARAM_TOKEN.match(rest, position)
+            if not key_match:
+                valid = False
+                break
+            key = key_match.group(0)
+            position = key_match.end()
+            while position < len(rest) and rest[position] in " \t":
+                position += 1
+            if position >= len(rest) or rest[position] != "=":
+                valid = False
+                break
+            position += 1
+            while position < len(rest) and rest[position] in " \t":
+                position += 1
+            if position < len(rest) and rest[position] == '"':
+                position += 1
+                chars = []
+                escaped = False
+                closed = False
+                while position < len(rest):
+                    char = rest[position]
+                    if char == '"':
+                        position += 1
+                        closed = True
+                        break
+                    if char == "\\":
+                        position += 1
+                        if position >= len(rest):
+                            valid = False
+                            break
+                        chars.append(rest[position])
+                        escaped = True
+                        position += 1
+                    else:
+                        chars.append(char)
+                        position += 1
+                if not valid or not closed:
+                    valid = False
+                    break
+                value = None if escaped else "".join(chars)
+            else:
+                value_match = _AUTH_PARAM_TOKEN.match(rest, position)
+                if not value_match:
+                    valid = False
+                    break
+                value = value_match.group(0)
+                position = value_match.end()
+            if key == "error":
+                if error_seen:
+                    valid = False
+                    break
+                error_seen = True
+                error_value = value
+            while position < len(rest) and rest[position] in " \t":
+                position += 1
+            if position == len(rest):
+                break
+            if rest[position] != ",":
+                valid = False
+                break
+            position += 1
+            if position == len(rest):
+                valid = False
+                break
+        if valid and error_seen and _UPSTREAM_BEARER_ERROR_STATUS.get(error_value) == status:
+            return error_value
+    return None
+
+
 class OperatorError(TenantPlatformError):
-    def __init__(self, message, status=400, *, upstream_http_status=None):
+    def __init__(self, message, status=400, *, upstream_http_status=None,
+                 upstream_error_code=None):
         super().__init__(message)
         self.status = status
         self.upstream_http_status = (
             upstream_http_status if upstream_http_status in (401, 403) else None
+        )
+        self.upstream_error_code = (
+            upstream_error_code
+            if (_UPSTREAM_BEARER_ERROR_STATUS.get(upstream_error_code)
+                == self.upstream_http_status)
+            else None
         )
 
 
@@ -493,12 +606,20 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         code = getattr(exc, "code", None)
         if code in (401, 403):
-            # Keep this as a local gateway failure; expose only the allowlisted
-            # upstream status, never the provider body or token.
+            challenge_code = _bearer_challenge_error_code(
+                getattr(exc, "headers", None), code)
+            if challenge_code == "invalid_token":
+                message = "Upstream Bearer challenge invalid_token (HTTP 401)."
+            elif challenge_code == "insufficient_scope":
+                message = ("Upstream Bearer challenge insufficient_scope "
+                           "(HTTP 403; доступ к чтению не подтверждён).")
+            else:
+                message = (
+                    f"Operator отклонил служебную авторизацию (upstream HTTP {code}).")
+            # The provider body and all unrecognized header text remain private.
             raise OperatorError(
-                f"Operator отклонил служебную авторизацию (upstream HTTP {code}).",
-                502,
-                upstream_http_status=code,
+                message, 502, upstream_http_status=code,
+                upstream_error_code=challenge_code,
             ) from None
         raise OperatorError("Operator временно не ответил.") from None
     if len(raw) > MAX_RESPONSE_BYTES:
