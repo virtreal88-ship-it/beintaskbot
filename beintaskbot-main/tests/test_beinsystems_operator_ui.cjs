@@ -248,6 +248,9 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(probeMessage().includes('вернул одну запись; чтение account подтверждено'));
   assert(probeMessage().includes('Точное совпадение найдено'));
   assert.equal(mockIntegration.pending_auth_access_confirmed,true);
+  assert(authPanel.querySelector('[data-status]').textContent.includes('отметка предыдущей проверки'));
+  assert(!authPanel.querySelector('[data-status]').textContent.includes('прочитан account'),
+    'persisted legacy status is not presented as a confirmed account read');
 
   mockIntegration={status:'connected',connected:true,configured:true,api_ready:true,
     pending_auth_received:false,pending_auth_access_confirmed:null};
