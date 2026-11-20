@@ -55,6 +55,81 @@ def migrate(cur):
       WHERE deleted_at IS NULL""")
 
 
+_EXPECTED_COLUMNS = (
+    ("tenant_id", "uuid", True, None),
+    ("id", "uuid", True, None),
+    ("request_id", "uuid", True, None),
+    ("name", "text", True, None),
+    ("body", "text", True, None),
+    ("visibility", "text", True, None),
+    ("department_id", "uuid", False, None),
+    ("created_by", "bigint", True, None),
+    ("updated_by", "bigint", True, None),
+    ("version", "integer", True, "1"),
+    ("created_at", "timestamp with time zone", True, "clock_timestamp()"),
+    ("updated_at", "timestamp with time zone", True, "clock_timestamp()"),
+    ("deleted_at", "timestamp with time zone", False, None),
+)
+_EXPECTED_CONSTRAINTS = frozenset({
+    "CHECK (((length(body) >= 1) AND (length(body) <= 4000)))",
+    "CHECK (((length(name) >= 1) AND (length(name) <= 120)))",
+    "CHECK (((visibility = 'team'::text) = (department_id IS NOT NULL)))",
+    "CHECK ((version > 0))",
+    "CHECK ((visibility = ANY (ARRAY['personal'::text, 'team'::text, 'shared'::text])))",
+    "FOREIGN KEY (tenant_id, created_by) REFERENCES saas_tenant_members(tenant_id, telegram_id)",
+    "FOREIGN KEY (tenant_id, department_id) REFERENCES saas_tenant_departments(tenant_id, id)",
+    "FOREIGN KEY (tenant_id, updated_by) REFERENCES saas_tenant_members(tenant_id, telegram_id)",
+    "PRIMARY KEY (tenant_id, id)",
+    "UNIQUE (tenant_id, created_by, request_id)",
+})
+
+
+def verify_provisioned_schema(cur):
+    """Verify IF NOT EXISTS did not silently accept an incompatible object."""
+    cur.execute("""SELECT c.oid, n.nspname FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.oid=to_regclass('saas_dialog_reply_templates')
+        AND n.nspname=current_schema() AND c.relkind='r' AND c.relpersistence='p'
+        AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_trigger t
+                        WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits inh
+                        WHERE c.oid IN (inh.inhrelid, inh.inhparent))""")
+    table = cur.fetchone()
+    if not table:
+        raise RuntimeError("Unexpected reply-template table; provisioning rolled back.")
+    oid = table["oid"]
+    cur.execute("""SELECT a.attname, format_type(a.atttypid,a.atttypmod) AS data_type,
+      a.attnotnull, pg_get_expr(d.adbin,d.adrelid) AS default_expression,
+      a.attidentity, a.attgenerated
+      FROM pg_catalog.pg_attribute a
+      LEFT JOIN pg_catalog.pg_attrdef d ON (d.adrelid,d.adnum)=(a.attrelid,a.attnum)
+      WHERE a.attrelid=%s::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum""", (oid,))
+    columns = cur.fetchall()
+    if (tuple((row["attname"], row["data_type"], row["attnotnull"], row["default_expression"])
+              for row in columns) != _EXPECTED_COLUMNS
+            or any(row["attidentity"] or row["attgenerated"] for row in columns)):
+        raise RuntimeError("Unexpected reply-template columns; provisioning rolled back.")
+    cur.execute("""SELECT pg_get_constraintdef(oid) AS definition, convalidated
+      FROM pg_catalog.pg_constraint WHERE conrelid=%s::oid AND contype IN ('c','f','p','u','x')""",
+                (oid,))
+    constraints = cur.fetchall()
+    # PostgreSQL 18 also stores NOT NULL constraints here. The column check
+    # above covers them on both PostgreSQL 17 and 18.
+    if (len(constraints) != len(_EXPECTED_CONSTRAINTS)
+            or frozenset(row["definition"] for row in constraints) != _EXPECTED_CONSTRAINTS
+            or not all(row["convalidated"] for row in constraints)):
+        raise RuntimeError("Unexpected reply-template constraints; provisioning rolled back.")
+    cur.execute("""SELECT 1 FROM pg_catalog.pg_index i
+      WHERE i.indexrelid=to_regclass('saas_dialog_reply_templates_scope_idx')
+        AND i.indrelid=%s::oid AND i.indisvalid AND i.indisready AND i.indislive
+        AND pg_get_indexdef(i.indexrelid)=format(
+           'CREATE INDEX saas_dialog_reply_templates_scope_idx ON %%I.saas_dialog_reply_templates USING btree (tenant_id, visibility, department_id, updated_at DESC) WHERE (deleted_at IS NULL)',
+           %s::text)""", (oid, table["nspname"]))
+    if not cur.fetchone():
+        raise RuntimeError("Unexpected reply-template index; provisioning rolled back.")
+
+
 def _schema_ready(cur):
     cur.execute("SELECT to_regclass('saas_dialog_reply_templates') AS table_name")
     row = cur.fetchone()

@@ -4,6 +4,8 @@ on:
     paths:
       - 'beintaskbot-main/tenant_dialog_reply_templates.py'
       - 'beintaskbot-main/tenant_dialog_reply_templates_api.py'
+      - 'beintaskbot-main/tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/tests/test_dialog_reply_template_startup_postgres.py'
       - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tenant_web_assets.py'
       - 'beintaskbot-main/docs/tenant-app.html'
@@ -19,7 +21,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
@@ -54,4 +56,4 @@ jobs:
       - name: Verify suggestions never send messages
         run: NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_reply_templates_ui.cjs
       - name: Verify migration and tenant isolation on disposable PostgreSQL
-        run: python -m pytest -q --tb=short tests/test_dialog_reply_templates_postgres.py
+        run: python -m pytest -q --tb=short tests/test_dialog_reply_templates_postgres.py tests/test_dialog_reply_template_startup_postgres.py
