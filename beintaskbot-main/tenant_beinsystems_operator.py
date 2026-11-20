@@ -617,9 +617,41 @@ def _request_accounts_with_requests(url, payload, token):
         raise OperatorError("Operator временно не ответил.") from None
 
 
-def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
+def _request_me_with_requests(url, token):
+    """Read the independently authenticated identity without redirects or proxies."""
+    try:
+        with _NoRedirectRequestsSession() as session:
+            session.trust_env = False
+            with session.get(
+                url, headers={"Authorization": "Bearer " + str(token)},
+                timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False,
+                stream=True, verify=True,
+            ) as response:
+                status = int(response.status_code)
+                if status in (401, 403):
+                    raise _operator_upstream_auth_error(status, response.headers)
+                if not 200 <= status < 300:
+                    raise OperatorError("Operator временно не ответил.")
+                raw = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    if len(raw) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise OperatorError("Ответ Operator превышает допустимый размер.")
+                    raw.extend(chunk)
+                return bytes(raw)
+    except OperatorError:
+        raise
+    except requests.RequestException:
+        raise OperatorError("Operator временно не ответил.") from None
+
+
+def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
+                      requests_me=False):
     """Call one allowlisted documented read method; never follows redirects."""
     if endpoint not in READ_ENDPOINTS:
+        raise OperatorError("Операция Operator пока не поддерживается.")
+    if requests_me and (endpoint != "me" or opener is not None):
         raise OperatorError("Операция Operator пока не поддерживается.")
     path, fields = READ_ENDPOINTS[endpoint]
     if not isinstance(payload, dict) or set(payload) - fields:
@@ -653,6 +685,8 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
         raise OperatorError("Адрес Operator API не настроен.")
     if endpoint == "accounts":
         raw = _request_accounts_with_requests(base + path, payload, token)
+    elif endpoint == "me" and requests_me:
+        raw = _request_me_with_requests(base + path, token)
     else:
         method = "GET" if endpoint == "me" else "POST"
         body = None if method == "GET" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -806,6 +840,82 @@ def _assert_current_operator_owner(tenant, actor, *, pending_received_at=None):
                         cur, tenant, actor, pending_received_at)):
                 raise OperatorError(
                     "JWT Operator был заменён во время проверки. Повторите попытку.", 409)
+
+
+def _operator_directory_fence(profile, tenant, actor, source, credentials):
+    """Recheck owner and the exact selected credentials around each provider read."""
+    _assert_current_operator_owner(tenant, actor)
+    if source == "active":
+        fresh = _credentials(tenant, allow_configured=True)
+        if (fresh["generation"] != credentials["generation"]
+                or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
+            raise OperatorError("Подключение Operator изменилось во время поиска.", 409)
+        return
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            row = _operator_row(cur, tenant)
+            if row and row.get("status") in {"connected", "configured"} and row.get("secrets"):
+                raise OperatorError("Подключение Operator изменилось во время поиска.", 409)
+            if not _pending_timestamp_is_current(
+                    cur, tenant, actor, credentials["received_at"]):
+                raise OperatorError("JWT Operator был заменён во время поиска.", 409)
+
+
+def search_authenticated_operator_account(profile, search):
+    """Verify identity with /me, then return only one account ID from a narrow search."""
+    tenant = _tenant(profile)
+    try:
+        actor = int(profile.get("telegram_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Поиск Operator доступен только владельцу BeinSystems.")
+    if not isinstance(search, str):
+        raise OperatorError("Укажите строку поиска аккаунта Operator.")
+    if any(ord(char) < 32 or ord(char) == 127 for char in search):
+        raise OperatorError("Поиск Operator должен содержать от 4 до 120 символов без управляющих знаков.")
+    query = search.strip()
+    if len(query) < 4 or len(query) > 120:
+        raise OperatorError("Поиск Operator должен содержать от 4 до 120 символов без управляющих знаков.")
+
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError("Поиск Operator доступен только владельцу BeinSystems.")
+            active_row = _operator_row(cur, tenant)
+    active_exists = bool(active_row and active_row.get("status") in {"connected", "configured"}
+                         and active_row.get("secrets"))
+    if active_exists:
+        credentials = _credentials(tenant, allow_configured=True)
+        source = "active"
+    else:
+        candidate = _pending_auth_candidate(profile, required=False)
+        if not candidate:
+            raise OperatorError("Сначала получите JWT из карточки интеграции.")
+        credentials = candidate
+        source = "pending"
+
+    _record_operator_read(profile, "me", {})
+    _operator_directory_fence(profile, tenant, actor, source, credentials)
+    identity = operator_me_payload(_request_operator(
+        "me", {}, token=credentials["token"], base_url=credentials["base_url"],
+        requests_me=True))
+    # Identity confirms this credential only. It is deliberately neither returned
+    # nor used for CRM permissions; the live CRM owner check remains authoritative.
+    del identity
+    _operator_directory_fence(profile, tenant, actor, source, credentials)
+
+    _record_operator_read(profile, "accounts", {"search": query})
+    _operator_directory_fence(profile, tenant, actor, source, credentials)
+    response = _request_operator("accounts", {"search": query, "limit": 1},
+                                 token=credentials["token"], base_url=credentials["base_url"])
+    accounts = _accounts_access_probe_payload(response)
+    _operator_directory_fence(profile, tenant, actor, source, credentials)
+    return {"source": source, "account_id": accounts[0] if accounts else None,
+            "result_count": len(accounts)}
 
 
 def verify_accounts_access(profile, search):
