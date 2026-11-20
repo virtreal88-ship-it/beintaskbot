@@ -107,8 +107,10 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             "Operator отклонил служебную авторизацию (upstream HTTP 401).",
             502, upstream_http_status=401)
         with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
-             patch.object(operator_api, "_body", new=AsyncMock(return_value={"action": "test"})), \
-             patch.object(operator, "verify_connection", side_effect=provider_error):
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                 "action": "test", "search": "synthetic-account",
+             })), \
+             patch.object(operator, "verify_accounts_access", side_effect=provider_error) as verify:
             response = asyncio.run(handler(request))
         body = json.loads(response.text)
         self.assertEqual(response.status, 502)
@@ -118,6 +120,44 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertNotIn("private provider detail", response.text)
         self.assertEqual(response.headers["X-Tenant-Auth-Source"], "operator")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+        verify.assert_called_once_with(profile, "synthetic-account")
+    def test_integration_handler_test_action_checks_accounts_with_pending_token_contract(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(
+            lambda _request: profile, "https://crm.example", MagicMock())
+        verification = {"source": "pending", "request_accepted": True,
+                        "access_confirmed": False, "account_read": False,
+                        "result_count": 0, "match_found": False}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                 "action": "test", "search": "synthetic-account",
+             })), \
+             patch.object(operator, "verify_accounts_access", return_value=verification) as verify, \
+             patch.object(operator, "status", return_value={
+                 "status": "not_connected", "pending_auth_received": True,
+                 "pending_auth_access_confirmed": True,
+             }):
+            response = asyncio.run(handler(request))
+        body = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body["verification"], verification)
+        self.assertEqual(body["integration"]["status"], "not_connected")
+        self.assertNotIn("synthetic-account", response.text)
+        self.assertNotIn("synthetic-jwt", response.text)
+        verify.assert_called_once_with(profile, "synthetic-account")
+
+    def test_integration_handler_test_action_requires_bounded_search(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(
+            lambda _request: profile, "https://crm.example", MagicMock())
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={"action": "test"})), \
+             patch.object(operator, "verify_accounts_access") as verify:
+            response = asyncio.run(handler(request))
+        self.assertEqual(response.status, 400)
+        verify.assert_not_called()
 
     def test_account_catalog_get_and_import_are_explicit_same_origin_actions(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
@@ -209,7 +249,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         fake = FakeOpener({"status": "success", "data": [{"account": "client-1"}]})
         base = "https://operator-api.beinsystems.az/v1"
         result = operator._request_operator(
-            "accounts", {"search": "client"}, token="secret-jwt",
+            "accounts", {"search": "client", "limit": 1}, token="secret-jwt",
             base_url=base, opener=fake)
         self.assertEqual(result["data"][0]["account"], "client-1")
         self.assertEqual(fake.request.full_url, base + "/user/accounts")
@@ -219,7 +259,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIsNone(fake.request.get_header("Referer"))
         self.assertEqual(fake.request.get_header("Content-type"), "application/json")
         self.assertIsNone(fake.request.get_header("User-agent"))
-        self.assertEqual(json.loads(fake.request.data), {"search": "client"})
+        self.assertEqual(json.loads(fake.request.data), {"search": "client", "limit": 1})
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
 
     def test_me_read_uses_confirmed_get_host_path_and_bearer_only(self):
@@ -268,64 +308,43 @@ class BeinSystemsOperatorTests(unittest.TestCase):
 
     def test_operator_login_uses_confirmed_request_and_response_contract(self):
         fake = FakeOpener({"success": True, "data": {"token": "synthetic-jwt"}})
-        runtime_data = {"version": "2.36.24", "platform": "linux", "arch": "x64"}
-        with patch.object(operator, "_auth_runtime_metadata", return_value=runtime_data), \
-             patch.object(operator, "build_opener", return_value=fake):
-            actual = operator._authenticate_operator("beinsystems-account", "synthetic-password")
+        with patch.object(operator, "build_opener", return_value=fake):
+            actual = operator._authenticate_operator(
+                "beinsystems-user@account", "synthetic-password")
         self.assertEqual(actual, "synthetic-jwt")
         self.assertEqual(fake.request.full_url, "https://auth.beinsystems.az/auth/login")
         self.assertEqual(fake.request.get_method(), "POST")
         self.assertEqual(json.loads(fake.request.data), {
-            "login": "beinsystems-account", "password": "synthetic-password", "data": runtime_data,
+            "login": "beinsystems-user@account", "password": "synthetic-password",
+            "uniqDeviceId": "beintaskbot-operator",
         })
         self.assertEqual(fake.request.get_header("Content-type"), "application/json")
         self.assertEqual(fake.request.get_header("Accept"), "application/json, text/plain, */*")
-        self.assertEqual(fake.request.get_header("User-agent"), operator.AUTH_APPLICATION_USER_AGENT)
         self.assertTrue(fake.request.get_header("User-agent").startswith("Beintaskbot-Operator Python-urllib/"))
         self.assertIsNone(fake.request.get_header("Origin"))
         self.assertIsNone(fake.request.get_header("Referer"))
         self.assertIsNone(fake.request.get_header("Authorization"))
         self.assertEqual(fake.timeout, operator.REQUEST_TIMEOUT_SECONDS)
-
-    def test_auth_runtime_metadata_uses_actual_supported_platform_and_architecture(self):
-        cases = [
-            ("linux", "x86_64", 8, {"version": "2.36.24", "platform": "linux", "arch": "x64"}),
-            ("darwin", "arm64", 8, {"version": "2.36.24", "platform": "darwin", "arch": "arm64"}),
-            ("win32", "i686", 4, {"version": "2.36.24", "platform": "win32", "arch": "ia32"}),
-        ]
-        for runtime, machine, pointer_bytes, expected in cases:
-            with self.subTest(runtime=runtime, machine=machine), \
-                 patch.object(operator.sys, "platform", runtime), \
-                 patch.object(operator.runtime_platform, "machine", return_value=machine), \
-                 patch.object(operator.struct, "calcsize", return_value=pointer_bytes):
-                self.assertEqual(operator._auth_runtime_metadata(), expected)
-
-    def test_auth_runtime_metadata_rejects_unknown_architecture_before_request(self):
-        with patch.object(operator.runtime_platform, "machine", return_value="sparc"):
-            with self.assertRaises(operator.OperatorError) as raised:
-                operator._auth_runtime_metadata()
-        self.assertEqual(raised.exception.status, 503)
-
+    def test_operator_login_requires_user_at_account_before_network(self):
+        for login in ("operator-user", "@account", "user@", "user@@account"):
+            with self.subTest(login=login), patch.object(operator, "build_opener") as build:
+                with self.assertRaises(operator.OperatorError) as raised:
+                    operator._authenticate_operator(login, "synthetic-password")
+                self.assertEqual(raised.exception.status, 400)
+                build.assert_not_called()
     def test_operator_login_transport_disables_redirects(self):
         fake = FakeOpener({"success": True, "data": {"token": "synthetic-jwt"}})
-        with patch.object(operator, "_auth_runtime_metadata", return_value={
-                "version": "2.36.24", "platform": "linux", "arch": "x64"}), \
-             patch.object(operator, "build_opener", return_value=fake) as build:
-            operator._authenticate_operator("operator", "synthetic-password")
+        with patch.object(operator, "build_opener", return_value=fake) as build:
+            operator._authenticate_operator("operator-user@account", "synthetic-password")
         self.assertIsInstance(build.call_args.args[0], operator._NoRedirect)
-
-
     def test_operator_login_passes_the_supplied_login_without_rewriting_it(self):
         fake = FakeOpener({"success": True, "data": {"token": "synthetic-jwt"}})
-        with patch.object(operator, "_auth_runtime_metadata", return_value={
-                "version": "2.36.24", "platform": "linux", "arch": "x64"}), \
-             patch.object(operator, "build_opener", return_value=fake):
-            operator._authenticate_operator("  operator-user  ", "synthetic-password")
+        with patch.object(operator, "build_opener", return_value=fake):
+            operator._authenticate_operator("  operator-user@account  ", "synthetic-password")
         self.assertEqual(json.loads(fake.request.data), {
-            "login": "operator-user", "password": "synthetic-password",
-            "data": {"version": "2.36.24", "platform": "linux", "arch": "x64"},
+            "login": "operator-user@account", "password": "synthetic-password",
+            "uniqDeviceId": operator.AUTH_UNIQ_DEVICE_ID,
         })
-
     def test_operator_login_ignores_provider_messages_and_legacy_token_shapes(self):
         responses = [
             ({"success": False, "message": "arbitrary server text synthetic-password synthetic-jwt"}, 401),
@@ -334,25 +353,21 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             ({"success": 1, "data": {"token": "synthetic-jwt"}}, 502),
         ]
         for payload, expected_status in responses:
-            with self.subTest(payload=payload), \
-                 patch.object(operator, "_auth_runtime_metadata", return_value={
-                     "version": "2.36.24", "platform": "linux", "arch": "x64"}):
+            with self.subTest(payload=payload):
                 fake = FakeOpener(payload)
                 with patch.object(operator, "build_opener", return_value=fake):
                     with self.assertRaises(operator.OperatorError) as raised:
-                        operator._authenticate_operator("user@example.com", "synthetic-password")
+                        operator._authenticate_operator(
+                            "user@example.com", "synthetic-password")
                 self.assertEqual(raised.exception.status, expected_status)
                 self.assertNotIn("synthetic-password", str(raised.exception))
                 self.assertNotIn("synthetic-jwt", str(raised.exception))
                 self.assertNotIn("arbitrary server text", str(raised.exception))
-
     def test_operator_http_auth_error_does_not_return_provider_body(self):
         fake = FakeHTTPErrorOpener(403, {
             "message": "arbitrary server text user@example.com synthetic-password synthetic-jwt",
         })
-        with patch.object(operator, "_auth_runtime_metadata", return_value={
-                "version": "2.36.24", "platform": "linux", "arch": "x64"}), \
-             patch.object(operator, "build_opener", return_value=fake):
+        with patch.object(operator, "build_opener", return_value=fake):
             with self.assertRaises(operator.OperatorError) as raised:
                 operator._authenticate_operator("user@example.com", "synthetic-password")
         message = str(raised.exception)
@@ -361,7 +376,6 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertNotIn("synthetic-password", message)
         self.assertNotIn("synthetic-jwt", message)
         self.assertEqual(raised.exception.status, 401)
-
     def test_connect_with_password_stages_token_without_using_or_replacing_active_token(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         connection = MagicMock()
@@ -433,11 +447,47 @@ class BeinSystemsOperatorTests(unittest.TestCase):
                              for call in cursor.execute.call_args_list))
         self.assertEqual(result["status"], "connected")
         self.assertTrue(result["pending_auth_received"])
-        self.assertEqual(result["pending_auth_contract"], operator.AUTH_CONTRACT_VERSION)
+        self.assertIsNone(result["pending_auth_contract"],
+                          "status does not infer a pending token’s login provenance")
         self.assertFalse(result["pending_auth_access_confirmed"])
         self.assertTrue(result["legacy_pending_auth_received"])
         self.assertEqual(result["pending_auth_received_at"], current_at)
         connection.commit.assert_called_once()
+
+    def test_pending_auth_candidate_accepts_previous_login_contract(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        cipher = Fernet(Fernet.generate_key())
+        for contract in (
+            operator.AUTH_CONTRACT_VERSION,
+            "auth_login_runtime_metadata_v1",
+        ):
+            with self.subTest(contract=contract):
+                envelope = {
+                    "tenant_id": TENANT, "provider": operator.PROVIDER,
+                    "owner_telegram_id": 7, "purpose": "pending_auth_verification",
+                    "auth_contract": contract, "token": "synthetic-jwt",
+                }
+                ciphertext = cipher.encrypt(json.dumps(envelope).encode("utf-8"))
+                connection = MagicMock()
+                connection.__enter__.return_value = connection
+                connection.__exit__.return_value = False
+                cursor = MagicMock()
+                cursor.__enter__.return_value = cursor
+                cursor.__exit__.return_value = False
+                cursor.fetchone.return_value = {
+                    "token_ciphertext": ciphertext, "received_at": "2026-11-19T00:00:00Z",
+                }
+                connection.cursor.return_value = cursor
+                with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+                     patch.object(operator, "_connect", return_value=connection), \
+                     patch.object(operator, "_ensure_schema"), \
+                     patch.object(operator, "_current_profile", return_value=profile), \
+                     patch.object(operator, "_fernet", return_value=cipher), \
+                     patch.object(operator, "api_base_url",
+                                  return_value="https://operator-api.beinsystems.az/v1"):
+                    candidate = operator._pending_auth_candidate(profile)
+                self.assertEqual(candidate["token"], "synthetic-jwt")
+                self.assertEqual(candidate["received_at"], "2026-11-19T00:00:00Z")
 
     def test_legacy_pending_token_storage_remains_separate(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
@@ -490,7 +540,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             owner_status = operator.status(profile)
         self.assertTrue(owner_status["pending_auth_received"])
         self.assertFalse(owner_status["pending_auth_access_confirmed"])
-        self.assertEqual(owner_status["pending_auth_contract"], operator.AUTH_CONTRACT_VERSION)
+        self.assertIsNone(owner_status["pending_auth_contract"],
+                          "pending candidates can predate the current login contract")
         self.assertTrue(owner_status["legacy_pending_auth_received"])
 
         cursor.execute.reset_mock()
@@ -505,7 +556,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertFalse(non_owner_status["legacy_pending_auth_received"])
         cursor.execute.assert_not_called()
 
-    def test_verify_connection_uses_only_documented_me_and_keeps_token_pending(self):
+    def test_verify_accounts_access_reads_one_pending_result_without_activation(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         connection = MagicMock()
         connection.__enter__.return_value = connection
@@ -517,27 +568,279 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         connection.cursor.return_value = cursor
         candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
                      "base_url": "https://operator-api.beinsystems.az/v1"}
-        response = {"status": "success", "data": {
-            "identifier": "synthetic.operator", "role": "superadmin", "partnerPin": None,
-        }}
+        response = {"status": "success", "data": [{"account": "synthetic-account"}]}
         with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
              patch.object(operator, "_connect", return_value=connection), \
              patch.object(operator, "_ensure_schema"), \
              patch.object(operator, "_current_profile", return_value=profile), \
              patch.object(operator, "_operator_row", return_value=None), \
              patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+             patch.object(operator, "_assert_current_operator_owner") as owner_check, \
+             patch.object(operator, "_pending_timestamp_is_current", return_value=True), \
              patch.object(operator, "_record_operator_read") as audit, \
-             patch.object(operator, "_request_operator", return_value=response) as request:
-            identity = operator.verify_connection(profile)
-        self.assertEqual(identity, {
-            "identifier": "synthetic.operator", "role": "superadmin", "source": "pending",
+             patch.object(operator, "_request_operator", return_value=response) as request, \
+             patch.object(operator, "_upsert_imported_accounts") as upsert, \
+             patch.object(operator, "_activate_candidate_if_unconfigured") as activate, \
+             patch.object(operator, "save_token") as save:
+            result = operator.verify_accounts_access(profile, " synthetic-account ")
+        self.assertEqual(result, {
+            "source": "pending", "request_accepted": True,
+            "access_confirmed": True, "account_read": True,
+            "result_count": 1, "match_found": True,
         })
-        request.assert_called_once_with("me", {}, token="synthetic-jwt", base_url=candidate["base_url"])
-        audit.assert_called_once_with(profile, "me", {})
+        self.assertEqual(owner_check.call_count, 2,
+                         "the live workspace owner is rechecked before the request and before return")
+        request.assert_called_once_with(
+            "accounts", {"search": "synthetic-account", "limit": 1},
+            token="synthetic-jwt", base_url=candidate["base_url"])
+        audit.assert_called_once_with(
+            profile, "accounts", {"search": "synthetic-account"})
         sql = "\n".join(call.args[0] for call in cursor.execute.call_args_list)
-        self.assertIn("verified_identifier=%s", sql)
+        self.assertIn("SET accounts_access_verified_at=now()", sql)
+        self.assertNotIn("me_verified_at=now()", sql)
+        self.assertNotIn("verified_identifier", sql)
         self.assertNotIn("saas_tenant_integrations SET", sql)
         self.assertFalse(any("synthetic-jwt" in repr(call) for call in cursor.execute.call_args_list))
+        upsert.assert_not_called()
+        activate.assert_not_called()
+        save.assert_not_called()
+        connection.commit.assert_called_once()
+
+    def test_verify_accounts_access_accepts_empty_result_without_claiming_account_read(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value=None), \
+             patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+             patch.object(operator, "_assert_current_operator_owner"), \
+             patch.object(operator, "_pending_timestamp_is_current", return_value=True), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", return_value={
+                 "status": "success", "data": [],
+             }) as request:
+            result = operator.verify_accounts_access(profile, "synthetic-account")
+        self.assertEqual(result, {
+            "source": "pending", "request_accepted": True,
+            "access_confirmed": False, "account_read": False,
+            "result_count": 0, "match_found": False,
+        })
+        request.assert_called_once_with(
+            "accounts", {"search": "synthetic-account", "limit": 1},
+            token="synthetic-jwt", base_url=candidate["base_url"])
+        self.assertFalse(any(
+            "SET accounts_access_verified_at=now()" in call.args[0]
+            for call in cursor.execute.call_args_list))
+        connection.commit.assert_not_called()
+
+    def test_verify_accounts_access_rejects_unknown_or_malformed_probe_responses(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        malformed = [
+            [{"account": "synthetic-account"}],
+            {"success": True, "data": [{"account": "synthetic-account"}]},
+            {"status": "error", "data": []},
+            {"status": "success", "data": "not-a-list"},
+            {"status": "success", "data": [{"account": "first"}, {"account": "second"}]},
+            {"status": "success", "data": [None]},
+            {"status": "success", "data": [{}]},
+            {"status": "success", "data": [{"account": 17}]},
+            {"status": "success", "data": [{"account": "   "}]},
+            {"status": "success", "data": [{"account": "invalid\\naccount"}]},
+            {"status": "success", "data": [], "extra": "unknown"},
+        ]
+        for response in malformed:
+            with self.subTest(response=response):
+                connection = MagicMock()
+                connection.__enter__.return_value = connection
+                connection.__exit__.return_value = False
+                cursor = MagicMock()
+                cursor.__enter__.return_value = cursor
+                cursor.__exit__.return_value = False
+                connection.cursor.return_value = cursor
+                with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+                     patch.object(operator, "_connect", return_value=connection), \
+                     patch.object(operator, "_ensure_schema"), \
+                     patch.object(operator, "_current_profile", return_value=profile), \
+                     patch.object(operator, "_operator_row", return_value=None), \
+                     patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+                     patch.object(operator, "_assert_current_operator_owner"), \
+                     patch.object(operator, "_record_operator_read"), \
+                     patch.object(operator, "_request_operator", return_value=response):
+                    with self.assertRaises(operator.OperatorError):
+                        operator.verify_accounts_access(profile, "synthetic-account")
+                self.assertFalse(any(
+                    "SET accounts_access_verified_at=now()" in call.args[0]
+                    for call in cursor.execute.call_args_list))
+                connection.commit.assert_not_called()
+
+    def test_verify_accounts_access_rechecks_owner_before_network_and_before_active_return(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        owner = {"role": "owner", "active": True, "tenant_status": "active"}
+        manager = {"role": "manager", "active": True, "tenant_status": "active"}
+
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", side_effect=[owner, manager]), \
+             patch.object(operator, "_operator_row", return_value=None), \
+             patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator") as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.verify_accounts_access(profile, "synthetic-account")
+        request.assert_not_called()
+
+        active_row = {"status": "connected", "secrets": b"encrypted-active"}
+        credentials = {
+            "token": "synthetic-active-jwt",
+            "base_url": "https://operator-api.beinsystems.az/v1",
+            "generation": "generation-1", "connection_instance_id": "connection-1",
+        }
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", side_effect=[owner, owner, manager]), \
+             patch.object(operator, "_operator_row", return_value=active_row), \
+             patch.object(operator, "_pending_auth_candidate", return_value=None), \
+             patch.object(operator, "_credentials", side_effect=[credentials, credentials, credentials]), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", return_value={
+                 "status": "success", "data": [{"account": "synthetic-account"}],
+             }) as request:
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator.verify_accounts_access(profile, "synthetic-account")
+        request.assert_called_once()
+        self.assertNotIn("synthetic-active-jwt", str(raised.exception))
+
+    def test_verify_accounts_access_rejects_provider_failure_even_with_list_data(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value=None), \
+             patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+             patch.object(operator, "_assert_current_operator_owner"), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", return_value={
+                 "success": False, "message": "private provider detail", "data": [],
+             }):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator.verify_accounts_access(profile, "synthetic-account")
+        self.assertNotIn("private provider detail", str(raised.exception))
+        self.assertEqual(cursor.execute.call_count, 0)
+        connection.commit.assert_not_called()
+
+    def test_verify_accounts_access_uses_active_connection_without_changing_it(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        connection.cursor.return_value = cursor
+        active_row = {"status": "connected", "secrets": b"encrypted-active-token"}
+        credentials = {
+            "token": "synthetic-active-jwt", "base_url": "https://operator-api.beinsystems.az/v1",
+            "generation": "generation-1", "connection_instance_id": "connection-1",
+        }
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value=active_row), \
+             patch.object(operator, "_pending_auth_candidate", return_value=None), \
+             patch.object(operator, "_credentials", side_effect=[credentials, credentials, credentials]), \
+             patch.object(operator, "_record_operator_read") as audit, \
+             patch.object(operator, "_request_operator", return_value={
+                 "status": "success", "data": [{"account": "synthetic-account"}],
+             }) as request:
+            result = operator.verify_accounts_access(profile, "synthetic-account")
+        self.assertEqual(result, {
+            "source": "active", "request_accepted": True,
+            "access_confirmed": True, "account_read": True,
+            "result_count": 1, "match_found": True,
+        })
+        request.assert_called_once_with(
+            "accounts", {"search": "synthetic-account", "limit": 1},
+            token="synthetic-active-jwt", base_url=credentials["base_url"])
+        audit.assert_called_once_with(profile, "accounts", {"search": "synthetic-account"})
+        self.assertEqual(cursor.execute.call_count, 0)
+        connection.commit.assert_not_called()
+        self.assertNotIn("synthetic-active-jwt", json.dumps(result))
+
+    def test_verify_accounts_access_requires_owner_and_search_before_provider_call(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "manager", "active": True}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_request_operator") as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.verify_accounts_access(profile, "synthetic-account")
+            request.assert_not_called()
+            profile["role"] = "owner"
+            with self.assertRaises(operator.OperatorError):
+                operator.verify_accounts_access(profile, "abc")
+            request.assert_not_called()
+
+    def test_verify_accounts_access_rejects_stale_pending_candidate(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        cursor.rowcount = 0
+        connection.cursor.return_value = cursor
+        candidate = {"token": "synthetic-jwt", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value=None), \
+             patch.object(operator, "_pending_auth_candidate", return_value=candidate), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", return_value={
+                 "status": "success", "data": [],
+             }) as request:
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator.verify_accounts_access(profile, "synthetic-account")
+        request.assert_not_called()
+        self.assertEqual(raised.exception.status, 409)
+        sql = "\n".join(call.args[0] for call in cursor.execute.call_args_list)
+        self.assertNotIn("saas_tenant_integrations SET", sql)
+        connection.commit.assert_not_called()
 
     def test_account_import_reads_pending_candidate_and_preserves_existing_connection(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
@@ -610,7 +913,12 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             operator._request_operator("accounts", {"search": "abc"}, token="jwt",
                                        base_url="https://operator.example",
                                        opener=FakeOpener({}))
-
+        for invalid_limit in (0, 101, True, 1.0, "1"):
+            with self.subTest(limit=invalid_limit), self.assertRaises(operator.OperatorError):
+                operator._request_operator("accounts", {
+                    "search": "known-account", "limit": invalid_limit,
+                }, token="jwt", base_url="https://operator.example",
+                   opener=FakeOpener({}))
     def test_account_search_and_user_login_projection_are_bounded(self):
         self.assertEqual(operator.accounts_list_payload({"status": "success", "data": [
             {"account": "acct-7", "phone": "+1 555 0100", "balance": 999},
