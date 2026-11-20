@@ -72,7 +72,7 @@
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
       if (state.pending_auth_received) {
-        if (state.pending_auth_access_confirmed === true) parts.push('Из pending JWT прочитан account из /user/accounts');
+        if (state.pending_auth_access_confirmed === true) parts.push('У pending-кандидата есть отметка предыдущей проверки /user/accounts; конкретный результат здесь не указан');
         else parts.push('JWT сохранён как pending; чтение account не подтверждено');
       }
       status.textContent = parts.join(' · ');
