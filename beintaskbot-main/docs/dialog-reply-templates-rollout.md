@@ -4,11 +4,16 @@ This pilot is limited to the single UUID-configured BeinSystems workspace throug
 
 ## Preflight
 
-`tenant_dialog_reply_templates.migrate(cursor)` is an additive, idempotent schema migration. Run it only through a separately reviewed tenant database preflight with an approved backup and recovery procedure. This repository does not provide an approved live procedure for this migration. The explicit server gate defaults off and requires both the exact pilot workspace and the initialized table; the request handler never performs DDL. This PR does not run a production migration or deploy the feature.
+The provisioning and UI switches are independent and both default off. Stock boot neither probes nor creates the template schema. API and request paths never provision it. The pilot API remains disabled unless `DIALOG_REPLY_TEMPLATES_ENABLED=true`, the exact configured BeinSystems workspace matches, and the schema is present.
 
-Proposed sequence, not an approved live procedure: obtain owner approval and a verified recoverable backup; in a short tenant-scoped transaction apply the additive migration, verify the table/index, and commit; enable `DIALOG_REPLY_TEMPLATES_ENABLED=true` only after the migration is confirmed. Roll back the application by disabling that setting while retaining the additive table. Do not drop the table as part of application rollback. No new backup service or data export is part of this proposal.
+**Proposed release sequence, not an approved live change:**
 
-The migration creates `saas_dialog_reply_templates` and an index for active visibility scopes. It does not alter memberships, existing CRM records, customer conversations, or messages.
+1. Obtain separate owner approval and verify the current recoverable backup and restore procedure before any production provisioning. A historic restore test is not current recovery evidence. Do not turn on backups, export data, or run a live restore as part of this change.
+2. Release the code with both switches off. After approval and recovery verification, leave the UI switch off and enable `DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP=true` only for the controlled startup. The configured `BEINSYSTEMS_OPERATOR_TENANT_ID` must be a valid UUID. This setting provisions shared, empty schema, never a tenant's data.
+3. The dedicated startup connection waits on the existing startup advisory lock. After the normal base schema commits, one transaction with the existing 5-second transaction and 2-second lock limits creates and verifies only the reviewed template table and partial scope index. An error or incompatible existing shape rolls that transaction back without undoing the already committed base schema. Do not repair or replace an unexpected table or index in this rollout.
+4. Verify the worker booted and the table/index match. Turn provisioning off again; subsequent boots do not need it. Keep the UI off until the pilot activation is separately approved, then enable only the feature switch for the existing exact-workspace gate.
+
+Rollback: disable the feature and provisioning switches. Retain the additive table and index; do not drop or rewrite them. No membership, CRM, chat, message, or template rows are created or changed by provisioning.
 
 ## Behavior
 
@@ -29,4 +34,4 @@ The migration creates `saas_dialog_reply_templates` and an index for active visi
 
 Synthetic tests cover scope isolation, tenant binding, stale versions, idempotent retries, department-preserving edits and transitions, route wiring, and that typing/insertion/management do not call a message endpoint or store drafts locally.
 
-The dedicated disposable PostgreSQL CI test runs the actual migration twice, checks synthetic tenant/department CRUD and rollback, and drops its isolated schema. The profile capability is false unless the server opt-in is true, the configured pilot tenant matches, and the schema exists; the browser does not mount or call template endpoints when false.
+The disposable PostgreSQL CI tests cover repeated migration, preserved synthetic data, the startup lock and commit boundary, stock boot without template probes, and rollback on incompatible schema or error. The profile capability is false unless the server opt-in is true, the configured pilot tenant matches, and the schema exists; the browser does not mount or call template endpoints when false.

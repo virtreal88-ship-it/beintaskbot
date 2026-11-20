@@ -1,6 +1,7 @@
 """Fail-fast AI Agent database preparation and worker startup."""
 import asyncio
 from contextlib import closing
+import os
 import time
 
 
@@ -69,6 +70,18 @@ def prepare_database() -> None:
         from tenant_dialog_consultations import require_schema
         require_schema(conn)
         conn.commit()
+        # Opt-in only, on the dedicated startup connection. This fresh
+        # transaction inherits the existing startup lock and timeout budget.
+        # Closing the connection rolls back any partial template DDL.
+        if os.environ.get('DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP', '').lower() == 'true':
+            from tenant_beinsystems_operator_access import configured_workspace_id
+            from tenant_dialog_reply_templates import migrate, verify_provisioned_schema
+            if not configured_workspace_id():
+                raise RuntimeError('Reply-template provisioning requires a configured BeinSystems workspace UUID.')
+            with conn.cursor() as cur:
+                migrate(cur)
+                verify_provisioned_schema(cur)
+            conn.commit()
 
 
 def ensure_pilot_case_schema(conn) -> None:
