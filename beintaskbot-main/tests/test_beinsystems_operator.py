@@ -150,6 +150,38 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertNotIn("synthetic-jwt", response.text)
         verify.assert_called_once_with(profile, "synthetic-account")
 
+    def test_integration_handler_login_check_returns_only_bounded_accounts_result(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(
+            lambda _request: profile, "https://crm.example", MagicMock())
+        verification = {
+            "source": "fresh_login", "request_accepted": True,
+            "access_confirmed": True, "account_read": True, "result_count": 1,
+            "match_found": True, "accounts": ["beinsystems"], "token_stored": False,
+        }
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                 "action": "login_check", "login": "synthetic-user@account",
+                 "password": "synthetic-password", "search": "beinsystems",
+             })), \
+             patch.object(operator, "login_and_read_accounts",
+                          return_value=verification) as check, \
+             patch.object(operator, "status", return_value={
+                 "status": "not_connected", "pending_auth_received": True,
+             }):
+            response = asyncio.run(handler(request))
+        body = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body["verification"], verification)
+        self.assertEqual(body["integration"]["status"], "not_connected")
+        self.assertNotIn("synthetic-password", response.text)
+        self.assertNotIn("fresh-sso-jwt", response.text)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        check.assert_called_once_with(
+            profile, "synthetic-user@account", "synthetic-password", "beinsystems")
+
+
     def test_integration_handler_test_action_requires_bounded_search(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         request = MagicMock(method="POST")
@@ -436,6 +468,120 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         request.assert_not_called()
         save.assert_not_called()
         self.assertFalse(any("raw-password" in repr(call) for call in cursor.execute.call_args_list))
+
+    def test_login_and_read_accounts_uses_fresh_jwt_without_staging_tokens(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        cursor.fetchone.return_value = {"request_count": 1}
+        connection.cursor.return_value = cursor
+        response = {"ResponseStatus": 0, "data": [
+            {"account": "beinsystems", "phone": "private-synthetic-phone"},
+        ], "metadata": {"private": "ignored"}}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_authenticate_operator", return_value="fresh-sso-jwt") as authenticate, \
+             patch.object(operator, "_assert_current_operator_owner") as owner_check, \
+             patch.object(operator, "_record_operator_read") as audit, \
+             patch.object(operator, "_request_operator", return_value=response) as request, \
+             patch.object(operator, "stage_confirmed_auth_token") as stage, \
+             patch.object(operator, "_activate_candidate_if_unconfigured") as activate:
+            result = operator.login_and_read_accounts(
+                profile, "synthetic-user@synthetic-account", "synthetic-password",
+                "beinsystems")
+        self.assertEqual(result, {
+            "source": "fresh_login", "request_accepted": True,
+            "access_confirmed": True, "account_read": True,
+            "result_count": 1, "match_found": True,
+            "accounts": ["beinsystems"], "token_stored": False,
+        })
+        authenticate.assert_called_once_with(
+            "synthetic-user@synthetic-account", "synthetic-password")
+        request.assert_called_once_with(
+            "accounts", {"search": "beinsystems", "limit": 10},
+            token="fresh-sso-jwt", base_url=operator.api_base_url())
+        audit.assert_called_once_with(
+            profile, "accounts", {"search": "beinsystems"})
+        self.assertEqual(owner_check.call_count, 3)
+        stage.assert_not_called()
+        activate.assert_not_called()
+        self.assertNotIn("private-synthetic-phone", repr(result))
+        self.assertFalse(any(
+            "synthetic-password" in repr(call) or "fresh-sso-jwt" in repr(call)
+            for call in cursor.execute.call_args_list))
+
+    def test_login_and_read_accounts_403_keeps_existing_pending_and_active_untouched(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        cursor.fetchone.return_value = {"request_count": 1}
+        connection.cursor.return_value = cursor
+        provider_error = operator.OperatorError(
+            "Upstream Bearer challenge insufficient_scope (HTTP 403).",
+            502, upstream_http_status=403, upstream_error_code="insufficient_scope")
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_authenticate_operator", return_value="fresh-sso-jwt"), \
+             patch.object(operator, "_assert_current_operator_owner"), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", side_effect=provider_error) as request, \
+             patch.object(operator, "_pending_auth_candidate") as pending, \
+             patch.object(operator, "_credentials") as credentials, \
+             patch.object(operator, "stage_confirmed_auth_token") as stage, \
+             patch.object(operator, "save_token") as save:
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator.login_and_read_accounts(
+                    profile, "synthetic-user@synthetic-account", "synthetic-password",
+                    "beinsystems")
+        self.assertEqual(raised.exception.upstream_http_status, 403)
+        self.assertEqual(raised.exception.upstream_error_code, "insufficient_scope")
+        request.assert_called_once()
+        pending.assert_not_called()
+        credentials.assert_not_called()
+        stage.assert_not_called()
+        save.assert_not_called()
+        self.assertFalse(any(
+            "synthetic-password" in repr(call) for call in cursor.execute.call_args_list))
+
+    def test_login_and_read_accounts_requires_current_owner_before_authentication(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 9, "role": "operator", "active": True}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_authenticate_operator") as authenticate, \
+             patch.object(operator, "_request_operator") as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.login_and_read_accounts(
+                    profile, "synthetic-user@account", "synthetic-password",
+                    "beinsystems")
+        authenticate.assert_not_called()
+        request.assert_not_called()
+
+    def test_login_search_parser_accepts_account_data_with_unknown_envelope_fields(self):
+        self.assertEqual(operator._accounts_login_search_payload({
+            "status": "success", "ResponseStatus": 0,
+            "data": [{"account": "beinsystems", "phone": "private-synthetic-phone"}],
+            "extra": {"ignored": True},
+        }, limit=10), ["beinsystems"])
+        self.assertEqual(operator._accounts_login_search_payload({"data": []}, limit=10), [])
+        for response in (
+            {"success": False, "data": [{"account": "beinsystems"}]},
+            {"status": "error", "data": [{"account": "beinsystems"}]},
+            {"data": [{"account": "beinsystems"}] * 11},
+            {"data": [{"name": "malformed"}]},
+        ):
+            with self.subTest(response=response), self.assertRaises(operator.OperatorError):
+                operator._accounts_login_search_payload(response, limit=10)
 
     def test_contract_pending_token_is_encrypted_separately_from_legacy_pending(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
