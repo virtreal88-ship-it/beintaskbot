@@ -42,6 +42,7 @@ from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
+from tenant_dialog_reply_templates_api import handler as reply_templates_handler
 from tenant_operator_voice_api import handler as operator_voice_handler
 from tenant_dialog_consultations_api import handler as dialog_consultations_handler
 from tenant_instruction_library_api import handler as instruction_handler
@@ -173,6 +174,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
+        ('dialogs/reply-templates', reply_templates_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
         ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle'), ('POST',)),
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),
