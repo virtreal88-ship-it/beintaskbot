@@ -107,6 +107,8 @@ def integration_handler(member: Callable, origin: str, logger):
             body = {"success": False, "error": str(error)}
             if error.upstream_http_status in (401, 403):
                 body["upstream_http_status"] = error.upstream_http_status
+            if error.upstream_error_code:
+                body["upstream_error_code"] = error.upstream_error_code
             return web.json_response(body, status=error.status, headers=headers)
         except Exception:
             logger.exception("Operator integration settings failed")
