@@ -99,6 +99,7 @@ class FakeRequestsSession:
         self.url = None
         self.kwargs = None
         self.post_calls = 0
+        self.get_calls = 0
         self.closed = False
 
     def __enter__(self):
@@ -112,6 +113,12 @@ class FakeRequestsSession:
         self.url = url
         self.kwargs = kwargs
         self.post_calls += 1
+        return self.response
+
+    def get(self, url, **kwargs):
+        self.url = url
+        self.kwargs = kwargs
+        self.get_calls += 1
         return self.response
 
 
@@ -265,6 +272,26 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(response.status, 400)
         verify.assert_not_called()
 
+    def test_integration_handler_returns_only_authenticated_directory_id(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.integration_handler(
+            lambda _request: profile, "https://crm.example", MagicMock())
+        directory = {"source":"active", "account_id":"synthetic-account", "result_count":1}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                 "action":"directory_search", "search":"synthetic-account"})), \
+             patch.object(operator, "search_authenticated_operator_account",
+                          return_value=directory) as search:
+            response = asyncio.run(handler(request))
+        body = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body, {"success":True, "directory":directory})
+        self.assertNotIn("identity", body)
+        self.assertNotIn("token", response.text)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        search.assert_called_once_with(profile, "synthetic-account")
+
     def test_account_catalog_get_and_import_are_explicit_same_origin_actions(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         query = {"expected_tenant_id": TENANT, "expected_user_id": "7"}
@@ -391,6 +418,29 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIsNone(fake.request.get_header("Origin"))
         self.assertIsNone(fake.request.get_header("Referer"))
         self.assertEqual(fake.request.get_header("Accept"), "application/json")
+
+    def test_owner_directory_me_requests_transport_is_bounded_direct_and_has_no_body(self):
+        response = FakeRequestsResponse({"status":"success", "data":{
+            "identifier":"synthetic.operator", "role":"superadmin"}})
+        fake = FakeRequestsSession(response)
+        base = "https://operator-api.beinsystems.az/v1"
+        with patch.object(operator, "_NoRedirectRequestsSession", return_value=fake), \
+             patch.object(operator, "build_opener") as urllib_opener:
+            result = operator._request_operator("me", {}, token="synthetic-jwt", base_url=base,
+                                                requests_me=True)
+        self.assertEqual(result["data"]["identifier"], "synthetic.operator")
+        self.assertEqual(fake.url, base + "/user/me")
+        self.assertEqual(fake.get_calls, 1)
+        self.assertEqual(fake.post_calls, 0)
+        self.assertEqual(fake.kwargs["headers"], {"Authorization":"Bearer synthetic-jwt"})
+        self.assertFalse(fake.kwargs["allow_redirects"])
+        self.assertTrue(fake.kwargs["stream"])
+        self.assertTrue(fake.kwargs["verify"])
+        self.assertFalse(fake.trust_env)
+        self.assertEqual(response.chunk_size, 64 * 1024)
+        self.assertTrue(response.closed)
+        self.assertTrue(fake.closed)
+        urllib_opener.assert_not_called()
 
     def test_operator_read_auth_http_errors_keep_upstream_code_without_body(self):
         base = "https://operator-api.beinsystems.az/v1"
@@ -1072,6 +1122,176 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         sql = "\n".join(call.args[0] for call in cursor.execute.call_args_list)
         self.assertNotIn("saas_tenant_integrations SET", sql)
         connection.commit.assert_not_called()
+
+    def test_authenticated_directory_search_uses_active_first_and_returns_only_one_id(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        active_row = {"status": "connected", "secrets": b"encrypted"}
+        credentials = {"token": "synthetic-active-jwt",
+            "base_url": "https://operator-api.beinsystems.az/v1",
+            "generation": "g1", "connection_instance_id": "c1"}
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        db.cursor.return_value = cursor
+        responses = [
+            {"status": "success", "data": {"identifier": "secret@example.test",
+                "role": "superadmin", "partnerPin": "private"}},
+            {"status": "success", "data": [{"account": "Synthetic Account",
+                "name": "private name", "email": "private@example.test"}]},
+        ]
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=db), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value=active_row), \
+             patch.object(operator, "_pending_auth_candidate") as pending, \
+             patch.object(operator, "_credentials", return_value=credentials), \
+             patch.object(operator, "_record_operator_read") as audit, \
+             patch.object(operator, "_operator_directory_fence"), \
+             patch.object(operator, "_request_operator", side_effect=responses) as request:
+            result = operator.search_authenticated_operator_account(profile, " Synthetic ")
+        self.assertEqual(result, {"source": "active", "account_id": "Synthetic Account",
+                                  "result_count": 1})
+        self.assertEqual([call.args[0] for call in request.call_args_list], ["me", "accounts"])
+        self.assertEqual(request.call_args_list[0].args[1], {})
+        self.assertEqual(request.call_args_list[1].args[1],
+                         {"search": "Synthetic", "limit": 1})
+        self.assertEqual([call.args[1] for call in audit.call_args_list], ["me", "accounts"])
+        pending.assert_not_called()
+        self.assertNotIn("secret@example.test", json.dumps(result))
+        self.assertNotIn("superadmin", json.dumps(result))
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_authenticated_directory_search_empty_and_bad_identity_fail_closed(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        credentials = {"token": "synthetic-pending-jwt", "received_at": "r1",
+            "base_url": "https://operator-api.beinsystems.az/v1"}
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        db.cursor.return_value = cursor
+        base_patches = [
+            patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}),
+            patch.object(operator, "_connect", return_value=db),
+            patch.object(operator, "_ensure_schema"),
+            patch.object(operator, "_current_profile", return_value=profile),
+            patch.object(operator, "_operator_row", return_value=None),
+            patch.object(operator, "_pending_auth_candidate", return_value=credentials),
+            patch.object(operator, "_record_operator_read"),
+            patch.object(operator, "_operator_directory_fence"),
+        ]
+        for patcher in base_patches: patcher.start()
+        try:
+            with patch.object(operator, "_request_operator", side_effect=[
+                    {"status":"success", "data":{"identifier":"hidden", "role":"owner"}},
+                    {"status":"success", "data":[]}]) as request:
+                self.assertEqual(operator.search_authenticated_operator_account(
+                    profile, "empty query"), {"source":"pending", "account_id":None,
+                                               "result_count":0})
+            self.assertEqual(request.call_count, 2)
+            with patch.object(operator, "_request_operator", return_value={
+                    "status":"failure", "data":{"identifier":"hidden", "role":"owner"}}) as request:
+                with self.assertRaises(operator.OperatorError):
+                    operator.search_authenticated_operator_account(profile, "empty query")
+                request.assert_called_once()
+            with patch.object(operator, "_request_operator", return_value={
+                    "status":"success", "data":{"identifier":"hidden"}}) as request:
+                with self.assertRaises(operator.OperatorError):
+                    operator.search_authenticated_operator_account(profile, "empty query")
+                request.assert_called_once()
+            with patch.object(operator, "_request_operator", side_effect=[
+                    {"status":"success", "data":{"identifier":"hidden", "role":"owner"}},
+                    {"status":"success", "data":[{"account":"one"},{"account":"two"}]}]) as request:
+                with self.assertRaises(operator.OperatorError):
+                    operator.search_authenticated_operator_account(profile, "empty query")
+                self.assertEqual(request.call_count, 2)
+        finally:
+            for patcher in reversed(base_patches): patcher.stop()
+
+    def test_authenticated_directory_search_rejects_invalid_input_before_network(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        for value in ("abc", "x" * 121, "okay\nsearch"):
+            with self.subTest(value=value), patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+                 patch.object(operator, "_connect") as connect, \
+                 patch.object(operator, "_request_operator") as request:
+                with self.assertRaises(operator.OperatorError):
+                    operator.search_authenticated_operator_account(profile, value)
+                connect.assert_not_called()
+                request.assert_not_called()
+        profile["role"] = "manager"
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_request_operator") as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.search_authenticated_operator_account(profile, "valid search")
+            request.assert_not_called()
+
+    def test_directory_fence_rejects_active_generation_change_and_active_appearing_for_pending(self):
+        credentials = {"generation":"g1", "connection_instance_id":"c1",
+            "token":"synthetic", "base_url":"https://operator-api.beinsystems.az/v1"}
+        profile = {"tenant_id":TENANT, "telegram_id":7}
+        fresh = {**credentials, "generation":"g2"}
+        with patch.object(operator, "_assert_current_operator_owner"), \
+             patch.object(operator, "_credentials", return_value=fresh):
+            with self.assertRaises(operator.OperatorError):
+                operator._operator_directory_fence(profile, TENANT, 7, "active", credentials)
+
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        db.cursor.return_value = cursor
+        with patch.object(operator, "_assert_current_operator_owner"), \
+             patch.object(operator, "_connect", return_value=db), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_operator_row", return_value={
+                 "status":"connected", "secrets":b"active"}):
+            with self.assertRaises(operator.OperatorError):
+                operator._operator_directory_fence(profile, TENANT, 7, "pending",
+                    {"received_at":"r1"})
+
+    def test_authenticated_directory_search_stops_if_owner_or_active_generation_changes_after_me(self):
+        profile = {"tenant_id":TENANT, "telegram_id":7, "role":"owner", "active":True}
+        credentials = {"token":"synthetic-active-jwt", "base_url":"https://operator-api.beinsystems.az/v1",
+            "generation":"g1", "connection_instance_id":"c1"}
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.__exit__.return_value = False
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.__exit__.return_value = False
+        db.cursor.return_value = cursor
+        responses = [{"status":"success", "data":{"identifier":"hidden", "role":"owner"}}]
+        with patch.dict("os.environ", {access.WORKSPACE_ENV:TENANT}), \
+             patch.object(operator, "_connect", return_value=db), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value={"status":"connected", "secrets":b"x"}), \
+             patch.object(operator, "_credentials", return_value=credentials), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_operator_directory_fence",
+                          side_effect=[None, operator.OperatorError("owner changed", 409)]) as fence, \
+             patch.object(operator, "_request_operator", side_effect=responses) as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.search_authenticated_operator_account(profile, "valid query")
+        self.assertEqual(fence.call_count, 2)
+        request.assert_called_once()
+
+    def test_authenticated_directory_search_requires_configured_tenant(self):
+        profile = {"tenant_id":"bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", "telegram_id":7,
+                   "role":"owner", "active":True}
+        with patch.dict("os.environ", {access.WORKSPACE_ENV:TENANT}), \
+             patch.object(operator, "_request_operator") as request:
+            with self.assertRaises(operator.OperatorError):
+                operator.search_authenticated_operator_account(profile, "valid query")
+            request.assert_not_called()
 
     def test_account_import_reads_pending_candidate_and_preserves_existing_connection(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
