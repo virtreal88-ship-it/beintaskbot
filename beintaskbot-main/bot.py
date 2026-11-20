@@ -56,6 +56,7 @@ from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECOND
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
+from tenant_dialog_reply_templates import feature_ready as dialog_reply_templates_ready
 import tenant_email_auth
 import tenant_sso
 from tenant_connect_access_api import ConnectAccessContext, handler as tenant_connect_access_handler
@@ -18582,6 +18583,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         list_members=list_tenant_members,
         capabilities=lambda profile: {**TenantPolicy(profile).public_capabilities(),
             'can_manage_employees': TenantPolicy(profile).allows_action('employees', 'manage')},
+        dialog_reply_templates_ready=dialog_reply_templates_ready,
         disable_browser_push=disable_tenant_browser_push,
         role_permissions=ROLE_PERMISSIONS, platform_error=TenantPlatformError,
         origin=CANONICAL_WEB_ORIGIN, cookie_name=_TENANT_SESSION_COOKIE,

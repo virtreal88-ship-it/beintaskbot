@@ -43,6 +43,7 @@ class AuthApiContext:
     record_login: Callable[..., object] | None = None
     accept_email_invite: Callable[..., dict] | None = None
     source_session: Callable[..., dict | None] | None = None
+    dialog_reply_templates_ready: Callable[[dict], bool] | None = None
 
 
 def _credential_fingerprint(context: AuthApiContext, credentials: dict) -> str:
@@ -364,6 +365,13 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 context.list_integrations, tenant_id=profile["tenant_id"], telegram_id=telegram_id)
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
             capabilities = context.capabilities(profile)
+            if context.dialog_reply_templates_ready:
+                try:
+                    capabilities["dialog_reply_templates"] = await asyncio.to_thread(
+                        context.dialog_reply_templates_ready, profile)
+                except Exception as error:
+                    context.logger.warning("Reply template readiness probe failed (%s)", type(error).__name__)
+                    capabilities["dialog_reply_templates"] = False
             members = await asyncio.to_thread(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
             ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []
