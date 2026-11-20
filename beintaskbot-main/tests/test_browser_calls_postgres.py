@@ -96,6 +96,8 @@ def test_two_employees_cannot_both_accept_new_incoming_after_close(managed,monke
     db,key,cfg=managed;person=employee(db,['dialogs'])
     with db.cursor() as cur:
         lifecycle.migrate(cur);transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s,%s,'online',%s)",(A,11,11))
+    db.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s,%s,'online',%s)",(A,33,33))
     db.execute("INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at) VALUES(%s,%s,%s,%s,'closed',11,1,now()-interval '1 minute')",(A,CA,CONVERSATION,str(uuid.uuid4())));db.commit()
     connect=lambda:psycopg.connect(db.dsn,row_factory=dict_row)
     monkeypatch.setattr(calls,'_connect',connect);monkeypatch.setattr(sources,'_connect',connect);monkeypatch.setattr(tenant_platform,'_connect',connect)

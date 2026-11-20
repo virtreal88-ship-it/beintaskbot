@@ -21,6 +21,8 @@ def active(fixture, monkeypatch):
     with fixture.cursor() as cur:
         lifecycle.migrate(cur)
         transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    employee=int(PROFILE['telegram_id'])
+    fixture.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s::uuid,%s,'online',%s)",(A,employee,employee))
     fixture.commit()
     return fixture
 
@@ -228,7 +230,7 @@ def test_unknown_inbound_and_permission_fail_closed():
     class NoSQL:
         def execute(self,*_):raise AssertionError('No SQL for supplied list snapshot')
     row=dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,can_send=True)
-    result=lifecycle.decorate(NoSQL(),A,11,row,details=False,_rollout=SimpleNamespace(enforced=True,admission_enabled=True),_workflow=None,_last_inbound='incoming')
+    result=lifecycle.decorate(NoSQL(),A,11,row,details=False,_rollout=SimpleNamespace(enforced=True,admission_enabled=True),_workflow=None,_last_inbound='incoming',_online=False)
     assert result['lifecycle']['has_inbound'] is None
     assert result['lifecycle']['can_dismiss'] is False
 
