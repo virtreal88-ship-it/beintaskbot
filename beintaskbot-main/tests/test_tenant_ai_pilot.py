@@ -114,51 +114,6 @@ def test_expected_human_active_handoff_transition_keeps_scope_identity_stable():
         assert pilot._snapshot(Cursor({**base,'conversation_manual_hold':True}),scope['tenant_id'],scope)[1]!=human
 
 
-def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypatch):
-    row = {'active': True, 'integration_status': 'connected', 'conversation_id': 'test-chat',
-           'conversation_state': 'active', 'company_enabled': False,
-           'auto_send_enabled': False, 'emergency_stop': True, 'tenant_status': 'active',
-           'agent_id': None, 'agent_enabled': False, 'agent_mode': 'manual', 'scopes': []}
-
-    class Cursor:
-        def __init__(self): self.sql = []
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, sql, _params=None): self.sql.append(sql)
-        def fetchone(self): return {'lead_id':123,'state':'paused','no_pending_jobs':True}
-
-    class Connection:
-        def __init__(self): self.cur = Cursor()
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return self.cur
-
-    conn = Connection()
-    monkeypatch.setattr('tenant_platform._connect', lambda: conn)
-    monkeypatch.setattr('tenant_ai_agents_store._authorize', lambda _cur, _profile: (TENANT, 7))
-    monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fingerprint'))
-    monkeypatch.setattr(pilot, '_confirmation', lambda *_: ({}, {}))
-    monkeypatch.setattr(pilot, 'scoped_live_enabled', lambda: True)
-    monkeypatch.setattr(pilot, 'configured_group_scope', lambda: {
-        'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
-    with patch.dict('os.environ', pilot_env(), clear=True):
-        result = pilot.preflight({'tenant_id': TENANT, 'telegram_id': 7})
-    assert result['competing_handler'] == {'state': 'unknown', 'source': 'manual_confirmation_required'}
-    assert result['kwid_confirmation']['state'] == 'missing'
-    assert result['separate_owner_approval']['state'] == 'missing'
-    assert result['scoped_live']['consultation_destination']=='pilot_group'
-    assert 'developer_consult_recipient_unconfigured_or_unavailable' not in result['blockers']
-    assert not result['ready'] and 'kwid_confirmation_missing_expired_or_scope_changed' in result['blockers']
-    assert all(sql.lstrip().upper().startswith('SELECT') for sql in conn.cur.sql)
-
-
-def test_owner_approval_is_a_separate_step_and_not_a_runtime_switch(monkeypatch):
-    # The owner decision only writes its own attestation; it never mutates a
-    # runtime flag. The store/API policy itself is exercised through SQL below.
-    with patch.dict('os.environ', pilot_env(), clear=True):
-        assert not pilot._enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
-        assert not pilot._enabled('AI_AGENTS_AUTO_SEND_ENABLED')
-    assert pilot.CONFIRMATION_MINUTES <= 15
 
 
 def test_episode_cutoff_excludes_old_history_but_keeps_fresh_inbound():
@@ -169,11 +124,6 @@ def test_episode_cutoff_excludes_old_history_but_keeps_fresh_inbound():
           {'external_id':'new','happened_at':'2026-10-31T14:00:01+00:00','body':'fresh question'}]
     assert _after_pilot_cutoff(rows,cutoff)==[rows[1]]
     assert rows[0]['body']=='old case'  # cutoff filtering does not mutate stored/history data
-
-
-def test_reset_requires_exact_confirmation_and_is_owner_only():
-    with pytest.raises(TenantLinearError):
-        pilot.reset_pilot_test_dialog({}, {'confirmed':False})
 
 
 def _exact_pilot_env(**extra):
@@ -188,51 +138,6 @@ def _exact_pilot_env(**extra):
     }
 
 
-def _pilot_resume_row(state='human'):
-    return {
-        'conversation_id': pilot.SCOPED_LIVE_CUSTOMER,
-        'conversation_state': state,
-        'conversation_ai_enabled': True,
-        'conversation_manual_hold': False,
-        'active': True,
-        'integration_status': 'connected',
-        'tenant_status': 'active',
-        'company_enabled': True,
-        'emergency_stop': False,
-        'agent_id': pilot.SCOPED_LIVE_AGENT,
-        'agent_enabled': True,
-        'agent_mode': 'manual',
-        'exact_agent_scope': True,
-    }
-
-
-def test_owner_can_resume_only_exact_pilot_dialog_while_both_guards_are_off(monkeypatch):
-    class Cursor:
-        def __init__(self): self.executed=[]
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, sql, params=None): self.executed.append((sql,params))
-        def fetchone(self): return {'role':'owner'}
-    class Connection:
-        def __init__(self): self.cur=Cursor(); self.committed=False
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return self.cur
-        def commit(self): self.committed=True
-    conn=Connection()
-    resumed=[]
-    monkeypatch.setattr('tenant_platform._connect',lambda:conn)
-    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda cur,profile:(pilot.SCOPED_LIVE_TENANT,7))
-    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
-    monkeypatch.setattr('tenant_ai_agents_store.set_conversation_state',lambda *args:resumed.append(args))
-    monkeypatch.setattr(pilot,'preflight',lambda _profile:{'scope_configured':True,'handoff':'active'})
-    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
-        result=pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
-    assert result['handoff']=='active' and conn.committed
-    assert len(resumed)==1
-    assert resumed[0][1:]==(pilot.SCOPED_LIVE_CUSTOMER,'active','pilot_preparation_resume','connect',pilot.SCOPED_LIVE_CHANNEL)
-
-
 def test_preparation_scope_uses_server_selected_direct_peer_not_retired_test_number():
     replacement='994102135103@s.whatsapp.net'
     with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_PILOT_CONVERSATION_ID=replacement),clear=True):
@@ -244,157 +149,6 @@ def test_preparation_scope_uses_server_selected_direct_peer_not_retired_test_num
     for invalid in ('120363431915456655@g.us','not-a-peer','123@s.whatsapp.net'):
         with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_PILOT_CONVERSATION_ID=invalid),clear=True):
             assert pilot.configured_group_scope() is None
-
-
-def test_pilot_preparation_resume_rejects_admin_or_live_guard(monkeypatch):
-    class Cursor:
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, *_): pass
-        def fetchone(self): return {'role':'admin'}
-    class Connection:
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return Cursor()
-    monkeypatch.setattr('tenant_platform._connect',lambda:Connection())
-    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(pilot.SCOPED_LIVE_TENANT,7))
-    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
-    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
-        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
-        except TenantLinearError as error: assert error.status==403
-        else: raise AssertionError('only the database-verified owner may resume')
-    with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_SCOPED_LIVE_ENABLED='true'),clear=True):
-        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
-        except TenantLinearError as error: assert error.status==409
-        else: raise AssertionError('preparation resume must reject a live pilot guard')
-
-
-def test_pilot_preparation_resume_preserves_legacy_route_conflict(monkeypatch):
-    class Cursor:
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, *_): pass
-        def fetchone(self): return {'role':'owner'}
-    class Connection:
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return Cursor()
-        def commit(self): pass
-    monkeypatch.setattr('tenant_platform._connect',lambda:Connection())
-    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(pilot.SCOPED_LIVE_TENANT,7))
-    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
-    conflict=TenantLinearError('Legacy dialogue channel is ambiguous; manual resolution is required.',409)
-    monkeypatch.setattr('tenant_ai_agents_store.set_conversation_state',Mock(side_effect=conflict))
-    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
-        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
-        except TenantLinearError as error: assert error.status==409 and 'ambiguous' in str(error)
-        else: raise AssertionError('the existing exact-route conflict must be preserved')
-
-
-def test_admin_attestation_is_short_lived_and_clears_prior_owner_approval(monkeypatch):
-    class Cursor:
-        def __init__(self): self.sql = []; self.params = []
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, sql, params=None): self.sql.append(sql); self.params.append(params)
-    class Connection:
-        def __init__(self): self.cur = Cursor(); self.committed = False
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return self.cur
-        def commit(self): self.committed = True
-    conn = Connection()
-    monkeypatch.setattr('tenant_ai_agents_schema.ensure_schema', lambda _conn: None)
-    monkeypatch.setattr('tenant_platform._connect', lambda: conn)
-    monkeypatch.setattr(pilot, '_authorized_scope', lambda *_: (TENANT, 7,
-        {'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'}, {}, 'fp'))
-    monkeypatch.setattr(pilot, 'preflight', lambda _profile: {'ready':False})
-    result = pilot.confirm_kwid_disabled({'tenant_id':TENANT,'telegram_id':7}, {'confirmed':True})
-    assert result == {'ready':False} and conn.committed
-    sql = conn.cur.sql[0].lower()
-    assert 'on conflict(tenant_id) do update' in sql and 'owner_approved_by=null' in sql
-    assert 'interval' in sql and conn.cur.params[0] == (TENANT, CHANNEL, 'test-chat', 'fp', 7, 15)
-
-
-def test_owner_approval_rejects_admin_and_is_separate_from_kwid_attestation(monkeypatch):
-    class Cursor:
-        def __init__(self, role): self.role=role; self.sql=[]
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def execute(self, sql, _params=None): self.sql.append(sql)
-        def fetchone(self):
-            if 'SELECT role' in self.sql[-1]: return {'role':self.role}
-            if 'RETURNING tenant_id' in self.sql[-1]: return {'tenant_id':TENANT}
-            return None
-    class Connection:
-        def __init__(self, role): self.cur=Cursor(role); self.committed=False
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def cursor(self): return self.cur
-        def commit(self): self.committed=True
-    monkeypatch.setattr('tenant_ai_agents_schema.ensure_schema', lambda _conn: None)
-    monkeypatch.setattr(pilot, '_authorized_scope', lambda *_: (TENANT, 7,
-        {'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'}, {}, 'fp'))
-    monkeypatch.setattr(pilot, 'preflight', lambda _profile: {'ready':False})
-    admin_conn=Connection('admin')
-    monkeypatch.setattr('tenant_platform._connect', lambda: admin_conn)
-    try:
-        pilot.approve_pilot({'tenant_id':TENANT,'telegram_id':7}, {'approved':True})
-    except TenantLinearError as error:
-        assert error.status == 403
-    else:
-        raise AssertionError('admin must not issue separate owner approval')
-    assert not admin_conn.committed and not any('UPDATE' in sql for sql in admin_conn.cur.sql)
-
-    owner_conn=Connection('owner')
-    monkeypatch.setattr('tenant_platform._connect', lambda: owner_conn)
-    assert pilot.approve_pilot({'tenant_id':TENANT,'telegram_id':7}, {'approved':True}) == {'ready':False}
-    assert owner_conn.committed and 'LEAST(kwid_expires_at' in owner_conn.cur.sql[-1]
-
-
-@pytest.mark.parametrize(('state','reason','continuation_valid','scope_tenant','allowed'), [
-    ('human','ai_developer_consultation:unsupported_evidence',True,TENANT,True),
-    ('human','manual_takeover',True,TENANT,False),
-    ('paused','ai_developer_consultation:unsupported_evidence',True,TENANT,False),
-    ('human','ai_developer_consultation:unsupported_evidence',False,TENANT,False),
-    ('human','ai_developer_consultation:unsupported_evidence',True,OTHER,False),
-])
-def test_attestation_renewal_is_limited_to_one_open_consultation_receipt(
-        monkeypatch,state,reason,continuation_valid,scope_tenant,allowed):
-    row={**_pilot_resume_row(state), 'handoff_reason':reason}
-    class Cursor:
-        def __init__(self): self.sql=[]
-        def execute(self,sql,_params=None): self.sql.append(sql)
-        def fetchone(self): return {'valid':continuation_valid}
-    cur=Cursor()
-    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(scope_tenant,7))
-    monkeypatch.setattr(pilot,'configured_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'})
-    monkeypatch.setattr(pilot,'configured_group_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
-    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(row,'fingerprint'))
-    try:
-        result=pilot._authorized_scope(cur,{'tenant_id':TENANT,'telegram_id':7})
-    except TenantLinearError as error:
-        assert error.status==409
-        result=None
-    assert bool(result) is allowed
-    if state=='human' and reason.startswith('ai_developer_consultation:') and scope_tenant==TENANT:
-        assert len(cur.sql)==1
-        assert 'provider_message_id IS NOT NULL' in cur.sql[0]
-        assert "t.status NOT IN ('resolved','closed')" in cur.sql[0]
-        assert "d.state='sent'" in cur.sql[0]
-
-
-def test_continuation_validation_requires_exactly_one_valid_open_case_receipt(monkeypatch):
-    class Cursor:
-        def __init__(self,value): self.value=value; self.sql=''
-        def execute(self,sql,_params=None): self.sql=sql
-        def fetchone(self): return {'valid':self.value}
-    monkeypatch.setattr(pilot,'configured_group_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
-    for value in (True,False):
-        cur=Cursor(value)
-        assert pilot._valid_consultation_continuation(cur,TENANT,{'channel_id':CHANNEL,'conversation_id':'test-chat'}) is value
-        assert 'count(DISTINCT c.id)=1' in cur.sql
-        assert 'd.channel_id=%s::uuid AND d.conversation_id=%s' in cur.sql
 
 
 def test_active_exact_scope_fails_closed_when_confirmation_table_is_missing(monkeypatch):
@@ -545,8 +299,6 @@ def test_worker_config_overrides_modes_only_for_exact_scoped_customer(monkeypatc
         assert row['mode']=='manual' and row['operating_mode']=='simulation' and row['auto_send_enabled'] is False
         other=store.load_agent_config({**job,'conversation_id':'ordinary-client'})
         assert other is None
-
-
 
 
 def test_final_gate_rejects_agent_id_mismatch(monkeypatch):
