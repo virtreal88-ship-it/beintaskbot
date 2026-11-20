@@ -115,6 +115,55 @@ class FakeRequestsSession:
         return self.response
 
 
+class CountingResponseBody:
+    def __init__(self, body):
+        self.body = body
+        self.stream_calls = 0
+        self.bytes_yielded = 0
+        self.read_calls = []
+        self.closed = False
+
+    def stream(self, chunk_size, decode_content=False):
+        self.stream_calls += 1
+        if self.body:
+            self.bytes_yielded += len(self.body)
+            yield self.body
+
+    def read(self, amount=None, decode_content=False):
+        self.read_calls.append(amount)
+        body, self.body = self.body, b""
+        return body
+
+    def close(self):
+        self.closed = True
+
+
+class SyntheticResponseAdapter(operator.requests.adapters.BaseAdapter):
+    def __init__(self, status_code, headers, raw):
+        self.status_code = status_code
+        self.headers = headers
+        self.raw = raw
+        self.calls = 0
+        self.request = None
+        self.kwargs = None
+
+    def send(self, request, **kwargs):
+        self.calls += 1
+        self.request = request
+        self.kwargs = kwargs
+        response = operator.requests.Response()
+        response.status_code = self.status_code
+        response.headers = operator.requests.structures.CaseInsensitiveDict(self.headers)
+        response.url = request.url
+        response.reason = "Synthetic response"
+        response.request = request
+        response.raw = self.raw
+        return response
+
+    def close(self):
+        pass
+
+
 class FakeCursor:
     def __init__(self):
         self.sql = []
@@ -306,7 +355,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         response = FakeRequestsResponse({"status": "success", "data": [{"account": "client-1"}]})
         fake = FakeRequestsSession(response)
         base = "https://operator-api.beinsystems.az/v1"
-        with patch.object(operator.requests, "Session", return_value=fake) as session, \
+        with patch.object(operator, "_NoRedirectRequestsSession", return_value=fake) as session, \
              patch.object(operator, "build_opener") as urllib_opener:
             result = operator._request_operator(
                 "accounts", {"search": "client", "limit": 1}, token="synthetic-jwt",
@@ -384,7 +433,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             fake = FakeRequestsSession(response)
             with self.subTest(status=status, expected_code=expected_code), \
                  patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
-                 patch.object(operator.requests, "Session", return_value=fake):
+                 patch.object(operator, "_NoRedirectRequestsSession", return_value=fake):
                 with self.assertRaises(operator.OperatorError) as raised:
                     operator._request_operator(
                         "accounts", {"search": "synthetic-account", "limit": 1},
@@ -405,7 +454,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             headers={"Location": "https://attacker.example/"})
         fake = FakeRequestsSession(response)
         with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
-             patch.object(operator.requests, "Session", return_value=fake):
+             patch.object(operator, "_NoRedirectRequestsSession", return_value=fake):
             with self.assertRaises(operator.OperatorError) as raised:
                 operator._request_operator(
                     "accounts", {"search": "synthetic-account", "limit": 1},
@@ -416,6 +465,37 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertNotIn("private redirect response", str(raised.exception))
         self.assertNotIn("attacker.example", str(raised.exception))
 
+    def test_real_requests_session_does_not_prefetch_redirect_body(self):
+        # The real requests Session.send/resolve_redirects path runs here; only
+        # the adapter's upstream Response is synthetic, so this cannot reach Operator.
+        base = "https://operator-api.beinsystems.az/v1"
+        raw = CountingResponseBody(b"synthetic redirect body beyond the response limit")
+        adapter = SyntheticResponseAdapter(
+            302, {"Location": "/redirect"}, raw)
+        session = operator._NoRedirectRequestsSession()
+        session.mount("https://", adapter)
+        with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
+             patch.object(operator, "_NoRedirectRequestsSession", return_value=session), \
+             patch.object(operator, "MAX_RESPONSE_BYTES", 8):
+            with self.assertRaises(operator.OperatorError) as raised:
+                operator._request_operator(
+                    "accounts", {"search": "synthetic-account", "limit": 1},
+                    token="synthetic-jwt", base_url=base)
+        self.assertEqual(str(raised.exception), "Operator временно не ответил.")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(adapter.request.url, base + "/user/accounts")
+        self.assertEqual(adapter.request.headers["Authorization"], "Bearer synthetic-jwt")
+        self.assertEqual(json.loads(adapter.request.body), {
+            "search": "synthetic-account", "limit": 1,
+        })
+        self.assertTrue(adapter.kwargs["stream"])
+        self.assertTrue(adapter.kwargs["verify"])
+        self.assertTrue(adapter.request.headers["User-Agent"].startswith("python-requests/"))
+        self.assertEqual(raw.stream_calls, 0)
+        self.assertEqual(raw.bytes_yielded, 0)
+        self.assertEqual(raw.read_calls, [])
+        self.assertTrue(raw.closed)
+
     def test_accounts_request_bounds_streamed_response_and_closes_it(self):
         base = "https://operator-api.beinsystems.az/v1"
         response = FakeRequestsResponse(
@@ -423,7 +503,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         fake = FakeRequestsSession(response)
         with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
              patch.object(operator, "MAX_RESPONSE_BYTES", 10), \
-             patch.object(operator.requests, "Session", return_value=fake):
+             patch.object(operator, "_NoRedirectRequestsSession", return_value=fake):
             with self.assertRaises(operator.OperatorError) as raised:
                 operator._request_operator(
                     "accounts", {"search": "synthetic-account", "limit": 1},
@@ -439,7 +519,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         fake.post = MagicMock(side_effect=operator.requests.ConnectionError(
             "private transport detail synthetic-jwt"))
         with patch.dict("os.environ", {access.API_BASE_URL_ENV: base}), \
-             patch.object(operator.requests, "Session", return_value=fake), \
+             patch.object(operator, "_NoRedirectRequestsSession", return_value=fake), \
              patch.object(operator, "build_opener") as urllib_opener:
             with self.assertRaises(operator.OperatorError) as raised:
                 operator._request_operator(
