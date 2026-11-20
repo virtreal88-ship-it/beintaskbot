@@ -48,15 +48,17 @@ class FakeOpener:
 
 
 class FakeHTTPErrorOpener:
-    def __init__(self, status, payload):
+    def __init__(self, status, payload, headers=None):
         self.status = status
         self.response = FakeResponse(payload)
+        self.headers = headers
         self.request = None
         self.timeout = None
 
     def open(self, request, timeout):
         self.request, self.timeout = request, timeout
-        raise HTTPError(request.full_url, self.status, "Unauthorized", None, self.response)
+        raise HTTPError(
+            request.full_url, self.status, "Unauthorized", self.headers, self.response)
 
 
 class FakeCursor:
@@ -104,8 +106,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         handler = operator_api.integration_handler(
             lambda _request: profile, "https://crm.example", MagicMock())
         provider_error = operator.OperatorError(
-            "Operator отклонил служебную авторизацию (upstream HTTP 401).",
-            502, upstream_http_status=401)
+            "Operator сообщил Bearer invalid_token (upstream HTTP 401).",
+            502, upstream_http_status=401, upstream_error_code="invalid_token")
         with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
              patch.object(operator_api, "_body", new=AsyncMock(return_value={
                  "action": "test", "search": "synthetic-account",
@@ -115,7 +117,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         body = json.loads(response.text)
         self.assertEqual(response.status, 502)
         self.assertEqual(body["upstream_http_status"], 401)
-        self.assertIn("upstream HTTP 401", body["error"])
+        self.assertEqual(body["upstream_error_code"], "invalid_token")
+        self.assertIn("invalid_token", body["error"])
         self.assertNotIn("synthetic-jwt", response.text)
         self.assertNotIn("private provider detail", response.text)
         self.assertEqual(response.headers["X-Tenant-Auth-Source"], "operator")
@@ -298,6 +301,36 @@ class BeinSystemsOperatorTests(unittest.TestCase):
                 self.assertNotIn(secret, str(raised.exception))
             self.assertEqual(fake.request.full_url, base + "/user/me")
             self.assertEqual(fake.request.get_method(), "GET")
+
+    def test_operator_read_classifies_only_explicit_bearer_challenges(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        cases = (
+            (401, {"WWW-Authenticate": 'Bearer realm="operator", error="invalid_token"'},
+             "invalid_token"),
+            (403, {"WWW-Authenticate": 'Bearer error="insufficient_scope"'},
+             "insufficient_scope"),
+            (403, {"WWW-Authenticate": 'Bearer error="invalid_token"'}, None),
+            (403, {"WWW-Authenticate":
+                   'Bearer error_description="copy, error=\\\"insufficient_scope\\\""'},
+             None),
+            (403, {"WWW-Authenticate": 'Basic realm="private-detail"'}, None),
+        )
+        for status, headers, expected_code in cases:
+            fake = FakeHTTPErrorOpener(status, {
+                "detail": "private provider body synthetic-jwt",
+            }, headers=headers)
+            with self.subTest(status=status, expected_code=expected_code), \
+                 patch.dict("os.environ", {access.API_BASE_URL_ENV: base}):
+                with self.assertRaises(operator.OperatorError) as raised:
+                    operator._request_operator(
+                        "accounts", {"search": "synthetic-account", "limit": 1},
+                        token="synthetic-jwt", base_url=base, opener=fake)
+            self.assertEqual(raised.exception.upstream_error_code, expected_code)
+            self.assertEqual(raised.exception.upstream_http_status, status)
+            self.assertNotIn("private provider body", str(raised.exception))
+            self.assertNotIn("synthetic-jwt", str(raised.exception))
+            self.assertNotIn("private-detail", str(raised.exception))
+            self.assertNotIn("error_description", str(raised.exception))
 
     def test_operator_read_rejects_unapproved_api_host(self):
         fake = FakeOpener({"status": "success"})
