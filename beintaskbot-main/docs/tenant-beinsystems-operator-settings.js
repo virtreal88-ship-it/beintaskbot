@@ -303,8 +303,14 @@
           if(current!==revision||requestId!==directoryRevision)return;
           const result=found.directory||{};
           if(result.account_id){
-            const line=document.createElement('p');line.append(document.createTextNode('Account ID: '));
-            const id=document.createElement('code');id.textContent=result.account_id;line.append(id);results.append(line);
+            if(result.source==='active'){
+              const item=document.createElement('button');item.type='button';item.textContent=result.account_id;
+              item.setAttribute('aria-label','Выбрать account ID '+result.account_id);
+              item.onclick=()=>{$(panel,'[data-account]').value=result.account_id;};results.append(item);
+            }else{
+              const line=document.createElement('p');line.append(document.createTextNode('Account ID: '));
+              const id=document.createElement('code');id.textContent=result.account_id;line.append(id);results.append(line);
+            }
             const note=document.createElement('p');note.textContent='Показана одна запись максимум. Результат не является полным каталогом.';results.append(note);
             message.textContent='Проверка /user/me пройдена; использовано '+(result.source==='active'?'активное подключение':'pending JWT')+'.';
           }else{
