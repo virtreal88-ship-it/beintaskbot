@@ -6,7 +6,7 @@ const dom=new JSDOM('<!doctype html><div id="integrationSettingsHost"></div>',{
   url:'https://beintaskbot.test/app?view=integrations',runScripts:'outside-only',
 });
 const {window}=dom;
-let viewDemand,requests=[],companyImports=[],confirmMessages=[];
+let viewDemand,requests=[],companyImports=[],confirmMessages=[],freshLoginChecks=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
 let loginMode='success';
@@ -45,6 +45,13 @@ window.fetch=async(path,options={})=>{
     companyImports.push(JSON.parse(options.body));
     result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,
       name_collision_count:1,name_collision_accounts:['synthetic-collision'],name_collision_truncated:false}};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='login_check'){
+    freshLoginChecks.push(JSON.parse(options.body));
+    result={success:true,integration:{...mockIntegration},verification:{
+      source:'fresh_login',request_accepted:true,access_confirmed:true,account_read:true,
+      result_count:1,match_found:true,accounts:['beinsystems'],token_stored:false,
+    }};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='test'){
     let verification;
@@ -211,6 +218,27 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(window.document.activeElement,authMessage,'success focuses the visible auth result');
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert(!authPanel.querySelector('[data-token]'),'the API token remains server-side');
+  const loginCheck=authPanel.querySelector('[data-login-check]');
+  const searchField=authPanel.querySelector('[data-search]');
+  assert(loginCheck,'the owner can check a fresh login in one action');
+  assert(searchField,'the fresh-login action uses the known account search field');
+  searchField.value='beinsystems';
+  authPassword.value='fresh-synthetic-password';
+  const beforeFreshCheck={...mockIntegration};
+  loginCheck.click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(freshLoginChecks.length,1,'the fresh login and accounts read use one CRM action');
+  assert.deepEqual(freshLoginChecks[0],{
+    action:'login_check',login:'synthetic-user@synthetic-account',
+    password:'fresh-synthetic-password',search:'beinsystems',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id,
+  });
+  assert.equal(authPassword.value,'','fresh credentials are cleared after the request');
+  assert.deepEqual(mockIntegration,beforeFreshCheck,
+    'fresh-token diagnostics do not replace pending or active connection state');
+  assert(authMessage.textContent.includes('beinsystems'));
+  assert(authMessage.textContent.includes('JWT использован только в памяти'));
+  assert(authMessage.textContent.includes('pending JWT не менялись'));
   assert(authPanel.querySelector('[data-test]'),'the bounded account-access check is available');
   assert(authPanel.querySelector('[data-import]'),'full account import is an explicit owner action');
   assert(authPanel.querySelector('[data-create-companies]')?.disabled,
