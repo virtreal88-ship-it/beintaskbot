@@ -13,6 +13,9 @@ The migration creates `saas_dialog_reply_templates` and an index for active visi
 - Personal templates are visible to their author.
 - Team templates are visible inside their department and manageable by members with the existing department update scope.
 - Shared templates are visible to dialogue viewers; creation and editing require the existing all-scope update permission.
+- Template view and update scope currently derive from the existing `dialogs` view/update policy. There are no separate configurable template permissions. Whether to introduce distinct template capabilities is an open policy decision; it requires a separately reviewed rights model before any permission changes.
+- A team edit that keeps `team` visibility retains the row's original department, including for an all-scope editor with no department. Only the author can change visibility; transitions to `team` use the editor's current department and require one.
+- An idempotent create retry rechecks current view access before returning an existing row, so a former department member cannot retrieve old team text through the replay path.
 - The API rechecks active tenant membership and current dialog permissions on each request.
 - Typing filters already loaded tenant-scoped template text in memory. It does not send the draft to the server.
 - Selecting a suggestion only inserts text into the existing editable composer. Sending remains an explicit action in the existing composer.
@@ -21,4 +24,4 @@ The migration creates `saas_dialog_reply_templates` and an index for active visi
 
 ## Tests
 
-Synthetic tests cover scope isolation, tenant binding, stale versions, idempotent retries, route wiring, and that typing/insertion/management do not call a message endpoint or store drafts locally.
+Synthetic tests cover scope isolation, tenant binding, stale versions, idempotent retries, department-preserving edits and transitions, route wiring, and that typing/insertion/management do not call a message endpoint or store drafts locally.

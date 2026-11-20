@@ -256,6 +256,12 @@ def mutate_template(profile, payload):
                     row = cur.fetchone()
                 if not row:
                     raise TenantLinearError("Не удалось сохранить шаблон.", 409)
+                if not created:
+                    view_tenant, view_actor, view_policy = _authorize(cur, profile, "view")
+                    view_scope = _effective_scope(view_policy, "view")
+                    if ((view_tenant, view_actor) != (tenant, actor)
+                            or not can_view(row, actor, _department(view_policy), view_scope)):
+                        raise TenantLinearError("Шаблон не найден.", 404)
                 if created:
                     _audit(cur, tenant, actor, str(row["id"]), "dialog_reply_template_created", row["visibility"])
                 conn.commit()
@@ -297,9 +303,13 @@ def mutate_template(profile, payload):
             if visibility != row["visibility"] and int(row["created_by"]) != actor:
                 raise TenantLinearError("Изменить область чужого шаблона может только его автор.", 403)
             choices = allowed_visibility(policy)
-            if visibility not in choices:
+            preserve_team_scope = visibility == row["visibility"] == "team"
+            if visibility not in choices and not preserve_team_scope:
                 raise TenantLinearError("Недостаточно прав для этого типа шаблона.", 403)
-            target_department = department_id if visibility == "team" else None
+            target_department = (
+                row["department_id"] if preserve_team_scope
+                else department_id if visibility == "team" else None
+            )
             cur.execute("""UPDATE saas_dialog_reply_templates SET name=%s,body=%s,
                 visibility=%s,department_id=%s::uuid,updated_by=%s,updated_at=clock_timestamp(),
                 version=version+1

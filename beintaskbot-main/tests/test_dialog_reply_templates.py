@@ -165,6 +165,24 @@ def test_create_retry_returns_existing_without_duplicate_audit(monkeypatch):
     assert connection.commits == 1
 
 
+def test_create_retry_does_not_return_team_template_after_author_changes_department(monkeypatch):
+    old_department = DEPT
+    new_department = "00000000-0000-4000-8000-000000000202"
+    existing = {"id": str(uuid.uuid4()), "name": "Greeting", "body": "Private old-team text",
+                "visibility": "team", "department_id": old_department,
+                "created_by": ACTOR, "version": 1}
+    connection, cur = install_db(monkeypatch, Cursor([None, existing]))
+    monkeypatch.setattr(templates, "_authorize", lambda cur, profile, action:
+        (TENANT, ACTOR, policy("department", new_department)))
+    monkeypatch.setattr(templates, "_schema_ready", lambda cur: True)
+    with pytest.raises(TenantLinearError) as denied:
+        templates.mutate_template({"tenant_id": TENANT, "telegram_id": ACTOR},
+            {"action": "create", "request_id": str(uuid.uuid4()), "name": "Greeting",
+             "body": "Greeting", "visibility": "team"})
+    assert denied.value.status == 404
+    assert connection.commits == 0
+
+
 def test_stale_template_version_is_rejected_before_update(monkeypatch):
     existing = {"id": str(uuid.uuid4()), "name": "Old", "body": "Text",
                 "visibility": "personal", "department_id": None, "created_by": ACTOR, "version": 2}
@@ -178,6 +196,80 @@ def test_stale_template_version_is_rejected_before_update(monkeypatch):
     assert not any(sql.lstrip().startswith("UPDATE saas_dialog_reply_templates") for sql, _ in cur.statements)
 
 
+def test_all_scope_editor_without_department_preserves_foreign_team_department(monkeypatch):
+    other_department = "00000000-0000-4000-8000-000000000202"
+    existing = {"id": str(uuid.uuid4()), "name": "Old", "body": "Text",
+                "visibility": "team", "department_id": other_department,
+                "created_by": 11, "version": 1}
+    saved = {**existing, "name": "Edited", "body": "Edited text", "version": 2}
+    connection, cur = install_db(monkeypatch, Cursor([existing, saved]))
+    authorize(monkeypatch, "all", department=None)
+    result = templates.mutate_template({"tenant_id": TENANT, "telegram_id": ACTOR},
+        {"action": "update", "template_id": existing["id"], "version": 1,
+         "name": "Edited", "body": "Edited text", "visibility": "team"})
+    assert result["visibility"] == "team"
+    update = next((sql, params) for sql, params in cur.statements
+                  if sql.lstrip().startswith("UPDATE saas_dialog_reply_templates"))
+    assert update[1][3] == other_department  # department_id is retained from the row
+    assert update[1][4] == ACTOR  # editor attribution changes, author does not
+    assert "created_by=" not in update[0]
+    assert connection.commits == 1
+
+
+def test_foreign_team_editor_cannot_change_visibility_or_reassign_department(monkeypatch):
+    other_department = "00000000-0000-4000-8000-000000000202"
+    existing = {"id": str(uuid.uuid4()), "name": "Old", "body": "Text",
+                "visibility": "team", "department_id": other_department,
+                "created_by": 11, "version": 1}
+    connection, cur = install_db(monkeypatch, Cursor([existing]))
+    authorize(monkeypatch, "all", department=DEPT)
+    with pytest.raises(TenantLinearError) as denied:
+        templates.mutate_template({"tenant_id": TENANT, "telegram_id": ACTOR},
+            {"action": "update", "template_id": existing["id"], "version": 1,
+             "name": "Edited", "body": "Edited text", "visibility": "personal"})
+    assert denied.value.status == 403
+    assert not any(sql.lstrip().startswith("UPDATE saas_dialog_reply_templates") for sql, _ in cur.statements)
+    assert connection.commits == 0
+
+
+@pytest.mark.parametrize(("before", "after", "expected_department"), [
+    ("team", "personal", None),
+    ("team", "shared", None),
+    ("shared", "team", DEPT),
+])
+def test_author_visibility_transitions_set_department_only_for_team(before, after,
+                                                                     expected_department, monkeypatch):
+    existing = {"id": str(uuid.uuid4()), "name": "Old", "body": "Text",
+                "visibility": before, "department_id": DEPT if before == "team" else None,
+                "created_by": ACTOR, "version": 1}
+    saved = {**existing, "visibility": after,
+             "department_id": expected_department, "version": 2}
+    connection, cur = install_db(monkeypatch, Cursor([existing, saved]))
+    authorize(monkeypatch, "all", department=DEPT)
+    templates.mutate_template({"tenant_id": TENANT, "telegram_id": ACTOR},
+        {"action": "update", "template_id": existing["id"], "version": 1,
+         "name": "Edited", "body": "Edited text", "visibility": after})
+    update = next((sql, params) for sql, params in cur.statements
+                  if sql.lstrip().startswith("UPDATE saas_dialog_reply_templates"))
+    assert update[1][3] == expected_department
+    assert connection.commits == 1
+
+
+def test_shared_to_team_transition_requires_editor_department(monkeypatch):
+    existing = {"id": str(uuid.uuid4()), "name": "Old", "body": "Text",
+                "visibility": "shared", "department_id": None,
+                "created_by": ACTOR, "version": 1}
+    connection, cur = install_db(monkeypatch, Cursor([existing]))
+    authorize(monkeypatch, "all", department=None)
+    with pytest.raises(TenantLinearError) as denied:
+        templates.mutate_template({"tenant_id": TENANT, "telegram_id": ACTOR},
+            {"action": "update", "template_id": existing["id"], "version": 1,
+             "name": "Edited", "body": "Edited text", "visibility": "team"})
+    assert denied.value.status == 403
+    assert not any(sql.lstrip().startswith("UPDATE saas_dialog_reply_templates") for sql, _ in cur.statements)
+    assert connection.commits == 0
+
+
 def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
     import tenant_dialog_reply_templates_api as api
     # _expected is in the route; a mismatched body must fail before the store is called.
@@ -185,6 +277,9 @@ def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
     from aiohttp.test_utils import make_mocked_request
     profile={"tenant_id":TENANT,"telegram_id":ACTOR}
     called=[]
+    pilot_checks=[]
+    monkeypatch.setattr(api, "is_operator_workspace",
+                        lambda tenant: pilot_checks.append(tenant) or tenant == TENANT)
     monkeypatch.setattr(api,"mutate_template",lambda *_: called.append(True))
     handler=api.handler(lambda _request:profile,"https://crm.test",Mock())
     body=json.dumps({"action":"create","expected_tenant_id":OTHER,
@@ -199,6 +294,7 @@ def test_cross_tenant_payload_identity_is_rejected_before_database(monkeypatch):
             return body
     response=asyncio.run(handler(Request()))
     assert response.status==409
+    assert pilot_checks == [TENANT]  # eligible pilot passes before the intended identity mismatch guard
     assert not called
     assert response.headers["Cache-Control"]=="no-store"
 

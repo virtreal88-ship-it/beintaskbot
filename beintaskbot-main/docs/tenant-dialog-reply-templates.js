@@ -159,8 +159,10 @@
       bodyLabel.append(bodyText,body);
       const visibilityLabelNode=document.createElement('label'),visibilityText=document.createElement('span'),visibility=document.createElement('select');
       visibilityText.textContent=copy('visibility');visibility.name='visibility';visibility.required=true;
-      for(const choice of state.allowed){const option=document.createElement('option');option.value=choice;option.textContent=visibilityLabel(choice);visibility.append(option);}
-      if(item?.visibility&&state.allowed.includes(item.visibility))visibility.value=item.visibility;
+      const choices=state.allowed.slice();
+      if(item?.can_edit&&item.visibility&&!choices.includes(item.visibility))choices.push(item.visibility);
+      for(const choice of choices){const option=document.createElement('option');option.value=choice;option.textContent=visibilityLabel(choice);visibility.append(option);}
+      if(item?.visibility&&choices.includes(item.visibility))visibility.value=item.visibility;
       visibilityLabelNode.append(visibilityText,visibility);
       const actions=document.createElement('div');actions.className='operator-reply-template-actions';
       const save=document.createElement('button');save.type='submit';save.className='primary';save.textContent=copy('save');

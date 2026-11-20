@@ -22,7 +22,7 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
    if((options.method||'GET')==='GET'){
      const tenant=new URL(value,'https://crm.test').searchParams.get('expected_tenant_id');
      if(tenant===tenantB)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};
-     return{ok:true,json:async()=>({success:true,result:{available:true,templates:initial,allowed_visibility:['personal','team']}})};
+     return{ok:true,json:async()=>({success:true,result:{available:true,templates:initial,allowed_visibility:['personal','shared']}})};
    }
    const body=JSON.parse(options.body);
    return{ok:true,json:async()=>({success:true,result:{id:'t2',name:body.name,body:body.body,visibility:body.visibility,version:1,can_edit:true}})};
@@ -44,6 +44,17 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.equal(storageWrites,0,'templates and drafts are not stored in localStorage');
  button.click();await tick();
  assert.ok(w.document.getElementById('operatorReplyTemplateModal'),'management is available in the modal');
+ const edit=[...w.document.querySelectorAll('#operatorReplyTemplateModal button')].find(node=>node.textContent==='Edit');
+ assert.ok(edit);edit.click();
+ const editForm=w.document.querySelector('#operatorReplyTemplateModal form');
+ const editVisibility=editForm.querySelector('[name=visibility]');
+ assert.equal(editVisibility.value,'team','an all-scope editor without a department keeps the existing team scope selected');
+ assert.deepEqual([...editVisibility.options].map(option=>option.value).sort(),['personal','shared','team']);
+ editForm.querySelector('[name=name]').value='Welcome edited';
+ editForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ const editPost=calls.find(call=>call.method==='POST');
+ assert.equal(JSON.parse(editPost.body).visibility,'team','editing does not silently reassign the template to another scope');
+ button.click();await tick();
  const add=[...w.document.querySelectorAll('#operatorReplyTemplateModal button')].find(node=>node.textContent==='New template');
  assert.ok(add);add.click();
  const form=w.document.querySelector('#operatorReplyTemplateModal form');
@@ -51,7 +62,7 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  form.querySelector('[name=body]').value='Please share a suitable time.';
  form.querySelector('[name=visibility]').value='personal';
  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
- const post=calls.find(call=>call.method==='POST');
+ const post=calls.filter(call=>call.method==='POST').at(-1);
  assert.ok(post,'management uses only the same-origin template API');
  const body=JSON.parse(post.body);
  assert.equal(body.action,'create');assert.equal(body.expected_tenant_id,tenantA);
