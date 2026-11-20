@@ -428,7 +428,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
                 operator._request_operator(
                     "accounts", {"search": "synthetic-account", "limit": 1},
                     token="synthetic-jwt", base_url=base)
-        self.assertIn("допустимого размера", str(raised.exception))
+        self.assertEqual(str(raised.exception), "Ответ Operator превышает допустимый размер.")
         self.assertTrue(response.closed)
         self.assertTrue(fake.closed)
         self.assertEqual(response.chunk_size, 64 * 1024)
