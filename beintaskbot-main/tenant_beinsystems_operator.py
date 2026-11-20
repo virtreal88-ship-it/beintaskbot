@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-import platform as runtime_platform
 import re
-import struct
 import sys
 import uuid
 from urllib.error import HTTPError, URLError
@@ -30,13 +28,18 @@ MAX_RESPONSE_BYTES = 1_000_000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
 AUTH_LOGIN_URL = "https://auth.beinsystems.az/auth/login"
-AUTH_CONTRACT_VERSION = "auth_login_runtime_metadata_v1"
+AUTH_CONTRACT_VERSION = "auth_login_uniq_device_id_v1"
+AUTH_SUPPORTED_CONTRACT_VERSIONS = frozenset({
+    AUTH_CONTRACT_VERSION,
+    "auth_login_runtime_metadata_v1",
+})
+AUTH_UNIQ_DEVICE_ID = "beintaskbot-operator"
 AUTH_APPLICATION_USER_AGENT = (
     f"Beintaskbot-Operator Python-urllib/{sys.version_info.major}.{sys.version_info.minor}"
 )
 READ_ENDPOINTS = {
     "me": ("/user/me", set()),
-    "accounts": ("/user/accounts", {"search"}),
+    "accounts": ("/user/accounts", {"search", "limit"}),
     "account_info": ("/user/info", {"account"}),
     "profile_users": ("/user/profileUsers", {"account"}),
     "task_list": ("/task/list", {"account"}),
@@ -242,45 +245,21 @@ def stage_auth_token(profile, token):
     return _public(row, legacy_pending_auth_received=True)
 
 
-def _auth_runtime_metadata():
-    """Describe this server process using the vendor's supported value set."""
-    if sys.platform == "win32":
-        platform_name = "win32"
-    elif sys.platform == "darwin":
-        platform_name = "darwin"
-    elif sys.platform.startswith("linux"):
-        platform_name = "linux"
-    else:
-        raise OperatorError("Серверная среда не поддерживается для входа Operator.", 503)
-
-    machine = runtime_platform.machine().casefold()
-    pointer_bits = struct.calcsize("P") * 8
-    if machine in {"x86_64", "amd64", "x64"}:
-        architecture = "x64" if pointer_bits == 64 else "ia32" if pointer_bits == 32 else None
-    elif machine in {"aarch64", "arm64"}:
-        architecture = "arm64" if pointer_bits == 64 else None
-    elif machine in {"i386", "i486", "i586", "i686", "x86", "ia32"}:
-        architecture = "ia32"
-    else:
-        architecture = None
-    if architecture not in {"x64", "arm64", "ia32"}:
-        raise OperatorError("Архитектура сервера не поддерживается для входа Operator.", 503)
-    return {"version": "2.36.24", "platform": platform_name, "arch": architecture}
-
-
 def _authenticate_operator(login, password, *, opener=None):
     """Exchange credentials for a pending token using the confirmed auth contract."""
     username = str(login or "").strip()
     secret = str(password or "")
-    if (not username or len(username) > 240
+    login_parts = username.split("@")
+    if (not username or len(username) > 240 or len(login_parts) != 2
+            or any(not part.strip() for part in login_parts)
             or any(ord(char) < 32 for char in username)
             or not secret or len(secret) > 512):
-        raise OperatorError("Укажите корректный логин и пароль Operator.")
+        raise OperatorError("Укажите логин в формате user@account и пароль Operator.")
 
     payload = {
         "login": username,
         "password": secret,
-        "data": _auth_runtime_metadata(),
+        "uniqDeviceId": AUTH_UNIQ_DEVICE_ID,
     }
     request = Request(
         AUTH_LOGIN_URL,
@@ -472,12 +451,23 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None):
     if not isinstance(payload, dict) or set(payload) - fields:
         raise OperatorError("Параметры запроса Operator некорректны.")
     if endpoint == "accounts":
-        search = str(payload.get("search") or "").strip()
+        search_value = payload.get("search", "")
+        if not isinstance(search_value, str):
+            raise OperatorError("Поисковый запрос Operator некорректен.")
+        search = search_value.strip()
         if search and len(search) < 4:
             raise OperatorError("Поиск Operator требует не менее четырёх символов.")
         if len(search) > 120:
             raise OperatorError("Слишком длинный поисковый запрос.")
-        payload = {"search": search} if search else {}
+        has_limit = "limit" in payload
+        limit = payload.get("limit")
+        if has_limit and (type(limit) is not int or not 1 <= limit <= 100):
+            raise OperatorError("Размер списка Operator должен быть от 1 до 100.")
+        payload = {}
+        if search:
+            payload["search"] = search
+        if has_limit:
+            payload["limit"] = limit
     if "account" in payload:
         account = str(payload.get("account") or "").strip()
         if not account or len(account) > 240 or any(ord(char) < 32 for char in account):
@@ -593,7 +583,7 @@ def _pending_auth_candidate(profile, *, required=True):
             or envelope.get("provider") != PROVIDER
             or envelope.get("owner_telegram_id") != actor
             or envelope.get("purpose") != "pending_auth_verification"
-            or envelope.get("auth_contract") != AUTH_CONTRACT_VERSION
+            or envelope.get("auth_contract") not in AUTH_SUPPORTED_CONTRACT_VERSIONS
             or not isinstance(envelope.get("token"), str) or not envelope.get("token")):
         raise OperatorError("Кандидат Operator не относится к этому владельцу и workspace.")
     return {"token": envelope["token"], "received_at": row["received_at"],
@@ -630,20 +620,31 @@ def _record_operator_read(profile, endpoint, payload):
         conn.commit()
 
 
-def verify_connection(profile):
-    """Check the documented GET /user/me method; this never activates a pending token."""
+def verify_accounts_access(profile, search):
+    """Confirm only bounded account-list access without activating pending credentials."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
     except (TypeError, ValueError, AttributeError):
         raise OperatorError("Нет доступа.") from None
+    if profile.get("role") != "owner" or profile.get("active") is False:
+        raise OperatorError("Проверить доступ к accounts может только владелец BeinSystems.")
+    if not isinstance(search, str):
+        raise OperatorError("Укажите строку поиска аккаунта Operator.")
+    query = search.strip()
+    if len(query) < 4:
+        raise OperatorError("Поиск Operator требует не менее четырёх символов.")
+    if len(query) > 120:
+        raise OperatorError("Слишком длинный поисковый запрос.")
+
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             current = _current_profile(cur, tenant, actor)
             if current.get("role") != "owner":
-                raise OperatorError("Проверить Operator может только владелец BeinSystems.")
+                raise OperatorError("Проверить доступ к accounts может только владелец BeinSystems.")
             row = _operator_row(cur, tenant)
+
     candidate = _pending_auth_candidate(profile, required=False)
     if candidate:
         credentials = candidate
@@ -653,30 +654,43 @@ def verify_connection(profile):
         source = "active"
     else:
         raise OperatorError("Сначала получите JWT из карточки интеграции.")
-    _record_operator_read(profile, "me", {})
-    response = _request_operator("me", {}, token=credentials["token"], base_url=credentials["base_url"])
-    identity = operator_me_payload(response)
+
+    _record_operator_read(profile, "accounts", {"search": query})
+    response = _request_operator(
+        "accounts", {"search": query, "limit": 1},
+        token=credentials["token"], base_url=credentials["base_url"])
+    if isinstance(response, dict) and "success" in response and response.get("success") is not True:
+        raise OperatorError("Operator сообщил об ошибке списка аккаунтов.")
+    accounts = accounts_list_payload(response)
+    match_found = any(item["account"].casefold() == query.casefold() for item in accounts)
+
     if source == "active":
         fresh = _credentials(tenant, allow_configured=True)
         if (fresh["generation"] != credentials["generation"]
                 or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
             raise OperatorError("Подключение Operator изменилось во время запроса.", 409)
-        return {**identity, "source": "active"}
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            current = _current_profile(cur, tenant, actor)
-            if current.get("role") != "owner":
-                raise OperatorError("Проверить Operator может только владелец BeinSystems.")
-            cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
-              SET me_verified_at=now(),verified_identifier=%s,verified_role=%s
-              WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
-                AND activated_at IS NULL""",
-              (identity["identifier"], identity["role"], tenant, actor, candidate["received_at"]))
-            if cur.rowcount != 1:
-                raise OperatorError("JWT Operator был заменён во время проверки. Повторите проверку.", 409)
-        conn.commit()
-    return {**identity, "source": "pending"}
+    else:
+        with _connect() as conn:
+            _ensure_schema(conn)
+            with conn.cursor() as cur:
+                current = _current_profile(cur, tenant, actor)
+                if current.get("role") != "owner":
+                    raise OperatorError(
+                        "Проверить доступ к accounts может только владелец BeinSystems.")
+                cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
+                  SET accounts_access_verified_at=now()
+                  WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
+                    AND activated_at IS NULL""",
+                  (tenant, actor, candidate["received_at"]))
+                if cur.rowcount != 1:
+                    raise OperatorError(
+                        "JWT Operator был заменён во время проверки. Повторите проверку.", 409)
+            conn.commit()
+    return {
+        "source": source,
+        "access_confirmed": True,
+        "match_found": match_found,
+    }
 
 
 def read(profile, endpoint, payload, *, allow_configured=False):
