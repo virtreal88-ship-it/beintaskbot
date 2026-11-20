@@ -7,11 +7,15 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  const w=dom.window,tenantA='00000000-0000-4000-8000-000000000101',tenantB='00000000-0000-4000-8000-000000000102';
  const profile=tenant=>({member:{tenant_id:tenant,telegram_id:33,role:'worker',active:true,permissions:['dialogs']},capabilities:{modules:{dialogs:true}}});
  w.tenantProfileSnapshot=profile(tenantA);w.tenantI18n={language:'en'};
- const composer=w.document.createElement('div');composer.className='operator-composer';
+ const composer=w.document.createElement('div');composer.className='tc-legacy-composer operator-composer';
  const chat=w.document.createElement('textarea');chat.id='chatText';composer.append(chat);
  const actions=w.document.createElement('div');actions.className='operator-composer-actions';composer.append(actions);
  const sendButton=w.document.createElement('button');sendButton.id='sendChat';sendButton.type='button';actions.append(sendButton);
  w.document.body.append(composer);
+ const dealComposer=w.document.createElement('div');dealComposer.className='deal-composer';
+ const dealChat=w.document.createElement('textarea');dealChat.id='chatText';dealComposer.append(dealChat);
+ const dealActions=w.document.createElement('div');dealActions.className='operator-composer-actions';dealComposer.append(dealActions);
+ w.document.body.append(dealComposer);
  const initial=[{id:'t1',name:'Welcome',body:'Welcome back. How can I help?',visibility:'team',version:1,can_edit:true}];
  const calls=[];let sent=0,storageWrites=0;
  Object.defineProperty(w.localStorage,'setItem',{value:()=>{storageWrites++;}});
@@ -33,6 +37,7 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  await tick();
  const input=w.document.getElementById('chatText'),button=w.document.getElementById('operatorReplyTemplatesOpen');
  assert.ok(button,'template control is attached to the existing composer');
+ assert.equal(dealActions.querySelector('#operatorReplyTemplatesOpen'),null,'decoy deal composer with overlapping IDs is not mounted');
  assert.equal(calls.length,1,'templates are loaded once for the current tenant');
  input.value='welcome';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();
  assert.equal(calls.length,1,'typing filters in memory and never sends draft text to an API');

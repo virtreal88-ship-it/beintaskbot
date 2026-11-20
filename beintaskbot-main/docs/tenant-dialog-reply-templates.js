@@ -227,7 +227,7 @@
     mounted=null;modalClose?.();
   }
   async function attach(){
-    const actions=document.querySelector('.operator-composer-actions'),input=document.getElementById('chatText'),owner=identity();
+    const actions=document.querySelector('.tc-legacy-composer .operator-composer-actions'),input=document.querySelector('.tc-legacy-composer #chatText'),owner=identity();
     if(!actions||!input||!owner){teardown();return;}
     if(mounted?.actions===actions&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
