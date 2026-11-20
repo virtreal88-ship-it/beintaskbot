@@ -209,7 +209,6 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(authPanel.querySelector('[data-auth-message]').textContent.includes('JWT получен и зашифрован отдельно'));
   assert(authPanel.querySelector('[data-status]').textContent.includes('not_connected'));
   assert.equal(authPosts().length,1,'a reload does not resubmit credentials');
-  authPanel.querySelector('[data-search]').value='synthetic-account';
   const testButton=authPanel.querySelector('[data-test]');
   const testPostCount=()=>requests.filter(row=>row.path==='/api/platform/integrations/beinsystems-operator'
     &&row.options.method==='POST'&&JSON.parse(row.options.body).action==='test').length;
