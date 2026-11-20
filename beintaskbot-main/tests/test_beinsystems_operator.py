@@ -723,7 +723,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
              patch.object(operator, "_current_profile", side_effect=[owner, owner, manager]), \
              patch.object(operator, "_operator_row", return_value=active_row), \
              patch.object(operator, "_pending_auth_candidate", return_value=None), \
-             patch.object(operator, "_credentials", side_effect=[credentials, credentials]), \
+             patch.object(operator, "_credentials", side_effect=[credentials, credentials, credentials]), \
              patch.object(operator, "_record_operator_read"), \
              patch.object(operator, "_request_operator", return_value={
                  "status": "success", "data": [{"account": "synthetic-account"}],
@@ -781,7 +781,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
              patch.object(operator, "_current_profile", return_value=profile), \
              patch.object(operator, "_operator_row", return_value=active_row), \
              patch.object(operator, "_pending_auth_candidate", return_value=None), \
-             patch.object(operator, "_credentials", side_effect=[credentials, credentials]), \
+             patch.object(operator, "_credentials", side_effect=[credentials, credentials, credentials]), \
              patch.object(operator, "_record_operator_read") as audit, \
              patch.object(operator, "_request_operator", return_value={
                  "status": "success", "data": [{"account": "synthetic-account"}],
