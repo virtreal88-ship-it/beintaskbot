@@ -8,8 +8,8 @@ from tenant_dialog_reply_templates import migrate
 
 
 def test_migration_is_idempotent_and_crud_is_tenant_department_scoped():
-    dsn = os.environ.get("TEST_DATABASE_URL")
-    assert dsn, "TEST_DATABASE_URL must point to disposable PostgreSQL"
+    dsn = os.environ.get("BEINTASKBOT_TEST_POSTGRES_DSN")
+    assert dsn, "BEINTASKBOT_TEST_POSTGRES_DSN must point to disposable PostgreSQL"
     schema = "dialog_templates_" + uuid.uuid4().hex
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')

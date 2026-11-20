@@ -16,6 +16,24 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -36,27 +54,4 @@ jobs:
       - name: Verify suggestions never send messages
         run: NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_reply_templates_ui.cjs
       - name: Verify migration and tenant isolation on disposable PostgreSQL
-        env:
-          DATABASE_URL: postgresql://invalid.invalid/disabled
-          TEST_DATABASE_URL: host=/tmp/dialog-templates-pg dbname=dialog_templates_test user=postgres
-        run: |
-          set -euo pipefail
-          SOCKET_DIR=/tmp/dialog-templates-pg
-          mkdir -p "$SOCKET_DIR"
-          chmod 0777 "$SOCKET_DIR"
-          docker run --detach --name dialog-templates-pg --network none \
-            --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=256m \
-            --mount "type=bind,src=$SOCKET_DIR,dst=/var/run/postgresql" \
-            --env POSTGRES_HOST_AUTH_METHOD=trust postgres:16
-          cleanup() {
-            docker exec --user postgres dialog-templates-pg pg_ctl -D /var/lib/postgresql/data stop -m fast >/dev/null 2>&1 || true
-            docker rm --force dialog-templates-pg >/dev/null 2>&1 || true
-            sudo rm -rf -- "$SOCKET_DIR"
-          }
-          trap cleanup EXIT
-          for attempt in $(seq 1 60); do
-            if docker exec dialog-templates-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          docker exec dialog-templates-pg createdb -U postgres dialog_templates_test
-          PYTHONPATH=tests/isolated_database_guard:. python -m pytest -q --tb=short tests/test_dialog_reply_templates_postgres.py
+        run: python -m pytest -q --tb=short tests/test_dialog_reply_templates_postgres.py
