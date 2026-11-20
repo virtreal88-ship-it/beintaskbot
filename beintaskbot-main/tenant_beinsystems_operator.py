@@ -121,7 +121,9 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
         "api_ready": bool(api_base_url()),
         "pending_auth_received": bool(pending_auth_received),
-        "pending_auth_contract": AUTH_CONTRACT_VERSION if pending_auth_received else None,
+        # Existing pending rows may predate the current login contract. This status
+        # projection does not inspect their encrypted envelope, so never infer provenance.
+        "pending_auth_contract": None,
         "pending_auth_access_confirmed": bool(pending_auth_accounts_access_verified)
             if pending_auth_received else None,
         "pending_auth_me_verified": bool(pending_auth_me_verified),
@@ -620,8 +622,24 @@ def _record_operator_read(profile, endpoint, payload):
         conn.commit()
 
 
+def _assert_current_operator_owner(tenant, actor, *, pending_received_at=None):
+    """Recheck the live workspace owner immediately around the external read."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            current = _current_profile(cur, tenant, actor)
+            if current.get("role") != "owner":
+                raise OperatorError(
+                    "Проверить доступ к accounts может только владелец BeinSystems.")
+            if (pending_received_at is not None
+                    and not _pending_timestamp_is_current(
+                        cur, tenant, actor, pending_received_at)):
+                raise OperatorError(
+                    "JWT Operator был заменён во время проверки. Повторите попытку.", 409)
+
+
 def verify_accounts_access(profile, search):
-    """Confirm only bounded account-list access without activating pending credentials."""
+    """Check a bounded accounts read without activating pending credentials."""
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -656,19 +674,32 @@ def verify_accounts_access(profile, search):
         raise OperatorError("Сначала получите JWT из карточки интеграции.")
 
     _record_operator_read(profile, "accounts", {"search": query})
+    if source == "active":
+        fresh = _credentials(tenant, allow_configured=True)
+        if (fresh["generation"] != credentials["generation"]
+                or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
+            raise OperatorError("Подключение Operator изменилось до проверки.", 409)
+        # The audit path checks operator_data:view; this separate live check
+        # ensures the caller is still the workspace owner immediately preflight.
+        _assert_current_operator_owner(tenant, actor)
+    else:
+        _assert_current_operator_owner(
+            tenant, actor, pending_received_at=candidate["received_at"])
+
     response = _request_operator(
         "accounts", {"search": query, "limit": 1},
         token=credentials["token"], base_url=credentials["base_url"])
-    if isinstance(response, dict) and "success" in response and response.get("success") is not True:
-        raise OperatorError("Operator сообщил об ошибке списка аккаунтов.")
-    accounts = accounts_list_payload(response)
-    match_found = any(item["account"].casefold() == query.casefold() for item in accounts)
+    accounts = _accounts_access_probe_payload(response)
+    account_read = bool(accounts)
+    match_found = bool(
+        accounts and accounts[0].casefold() == query.casefold())
 
     if source == "active":
         fresh = _credentials(tenant, allow_configured=True)
         if (fresh["generation"] != credentials["generation"]
                 or fresh["connection_instance_id"] != credentials["connection_instance_id"]):
             raise OperatorError("Подключение Operator изменилось во время запроса.", 409)
+        _assert_current_operator_owner(tenant, actor)
     else:
         with _connect() as conn:
             _ensure_schema(conn)
@@ -677,21 +708,32 @@ def verify_accounts_access(profile, search):
                 if current.get("role") != "owner":
                     raise OperatorError(
                         "Проверить доступ к accounts может только владелец BeinSystems.")
-                cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
-                  SET accounts_access_verified_at=now()
-                  WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
-                    AND activated_at IS NULL""",
-                  (tenant, actor, candidate["received_at"]))
-                if cur.rowcount != 1:
+                if not _pending_timestamp_is_current(
+                        cur, tenant, actor, candidate["received_at"]):
                     raise OperatorError(
-                        "JWT Operator был заменён во время проверки. Повторите проверку.", 409)
-            conn.commit()
+                        "JWT Operator был заменён во время проверки. Повторите попытку.", 409)
+                if account_read:
+                    cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2
+                      SET accounts_access_verified_at=now()
+                      WHERE tenant_id=%s::uuid AND owner_telegram_id=%s AND received_at=%s
+                        AND activated_at IS NULL""",
+                      (tenant, actor, candidate["received_at"]))
+                    if cur.rowcount != 1:
+                        raise OperatorError(
+                            "JWT Operator был заменён во время проверки. Повторите попытку.", 409)
+            if account_read:
+                conn.commit()
+        _assert_current_operator_owner(
+            tenant, actor, pending_received_at=candidate["received_at"])
+
     return {
         "source": source,
-        "access_confirmed": True,
+        "request_accepted": True,
+        "access_confirmed": account_read,
+        "account_read": account_read,
+        "result_count": len(accounts),
         "match_found": match_found,
     }
-
 
 def read(profile, endpoint, payload, *, allow_configured=False):
     tenant = _tenant(profile)
@@ -1052,6 +1094,36 @@ def accounts_list_payload(response):
         if account and len(account) <= 240 and not any(ord(char) < 32 for char in account):
             result.append({"account": account})
     return result
+
+
+def _accounts_access_probe_payload(response):
+    """Validate only the confirmed response shape for the one-row access probe.
+
+    Unlike the general catalogue parser, this rejects unknown envelopes, provider
+    errors, ignored limits, and malformed rows instead of silently filtering them.
+    """
+    if not isinstance(response, dict) or set(response) != {"status", "data"}:
+        raise OperatorError("Operator вернул неизвестный формат списка аккаунтов.")
+    if response.get("status") != "success":
+        raise OperatorError("Operator сообщил об ошибке списка аккаунтов.")
+    values = response.get("data")
+    if not isinstance(values, list):
+        raise OperatorError("Operator вернул неверный формат списка аккаунтов.")
+    if len(values) > 1:
+        raise OperatorError("Operator вернул больше одной записи при limit:1.")
+    if not values:
+        return []
+    row = values[0]
+    if not isinstance(row, dict):
+        raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+    account = row.get("account")
+    if not isinstance(account, str):
+        raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+    account = account.strip()
+    if (not account or len(account) > 240
+            or any(ord(char) < 32 for char in account)):
+        raise OperatorError("Operator вернул повреждённую запись аккаунта.")
+    return [account]
 
 
 def profile_users_payload(response):
