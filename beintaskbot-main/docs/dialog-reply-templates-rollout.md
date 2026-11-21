@@ -15,6 +15,19 @@ The provisioning and UI switches are independent and both default off. Stock boo
 
 Rollback: disable the feature and provisioning switches. Retain the additive table and index; do not drop or rewrite them. No membership, CRM, chat, message, or template rows are created or changed by provisioning.
 
+### Read-only schema observation
+
+If no approved catalogue client is available, a separately approved Worker
+rollout can set `DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP=true` once with
+both template UI and provisioning off. Under the existing bounded startup
+lock it explicitly opens a read-only transaction. The startup log message
+`Reply template schema observation` reports only `absent`, `matching`, or
+`unverified` (or `workspace_not_configured`). Matching uses the canonical
+schema verifier. No template rows or customer content are read, and no new
+schema writes occur within this observation. The normal Worker startup still
+runs its existing unrelated setup. Remove the observation switch afterwards.
+This does not validate recovery or approve live provisioning.
+
 ## Behavior
 
 - Personal templates are visible to their author.
