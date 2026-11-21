@@ -70,7 +70,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   await page.waitForFunction(()=>window.historyReads.at(-1)==='b'&&document.querySelector('[data-operator-dialog-company] button:not([hidden])')&&!document.querySelector('[data-company-value]').textContent.startsWith('Company'));
   const field=page.locator('[data-operator-dialog-company]'),edit=field.locator('button');
   const header=()=>field.evaluate(node=>{
-   const geometry=el=>{const {x,y,width,height}=el.getBoundingClientRect();return {x,y,width,height};};
+   const geometry=el=>({x:el.offsetLeft,y:el.offsetTop,width:el.offsetWidth,height:el.offsetHeight});
    return {host:geometry(node.parentElement),field:geometry(node),rows:[...node.children].map(el=>({tag:el.tagName,copy:el.textContent,hidden:el.hidden,rect:geometry(el)}))};
   });
   const before=await header();
