@@ -137,3 +137,30 @@ def test_scoped_feature_without_operator_connection(monkeypatch):
     assert not store.feature_for({**profile,'tenant_id':B})
     assert not store.feature_for({**profile,'active':False})
     assert not store.feature_for({**profile,'role':'operator','permissions':[]})
+
+
+@pytest.mark.parametrize('alter',[
+    'ADD COLUMN unexpected TEXT',
+    'ALTER COLUMN created_at DROP DEFAULT',
+    'ENABLE ROW LEVEL SECURITY',
+    'DROP CONSTRAINT beinsystems_kommo_binding_channel',
+])
+def test_unexpected_kommo_shape_does_not_adopt_or_write(local,alter):
+    database,company,*_=local
+    route=_deal(database)
+    database.execute(f'DROP TABLE IF EXISTS {store.KOMMO}')
+    database.commit()
+    with database.cursor() as cur:
+        store.provision_kommo(cur)
+        cur.execute(f'ALTER TABLE {store.KOMMO} {alter}')
+    database.commit()
+    with database.cursor() as cur,pytest.raises(RuntimeError,match='Unexpected Kommo'):
+        store.provision_kommo(cur)
+    database.rollback()
+    for extra in ({},{'company_id':company}):
+        with pytest.raises(OperatorError) as unavailable:
+            store.binding(PROFILE,**route,**extra)
+        assert unavailable.value.status==503
+    assert database.execute(f'SELECT count(*) AS n FROM {store.KOMMO}')==[{'n':0}]
+    database.execute(f'DROP TABLE {store.KOMMO}')
+    database.commit()

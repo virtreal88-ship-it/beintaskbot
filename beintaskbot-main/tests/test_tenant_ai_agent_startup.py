@@ -324,3 +324,30 @@ class RailwayStartupReadinessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptionalKommoCompanyBootstrapTests(unittest.TestCase):
+    def test_verified_path_commits_only_optional_transaction(self):
+        from tenant_ai_agent_startup import _prepare_optional_kommo_dialog_company
+        from unittest.mock import MagicMock
+        conn=MagicMock()
+        with (patch('tenant_beinsystems_operator_access.configured_workspace_id',return_value='configured'),
+              patch('tenant_dialog_company_binding.provision_kommo') as provision,
+              self.assertLogs('tenant_ai_agent_startup',level='INFO') as logs):
+            _prepare_optional_kommo_dialog_company(conn)
+        provision.assert_called_once_with(conn.cursor.return_value.__enter__.return_value)
+        conn.commit.assert_called_once_with()
+        conn.rollback.assert_not_called()
+        self.assertEqual(logs.output,['INFO:tenant_ai_agent_startup:Optional Kommo dialogue company schema ready'])
+
+    def test_mismatch_rolls_back_and_omits_exception_details(self):
+        from tenant_ai_agent_startup import _prepare_optional_kommo_dialog_company
+        from unittest.mock import MagicMock
+        conn=MagicMock(closed=False)
+        with (patch('tenant_beinsystems_operator_access.configured_workspace_id',return_value='configured'),
+              patch('tenant_dialog_company_binding.provision_kommo',side_effect=RuntimeError('synthetic database detail')),
+              self.assertLogs('tenant_ai_agent_startup',level='WARNING') as logs):
+            _prepare_optional_kommo_dialog_company(conn)
+        conn.commit.assert_not_called()
+        conn.rollback.assert_called_once_with()
+        self.assertEqual(logs.output,['WARNING:tenant_ai_agent_startup:Optional Kommo dialogue company schema unverified'])

@@ -1,5 +1,6 @@
 """Fail-fast AI Agent database preparation and worker startup."""
 import asyncio
+import logging
 from contextlib import closing
 import os
 import time
@@ -85,13 +86,33 @@ def prepare_database() -> None:
                 verify_provisioned_schema(cur)
             conn.commit()
         if os.environ.get(PROVISION_ENV, '').lower() == 'true':
-            from tenant_beinsystems_operator_access import configured_workspace_id
-            from tenant_dialog_company_binding import provision_kommo
-            if not configured_workspace_id():
-                raise RuntimeError('Dialogue company provisioning requires a configured BeinSystems workspace UUID.')
+            _prepare_optional_kommo_dialog_company(conn)
+
+
+def _prepare_optional_kommo_dialog_company(conn):
+    """Bounded by the retained startup lock; unavailable Kommo must not block boot."""
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_dialog_company_binding import provision_kommo
+    ready=False
+    try:
+        if configured_workspace_id():
             with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout='4000ms'")
                 provision_kommo(cur)
             conn.commit()
+            ready=True
+    except Exception:
+        # Closing the dedicated startup connection handles a terminated backend.
+        try:
+            if not conn.closed:
+                conn.rollback()
+        except Exception:
+            pass
+    log=logging.getLogger(__name__)
+    if ready:
+        log.info('Optional Kommo dialogue company schema ready')
+    else:
+        log.warning('Optional Kommo dialogue company schema unverified')
 
 
 def ensure_pilot_case_schema(conn) -> None:

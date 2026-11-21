@@ -8,7 +8,7 @@ from tenant_platform import _connect
 from tenant_policy import TenantPolicy
 
 CONNECT = 'saas_beinsystems_operator_dialog_company_bindings'
-KOMMO = 'saas_beinsystems_kommo_dialog_company_bindings'
+KOMMO = 'public.saas_beinsystems_kommo_dialog_company_bindings'
 COMPANIES = 'saas_crm_native_companies'
 PROVISION_ENV = 'BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'
 
@@ -24,39 +24,85 @@ def _ready(cur, table):
     from tenant_schema_preflight import ready
     cols = ('tenant_id', 'channel_id', 'conversation_id', 'company_id',
             'created_by', 'updated_by', 'created_at', 'updated_at')
-    return ready(cur, {table: cols + (('lead_id',) if table == KOMMO else ()),
-                       COMPANIES: ('tenant_id','id','name','archived_at','access_responsible_id')}, ())
+    company = {COMPANIES: ('tenant_id','id','name','archived_at','access_responsible_id')}
+    if table == KOMMO:
+        return _kommo_contract(cur) and ready(cur,company,())
+    return ready(cur,{table:cols,**company},())
+
+
+_KOMMO_COLS = {
+    'tenant_id':['uuid',True,None], 'lead_id':['bigint',True,None],
+    'channel_id':['text',True,None], 'conversation_id':['text',True,None],
+    'company_id':['uuid',True,None], 'created_by':['bigint',True,None],
+    'updated_by':['bigint',True,None],
+    'created_at':['timestamp with time zone',True,'now()'],
+    'updated_at':['timestamp with time zone',True,'now()'],
+}
+_KOMMO_CONSTRAINTS = {
+    'beinsystems_kommo_binding_lead':'CHECK ((lead_id > 0))',
+    'beinsystems_kommo_binding_channel':'CHECK ((length(channel_id) <= 256))',
+    'beinsystems_kommo_binding_conversation':'CHECK ((length(conversation_id) <= 256))',
+    'beinsystems_kommo_binding_creator':'CHECK ((created_by > 0))',
+    'beinsystems_kommo_binding_updater':'CHECK ((updated_by > 0))',
+    'beinsystems_kommo_binding_pk':'PRIMARY KEY (tenant_id, lead_id, channel_id, conversation_id)',
+    'beinsystems_kommo_binding_tenant':'FOREIGN KEY (tenant_id) REFERENCES saas_tenants(id) ON DELETE CASCADE',
+}
+
+
+def _kommo_contract(cur):
+    cur.execute("""SELECT
+        c.relkind='r' AND c.relpersistence='p' AND n.nspname='public'
+          AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity AND NOT c.relispartition
+          AND c.reloptions IS NULL AND am.amname='heap'
+          AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE c.oid IN (i.inhrelid,i.inhparent))
+          AND NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+          AND (SELECT count(*) FROM pg_trigger t WHERE t.tgconstraint IN (
+            SELECT fk.oid FROM pg_constraint fk WHERE fk.conrelid=c.oid AND fk.contype='f')
+            AND t.tgisinternal AND t.tgenabled='O')=4
+          AND (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid=c.oid)=2
+          AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid)
+          AND NOT EXISTS (SELECT 1 FROM pg_rewrite r WHERE r.ev_class=c.oid)
+          AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0
+            AND (a.attisdropped OR a.attidentity<>'' OR a.attgenerated<>''))
+          AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid
+            AND (NOT k.convalidated OR k.condeferrable OR k.condeferred
+              OR (k.contype='f' AND k.confrelid<>to_regclass('public.saas_tenants'))))
+          AND (SELECT count(*) FROM pg_index x WHERE x.indrelid=c.oid)=1
+          AND EXISTS (SELECT 1 FROM pg_index x WHERE x.indrelid=c.oid
+            AND x.indisprimary AND x.indisvalid AND x.indisready AND x.indislive)
+          AS structurally_safe,
+        (SELECT jsonb_object_agg(a.attname, jsonb_build_array(format_type(a.atttypid,a.atttypmod),
+          a.attnotnull, pg_get_expr(d.adbin,d.adrelid))) FROM pg_attribute a
+          LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+          WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped) AS columns,
+        (SELECT jsonb_object_agg(k.conname, replace(pg_get_constraintdef(k.oid), 'REFERENCES public.', 'REFERENCES '))
+          FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype<>'n') AS constraints
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      LEFT JOIN pg_am am ON am.oid=c.relam WHERE c.oid=to_regclass(%s)""",(KOMMO,))
+    row=cur.fetchone() or {}
+    return bool(row.get('structurally_safe') and row.get('columns')==_KOMMO_COLS
+                and row.get('constraints')==_KOMMO_CONSTRAINTS)
 
 
 def provision_kommo(cur):
-    """Add one empty table on explicit, bounded startup, never during requests."""
-    cur.execute(f"""CREATE TABLE IF NOT EXISTS {KOMMO} (
-        tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-        lead_id BIGINT NOT NULL CHECK(lead_id>0),
-        channel_id TEXT NOT NULL CHECK(length(channel_id)<=256),
-        conversation_id TEXT NOT NULL CHECK(length(conversation_id)<=256),
-        company_id UUID NOT NULL,
-        created_by BIGINT NOT NULL CHECK(created_by>0),
-        updated_by BIGINT NOT NULL CHECK(updated_by>0),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY(tenant_id,lead_id,channel_id,conversation_id)
-    )""")
-    cur.execute("""SELECT c.relkind='r' AS regular, ARRAY(
-        SELECT a.attname::text FROM unnest(p.conkey) WITH ORDINALITY AS k(num,ord)
-        JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num
-        ORDER BY k.ord) AS pk, ARRAY(
-        SELECT a.attname::text || ':' || format_type(a.atttypid,a.atttypmod)
-        FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0
-          AND NOT a.attisdropped AND a.attnotnull ORDER BY a.attnum) AS cols
-      FROM pg_class c JOIN pg_constraint p ON p.conrelid=c.oid AND p.contype='p'
-      WHERE c.oid=to_regclass(%s)""", (KOMMO,))
-    row = cur.fetchone() or {}
-    cols = ['tenant_id:uuid','lead_id:bigint','channel_id:text','conversation_id:text',
-            'company_id:uuid','created_by:bigint','updated_by:bigint',
-            'created_at:timestamp with time zone','updated_at:timestamp with time zone']
-    if (not row.get('regular') or row.get('pk') != ['tenant_id','lead_id','channel_id','conversation_id']
-            or row.get('cols') != cols):
+    """On reviewed startup only: create when absent, verify without adopting."""
+    cur.execute('SELECT to_regclass(%s) IS NOT NULL AS present',(KOMMO,))
+    if not cur.fetchone()['present']:
+        cur.execute(f"""CREATE TABLE {KOMMO} (
+            tenant_id UUID NOT NULL,
+            lead_id BIGINT NOT NULL CONSTRAINT beinsystems_kommo_binding_lead CHECK(lead_id>0),
+            channel_id TEXT NOT NULL CONSTRAINT beinsystems_kommo_binding_channel CHECK(length(channel_id)<=256),
+            conversation_id TEXT NOT NULL CONSTRAINT beinsystems_kommo_binding_conversation CHECK(length(conversation_id)<=256),
+            company_id UUID NOT NULL,
+            created_by BIGINT NOT NULL CONSTRAINT beinsystems_kommo_binding_creator CHECK(created_by>0),
+            updated_by BIGINT NOT NULL CONSTRAINT beinsystems_kommo_binding_updater CHECK(updated_by>0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT beinsystems_kommo_binding_pk PRIMARY KEY(tenant_id,lead_id,channel_id,conversation_id),
+            CONSTRAINT beinsystems_kommo_binding_tenant FOREIGN KEY(tenant_id)
+              REFERENCES public.saas_tenants(id) ON DELETE CASCADE
+        )""")
+    if not _kommo_contract(cur):
         raise RuntimeError('Unexpected Kommo dialogue company binding schema.')
 
 
