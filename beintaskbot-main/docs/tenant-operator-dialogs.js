@@ -108,7 +108,7 @@
   function bindNativeAudioErrors(){document.querySelectorAll('[data-native-audio] audio').forEach(audio=>{if(audio.dataset.errorBound)return;audio.dataset.errorBound='true';audio.addEventListener('error',()=>{if(!audio.isConnected||!audio.getAttribute('src')||!audio.error)return;const status=audio.closest('[data-native-audio]')?.querySelector('[data-media-load-status]');if(status)status.textContent=({ru:'Аудио недоступно. Повторите позже.',az:'Audio əlçatan deyil. Sonra yenidən yoxlayın.',en:'Audio unavailable. Try again later.'}[i18n.language]||'Audio unavailable. Try again later.');});});}
   document.addEventListener('tenant-chat-attachments-ready',bindNativeAudioErrors);
   const operatorListScroller=()=>window.matchMedia?.('(max-width:900px)')?.matches?($('operatorListScroll')||$('operatorRows')):$('operatorRows');
-  let member=null,capabilities={},operatorWorkspaceAvailable=false,epoch=0,listRevision=0,openRevision=0,diagnosticRevision=0,groupSettingsRevision=0,rows=[],nextOffset=null,currentDialog=null,selectedDialog=null,selectedDialogOwner='',viewReturnDialog=null,viewReturnDialogOwner='',currentPage=null,diagnosticScroll=null,diagnosticFocus=null,timer,bulkPreviewData=null,listScrollTop=0,autoRefreshTimer=null,autoRefreshBusy=false,pullRefreshBusy=false,pullStartY=null,hasInitialDialogSnapshot=false,lastDialogSnapshotAt=0;
+  let member=null,capabilities={},epoch=0,listRevision=0,openRevision=0,diagnosticRevision=0,groupSettingsRevision=0,rows=[],nextOffset=null,currentDialog=null,selectedDialog=null,selectedDialogOwner='',viewReturnDialog=null,viewReturnDialogOwner='',currentPage=null,diagnosticScroll=null,diagnosticFocus=null,timer,bulkPreviewData=null,listScrollTop=0,autoRefreshTimer=null,autoRefreshBusy=false,pullRefreshBusy=false,pullStartY=null,hasInitialDialogSnapshot=false,lastDialogSnapshotAt=0;
   const dialogPageCache=new Map(),DIALOG_PAGE_CACHE_LIMIT=6;
   // Keep mounted metadata separate: history reads can mutate displayedPage.dialog before rendering.
   let copilotDeferredPage=null,displayedPage=null,displayedLanguage=null,displayedRouteScope=null,dialogReadSerial=0,dialogRenderSerial=0,historyUpdateSerial=0;
@@ -175,8 +175,6 @@
     right==='dialogs'&&typeof capabilities.pages?.dialogs==='boolean'
       ?capabilities.pages.dialogs
       :(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right))));
-  const hasOperatorDataRight=()=>!!member&&member.active!==false&&(member.role==='owner'||(member.permissions||[]).some(value=>value==='operator_data'||value==='operator_data:view'));
-  const hasOperatorLinkRight=()=>!!member&&(member.role==='owner'||(member.permissions||[]).some(value=>value==='operator_data'||value==='operator_data:link'));
   function closeCopilotPanel(fromHistory=false){
     const panel=$('operatorCopilot');if(!panel)return;
     panel.querySelector('[data-copilot-voice]')?.endVoice?.();
@@ -958,7 +956,6 @@
       if(version!==epoch||revision!==openRevision||owner!==identity(member)||!hasRight('dialogs')||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
       const number=entry.phone||verifiedDialogPhone(route);
       const label=head.querySelector('[data-header-phone]');if(label)label.textContent=number||phoneUnavailable();
-      const panel=$('operatorClientCard')?.querySelector('[data-panel-phone]');if(panel)panel.textContent=number||phoneUnavailable();
     });
   }
   const phoneUnavailable=()=>({ru:'Номер не подтверждён',az:'Nömrə təsdiqlənməyib',en:'Phone not confirmed'}[i18n.language]||'Phone not confirmed');
@@ -1177,42 +1174,11 @@
     finally{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
   const clientCardText=key=>({
-    ru:{company:'Компания',title:'Данные клиента',client:'Клиент',group:'Группа',dialog:'Диалог',source:'Источник',transfer:'Передача',delegated:'Передано сотруднику',staff:'Сотрудник',save:'Сохранить имя',close:'Закрыть'},
-    az:{company:'Şirkət',title:'Müştəri məlumatları',client:'Müştəri',group:'Qrup',dialog:'Dialoq',source:'Mənbə',transfer:'Ötürülmə',delegated:'Əməkdaşa ötürülüb',staff:'Əməkdaş',save:'Adı yadda saxla',close:'Bağla'},
-    en:{company:'Company',title:'Customer details',client:'Customer',group:'Group',dialog:'Conversation',source:'Source',transfer:'Transfer',delegated:'Handed off to staff',staff:'Employee',save:'Save name',close:'Close'}
+    ru:{company:'Компания',title:'Данные клиента',group:'Группа',dialog:'Диалог',source:'Источник',transfer:'Передача',delegated:'Передано сотруднику',staff:'Сотрудник',save:'Сохранить имя',close:'Закрыть'},
+    az:{company:'Şirkət',title:'Müştəri məlumatları',group:'Qrup',dialog:'Dialoq',source:'Mənbə',transfer:'Ötürülmə',delegated:'Əməkdaşa ötürülüb',staff:'Əməkdaş',save:'Adı yadda saxla',close:'Bağla'},
+    en:{company:'Company',title:'Customer details',group:'Group',dialog:'Conversation',source:'Source',transfer:'Transfer',delegated:'Handed off to staff',staff:'Employee',save:'Save name',close:'Close'}
   }[i18n.language]||{})[key]||'';
   let clientCardDispose=()=>{};
-  async function renderOperatorDialogContext(route,scope,card,isCurrent){
-    const host=card?.querySelector('#operatorBeinContext');
-    if(!host||!operatorWorkspaceAvailable||!hasOperatorDataRight()||route.provider!=='connect'||route.customer_kind==='group')return;
-    host.textContent='Проверяем подтверждённый контекст Operator…';
-    const query=new URLSearchParams({channel_id:String(route.channel_id),conversation_id:String(route.conversation_id)});
-    try{
-      const response=await rawApi('/api/platform/operator/dialog-context?'+query.toString());
-      if(!isCurrent()||card.dataset.scope!==scope)return;
-      const context=response.context||{},accounts=[...new Map((context.account_links||[]).map(item=>[item.account,item])).values()];
-      host.replaceChildren();
-      const heading=document.createElement('b');heading.textContent='BeinSystems Operator';host.append(heading);
-      const state=document.createElement('p');state.textContent=({confirmed:'ERP-клиент подтверждён',ambiguous:'Несколько аккаунтов: требуется выбор сотрудника',unlinked:'ERP-аккаунт не связан',crm_contact_unresolved:'CRM-контакт не определён'})[context.status]||'Контекст не подтверждён';host.append(state);
-      for(const link of accounts){
-        const row=document.createElement('section'),label=document.createElement('p'),info=document.createElement('button'),users=document.createElement('button'),target=document.createElement('div');
-        label.textContent='Account: '+link.account;info.type=users.type='button';info.textContent='Данные аккаунта';users.textContent='Пользователи аккаунта';target.dataset.operatorUserResults='';row.append(label,info,users,target);host.append(row);
-        info.onclick=async()=>{info.disabled=true;try{const result=await rawApi('/api/platform/operator/account-info',{method:'POST',body:JSON.stringify({entity_type:link.source_entity,entity_id:link.source_entity_id,account:link.account,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})});if(!isCurrent())return;const data=result.account_info||{};label.textContent='Account: '+data.account+(data.last_contact?' · Последний контакт: '+data.last_contact:'')+(data.partner_name?' · Partner: '+data.partner_name:'');}catch(error){if(isCurrent())state.textContent=error.message;}finally{info.disabled=false;}};
-        users.onclick=async()=>{users.disabled=true;try{const result=await rawApi('/api/platform/operator/profile-users',{method:'POST',body:JSON.stringify({entity_type:link.source_entity,entity_id:link.source_entity_id,account:link.account,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})});if(!isCurrent())return;target.replaceChildren();for(const user of result.users||[]){const select=document.createElement('button');select.type='button';select.textContent='Выбрать login: '+user.login;select.disabled=user.bindable!==true;select.onclick=()=>{chosenLogin=user.login;chosenAccount=link.account;for(const button of target.querySelectorAll('button'))button.setAttribute('aria-pressed',String(button===select));};target.append(select);}if(!(result.users||[]).length)target.textContent='Пользователи не найдены.';}catch(error){if(isCurrent())state.textContent=error.message;}finally{users.disabled=false;}};
-      }
-      for(const link of context.profile_user_links||[]){const user=document.createElement('p');user.textContent='ERP-пользователь: '+link.login+' · '+link.account;host.append(user);}
-      let chosenLogin='',chosenAccount='';
-      if(accounts.length&&context.contact_id&&!context.profile_user_links?.length&&hasOperatorLinkRight()){
-        const confirm=document.createElement('button'),evidence=document.createElement('input'),login=document.createElement('input'),accountSelect=document.createElement('select');
-        confirm.type='button';confirm.textContent='Подтвердить выбранный login';login.placeholder='ERP login';evidence.placeholder='Основание ручной проверки';
-        accountSelect.append(new Option('Выберите account',''));
-        for(const item of accounts)accountSelect.append(new Option(item.account,item.account));
-        accountSelect.value=accounts.length===1?accounts[0].account:'';
-        confirm.onclick=async()=>{const chosen=chosenLogin||login.value.trim(),account=chosenLogin?chosenAccount:accountSelect.value;if(!chosen||!account||evidence.value.trim().length<8){state.textContent='Выберите account, login и укажите основание проверки.';return;}confirm.disabled=true;try{await rawApi('/api/platform/operator/links',{method:'POST',body:JSON.stringify({entity_type:'contact',entity_id:context.contact_id,account,login:chosen,evidence:evidence.value.trim(),expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})});if(isCurrent())await renderOperatorDialogContext(route,scope,card,isCurrent);}catch(error){if(isCurrent())state.textContent=error.message;}finally{confirm.disabled=false;}};
-        host.append(accountSelect,login,evidence,confirm);
-      }
-    }catch(error){if(isCurrent())host.textContent=error.message||'Контекст Operator недоступен.';}
-  }
   const pendingClientNames=new Set();
   const clientCardStyle=document.createElement('style');clientCardStyle.textContent=`
     #operatorConversationLayout{position:relative;display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
@@ -1225,13 +1191,13 @@
     #operatorClientCardOpen .operator-header-avatar{margin:0;width:29px;height:29px;font-size:15px}
     #operatorClientCardOpen:focus-visible,#operatorDialogTitleText:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
     #operatorDialogTitleText{font:inherit;text-align:start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;margin:0}
-    #operatorClientCard{position:static;inset:auto;margin:0;box-sizing:border-box;width:clamp(255px,31%,355px);max-width:none;max-height:none;flex:none;min-height:0;padding:0;border:0;border-inline-start:1px solid var(--line);background:var(--card);color:var(--ink);overflow:auto;overscroll-behavior:contain;text-align:start}
+    #operatorClientCard{position:static;inset:auto;margin:0;box-sizing:border-box;width:clamp(255px,31%,355px);max-width:none;max-height:var(--operator-client-available-height,100dvh);flex:none;min-height:0;padding:0;border:0;border-inline-start:1px solid var(--line);background:var(--card);color:var(--ink);overflow:hidden;text-align:start}
     #operatorClientCard:not([open]){display:none!important}
-    #operatorClientCard[open]{display:block}
-    #operatorClientCard .operator-client-panel-header{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+    #operatorClientCard[open]{display:flex;flex-direction:column;align-self:stretch}
+    #operatorClientCard .operator-client-panel-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card)}
     #operatorClientCard h2{margin:0;font-size:1.05rem;line-height:1.3}
     #operatorClientCard #operatorCancelConversationName{border:0;background:transparent;font-size:23px;min-width:40px;min-height:40px;padding:0}
-    #operatorClientCard .operator-client-panel-content{display:grid;align-content:start;gap:10px;padding:12px}
+    #operatorClientCard .operator-client-panel-content{min-height:0;flex:1 1 auto;display:grid;grid-auto-rows:max-content;align-content:start;gap:10px;padding:12px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
     #operatorClientCard .operator-client-panel-block{min-width:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
     #operatorClientCard .operator-client-panel-block>summary{display:flex;align-items:center;gap:8px;padding:9px 11px;font-weight:650;cursor:pointer;background:var(--paper);list-style:none}
     #operatorClientCard .operator-client-panel-block>summary::-webkit-details-marker{display:none}
@@ -1318,7 +1284,7 @@
     const editable=route.provider==='connect',group=route.customer_kind==='group'||route.conversation_kind==='group';
     const name=dialogTitle(route),phone=displayDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
     const sameCard=oldCard?.dataset.scope===scope;
-    const snapshot=sameCard&&oldCard.open?{value:$('operatorConversationNameInput')?.value,start:$('operatorConversationNameInput')?.selectionStart,end:$('operatorConversationNameInput')?.selectionEnd,focus:oldCard.contains(document.activeElement)?document.activeElement.id:'',scroll:oldCard.scrollTop,error:oldCard.querySelector('[data-client-card-error]')?.textContent,blocks:[...oldCard.querySelectorAll('.operator-client-panel-block')].map(block=>block.open)}:null;
+    const snapshot=sameCard&&oldCard.open?{value:$('operatorConversationNameInput')?.value,start:$('operatorConversationNameInput')?.selectionStart,end:$('operatorConversationNameInput')?.selectionEnd,focus:oldCard.contains(document.activeElement)?document.activeElement.id:'',scroll:oldCard.querySelector('.operator-client-panel-content').scrollTop,error:oldCard.querySelector('[data-client-card-error]')?.textContent,blocks:[...oldCard.querySelectorAll('.operator-client-panel-block')].map(block=>block.open)}:null;
     const developerNodes=sameCard?[...($('operatorClientDeveloperHost')?.childNodes||[])]:[],developerStatus=sameCard?[...($('operatorClientDeveloperStatus')?.childNodes||[])]:[];
     clientCardDispose();
     oldCard?.remove();
@@ -1338,15 +1304,15 @@
     const card=document.createElement('dialog');
     card.id='operatorClientCard';card.dataset.scope=scope;card.setAttribute('aria-labelledby','operatorClientCardTitle');
     const block=(label,content)=>`<details open class="operator-client-panel-block"><summary>${esc(label)}</summary>${content}</details>`;
-    const client=block(clientCardText(group?'group':'client'),`${group?'':`<div class="operator-client-panel-row" data-panel-phone>${esc(phone||phoneUnavailable())}</div>`}
-      ${editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<input id="operatorConversationNameInput" maxlength="180" autocomplete="off"></label><p data-client-card-error role="alert"></p><button type="submit" class="primary" id="operatorSaveConversationName">${esc(clientCardText('save'))}</button></form>`:''}
-      ${group?'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>':''}
-      <section class="operator-client-panel-row" id="operatorBeinContext" aria-live="polite"></section>`);
+    const roster=group?block(clientCardText('group'),'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>'):'';
+    const nameForm=editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<input id="operatorConversationNameInput" maxlength="180" autocomplete="off"></label><p data-client-card-error role="alert"></p><button type="submit" class="primary" id="operatorSaveConversationName">${esc(clientCardText('save'))}</button></form>`:'';
     const handoff=route.handoff_active?[route.handoff_source==='ai_handoff'?'AI':'',route.handoff_assignee_name||''].filter(Boolean).join(' → '):'';
-    const transfer=block(clientCardText('dialog'),`<div class="operator-client-panel-row"${channel?'':' hidden'}><small>${esc(clientCardText('source'))}</small><span data-user-content>${esc(channel)}</span></div>
+    const conversation=block(clientCardText('dialog'),`<div class="operator-client-panel-row"${channel?'':' hidden'}><small>${esc(clientCardText('source'))}</small><span data-user-content>${esc(channel)}</span></div>
       <div class="operator-client-panel-row" data-client-transfer ${route.handoff_active?'':'hidden'}><small>${esc(clientCardText('transfer'))}</small><span data-client-transfer-value>${esc(handoff||clientCardText('delegated'))}</span></div>
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span><div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`);
-    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${client}${transfer}${capabilities.dialog_company_binding===true?block(clientCardText('company'),'<div class="operator-client-panel-row" id="operatorClientCompanyHost"></div>'):''}</div>`;
+    const companyBinding=capabilities.dialog_company_binding===true?'<div class="operator-client-panel-row" id="operatorClientCompanyHost"></div>':'';
+    const company=nameForm||companyBinding?block(clientCardText('company'),nameForm+companyBinding):'';
+    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}</div>`;
     layout.append(card);
     hydrateContactPhone(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
@@ -1354,7 +1320,7 @@
     const form=$('operatorConversationName'),input=$('operatorConversationNameInput'),save=$('operatorSaveConversationName'),error=card.querySelector('[data-client-card-error]'),listeners=[];
     $('operatorClientDeveloperHost').append(...developerNodes);$('operatorClientDeveloperStatus').append(...developerStatus);
     if(input){input.value=snapshot?.value??(route.manual_display_name||name);save.disabled=pendingClientNames.has(scope);input.disabled=save.disabled;if(snapshot?.error)error.textContent=snapshot.error;}
-    let authorized=true,opener=trigger,contextLoaded=false;
+    let authorized=true,opener=trigger;
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
     const syncChatInteraction=()=>{
       $('operatorConversationContent').inert=card.open&&window.matchMedia?.('(max-width: 900px)').matches===true;
@@ -1367,8 +1333,8 @@
     const resizePanel=()=>{
       if(!card.open)return;
       const viewport=window.visualViewport;
-      const bottom=viewport?viewport.offsetTop+viewport.height:window.innerHeight;
-      card.style.setProperty('--operator-client-available-height',Math.max(1,bottom-layout.getBoundingClientRect().top)+'px');
+      const top=viewport?.offsetTop||0,bottom=top+(viewport?.height||window.innerHeight);
+      card.style.setProperty('--operator-client-available-height',Math.max(1,bottom-Math.max(top,layout.getBoundingClientRect().top))+'px');
       syncChatInteraction();
     };
     const open=(button=trigger)=>{
@@ -1376,8 +1342,7 @@
       opener=button;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
       void renderGroupParticipants(route,card,current);void showClientTransfer(route,card,current);
-      if(!contextLoaded&&operatorWorkspaceAvailable&&hasOperatorDataRight()){contextLoaded=true;void renderOperatorDialogContext(route,scope,card,current);}
-      if(!snapshot){(input||$('operatorCancelConversationName')).focus({preventScroll:true});input?.select();}
+      if(!snapshot)$('operatorCancelConversationName').focus({preventScroll:true});
     };
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
@@ -1402,7 +1367,7 @@
       [...card.querySelectorAll('.operator-client-panel-block')].forEach((block,index)=>{block.open=snapshot.blocks[index]!==false;});
       open();if(snapshot.focus&&card.contains($(snapshot.focus)))$(snapshot.focus).focus({preventScroll:true});
       if(input&&snapshot.start!==undefined)try{input.setSelectionRange(snapshot.start,snapshot.end);}catch{}
-      card.scrollTop=snapshot.scroll||0;
+      card.querySelector('.operator-client-panel-content').scrollTop=snapshot.scroll||0;
     }
   }
   function agentModeLabel(route){
@@ -1918,7 +1883,6 @@
     if($('operatorDialogs'))$('operatorDialogs').style.visibility='';
     const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||next?.department_id!==member?.department_id||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
     permissionScope=JSON.stringify(data.role_permissions);
-    operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
 if(changed){filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();contactPhoneLookups.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
