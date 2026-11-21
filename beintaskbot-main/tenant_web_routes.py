@@ -180,6 +180,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/reply-templates', reply_templates_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/personal-reminders', reminders_handler(member, origin, logger), ('GET','POST')),
+        ('dialogs/shared-reminders', reminders_handler(member, origin, logger, shared=True), ('GET','POST')),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
         ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle'), ('POST',)),
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),

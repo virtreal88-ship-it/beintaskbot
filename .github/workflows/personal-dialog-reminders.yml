@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/personal-dialog-reminders.yml'
       - 'beintaskbot-main/tenant_personal_dialog_reminders*.py'
+      - 'beintaskbot-main/tenant_shared_dialog_reminders.py'
       - 'beintaskbot-main/tenant_ai_agent_startup.py'
       - 'beintaskbot-main/tenant_policy.py'
       - 'beintaskbot-main/tenant_operator_access.py'
@@ -18,6 +19,8 @@ on:
       - 'beintaskbot-main/docs/tenant-dialog-composer.js'
       - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
       - 'beintaskbot-main/tests/test_personal_dialog_reminders*'
+      - 'beintaskbot-main/tests/test_shared_dialog_reminders*'
+      - 'beintaskbot-main/docs/tenant-shared-dialog-reminders.js'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_policy.py'
       - 'beintaskbot-main/tests/test_dialog_composer.cjs'
@@ -70,6 +73,7 @@ jobs:
         run: >-
           python -m pytest -q --tb=short
           tests/test_personal_dialog_reminders_postgres.py
+          tests/test_shared_dialog_reminders_postgres.py
           tests/test_personal_dialog_reminders_api.py
           tests/test_tenant_web_routes.py
           tests/test_tenant_policy.py
@@ -77,5 +81,6 @@ jobs:
         run: |
           node --check docs/tenant-personal-dialog-reminders.js
           node tests/test_personal_dialog_reminders_ui.cjs
+          node tests/test_shared_dialog_reminders_ui.cjs
           node tests/test_dialog_composer.cjs
           node tests/test_dialog_reply_templates_ui.cjs

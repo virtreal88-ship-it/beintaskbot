@@ -83,6 +83,8 @@ def prepare_database() -> None:
             _prepare_optional_kommo_dialog_company(conn)
         if os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
             _provision_personal_reminders(conn)
+        if os.environ.get('TENANT_SHARED_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
+            _provision_shared_reminders(conn)
         from tenant_dialog_presence import STATUS_PROVISION_ENV
         if os.environ.get(STATUS_PROVISION_ENV, '').strip().lower() == 'true':
             _provision_employee_status(conn)
@@ -171,6 +173,23 @@ def _provision_personal_reminders(conn):
         logger.warning('Personal reminders schema preflight: unverified')
     else:
         logger.info('Personal reminders schema preflight: ready')
+
+
+def _provision_shared_reminders(conn):
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_dialog_presence import work_status_routing_sources
+    from tenant_shared_dialog_reminders import provision_schema
+    logger = logging.getLogger(__name__)
+    if not work_status_routing_sources(configured_workspace_id()):
+        logger.warning('Shared reminders schema preflight: workspace_not_configured')
+        return
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            provision_schema(cur)
+    except Exception:
+        logger.warning('Shared reminders schema preflight: unverified')
+    else:
+        logger.info('Shared reminders schema preflight: ready')
 
 
 def _provision_employee_status(conn):

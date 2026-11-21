@@ -362,6 +362,9 @@ class TenantPolicy:
         from tenant_personal_dialog_reminders import capability as reminder_capability
         if reminder_capability(self):
             capabilities['personal_dialog_reminders'] = True
+        from tenant_shared_dialog_reminders import capability as shared_reminder_capability
+        if shared_reminder_capability(self):
+            capabilities['shared_dialog_reminders'] = True
         return capabilities
 
     def deal_board(self) -> list[dict]:
