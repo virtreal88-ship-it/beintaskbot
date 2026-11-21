@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 
+import tenant_ai_agent_startup as startup
 import tenant_dialog_lifecycle as lifecycle
 import tenant_dialog_presence as presence
 import tenant_operator_dialogs as dialogs
@@ -38,8 +39,11 @@ def test_shared_reminder_audience_and_first_open(episodes,monkeypatch):
     monkeypatch.setattr(dialogs,'_connect',lambda:db)
     with db.cursor() as cur:
         presence.provision_status_schema(cur)
-        team.provision_schema(cur)
-        team.provision_schema(cur)
+    db.commit()
+    with psycopg.connect(db.dsn,row_factory=dict_row) as conn:
+        startup._provision_shared_reminders(conn)
+        startup._provision_shared_reminders(conn)
+        assert team.schema_ready(conn.cursor())
     for actor in (34,35,36,37):
         db.execute("""INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions)
             VALUES(%s::uuid,%s,'operator','Synthetic operator','["dialogs"]'::jsonb)""",(A,actor))

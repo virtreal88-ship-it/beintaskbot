@@ -83,8 +83,7 @@ def prepare_database() -> None:
             _prepare_optional_kommo_dialog_company(conn)
         if os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
             _provision_personal_reminders(conn)
-        from tenant_shared_dialog_reminders import PROVISION as SHARED_REMINDERS_PROVISION
-        if os.environ.get(SHARED_REMINDERS_PROVISION) == '1':
+        if os.environ.get('TENANT_SHARED_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
             _provision_shared_reminders(conn)
         from tenant_dialog_presence import STATUS_PROVISION_ENV
         if os.environ.get(STATUS_PROVISION_ENV, '').strip().lower() == 'true':

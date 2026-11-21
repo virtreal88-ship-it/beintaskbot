@@ -11,7 +11,6 @@ from tenant_personal_dialog_reminders import SessionUnavailable, _route, _time, 
 from tenant_schema_preflight import ready
 
 ENABLE = 'TENANT_SHARED_DIALOG_REMINDERS_ENABLED'
-PROVISION = 'TENANT_SHARED_DIALOG_REMINDERS_PROVISION_ON_STARTUP'
 TABLE = 'saas_shared_dialog_reminders'
 PENDING = 'saas_shared_dialog_reminders_pending'
 MAX_VISIBLE = 100
