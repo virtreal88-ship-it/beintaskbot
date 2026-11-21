@@ -1,6 +1,7 @@
 """Fail-fast AI Agent database preparation and worker startup."""
 import asyncio
 from contextlib import closing
+import logging
 import os
 import time
 
@@ -82,6 +83,26 @@ def prepare_database() -> None:
                 migrate(cur)
                 verify_provisioned_schema(cur)
             conn.commit()
+        if os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
+            _provision_personal_reminders(conn)
+
+
+def _provision_personal_reminders(conn):
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_personal_dialog_reminders import provision_schema
+    logger = logging.getLogger(__name__)
+    if not configured_workspace_id():
+        logger.warning('Personal reminders schema preflight: workspace_not_configured')
+        return
+    try:
+        # Independent of base schema commits; the startup lock and timeouts
+        # remain in force. An unsuccessful opt-in must not take the app down.
+        with conn.transaction(), conn.cursor() as cur:
+            provision_schema(cur)
+    except Exception:
+        logger.warning('Personal reminders schema preflight: unverified')
+    else:
+        logger.info('Personal reminders schema preflight: ready')
 
 
 def ensure_pilot_case_schema(conn) -> None:
