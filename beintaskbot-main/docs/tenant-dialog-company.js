@@ -3,9 +3,9 @@
   'use strict';
   const endpoint='/api/platform/operator/dialog-company';
   const labels={
-    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',chooseCompany:'Выбрать компанию',edit:'Изменить компанию',search:'Найти компанию',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'Компании с правом привязки не найдены.',error:'Не удалось получить или изменить компанию.'},
-    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',chooseCompany:'Şirkət seç',edit:'Şirkəti dəyiş',search:'Şirkət axtar',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'Əlaqələndirə biləcəyiniz şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
-    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',chooseCompany:'Choose a company',edit:'Change company',search:'Find a company',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No linkable companies found.',error:'Could not get or change the company.'}
+    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'Компании с правом привязки не найдены.',error:'Не удалось получить или изменить компанию.'},
+    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'Əlaqələndirə biləcəyiniz şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
+    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No linkable companies found.',error:'Could not get or change the company.'}
   };
   const operatorLabels={
     ru:{hint:'Для поиска в Operator введите от 4 символов.',empty:'Аккаунты Operator не найдены.',error:'Не удалось найти аккаунты Operator.',bindError:'Не удалось привязать аккаунт Operator.',conflict:'Не удалось привязать аккаунт Operator. Проверьте текущую привязку.'},
@@ -21,7 +21,7 @@
   function clear(){
     const old=state;state=null;
     old?.read?.abort();
-    old?.closePicker?.(false);
+    old?.disposePicker?.();
     old?.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
@@ -42,9 +42,11 @@
     // The API may mask an existing but inaccessible company as null.
     const name=binding?.company_id&&binding.company_name?String(binding.company_name):binding?t('unknown'):t('unavailable');
     s.value.textContent=name;s.value.title=name;
-    s.edit.textContent=t(binding?.company_id?'edit':'chooseCompany');
-    s.edit.hidden=binding?.can_manage!==true;
-    if(!binding?.can_manage||s.pickerOffersOperator!==(binding.can_search_operator===true))s.closePicker?.(false);
+    if(!binding?.can_manage||s.pickerOffersOperator!==(binding.can_search_operator===true))s.disposePicker?.();
+    if(binding?.can_manage){
+      mountPicker(s);
+      s.setUnlinkVisibility?.(Boolean(binding.company_id));
+    }
   }
   function refresh(s=state){
     if(!s||!current(s)||s.read||s.writing)return;
@@ -54,9 +56,8 @@
         if(s.read===read&&(!s.binding||[401,403,404,409].includes(error.status)))paint(s,null);
       }).finally(()=>{if(s.read===read)s.read=null;});
   }
-  function openPicker(s){
-    if(!current(s)||s.binding?.can_manage!==true||s.writing)return;
-    if(s.panel){s.closePicker(true);return;}
+  function mountPicker(s){
+    if(s.panel)return;
 
     const showOperator=s.binding.can_search_operator===true;
     const panel=node('div'),input=node('input'),status=node('p'),results=node('div');
@@ -75,26 +76,30 @@
       if(active()&&s.binding?.company_id&&window.confirm(t('confirm')))void select({company_id:null});
     });
     remove.hidden=!s.binding.company_id;remove.className='outline operator-company-unlink';
-    panel.append(input,status,results,remove);s.section.append(panel);
+    const suggestions=node('div');suggestions.className='operator-company-suggestions';suggestions.hidden=true;
+    suggestions.id='operatorDialogueCompanySuggestions';
+    suggestions.append(status,results,remove);panel.append(input,suggestions);s.section.append(panel);
     s.panel=panel;s.pickerOffersOperator=showOperator;
-    s.edit.setAttribute('aria-expanded','true');s.edit.setAttribute('aria-controls',panel.id);
+    s.setUnlinkVisibility=visible=>{remove.hidden=!visible;};
 
-    let serial=0,timer=null,search=null,composing=false;
+    let serial=0,timer=null,search=null,composing=false,restoringFocus=false;
     const active=()=>current(s)&&s.panel===panel&&panel.isConnected;
     function cancelSearch(){
       serial++;
       clearTimeout(timer);timer=null;
       search?.abort();search=null;
     }
-    function close(restore){
-      cancelSearch();panel.remove();
-      if(s.panel===panel){
-        s.panel=null;s.closePicker=null;
-        s.edit.setAttribute('aria-expanded','false');s.edit.removeAttribute('aria-controls');
-      }
-      if(restore&&current(s)&&!s.edit.hidden)s.edit.focus({preventScroll:true});
+    function close(){
+      cancelSearch();
+      suggestions.hidden=true;input.value='';
+      operatorRows.replaceChildren();localRows.replaceChildren();
+      status.textContent='';operatorStatus.textContent='';localStatus.textContent='';
     }
     s.closePicker=close;
+    s.disposePicker=()=>{
+      close();panel.remove();s.panel=null;
+      s.closePicker=null;s.disposePicker=null;s.setUnlinkVisibility=null;
+    };
 
     function setDisabled(value){
       input.disabled=value;remove.disabled=value;
@@ -109,7 +114,11 @@
         const payload=await request(endpoint,s.member,{...s.route,...fields},true);
         if(!current(s))return;
         if(fields.operator_account&&!payload.binding?.company_id)throw Error(t('error'));
-        const restore=active();paint(s,payload.binding);close(restore);
+        const restoreFocus=active()&&!suggestions.hidden;
+        paint(s,payload.binding);close();
+        if(restoreFocus&&active()){
+          restoringFocus=true;input.disabled=false;input.focus({preventScroll:true});restoringFocus=false;
+        }
         if(current(s))void s.onChanged?.();
       }catch(error){
         if(active()){
@@ -169,6 +178,7 @@
     }
     function schedule(){
       if(!active()||s.writing)return;
+      suggestions.hidden=false;
       cancelSearch();operatorRows.replaceChildren();localRows.replaceChildren();
       status.textContent='';operatorStatus.textContent='';localStatus.textContent='';
       if(!composing){
@@ -176,6 +186,11 @@
         timer=setTimeout(()=>void find(query,seq),300);
       }
     }
+    input.onfocus=input.onclick=()=>{
+      if(!active()||s.writing||restoringFocus||!suggestions.hidden)return;
+      suggestions.hidden=false;
+      void find(input.value.trim(),serial);
+    };
     input.oninput=schedule;
     input.oncompositionstart=()=>{composing=true;schedule();};
     input.oncompositionend=()=>{composing=false;schedule();};
@@ -184,8 +199,6 @@
         event.preventDefault();results.querySelector('button').focus();
       }else if(event.key==='Enter')event.preventDefault();
     };
-    input.focus({preventScroll:true});
-    void find('',serial);
   }
   function mount({host,route,member,isCurrent,onChanged}){
     if(!host?.isConnected||!route?.provider||!route?.lead_id
@@ -206,16 +219,15 @@
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     const s={section,value,member,isCurrent,onChanged,route:exact,key,read:null};
-    s.edit=button(t('edit'),()=>openPicker(s));s.edit.hidden=true;s.edit.className='outline';s.edit.setAttribute('aria-expanded','false');
-    section.append(value,s.edit);host.append(section);state=s;
+    section.append(value);host.append(section);state=s;
     refresh(s);
   }
   const style=node('style');
   style.textContent=`
     [data-operator-dialog-company]{display:grid;gap:7px;min-width:0;color:var(--ink)}
-    [data-operator-dialog-company]>button{justify-self:start}
-    [data-operator-dialog-company]>button[hidden],#operatorDialogueCompanyPicker [hidden]{display:none!important}
-    #operatorDialogueCompanyPicker{display:grid;gap:7px;min-width:0;padding:8px;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+    #operatorDialogueCompanyPicker [hidden]{display:none!important}
+    #operatorDialogueCompanyPicker{display:grid;gap:5px;min-width:0}
+    #operatorDialogueCompanyPicker .operator-company-suggestions{display:grid;gap:6px;min-width:0;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
     #operatorDialogueCompanyPicker [role=status]{margin:0;color:var(--muted);font-size:.75rem}
     #operatorDialogueCompanyPicker [role=status]:empty,#operatorDialogueCompanyPicker .operator-dialog-company-results>div:empty{display:none}
     #operatorDialogueCompanyPicker .operator-dialog-company-results{display:grid;gap:4px;max-height:clamp(112px,35dvh,205px);overflow:auto;overscroll-behavior:auto}
@@ -234,5 +246,5 @@
   });
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
   document.addEventListener('tenant-dialog-reauthorized',()=>refresh());
-  window.tenantDialogueCompany={mount,clear,closePicker(){state?.closePicker?.(false);}};
+  window.tenantDialogueCompany={mount,clear,closePicker(){state?.closePicker?.();}};
 })();

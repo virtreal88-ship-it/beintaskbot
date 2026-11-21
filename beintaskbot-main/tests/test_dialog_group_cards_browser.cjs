@@ -72,7 +72,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
-  await page.locator('[data-operator-dialog-company] button').click();
+  await page.locator('#operatorDialogueCompanySearch').click();
   const companyPicker=await page.locator('#operatorDialogueCompanyPicker').boundingBox();
   assert(companyPicker.width>0&&companyPicker.x>=-1&&companyPicker.x+companyPicker.width<=width+1,'company picker fits the viewport');
   await page.keyboard.press('Escape');
@@ -84,15 +84,16 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   }
   await page.evaluate(()=>{window.offerOperatorPicker='off';});
   await page.locator('#operatorComposerSourceSelect').selectOption('1');
-  await page.waitForFunction(()=>window.historyReads.at(-1)==='b'&&document.querySelector('[data-operator-dialog-company] button:not([hidden])')&&!document.querySelector('[data-company-value]').textContent.startsWith('Company'));
+  await page.waitForFunction(()=>window.historyReads.at(-1)==='b'&&document.querySelector('#operatorDialogueCompanySearch')&&!document.querySelector('[data-company-value]').textContent.startsWith('Company'));
   await page.locator('#operatorDialogTitleText').click();
   await card.locator('[data-client-transfer]').waitFor();
   assert.match(await card.locator('[data-client-transfer]').innerText(),/Synthetic sender → Synthetic recipient/);
   assert.match(await card.innerText(),/Texniki Dəstək/);
-  const edit=page.locator('[data-operator-dialog-company]>button');
+  const search=page.locator('#operatorDialogueCompanySearch');
   const header=()=>page.locator('#operatorConversationHeader').evaluate(node=>[node.offsetWidth,node.offsetHeight,node.textContent]);
   const before=await header();
-  await edit.click();
+  assert(await search.isVisible(),'company search is visible without an extra button');
+  await search.click();
   assert(await page.locator('#operatorDialogueCompanyPicker').isVisible(),'default-off still offers the inline CRM company picker');
   await page.keyboard.press('Escape');
   const priorReads=await page.evaluate(()=>window.companyReads.length);
@@ -100,9 +101,9 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   await page.waitForFunction(n=>window.companyReads.length>n,priorReads);
   await page.locator('#operatorDialogTitleText').click();
   assert.deepEqual(await header(),before);
-  await edit.click();
-  const drop=page.locator('#operatorDialogueCompanyPicker'),input=drop.locator('input');
-  const geometry=await drop.boundingBox(),anchor=await edit.boundingBox();
+  await search.click();
+  const drop=page.locator('#operatorDialogueCompanySuggestions'),input=search;
+  const geometry=await drop.boundingBox(),anchor=await search.boundingBox();
   assert(await drop.evaluate(node=>node.closest('dialog')?.id==='operatorClientCard'));
   assert(geometry.x>=-1&&geometry.x+geometry.width<=width+1&&geometry.y>=anchor.y+anchor.height-1,
    'Operator chooser stays in the right panel below the company control '+JSON.stringify({geometry,anchor,width}));
