@@ -582,6 +582,7 @@
     chooseOrSkip:{ru:'Выберите компанию или завершите без неё.',az:'Şirkət seçin və ya şirkətsiz tamamlayın.',en:'Choose a company or complete without one.'},
     skipOnly:{ru:'Диалог можно завершить без выбора компании.',az:'Dialoqu şirkət seçmədən tamamlamaq olar.',en:'You can complete the dialogue without choosing a company.'},
     skip:{ru:'Без компании',az:'Şirkətsiz',en:'Without a company'},
+    archivedSkip:{ru:'Компания архивирована. Можно завершить диалог без выбора новой компании и сохранить текущую привязку.',az:'Şirkət arxivləşdirilib. Yeni şirkət seçmədən dialoqu tamamlayıb mövcud əlaqəni saxlamaq olar.',en:'The company is archived. You can complete without choosing a replacement and keep the current link.'},
     archived:{ru:'Компания диалога архивирована. Для завершения выберите действующую CRM-компанию.',az:'Dialoq şirkəti arxivləşdirilib. Tamamlamaq üçün aktiv CRM şirkəti seçin.',en:'The dialogue company is archived. Choose an active CRM company to complete it.'},
     locked:{ru:'Нет прав на привязку CRM-компании. Диалог остаётся в работе.',az:'CRM şirkətini bağlamaq icazəsi yoxdur. Dialoq işdə qalır.',en:'You cannot link a CRM company. The dialogue stays open.'},
     invalid:{ru:'Не удалось подтвердить прежнюю компанию. Диалог остаётся в работе до проверки администратором.',az:'Əvvəlki şirkət təsdiqlənmədi. İnzibatçı yoxlayana qədər dialoq işdə qalır.',en:'The previous company could not be verified. The dialogue stays open for administrator review.'},
@@ -600,7 +601,8 @@
     const searchButton=form.querySelector('button');
     const skip=document.createElement('button');skip.type='button';skip.className='outline';skip.dataset.companySkip='';skip.textContent=companyCloseText('skip');skip.hidden=!canSkip;done.after(skip);
     form.hidden=!canChoose;select.closest('label').hidden=!canChoose;done.hidden=!canChoose;
-    if(!canChoose&&canSkip){const hint=document.createElement('p');hint.className='sub';hint.textContent=companyCloseText('skipOnly');status.before(hint);}
+    if(canSkip&&(company.status==='archived'||!canChoose)){const hint=document.createElement('p');hint.className='sub';hint.textContent=companyCloseText(company.status==='archived'?'archivedSkip':'skipOnly');status.before(hint);}
+    if(canChoose&&canSkip)select.closest('label').firstChild.textContent=companyCloseText('chooseOrSkip');
     const owner=identity(member),focus=document.activeElement;
     let serial=0,submitting=false;
     const current=()=>modal.isConnected&&owner===identity(member)&&sameDialog(route,currentDialog);
@@ -641,7 +643,7 @@
     const state=route.lifecycle||{},company=state.company_completion;
     if(state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
       const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
-      reason.textContent=companyCloseText(company.can_skip?(company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
+      reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
     for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){

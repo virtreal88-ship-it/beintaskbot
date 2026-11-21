@@ -159,5 +159,13 @@ async function verifyCompanyCompletion(){
  d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();
  assert.equal(calls.filter(c=>c.body?.action==='close').length,1);
  assert(!calls.filter(c=>c.body?.action==='close')[0].body.company_choice);
+ route={...route,can_send:true,lifecycle:{state:'accepted',revision:6,can_close:true,company_completion:{status:'archived',required:false,can_choose:true,can_skip:true}}};
+ await w.tenantOperator.openDialog(route);await tick();calls.length=0;
+ d.querySelector('[data-operator-lifecycle=close]').click();
+ const archived=d.querySelector('#operatorLifecycleModal');
+ assert.match(archived.textContent,/keep the current link/);
+ archived.querySelector('[data-company-skip]').click();await tick();await tick();
+ const archiveClose=calls.find(c=>c.body?.action==='close');assert.equal(archiveClose.body.company_choice,'none');
+ assert(!('company_id' in archiveClose.body));
  dom.window.close();
 }
