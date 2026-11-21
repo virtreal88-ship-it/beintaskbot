@@ -57,7 +57,8 @@ class FirstBatchTests(unittest.TestCase):
                 patch.object(batch, "_selected_source_fence") as fence, \
                 patch.object(batch.operator, "_record_operator_read"), \
                 patch.object(batch.operator, "_request_operator", side_effect=[valid, response("b", "a")]) as read, \
-                patch.object(batch, "_apply_company_import") as apply:
+                patch.object(batch, "_apply_company_import") as apply, \
+                patch.object(batch.operator, "first_company_batch_confirm_enabled", return_value=True):
             batch.first_company_batch({})
             self.assertEqual(read.call_args.args, ("accounts", {"search": "", "limit": 100}))
             self.assertEqual(fence.call_count, 4)
@@ -66,6 +67,43 @@ class FirstBatchTests(unittest.TestCase):
                                 batch._first_batch_scope("other-tenant", 1, cred))
             self.assertNotEqual(batch._first_batch_scope("t", 1, cred),
                                 batch._first_batch_scope("t", 1, {**cred, "token": "rotated"}))
+
+    def test_confirm_off_uses_only_source_read_and_never_invokes_crm_planning(self):
+        profile = {"role": "owner"}
+        ident = "owner@example"
+        cred = {"token": "mock", "base_url": "https://example.invalid", "received_at": "rev",
+                "generation": "new", "connection_instance_id": "instance",
+                "identity_fingerprint": batch._identifier_fingerprint(ident)}
+        valid = {"status": "success", "data": {"identifier": ident, "role": "unlimited"}}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(batch.operator, "first_company_batch_preview_enabled",
+                                             return_value=True))
+            stack.enter_context(patch.object(batch.operator, "first_company_batch_confirm_enabled",
+                                             return_value=False))
+            stack.enter_context(patch.object(batch, "_selected_source_credentials",
+                                             return_value=("t", 1, "accounts_only", cred)))
+            stack.enter_context(patch.object(batch, "_selected_source_fence"))
+            stack.enter_context(patch.object(batch.operator, "_record_operator_read"))
+            upstream = stack.enter_context(patch.object(batch.operator, "_request_operator",
+                                            side_effect=[valid, response("b", "a")]))
+            planner = stack.enter_context(patch.object(batch, "_apply_company_import"))
+            stack.enter_context(patch.object(batch.operator, "_connect", return_value=conn))
+            barrier = stack.enter_context(patch.object(batch.operator, "_lock_accounts_capability_scope"))
+            actor = stack.enter_context(patch.object(batch.operator, "_current_profile",
+                                                     return_value=profile))
+            lock = stack.enter_context(patch.object(batch, "_lock_and_check_selected_source"))
+            expiry = stack.enter_context(patch.object(batch, "_assert_first_batch_not_expired"))
+            result = batch.first_company_batch(profile)
+            self.assertEqual(result, {"mode": "accounts_only", "partial": True, "limit": 100,
+                                      "checked": 2, "rows": [{"account": "a"}, {"account": "b"}]})
+            self.assertEqual(upstream.call_args.args, ("accounts", {"search": "", "limit": 100}))
+            planner.assert_not_called()
+            barrier.assert_called_once()
+            actor.assert_called_once()
+            lock.assert_called_once()
+            expiry.assert_called_once()
 
     def test_actual_transport_preserves_explicit_empty_batch_search_only(self):
         with patch.object(batch.operator, "api_base_url", return_value=batch.operator.OPERATOR_API_BASE_URL),                 patch.object(batch.operator, "_request_accounts_with_requests",
