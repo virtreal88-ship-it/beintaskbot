@@ -146,6 +146,12 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
+    from tenant_dialog_presence import is_online, work_status_routing_requested
+    if work_status_routing_requested(tenant) and not is_online(cur,tenant,actor):
+        return f"""({provider_expr}<>'connect' OR EXISTS(SELECT 1 FROM saas_dialog_workflows dw
+          WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
+            AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
+            AND dw.operator_id={actor}))"""
     return f"""({provider_expr}<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
@@ -172,6 +178,10 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     row = _row(cur, tenant, channel, conversation)
     if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
+    if (not row or row['state'] == 'waiting') and action == 'view':
+        from tenant_dialog_presence import is_online, work_status_routing_requested
+        if work_status_routing_requested(tenant) and not is_online(cur,tenant,actor):
+            raise TenantLinearError('Новые диалоги доступны операторам в статусе «В сети».', 404)
     if action != 'view' and (not row or row['state'] != 'accepted'):
         raise TenantLinearError('Сначала примите диалог.', 409)
     return True  # Active protection; callers may revalidate their original route proof.
@@ -181,6 +191,33 @@ def ai_blocked(cur, tenant, provider, channel, conversation):
     if not enabled(cur, tenant) or provider != 'connect': return False
     row = _row(cur, tenant, channel, conversation)
     return bool(row and row['state'] in {'accepted', 'closed', 'dismissed'})
+
+
+def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, message_id, event_at):
+    from tenant_dialog_presence import _work_ready, is_online, work_status_routing_requested
+    if not work_status_routing_requested(tenant) or not _work_ready(cur):
+        return False
+    row = _row(cur,tenant,channel,conversation)
+    if not row or row['state'] != 'accepted':
+        return False
+    if is_online(cur,tenant,row['operator_id'],source_channel=channel):
+        return False
+    cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
+        id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
+        FROM saas_dialog_episodes e
+        WHERE w.tenant_id=%s::uuid AND w.channel_id=%s::uuid AND w.conversation_id=%s
+          AND w.id=e.id AND e.tenant_id=w.tenant_id AND w.state='accepted' AND e.closed_at IS NULL
+          AND w.last_inbound_id IS DISTINCT FROM %s
+          AND %s::timestamptz>GREATEST(e.accepted_at,w.updated_at)
+        RETURNING w.updated_at""",
+        (str(uuid.uuid4()),str(message_id),tenant,channel,conversation,str(message_id),event_at))
+    moved = cur.fetchone()
+    if not moved:
+        return False
+    cur.execute("""UPDATE saas_dialog_episodes SET closed_at=%s
+        WHERE tenant_id=%s::uuid AND id=%s::uuid AND closed_at IS NULL""",
+        (moved['updated_at'],tenant,row['id']))
+    return True
 
 
 def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is_replay=False):
@@ -194,6 +231,8 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     from tenant_connect_dialog_equivalence import canonical
     conversation=canonical(cur,tenant,channel,conversation)
     lock_dialog(cur, tenant, 'connect', channel, conversation)
+    if _return_unavailable_dialog_to_queue(cur,tenant,channel,conversation,message_id,event_at):
+        return
     cur.execute("""UPDATE saas_dialog_workflows SET
       state=CASE WHEN state IN ('closed','dismissed') THEN 'waiting' ELSE state END,
       operator_id=CASE WHEN state IN ('closed','dismissed') THEN NULL ELSE operator_id END,

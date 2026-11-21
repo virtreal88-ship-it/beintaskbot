@@ -307,7 +307,7 @@
     unset:{ru:'Не выбран',az:'Seçilməyib',en:'Not set'},
     title:{ru:'Статус сотрудника',az:'Əməkdaşın statusu',en:'Employee status'},
     choose:{ru:'Выберите статус',az:'Status seçin',en:'Choose a status'},
-    hint:{ru:'Только сотрудники со статусом «В сети» получают новые диалоги и передачи. Смена статуса не меняет уже назначенные диалоги.',az:'Yalnız «Onlayn» statusunda olan əməkdaşlar yeni dialoq və ötürmələr alır. Statusun dəyişməsi artıq təyin olunmuş dialoqları dəyişmir.',en:'Only employees marked Online receive new dialogues and transfers. Changing status does not alter dialogues already assigned to you.'},
+    hint:{ru:'Новые диалоги и передачи доступны операторам в статусе «В сети». Смена статуса не меняет уже назначенные диалоги.',az:'Yeni dialoqlar və ötürmələr «Onlayn» statusunda olan operatorlara açıqdır. Statusun dəyişməsi artıq təyin olunmuş dialoqları dəyişmir.',en:'Only operators marked Online receive new dialogues and transfers. Changing status does not alter dialogues already assigned to you.'},
     confirmRouting:{ru:'По умолчанию ваш статус «В сети». Чтобы получать новые диалоги в текущем режиме, подтвердите его кнопкой «Сохранить».',az:'Standart status «Onlayn»dır. Cari rejimdə yeni dialoqları almaq üçün «Yadda saxla» düyməsi ilə təsdiqləyin.',en:'Your default status is Online. Select Save to confirm it before receiving new dialogues in the current mode.'},
     setupHint:{ru:'Вы можете выбрать статус заранее. Пока статус не влияет на получение новых диалогов и передач.',az:'Statusu əvvəlcədən seçə bilərsiniz. Hələlik status yeni dialoqların qəbulu və ötürülməsinə təsir etmir.',en:'You can set your status now. It does not affect new dialogues or transfers yet.'},
     save:{ru:'Сохранить',az:'Yadda saxla',en:'Save'},
@@ -352,7 +352,7 @@
     const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=presenceText('choose');placeholder.disabled=true;select.append(placeholder);
     for(const status of presenceStates.filter(value=>value!=='offline'||presenceSupportsOffline)){const option=document.createElement('option');option.value=status;option.textContent=presenceText(status);select.append(option);}
     select.value=currentPresence||'';label.append(labelText,select);
-    const hint=document.createElement('p');hint.className='sub';hint.textContent=presenceText(presenceRoutingEnforced?(!presenceConfigured&&currentPresence==='online'?'confirmRouting':'hint'):'setupHint');
+    const hint=document.createElement('p');hint.className='sub';hint.textContent=presenceText(presenceRoutingEnforced?(!presenceSupportsOffline&&!presenceConfigured&&currentPresence==='online'?'confirmRouting':'hint'):'setupHint');
     const feedback=document.createElement('p');feedback.id='operatorPresenceFeedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');
     const actions=document.createElement('div');actions.className='operator-complete-actions';
     const save=document.createElement('button');save.type='submit';save.className='primary';save.textContent=presenceText('save');
