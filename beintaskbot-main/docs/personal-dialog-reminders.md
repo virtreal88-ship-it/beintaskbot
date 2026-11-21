@@ -51,3 +51,26 @@ canonical shape before any reminder data read or write. If anything is missing
 or incompatible, the API fails closed and the control stays hidden. The separate manual preflight
 function `tenant_personal_dialog_reminders.migrate(cursor)` remains available
 only to existing explicitly approved migration operators.
+
+## Shared reminders
+
+An operator can schedule one reminder per exact dialogue from its action menu.
+The shared list shows pending reminders and the badge appears when a reminder
+is due. An accepted dialogue shows its reminder to its current operator. A
+closed or dismissed dialogue shows it to Online operators with current view
+access to that source. A waiting dialogue has no assigned operator.
+
+An operator with ordinary dialogue access can clear the badge by opening the
+dialogue. Other eligible operators can open the shared reminder card. It
+shows the shared note and schedule while conversation history remains subject
+to the dialogue permissions. The first authorized open clears the marker
+for everyone in the database. Other tabs reflect this on their next refresh.
+Background history reads never clear reminders.
+
+Shared reminders use the same source IDs as the four-state status routing
+rollout. Deploy with both shared-reminder switches off. Enable
+`TENANT_SHARED_DIALOG_REMINDERS_PROVISION_ON_STARTUP=1` for the optional
+schema startup. Verify the `Shared reminders schema preflight: ready`
+signal before disabling provisioning and enabling
+`TENANT_SHARED_DIALOG_REMINDERS_ENABLED=1`. The separate personal reminders
+switch continues to control the private feature.

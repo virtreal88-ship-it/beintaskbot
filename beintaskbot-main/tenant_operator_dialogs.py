@@ -1358,6 +1358,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if before is None:
                 from tenant_dialog_company_binding import read_dialogue_binding
                 dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)
+                from tenant_shared_dialog_reminders import dialogue_marker
+                reminder=dialogue_marker(cur,tenant,actor,policy,dialog)
+                if reminder is not None:
+                    dialog['shared_reminder']=reminder
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)

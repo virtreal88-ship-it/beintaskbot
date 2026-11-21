@@ -140,7 +140,7 @@
         if(box!==modal||!same(who,generation))return;
         if(action==='open'){
           if(current!==window.tenantOperator.dialogRevision)return;
-          close();void window.tenantOperator.openDialog(result.dialog);
+          close();void window.tenantOperator.openDialog(result.dialog,false,'',{userOpened:true});
         }else await refresh();
       }catch(error){if(!stale(error,who,generation))showError(box);}
       finally{box.busy=false;control.disabled=false;if(box===modal&&action==='complete'&&!box.status.textContent)renderList();}
