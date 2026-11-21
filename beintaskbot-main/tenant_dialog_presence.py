@@ -45,9 +45,13 @@ def _routing_requested(tenant):
     return _routing_flag_enabled() and is_operator_workspace(tenant)
 
 
+def work_status_routing_requested(tenant):
+    return _routing_requested(tenant) and work_status_enabled()
+
+
 def routing_enabled(cur, tenant):
-    """A staged, independent opt-in. Do not query for the table when off."""
-    return _routing_requested(tenant) and _available(cur)
+    """Keep the presence gate fail-closed when the four-state pilot is requested."""
+    return _routing_requested(tenant) and (work_status_enabled() or _available(cur))
 
 
 def _routing_enforced(cur, tenant):
@@ -212,7 +216,7 @@ def _allows(policy, action):
     return scope != "none" if scope is not None else policy.legacy_allows("dialogs")
 
 
-def _authorized_status(cur, tenant, employee, *, lock, require_update, absent):
+def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, operators_only=False):
     required = absent is not None
     if not (work_status_enabled() if required else _status_requested(tenant)):
         return None
@@ -227,6 +231,8 @@ def _authorized_status(cur, tenant, employee, *, lock, require_update, absent):
         guard(cur, tenant)
     profile = read_access_profile(cur, tenant, employee, lock=lock)
     if not profile or not tenant_status_allows_management(profile.get("tenant_status")):
+        return None
+    if operators_only and profile.get("role") != "operator":
         return None
     policy = TenantPolicy({**profile, "tenant_id": tenant})
     if not _allows(policy, "view") or (require_update and not _allows(policy, "update")):
@@ -258,6 +264,9 @@ def is_online(cur, tenant, employee, *, lock=False, _routing=None):
     """Admission predicate: legacy eligibility when routing is not enforced."""
     if not (routing_enabled(cur, tenant) if _routing is None else _routing):
         return True
+    if work_status_routing_requested(tenant):
+        return _authorized_status(cur, tenant, employee, lock=lock, require_update=True,
+                                  absent=DEFAULT_STATUS, operators_only=True) == DEFAULT_STATUS
     clause = " FOR SHARE" if lock else ""
     cur.execute("""SELECT 1 FROM saas_tenant_members
       WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE""" + clause,
