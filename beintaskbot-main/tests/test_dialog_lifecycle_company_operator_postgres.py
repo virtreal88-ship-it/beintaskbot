@@ -160,7 +160,7 @@ def test_failed_binding_rolls_back_local_company_and_mapping(ready,monkeypatch):
 
 def test_native_writers_share_guard_and_reject_only_protected_target_names(ready,monkeypatch):
     db,_,_=ready
-    dsn=db.conn.info.dsn
+    dsn=db.dsn
     monkeypatch.setattr(native,'_connect',lambda:psycopg.connect(dsn,row_factory=dict_row))
     monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
     with psycopg.connect(dsn,row_factory=dict_row) as first:
@@ -188,7 +188,7 @@ def test_native_writers_share_guard_and_reject_only_protected_target_names(ready
 
 def test_disabled_chooser_leaves_existing_ordinary_name_rules_unchanged(ready,monkeypatch):
     db,_,_=ready
-    dsn=db.conn.info.dsn
+    dsn=db.dsn
     monkeypatch.setattr(native,'_connect',lambda:psycopg.connect(dsn,row_factory=dict_row))
     monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
     chosen=choose('old-compatible')
@@ -241,7 +241,7 @@ def test_manual_identity_and_live_chooser_share_two_connection_winner_order(read
     _activate_synthetic(db,instance)
     target=db.execute("SELECT id::text AS id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1",(A,))[0]['id']
     db.commit()
-    dsn=db.conn.info.dsn
+    dsn=db.dsn
     def connect():
         return psycopg.connect(dsn,row_factory=dict_row)
     monkeypatch.setattr(provider,'_connect',connect)
@@ -326,7 +326,7 @@ def test_manual_identity_and_live_chooser_share_two_connection_winner_order(read
 @pytest.mark.parametrize('first',['native','chooser'])
 def test_real_ordinary_writer_and_chooser_winner_before_commit(ready,monkeypatch,writer,first):
     db,_,_=ready
-    dsn=db.conn.info.dsn
+    dsn=db.dsn
     def connect():
         return psycopg.connect(dsn,row_factory=dict_row)
     monkeypatch.setattr(provider,'_connect',connect)
