@@ -80,12 +80,16 @@
   }
   function renderSuggestions(state){
     if(state!==mounted||!state.input.isConnected)return;
-    const query=(state.input.value||'').trim().toLocaleLowerCase();
+    // Use the CRM language, not the browser default (AZ has two distinct I/i pairs).
+    const language=window.tenantI18n?.language;
+    const locale=language==='en'||language==='ru'?language:'az';
+    const fold=value=>value.toLocaleLowerCase(locale);
+    const query=fold((state.input.value||'').trim());
     state.suggestions.replaceChildren();
     if(query.length<2||!state.templates.length){state.suggestions.hidden=true;return;}
     const terms=query.split(/\s+/).filter(Boolean).slice(-8);
     const matches=state.templates.map(item=>{
-      const name=String(item.name||'').toLocaleLowerCase(),body=String(item.body||'').toLocaleLowerCase();
+      const name=fold(String(item.name||'')),body=fold(String(item.body||''));
       const score=terms.reduce((total,term)=>total+(name.includes(term)?3:body.includes(term)?1:0),0);
       return {item,score};
     }).filter(entry=>entry.score>0)
