@@ -30,7 +30,8 @@
       ...(body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {}),
     });
     const value = await response.json();
-    if (!response.ok || value.success === false) throw new Error(value.error || 'Операция не выполнена.');
+    if (!response.ok || value.success === false) throw Object.assign(
+      new Error(value.error || 'Операция не выполнена.'), {status:response.status});
     return value;
   }
   async function requestGet(path, params = {}) {
@@ -284,14 +285,30 @@
       batchPrerequisite.textContent='Сначала нажмите «Проверить личность для аккаунтного доступа» и подтвердите свою учётную запись Operator. Затем станет доступен предпросмотр.';
       batchButton.setAttribute('aria-describedby',batchPrerequisite.id);
       const batchHost=document.createElement('div');batchHost.dataset.firstBatchPreview='';batchHost.setAttribute('aria-live','polite');
+      batchHost.setAttribute('role','status');
       connection.append(batchButton,batchPrerequisite,batchHost);
       renderStatus();
       batchButton.onclick=event=>batchButton.hidden || batchButton.disabled ? undefined :
         run(event.currentTarget,async()=>{
+        batchHost.textContent='Загружаем предпросмотр аккаунтов Operator…';
+        let preview;
+        try {
+          const result=await request('/api/platform/operator/accounts',{action:'preview_first_company_batch'});
+          preview=result?.company_batch_preview;
+          if (!Array.isArray(preview?.rows) || !Number.isInteger(preview.checked)) {
+            throw new Error('Сервер вернул некорректный ответ предпросмотра.');
+          }
+        } catch(error) {
+          if(current!==revision || !batchHost.isConnected || batchButton.hidden) return {};
+          const detail=error?.name==='SyntaxError' ? 'Сервер вернул некорректный ответ предпросмотра.' :
+            (error?.message || 'Не удалось получить предпросмотр.');
+          const feedback='Не удалось открыть предпросмотр: '+detail+
+            (error?.status>=400 ? ' (HTTP '+error.status+')' : '');
+          batchHost.textContent=feedback;
+          return {message:feedback};
+        }
+        if(current!==revision || !batchHost.isConnected || batchButton.hidden) return {};
         batchHost.replaceChildren();
-        const result=await request('/api/platform/operator/accounts',{action:'preview_first_company_batch'});
-        if(current!==revision || batchButton.hidden) return {};
-        const preview=result.company_batch_preview;
         const heading=document.createElement('p');
         heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
         const rows=document.createElement('ul');
@@ -313,7 +330,8 @@
         }
         if (!canConfirm) {
           const note=document.createElement('p');
-          note.textContent='Доступен только предпросмотр. CRM-компании не создаются.';
+          note.textContent=preview.rows.length ? 'Доступен только предпросмотр. CRM-компании не создаются.' :
+            'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога. CRM-компании не создаются.';
           batchHost.append(heading,rows,note);
           return {message: note.textContent};
         }

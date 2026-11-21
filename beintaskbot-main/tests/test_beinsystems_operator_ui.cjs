@@ -9,7 +9,7 @@ const {window}=dom;
 let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
-let batchConfirmable=false,batchSourceOnly=false;
+let batchConfirmable=false,batchSourceOnly=false,batchPreviewMode='ok',finishBatchError;
 let loginMode='success';
 let probeMode='empty';
 let directorySource='pending',directoryReady=false,companyAddOutcome='create';
@@ -30,10 +30,17 @@ window.fetch=async(path,options={})=>{
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
   else if(options.method==='POST'&&JSON.parse(options.body).action==='preview_first_company_batch'){
-    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,
+    if(batchPreviewMode==='403')return await new Promise(resolve=>{
+      finishBatchError=()=>resolve({ok:false,status:403,json:async()=>({
+        success:false,error:'Для безопасного импорта нужен полный доступ к CRM-компаниям.'
+      })});
+    });
+    if(batchPreviewMode==='malformed')return {ok:true,json:async()=>({success:true})};
+    if(batchPreviewMode==='non-json')return {ok:false,status:502,json:async()=>{throw new SyntaxError('redacted marker');}};
+    const rows=batchPreviewMode==='empty'?[]:[batchSourceOnly?{account:'<img src=x>'}:{account:'<img src=x>',action:'create'}];
+    result={success:true,company_batch_preview:{partial:true,checked:rows.length,limit:100,
       ...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
-      ...(batchSourceOnly?{mode:'accounts_only'}:{}),
-      rows:[batchSourceOnly?{account:'<img src=x>'}:{account:'<img src=x>',action:'create'}]}};
+      ...(batchSourceOnly?{mode:'accounts_only'}:{}),rows}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
     result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
@@ -413,6 +420,26 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
   assert(batchPreview.textContent.includes('CRM-компании не создаются'));
+  batchPreviewMode='403';
+  const failedPreview=batchButton.onclick({currentTarget:batchButton});
+  assert(batchPreview.textContent.includes('Загружаем предпросмотр'));
+  assert.equal(batchButton.disabled,true);
+  finishBatchError();
+  await failedPreview;
+  assert(batchPreview.textContent.includes('полный доступ к CRM-компаниям'));
+  assert(batchPreview.textContent.includes('HTTP 403'));
+  assert.equal(batchButton.disabled,false,'preview can be retried after failure');
+  for(const mode of ['malformed','non-json']){
+    batchPreviewMode=mode;
+    await batchButton.onclick({currentTarget:batchButton});
+    assert(batchPreview.textContent.includes('некорректный ответ предпросмотра'));
+    assert(!batchPreview.textContent.includes('redacted marker'));
+  }
+  batchPreviewMode='empty';
+  await batchButton.onclick({currentTarget:batchButton});
+  assert(batchPreview.textContent.includes('Operator не вернул аккаунтов в этой выборке'));
+  assert.equal(batchPosts().length,0);
+  batchPreviewMode='ok';
   batchSourceOnly=true;
   batchConfirmable=true; // malformed server combination must never create a control in source-only mode
   await batchButton.onclick({currentTarget:batchButton});
