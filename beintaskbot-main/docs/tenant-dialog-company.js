@@ -17,8 +17,20 @@
   const node=(tag,txt)=>{const e=document.createElement(tag);if(txt!=null)e.textContent=txt;return e;};
   const button=(txt,fn)=>{const b=node('button',txt);b.type='button';b.onclick=fn;return b;};
   let state=null;
+  const headerHosts=new WeakMap();
   const current=s=>s===state&&s.section.isConnected&&s.isCurrent();
+  function paintHeader(s,verified){
+    s.headerVerified=verified;
+    const el=headerHosts.get(s.section),binding=s.binding;
+    if(!el?.isConnected)return;
+    const name=verified&&current(s)&&binding?.company_id&&typeof binding.company_name==='string'
+      ? binding.company_name:'';
+    el.textContent=name.trim()?name:'';
+    el.hidden=!el.textContent;
+    if(el.hidden)el.removeAttribute('title');else el.title=name;
+  }
   function clear(){
+    if(state)paintHeader(state,false);
     const old=state;state=null;
     old?.read?.abort();
     old?.disposePicker?.();
@@ -39,6 +51,7 @@
   function paint(s,binding){
     if(!current(s))return;
     s.binding=binding;
+    paintHeader(s,true);
     // The API may mask an existing but inaccessible company as null.
     const name=binding?.company_id&&binding.company_name?String(binding.company_name):binding?t('unknown'):t('unavailable');
     s.value.textContent=name;s.value.title=name;
@@ -50,6 +63,7 @@
   }
   function refresh(s=state){
     if(!s||!current(s)||s.read||s.writing)return;
+    paintHeader(s,false);
     const read=new AbortController();s.read=read;
     void request(endpoint,s.member,s.route,false,read.signal)
       .then(payload=>{if(s.read===read)paint(s,payload.binding);},error=>{
@@ -200,7 +214,7 @@
       }else if(event.key==='Enter')event.preventDefault();
     };
   }
-  function mount({host,route,member,isCurrent,onChanged}){
+  function mount({host,nameHost,route,member,isCurrent,onChanged}){
     if(!host?.isConnected||!route?.provider||!route?.lead_id
         ||typeof route.conversation_id!=='string'||typeof route.channel_id!=='string'
         ||(route.provider==='connect'&&(!route.channel_id||!route.conversation_id))
@@ -212,10 +226,17 @@
     if(state?.key===key){
       state.isCurrent=isCurrent;state.onChanged=onChanged;state.member=member;
       if(state.section.parentElement!==host)host.append(state.section);
+      if(headerHosts.get(state.section)!==nameHost){
+        const verified=state.headerVerified;
+        paintHeader(state,false);
+        headerHosts.set(state.section,nameHost);
+        paintHeader(state,verified);
+      }
       return;
     }
     clear();
     const section=node('div'),value=node('span',t('loading'));
+    headerHosts.set(section,nameHost);
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     const s={section,value,member,isCurrent,onChanged,route:exact,key,read:null};
