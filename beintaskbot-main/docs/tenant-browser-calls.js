@@ -111,11 +111,13 @@
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
     updateRing(call);updateDuration(m);m.sound.hidden=call?.state!=='incoming'||busy()||ringContext?.state==='running';
-    m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=call?.display_name?contactName(m.route,call):m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
+    if(call?.display_name)m.name=contactName(m.route,call);
+    m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
     const source=sourceOf(m.route);
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
     // Only a phone-number JID is a customer phone; numeric LIDs are opaque IDs.
     const number=contactPhone(m.route,call)||m.phone;
+    if(number)m.phone=number;
     m.phoneLine.textContent=number;m.phoneLine.hidden=!number;
     m.error.textContent=[s?.error,!terminal(call)&&s?.controlWarning,!terminal(call)&&s?.closeError].filter(Boolean).join(' ');m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
     m.start.disabled=!source.online;m.reject.hidden=!call||call.state!=='incoming'||!!s;
