@@ -81,6 +81,9 @@
       if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const createCompaniesButton=connection.querySelector('[data-create-companies]');
       if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
+      const firstBatchButton=connection.querySelector('[data-first-company-batch]');
+      if(firstBatchButton)firstBatchButton.hidden=!(state.first_company_batch_enabled &&
+        state.accounts_only_ready && !state.configured && !state.connected);
     };
     renderStatus();
     if (data.member.role === 'owner') {
@@ -186,9 +189,9 @@
                 (collisionAccounts.length ? ': '+collisionAccounts.join(', ') : '')+
                 (counts.name_collision_truncated ? ' …' : '')+'.'
               : '';
-            message.textContent='Проверено аккаунтов: '+counts.checked+
+            message.textContent=(counts.partial ? 'Первая выборка (не весь каталог): ' : 'Проверено аккаунтов: ')+counts.checked+
               ' · создано компаний: '+counts.created+
-              ' · повторно связано: '+counts.reused+
+              (counts.partial ? ' · уже есть без изменений: ' : ' · повторно связано: ')+counts.reused+
               ' · ручная проверка: '+counts.manual_review+'.'+collisionDetails;
           } else {
             message.textContent = result?.integration?.pending_auth_received
@@ -262,6 +265,44 @@
         if(!(state.connected||state.configured))throw new Error('Сначала проверьте действующее подключение Operator.');
         if(!window.confirm('Создать недостающие CRM-компании по свежему списку активного Operator? Совпадения названия отправятся на ручную проверку.'))return {message:'Отменено.'};
         return request('/api/platform/operator/accounts',{action:'create_companies'});
+      });
+      const batchButton=document.createElement('button');
+      batchButton.type='button'; batchButton.dataset.firstCompanyBatch='';
+      batchButton.textContent='Предпросмотр первой выборки: до 100 аккаунтов';
+      batchButton.hidden=true;
+      const batchHost=document.createElement('div');batchHost.dataset.firstBatchPreview='';batchHost.setAttribute('aria-live','polite');
+      connection.append(batchButton,batchHost);
+      renderStatus();
+      batchButton.onclick=event=>run(event.currentTarget,async()=>{
+        if (batchButton.hidden) return {};
+        batchHost.replaceChildren();
+        const result=await request('/api/platform/operator/accounts',{action:'preview_first_company_batch'});
+        if(current!==revision || batchButton.hidden) return {};
+        const preview=result.company_batch_preview;
+        const heading=document.createElement('p');
+        heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
+        const rows=document.createElement('ul');
+        const names={create:'Создать',reuse:'Уже есть, без изменений',manual_review:'Ручная проверка'};
+        for(const row of preview.rows){
+          const item=document.createElement('li');item.textContent=row.account+' · '+names[row.action];rows.append(item);
+        }
+        const confirm=document.createElement('button');confirm.type='button';
+        confirm.dataset.firstBatchConfirm='';
+        confirm.textContent='Подтвердить создание новых компаний из этой выборки';
+        confirm.disabled=!preview.rows.some(row=>row.action==='create');
+        const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отменить';
+        cancel.dataset.firstBatchCancel='';
+        cancel.onclick=()=>batchHost.replaceChildren();
+        confirm.onclick=event=>run(event.currentTarget,async()=>{
+          if(current!==revision || !batchHost.contains(confirm) || batchButton.hidden) return {};
+          batchHost.replaceChildren();
+          return request('/api/platform/operator/accounts',{
+            action:'confirm_first_company_batch',receipt:preview.receipt
+          });
+        });
+        batchHost.append(heading,rows,confirm,cancel);
+        return {message: preview.rows.length ? 'Проверьте выборку перед подтверждением.' :
+          'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога.'};
       });
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};

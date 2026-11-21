@@ -21,6 +21,87 @@ from tenant_policy import TenantPolicy
 
 MANUAL_REVIEW_ACCOUNT_LIMIT = 20
 ACCOUNTS_CAPABILITY_TTL_HOURS = 24
+FIRST_BATCH_LIMIT = 100
+FIRST_BATCH_PREVIEW_TTL = 300
+_FIRST_BATCH_PURPOSE = "operator_first_company_batch_v1"
+
+
+def _first_batch_payload(response):
+    if (not isinstance(response, dict) or set(response) != {"status", "data"}
+            or response.get("status") != "success"
+            or not isinstance(response.get("data"), list)
+            or len(response["data"]) > FIRST_BATCH_LIMIT):
+        raise operator.OperatorError("Operator не вернул допустимую первую выборку аккаунтов.", 409)
+    result, seen = [], set()
+    for row in response["data"]:
+        account = row.get("account") if isinstance(row, dict) else None
+        if (not isinstance(account, str) or not account or account != account.strip()
+                or len(account) > 240 or any(ord(c) < 32 or ord(c) == 127 for c in account)
+                or account.casefold() in seen):
+            raise operator.OperatorError("Первая выборка содержит недопустимый account ID.", 409)
+        seen.add(account.casefold())
+        result.append({"account": account})
+    return sorted(result, key=lambda item: item["account"])
+
+
+def _first_batch_digest(data):
+    return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def _first_batch_scope(tenant, actor, credentials):
+    # No credential or account identifiers are shipped in the opaque receipt.
+    return _first_batch_digest([tenant, actor, _revision(credentials["received_at"]),
+        credentials["generation"], credentials["connection_instance_id"],
+        credentials["identity_fingerprint"], credentials["base_url"],
+        hashlib.sha256(credentials["token"].encode("utf-8")).hexdigest()])
+
+
+def _decode_first_batch_receipt(receipt):
+    invalid = "Подтверждение первой выборки недействительно. Откройте новый предпросмотр."
+    if not isinstance(receipt, str) or not receipt or len(receipt) > 2048:
+        raise operator.OperatorError(invalid, 409)
+    try:
+        claims = json.loads(operator._fernet().decrypt(
+            receipt.encode("ascii"), ttl=FIRST_BATCH_PREVIEW_TTL))
+        if (not isinstance(claims, dict)
+                or set(claims) != {"purpose", "nonce", "scope", "digest"}
+                or claims["purpose"] != _FIRST_BATCH_PURPOSE
+                or str(uuid.UUID(claims["nonce"])) != claims["nonce"]):
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError, InvalidToken):
+        raise operator.OperatorError(invalid, 409) from None
+    return claims
+
+
+def first_company_batch(profile, *, receipt=None):
+    """Explicit owner-only first batch; separate one-run consent from single-account grant."""
+    if not operator.first_company_batch_enabled():
+        raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
+    claims = None if receipt is None else _decode_first_batch_receipt(receipt)
+    tenant, actor, source, credentials = _selected_source_credentials(profile)
+    if source != "accounts_only":
+        raise operator.OperatorError("Первая выборка доступна только для режима accounts-only.", 409)
+    scope = _first_batch_scope(tenant, actor, credentials)
+    if claims is not None and claims["scope"] != scope:
+        raise operator.OperatorError("Доступ Operator изменился. Откройте новый предпросмотр.", 409)
+
+    operator._record_operator_read(profile, "me", {})
+    _selected_source_fence(profile, tenant, actor, source, credentials)
+    identity = operator.operator_me_payload(operator._request_operator(
+        "me", {}, token=credentials["token"], base_url=credentials["base_url"], requests_me=True))
+    _selected_source_fence(profile, tenant, actor, source, credentials)
+    if _identifier_fingerprint(identity["identifier"]) != credentials["identity_fingerprint"]:
+        raise operator.OperatorError("Подтверждённый профиль Operator изменился.", 409)
+    operator._record_operator_read(profile, "accounts", {})
+    _selected_source_fence(profile, tenant, actor, source, credentials)
+    response = operator._request_operator("accounts", {"search": "", "limit": FIRST_BATCH_LIMIT},
+        token=credentials["token"], base_url=credentials["base_url"], first_batch_accounts=True)
+    accounts = _first_batch_payload(response)
+    _selected_source_fence(profile, tenant, actor, source, credentials)
+    return _apply_company_import(profile, tenant, actor, accounts, credentials,
+        first_batch=True, preview_receipt=receipt, preview_scope=scope)
+
 
 
 def _revision(value):
@@ -318,6 +399,49 @@ def create_companies(profile):
         raise operator.OperatorError("Нет доступа.") from None
 
     accounts, credentials = _fresh_active_accounts(profile, tenant, actor)
+    return _apply_company_import(profile, tenant, actor, accounts, credentials)
+
+
+def _first_batch_prior_identity(cur, tenant, account_ids):
+    """Read reserved identity evidence from any generation; it is never a binding grant."""
+    targets = {}
+    cur.execute("""SELECT a.account AS requested, m.external_account,
+                    m.company_id::text AS company_id
+                  FROM unnest(%s::text[]) AS a(account)
+                  JOIN saas_beinsystems_operator_company_imports m
+                    ON m.tenant_id=%s::uuid AND lower(m.external_account)=lower(a.account)
+                  FOR UPDATE OF m""", (account_ids, tenant))
+    exact_mappings = {}
+    for row in cur.fetchall():
+        account, company = row["requested"], str(row["company_id"])
+        targets.setdefault(account, set()).add(company)
+        if account == row["external_account"]:
+            exact_mappings[account] = company
+    cur.execute("""SELECT a.account AS requested, l.local_entity_id::text AS company_id
+                  FROM unnest(%s::text[]) AS a(account)
+                  JOIN saas_beinsystems_operator_links l
+                    ON l.tenant_id=%s::uuid AND lower(l.external_id)=lower(a.account)
+                  WHERE l.local_entity_type='company' AND l.external_entity_type='account'
+                    AND l.external_scope_id='' AND l.revoked_at IS NULL
+                  FOR UPDATE OF l""", (account_ids, tenant))
+    for row in cur.fetchall():
+        targets.setdefault(row["requested"], set()).add(str(row["company_id"]))
+    return exact_mappings, targets
+
+
+def _assert_first_batch_not_expired(cur, tenant, actor, credentials):
+    # The capability/candidate rows are already locked, but wall time may have
+    # advanced while waiting for the import or CRM rows. now() is transaction-start.
+    cur.execute("""SELECT 1 FROM saas_beinsystems_operator_accounts_capabilities
+        WHERE tenant_id=%s::uuid AND owner_telegram_id=%s
+          AND connection_generation=%s AND expires_at>clock_timestamp()""",
+        (tenant, actor, credentials["generation"]))
+    if not cur.fetchone():
+        raise operator.OperatorError("Аккаунтный доступ Operator истёк. Откройте новый предпросмотр.", 409)
+
+
+def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
+                          first_batch=False, preview_receipt=None, preview_scope=None):
     try:
         instance_id = str(uuid.UUID(credentials["connection_instance_id"]))
     except (TypeError, ValueError, KeyError):
@@ -327,32 +451,35 @@ def create_companies(profile):
     with operator._connect() as conn:
         operator._ensure_schema(conn)
         with conn.cursor() as cur:
+            if first_batch:
+                operator._lock_accounts_capability_scope(cur, tenant)
             current = operator._current_profile(cur, tenant, actor)
             _owner(profile, current)
-            integration = operator._operator_row(cur, tenant, lock=True)
-            if not _connection_is_current(integration, credentials, locked=True):
-                raise operator.OperatorError(
-                    "Подключение Operator изменилось во время импорта. Повторите попытку.", 409
-                )
-            # Check the encrypted active token again while the integration row is locked.
-            try:
-                import json
-                from cryptography.fernet import InvalidToken
-                secret = json.loads(
-                    operator._fernet().decrypt(bytes(integration["secrets"])).decode("utf-8")
-                )
-            except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError,
-                    TypeError, ValueError, KeyError):
-                raise operator.OperatorError(
-                    "Действующее подключение Operator не удалось проверить.", 409
-                ) from None
-            if (not isinstance(secret, dict)
-                    or secret.get("token") != credentials["token"]
-                    or secret.get("connection_instance_id")
-                    != credentials["connection_instance_id"]):
-                raise operator.OperatorError(
-                    "Подключение Operator изменилось во время импорта. Повторите попытку.", 409
-                )
+            if first_batch:
+                _lock_and_check_selected_source(cur, tenant, actor, "accounts_only", credentials)
+            else:
+                integration = operator._operator_row(cur, tenant, lock=True)
+                if not _connection_is_current(integration, credentials, locked=True):
+                    raise operator.OperatorError(
+                        "Подключение Operator изменилось во время импорта. Повторите попытку.", 409
+                    )
+                # Check the encrypted active token again while the integration row is locked.
+                try:
+                    secret = json.loads(
+                        operator._fernet().decrypt(bytes(integration["secrets"])).decode("utf-8")
+                    )
+                except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError,
+                        TypeError, ValueError, KeyError):
+                    raise operator.OperatorError(
+                        "Действующее подключение Operator не удалось проверить.", 409
+                    ) from None
+                if (not isinstance(secret, dict)
+                        or secret.get("token") != credentials["token"]
+                        or secret.get("connection_instance_id")
+                        != credentials["connection_instance_id"]):
+                    raise operator.OperatorError(
+                        "Подключение Operator изменилось во время импорта. Повторите попытку.", 409
+                    )
 
             create_profile = current_access(cur, tenant, actor, "companies", "create")
             view_profile = current_access(cur, tenant, actor, "companies", "view")
@@ -375,32 +502,36 @@ def create_companies(profile):
             confirmed_links = {}
             visible_company_ids = set()
             existing_name_keys = set()
+            prior_targets = {}
             if account_ids:
-                cur.execute(
-                    """SELECT external_account,company_id::text AS company_id
-                      FROM saas_beinsystems_operator_company_imports
-                      WHERE tenant_id=%s::uuid AND external_account=ANY(%s::text[])
-                      FOR UPDATE""",
-                    (tenant, account_ids),
-                )
-                mappings = {
-                    str(row["external_account"]): str(row["company_id"])
-                    for row in cur.fetchall()
-                }
-                cur.execute(
-                    """SELECT external_id,local_entity_id::text AS company_id
-                      FROM saas_beinsystems_operator_links
-                      WHERE tenant_id=%s::uuid AND local_entity_type='company'
-                        AND external_entity_type='account' AND external_scope_id=''
-                        AND connection_generation=%s AND connection_instance_id=%s::uuid
-                        AND revoked_at IS NULL AND external_id=ANY(%s::text[])
-                      FOR UPDATE""",
-                    (tenant, credentials["generation"], instance_id, account_ids),
-                )
-                for row in cur.fetchall():
-                    confirmed_links.setdefault(str(row["external_id"]), []).append(
-                        str(row["company_id"])
+                if first_batch:
+                    mappings, prior_targets = _first_batch_prior_identity(cur, tenant, account_ids)
+                else:
+                    cur.execute(
+                        """SELECT external_account,company_id::text AS company_id
+                          FROM saas_beinsystems_operator_company_imports
+                          WHERE tenant_id=%s::uuid AND external_account=ANY(%s::text[])
+                          FOR UPDATE""",
+                        (tenant, account_ids),
                     )
+                    mappings = {
+                        str(row["external_account"]): str(row["company_id"])
+                        for row in cur.fetchall()
+                    }
+                    cur.execute(
+                        """SELECT external_id,local_entity_id::text AS company_id
+                          FROM saas_beinsystems_operator_links
+                          WHERE tenant_id=%s::uuid AND local_entity_type='company'
+                            AND external_entity_type='account' AND external_scope_id=''
+                            AND connection_generation=%s AND connection_instance_id=%s::uuid
+                            AND revoked_at IS NULL AND external_id=ANY(%s::text[])
+                          FOR UPDATE""",
+                        (tenant, credentials["generation"], instance_id, account_ids),
+                    )
+                    for row in cur.fetchall():
+                        confirmed_links.setdefault(str(row["external_id"]), []).append(
+                            str(row["company_id"])
+                        )
                 cur.execute(
                     """SELECT lower(name) AS name_key
                       FROM saas_crm_native_companies
@@ -428,6 +559,40 @@ def create_companies(profile):
             plan = _plan_company_import(
                 accounts, mappings, confirmed_links, visible_company_ids, existing_name_keys
             )
+            if first_batch:
+                # Historical links and case variants can prevent a duplicate but
+                # cannot authorize reusing or rebinding a CRM company. A stable exact
+                # mapping can be reused without touching it only if all prior targets agree.
+                plan = [
+                    action if not prior_targets.get(action["account"]) or (
+                        action["action"] == "reuse"
+                        and prior_targets[action["account"]] == {action["company_id"]})
+                    else {"account": action["account"], "action": "manual_review",
+                          "reason": "prior_identity_conflict"}
+                    for action in plan
+                ]
+                _assert_first_batch_not_expired(cur, tenant, actor, credentials)
+                digest = _first_batch_digest(plan)
+                if preview_receipt is None:
+                    payload = {"purpose": _FIRST_BATCH_PURPOSE, "nonce": str(uuid.uuid4()),
+                               "scope": preview_scope, "digest": digest}
+                    receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
+                    return {"receipt": receipt.decode("ascii"), "checked": len(accounts),
+                            "partial": True, "limit": FIRST_BATCH_LIMIT,
+                            "rows": [{"account": a["account"], "action": a["action"]} for a in plan]}
+                claims = _decode_first_batch_receipt(preview_receipt)
+                if claims["scope"] != preview_scope or claims["digest"] != digest:
+                    raise operator.OperatorError("Выборка или план изменились. Откройте новый предпросмотр.", 409)
+                # Audit ID has a primary key. Insert in the write transaction:
+                # rollback permits retry, while concurrent/repeated confirmation cannot write twice.
+                cur.execute("""INSERT INTO saas_tenant_audit_events
+                  (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                  VALUES(%s::uuid,%s::uuid,%s,'operator_first_company_batch',
+                    'operator_company_import','first_batch',%s::jsonb)
+                  ON CONFLICT(id) DO NOTHING RETURNING id""",
+                  (claims["nonce"], tenant, actor, operator._json({"checked": len(accounts)})))
+                if not cur.fetchone():
+                    raise operator.OperatorError("Эта выборка уже подтверждена. Откройте новый предпросмотр.", 409)
             collision_summary = _name_collision_summary(plan)
             created = reused = manual_review = 0
             for action in plan:
@@ -456,6 +621,9 @@ def create_companies(profile):
                     created += 1
                     continue
                 company_id = action["company_id"]
+                if first_batch:
+                    reused += 1
+                    continue
                 if not _put_mapping(cur, tenant, account, company_id, actor, credentials):
                     manual_review += 1
                 else:
@@ -465,8 +633,9 @@ def create_companies(profile):
                 """INSERT INTO saas_tenant_audit_events
                   (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'operator_companies_imported',
-                    'operator_company_import','fresh_active_accounts',%s::jsonb)""",
-                (str(uuid.uuid4()), tenant, actor, operator._json({
+                    'operator_company_import',%s,%s::jsonb)""",
+                (str(uuid.uuid4()), tenant, actor,
+                 "first_bounded_accounts" if first_batch else "fresh_active_accounts", operator._json({
                     "checked": len(accounts), "created": created,
                     "reused": reused, "manual_review": manual_review,
                     "connection_generation": credentials["generation"],
@@ -477,6 +646,7 @@ def create_companies(profile):
         "checked": len(accounts), "created": created,
         "reused": reused, "manual_review": manual_review,
         **collision_summary,
+        **({"partial": True, "limit": FIRST_BATCH_LIMIT} if first_batch else {}),
     }
 
 
