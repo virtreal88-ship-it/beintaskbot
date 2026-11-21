@@ -145,9 +145,9 @@
     state.input.isConnected&&state.root===composerRoot()&&!state.input.disabled&&!state.input.readOnly;
   function insert(item,state){
     if(!canInsert(state))return false;
-    const current=state.input.value||'';
-    const separator=current.trim()?(current.endsWith('\n')?'':'\n'):'';
-    state.input.value=current+separator+item.body;
+    // A selected reply template is the complete draft, not an addition to a
+    // partially typed search prefix (for example "Sa" before "Salam").
+    state.input.value=item.body;
     state.input.dispatchEvent(new Event('input',{bubbles:true}));
     state.input.focus();
     try{state.input.setSelectionRange(state.input.value.length,state.input.value.length);}catch{}
