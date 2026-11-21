@@ -1428,7 +1428,7 @@
     const sameCard=oldCard?.dataset.scope===scope;
     const snapshot=sameCard&&oldCard.open?{value:$('operatorConversationNameInput')?.value,start:$('operatorConversationNameInput')?.selectionStart,end:$('operatorConversationNameInput')?.selectionEnd,focus:oldCard.contains(document.activeElement)?document.activeElement.id:'',scroll:oldCard.querySelector('.operator-client-panel-content').scrollTop,error:oldCard.querySelector('[data-client-card-error]')?.textContent,saved:oldCard.querySelector('[data-client-name-saved]')?.hidden===false,blocks:[...oldCard.querySelectorAll('.operator-client-panel-block')].map(block=>block.open)}:null;
     const developerNodes=sameCard?[...($('operatorClientDeveloperHost')?.childNodes||[])]:[],developerStatus=sameCard?[...($('operatorClientDeveloperStatus')?.childNodes||[])]:[];
-    clientCardDispose();
+    clientCardDispose(Boolean(snapshot));
     oldCard?.remove();
     head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span><details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
     head.parentElement.querySelector('[data-identity-warning]')?.remove();if(route.identity_conflict){const warning=document.createElement('p');warning.dataset.identityWarning='true';warning.className='operator-ai-context';warning.setAttribute('role','status');warning.textContent=({ru:'История WhatsApp разделена между JID/LID. AI остановлен до проверки связи диалогов.',az:'WhatsApp tarixçəsi JID/LID arasında bölünüb. Əlaqə yoxlanana qədər AI dayandırılıb.',en:'WhatsApp history is split between JID/LID. AI is blocked pending identity review.'})[i18n.language];head.after(warning);}
@@ -1501,9 +1501,10 @@
     const syncChatInteraction=()=>{
       $('operatorConversationContent').inert=card.open&&window.matchMedia?.('(max-width: 900px)').matches===true;
     };
-    const close=(restore=true)=>{
+    const close=(restore=true,preservePublicLink=false)=>{
       if(restore&&document.activeElement===input)void persistName();
       clearSupportCase();
+      if(!preservePublicLink)window.tenantDialogueCompany?.hidePublicLink?.();
       card.removeAttribute('open');for(const button of [trigger,title])button.setAttribute('aria-expanded','false');
       syncChatInteraction();
       if(restore){if(groupBlock)groupBlock.open=false;window.tenantDialogueCompany?.closePicker?.();if(opener.isConnected)opener.focus({preventScroll:true});}
@@ -1520,6 +1521,7 @@
       opener=button;if(!restore)dialogueBlock.open=true;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
       void refreshCase(true);
+      window.tenantDialogueCompany?.refreshPublicLink?.();
       loadRoster();void showClientTransfer(route,card,current);
       if(!snapshot)$('operatorCancelConversationName').focus({preventScroll:true});
     };
@@ -1539,9 +1541,9 @@
     listen('tenant-auth-invalid',destroy);
     listen('tenant-auth-pending',()=>{authorized=false;close(false);});
     listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')close(false);});
-    listen('tenant-profile',()=>{authorized=owner===identity(member)&&hasRight('dialogs');if(!current())close(false);else if(card.open)void refreshCase(true);});
+    listen('tenant-profile',()=>{authorized=owner===identity(member)&&hasRight('dialogs');if(!current())close(false);else if(card.open){void refreshCase(true);window.tenantDialogueCompany?.refreshPublicLink?.(true);}});
     listen('tenant-dialog-reauthorized',()=>{if(card.open)void refreshCase(true);});
-    clientCardDispose=()=>{if(refreshClientSupportCase===refreshCase)refreshClientSupportCase=()=>{};listeners.forEach(remove=>remove());close(false);};
+    clientCardDispose=(preservePublicLink=false)=>{if(refreshClientSupportCase===refreshCase)refreshClientSupportCase=()=>{};listeners.forEach(remove=>remove());close(false,preservePublicLink);};
     const activeCard=()=>{
       const active=$('operatorClientCard');
       return active?.dataset.scope===scope&&owner===identity(member)?active:null;

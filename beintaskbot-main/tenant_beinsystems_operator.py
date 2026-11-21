@@ -847,13 +847,21 @@ def _pending_auth_candidate(profile, *, required=True):
 
 
 def _record_operator_read(profile, endpoint, payload):
+    return _record_operator_request(profile, endpoint, payload)
+
+
+def _record_operator_request(profile, endpoint, payload, *, issuance=False):
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
     except (TypeError, ValueError, AttributeError):
         raise OperatorError("Нет доступа.") from None
     limits = {"me": 12, "accounts": 12, "account_info": 30, "profile_users": 20, "task_list": 20}
-    if endpoint not in limits:
+    # Reuse the existing task-domain budget; public-link issuance has its own
+    # audit action, but no schema migration or per-request DDL is necessary.
+    bucket = "task_list" if issuance and endpoint == "dialog_company_public_link" else endpoint
+    audit_action = "operator_public_link_requested" if issuance else "operator_read_requested"
+    if bucket not in limits or (issuance and endpoint != "dialog_company_public_link"):
         raise OperatorError("Операция Operator пока не поддерживается.")
     account = str((payload or {}).get("account") or "").strip()
     with _connect() as conn:
@@ -865,13 +873,13 @@ def _record_operator_read(profile, endpoint, payload):
               VALUES(%s::uuid,%s,%s,date_trunc('minute',now()),1)
               ON CONFLICT(tenant_id,actor_telegram_id,endpoint,bucket_start)
               DO UPDATE SET request_count=saas_beinsystems_operator_rate_limits.request_count+1,
-                updated_at=now() RETURNING request_count""", (tenant, actor, endpoint))
-            if int(cur.fetchone()["request_count"]) > limits[endpoint]:
+                updated_at=now() RETURNING request_count""", (tenant, actor, bucket))
+            if int(cur.fetchone()["request_count"]) > limits[bucket]:
                 raise OperatorError("Слишком много запросов Operator. Повторите позже.", 429)
             cur.execute("""INSERT INTO saas_tenant_audit_events
               (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s,%s::uuid,%s,'operator_read_requested','operator_endpoint',%s,%s::jsonb)""",
-              (str(uuid.uuid4()), tenant, actor, endpoint,
+              VALUES(%s,%s::uuid,%s,%s,'operator_endpoint',%s,%s::jsonb)""",
+              (str(uuid.uuid4()), tenant, actor, audit_action, endpoint,
                _json({"account_hash": hashlib.sha256(account.encode("utf-8")).hexdigest() if account else ""})))
         conn.commit()
 

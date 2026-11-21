@@ -2,6 +2,7 @@
 (()=>{
   'use strict';
   const endpoint='/api/platform/operator/dialog-company';
+  const publicLinkEndpoint=endpoint+'/public-link';
   const labels={
     ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
     az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
@@ -12,6 +13,12 @@
     az:{empty:'Operator hesabı tapılmadı.',error:'Operator hesablarını tapmaq mümkün olmadı.',bindError:'Operator hesabını bağlamaq mümkün olmadı.',},
     en:{empty:'No Operator accounts found.',error:'Could not find Operator accounts.',bindError:'Could not link the Operator account.',}
   };
+  const linkLabels={
+    ru:{label:'Ссылка для клиента',copy:'Скопировать ссылку',copied:'Ссылка скопирована',unavailable:'Ссылка для этой компании недоступна.',error:'Operator не подтвердил выдачу ссылки.',copyError:'Ссылка получена. Нажмите ещё раз, чтобы скопировать.',unsupported:'Копирование недоступно в этом браузере.'},
+    az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',unavailable:'Bu şirkət üçün link əlçatan deyil.',error:'Operator linkin verilməsini təsdiqləmədi.',copyError:'Link alındı. Kopyalamaq üçün yenidən basın.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
+    en:{label:'Customer link',copy:'Copy link',copied:'Link copied',unavailable:'No link is available for this company.',error:'Operator did not confirm the link request.',copyError:'Link obtained. Click again to copy it.',unsupported:'Copying is unavailable in this browser.'}
+  };
+  const linkText=key=>(linkLabels[window.tenantI18n?.language]||linkLabels.az)[key];
   const t=key=>(labels[window.tenantI18n?.language]||labels.az)[key];
   const copy=key=>(operatorLabels[window.tenantI18n?.language]||operatorLabels.az)[key];
   const node=(tag,txt)=>{const e=document.createElement(tag);if(txt!=null)e.textContent=txt;return e;};
@@ -30,7 +37,7 @@
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    paintHeader(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    paintHeader(old);clearPublicLink(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -44,6 +51,84 @@
     }
     return payload;
   }
+  const linkCurrent=(s,company)=>current(s)&&s.section.closest('dialog')?.open===true&&
+    !s.writing&&s.binding?.company_id===company;
+  function clearPublicLink(s){
+    s.linkRequest?.abort();s.linkRequest=null;s.linkCompany=null;s.linkUrl=null;
+    s.linkBox.hidden=true;s.linkCopy.disabled=false;s.linkStatus.textContent='';
+  }
+  function syncPublicLink(s,force=false){
+    const company=s.binding?.company_id;
+    if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
+    if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
+  }
+  function writePendingClipboard(pending){
+    if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
+    const blob=pending.then(url=>new Blob([url],{type:'text/plain'}));
+    // Also handle rejection when ClipboardItem/write throws before consuming it.
+    void blob.catch(()=>{});
+    return navigator.clipboard.write([new window.ClipboardItem({'text/plain':blob})]);
+  }
+  async function copyPublicLink(s){
+    const company=s.binding?.company_id;
+    if(!company||!linkCurrent(s,company)||s.linkCopy.disabled)return;
+    if(typeof navigator.clipboard?.writeText!=='function'&&
+      (typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')){
+      s.linkStatus.textContent=linkText('unsupported');return;
+    }
+    const read=new AbortController();s.linkRequest=read;s.linkCopy.disabled=true;s.linkStatus.textContent='';
+    const active=()=>s.linkRequest===read&&linkCurrent(s,company);
+    let uncertain=false;
+    const pending=s.linkUrl?Promise.resolve(s.linkUrl):request(publicLinkEndpoint,s.member,
+      {...s.route,expected_company_id:company},true,read.signal).then(({public_link:link})=>{
+        if(!active())throw Error('stale');
+        if(link?.state==='unavailable')throw Object.assign(Error('unavailable'),{status:404});
+        if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
+          throw Error('unconfirmed');
+        s.linkUrl=link.url;return link.url;
+      });
+    // Call write in the original gesture. Safari requires this even when the
+    // item data itself cannot exist until the verified Operator reply arrives.
+    let gestureWrite=null;
+    try{
+      if(s.linkUrl&&typeof navigator.clipboard?.writeText==='function')
+        gestureWrite=Promise.resolve(navigator.clipboard.writeText(s.linkUrl));
+      else gestureWrite=writePendingClipboard(pending);
+    }catch{}
+    const wrote=gestureWrite?.then(()=>true,()=>false);
+    try{
+      const url=await pending;
+      if(!active())return;
+      const copied=await wrote;
+      if(!active())return;
+      if(!copied)await navigator.clipboard.writeText(url);
+      if(active())s.linkStatus.textContent=linkText('copied');
+    }catch(error){
+      if(!active())return;
+      uncertain=!s.linkUrl&&(!error.status||error.status>=500||error.status===409);
+      s.linkStatus.textContent=linkText(s.linkUrl?'copyError':uncertain?'error':'unavailable');
+    }finally{
+      if(s.linkRequest===read){s.linkRequest=null;if(linkCurrent(s,company))s.linkCopy.disabled=uncertain;}
+    }
+  }
+  function mountPublicLink(s){
+    s.linkBox=node('div');s.linkBox.dataset.companyPublicLink='';s.linkBox.hidden=true;
+    s.linkLabel=node('span',linkText('label'));s.linkStatus=node('p');s.linkStatus.setAttribute('role','status');
+    s.linkCopy=button('',()=>void copyPublicLink(s));s.linkCopy.className='operator-company-copy-icon';
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width','17');svg.setAttribute('height','17');
+    svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');
+    svg.setAttribute('aria-hidden','true');
+    const rect=document.createElementNS(svg.namespaceURI,'rect'),path=document.createElementNS(svg.namespaceURI,'path');
+    for(const [key,value] of Object.entries({x:8,y:8,width:12,height:12,rx:2}))rect.setAttribute(key,value);
+    path.setAttribute('d','M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2');
+    svg.append(rect,path);s.linkCopy.append(svg);labelPublicLink(s);
+    s.linkBox.append(s.linkLabel,s.linkCopy,s.linkStatus);s.section.append(s.linkBox);
+  }
+  function labelPublicLink(s){
+    s.linkLabel.textContent=linkText('label');s.linkCopy.title=linkText('copy');
+    s.linkCopy.setAttribute('aria-label',linkText('copy'));
+  }
   function paint(s,binding){
     if(!current(s))return;
     const same=s.binding?.company_id===binding?.company_id;
@@ -53,7 +138,7 @@
     s.value.textContent=name||t(binding?'unknown':'unavailable');
     s.value.title=s.value.textContent;
     if(!same||binding?.can_manage!==true||!s.editing)s.reset();
-    s.sync();
+    s.sync();syncPublicLink(s);
   }
   function refresh(s=state){
     if(!s||!current(s)||s.read||s.writing)return;
@@ -68,7 +153,7 @@
         (fields.operator_account&&s.binding.can_search_operator!==true))return;
     const expected_company_id=s.binding.company_id||null;
     let recheck=false;
-    s.writing=true;s.read?.abort();s.read=null;s.cancelSearch();s.sync();
+    s.writing=true;clearPublicLink(s);s.read?.abort();s.read=null;s.cancelSearch();s.sync();
     s.status.textContent=t('loading');
     try{
       const {binding}=await request(endpoint,s.member,{...s.route,...fields,expected_company_id},true);
@@ -84,7 +169,7 @@
       }
     }finally{
       s.writing=false;
-      if(current(s)){s.sync();if(recheck)refresh(s);}
+      if(current(s)){s.sync();if(recheck)refresh(s);else syncPublicLink(s);}
     }
   }
   function mountEditor(s){
@@ -202,6 +287,7 @@
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
       headerHosts.set(s.section,nameHost);
+      labelPublicLink(s);
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
       }else paintHeader(s);
@@ -215,7 +301,7 @@
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
     const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
-    section.append(value,status);host.append(section);state=s;mountEditor(s);paintHeader(s);
+    section.append(value,status);host.append(section);state=s;mountEditor(s);mountPublicLink(s);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
@@ -236,6 +322,11 @@
     #operatorClientCard .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
     #operatorClientCard .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
+    [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:3px}
+    [data-company-public-link][hidden],[data-company-public-link] button[hidden],
+    [data-company-public-link] p:empty{display:none!important}
+    [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:.75rem}
+    #operatorClientCard .operator-company-copy-icon{display:inline-grid;place-items:center;width:40px;min-height:40px;padding:4px}
   `;document.head.append(style);
   for(const event of ['tenant-auth-invalid','tenant-auth-pending','tenant-chat-open','tenant-chat-close'])
     document.addEventListener(event,clear);
@@ -247,5 +338,8 @@
   });
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
   document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
-  window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();}};
+  window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
+    refreshPublicLink(force=false){if(state)syncPublicLink(state,force);},
+    hidePublicLink(){if(state)clearPublicLink(state);}
+  };
 })();
