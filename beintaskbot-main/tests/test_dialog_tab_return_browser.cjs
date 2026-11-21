@@ -51,14 +51,14 @@ function gate(){
     });
     await page.goto('https://crm.test/app?view=dialogs');
     await page.locator('.operator-row').first().click();
-    const company=page.locator('#operatorDialogueCompanySearch');
+    const company=page.locator('.operator-company-unlink');
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
     const avatar=page.locator('#operatorClientCardOpen');
     await avatar.click();
     await company.waitFor();await templates.waitFor();await input.fill('Unsaved reply');
     await page.evaluate(()=>{
-      window.initialNodes=['#operatorDialogs','#chatRows','#chatText','#operatorDialogueCompanySearch','#operatorReplyTemplatesOpen']
+      window.initialNodes=['#operatorDialogs','#chatRows','#chatText','.operator-company-unlink','#operatorReplyTemplatesOpen']
         .map(selector=>document.querySelector(selector));
       window.authPauses=0;document.addEventListener('tenant-auth-pending',()=>window.authPauses++);
     });
@@ -69,7 +69,7 @@ function gate(){
     },hidden);
     const mounted=()=>page.evaluate(()=>window.initialNodes.every(node=>node.isConnected)&&
       getComputedStyle(document.querySelector('#operatorDialogs')).visibility==='visible'&&
-      !document.querySelector('#operatorDialogueCompanySearch')?.hidden&&
+      !document.querySelector('.operator-company-unlink')?.hidden&&
       !document.querySelector('#operatorReplyTemplatesOpen')?.hidden);
     meGate=gate();companyGate=gate();templatesGate=gate();historyGate=gate();
     const previousProfileReads=profileReads;

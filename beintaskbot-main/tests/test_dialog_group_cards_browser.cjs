@@ -18,6 +18,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
+    if(url.includes('/api/platform/crm/native/companies'))return{ok:true,json:async()=>({success:true,companies:[]})};
     if(url.includes('/operator/dialog-company')){
      const q=new URL(url,'https://example.test').searchParams;
      if(opt.method==='POST'){
@@ -39,7 +40,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
       result={transfer:channel==='b'?{from_name:'Synthetic sender',to_name:'Synthetic recipient',at:'2026-11-16T09:11:22Z'}:null};
     }
     else if(url.includes('/dialogs/group-participants'))result={status:'available',phones:[],total:0};
-    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},unread_count:7,last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
+    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},dialog_company_name:i===0?'Long <b>stored</b> company name '.repeat(10):undefined,unread_count:7,last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
     else if(!url.includes('/dialogs/read'))throw Error('Unexpected request '+url);
     return{ok:true,status:200,json:async()=>({success:true,result})};};
   });
@@ -57,6 +58,15 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    if(g.badge)assert(Math.abs(g.badge.top-g.unread.top)<12,'text status and unread counter share the indicator line');
   }
   assert.equal(await page.locator('.operator-row').nth(1).locator('.operator-unread-count').textContent(),'7');
+  const companyCard=page.locator('.operator-row').filter({has:page.locator('.operator-row-company')});
+  assert.equal(await companyCard.count(),1);
+  const companyLine=await companyCard.evaluate(row=>{
+    const c=row.querySelector('.operator-row-company'),status=row.querySelector('.operator-row-status');
+    const fullHeight=row.offsetHeight,sameLine=Math.abs(c.getBoundingClientRect().top+c.offsetHeight/2-(status.getBoundingClientRect().top+status.offsetHeight/2))<=2;
+    const literal=c.textContent.includes('<b>stored</b>')&&!c.querySelector('b');
+    c.remove();return {sameLine,literal,noGrowth:fullHeight===row.offsetHeight};
+  });
+  assert.deepEqual(companyLine,{sameLine:true,literal:true,noGrowth:true});
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));
@@ -74,9 +84,10 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
-  await page.locator('#operatorDialogueCompanySearch').click();
-  const companyPicker=await page.locator('#operatorDialogueCompanyPicker').boundingBox();
-  assert(companyPicker.width>0&&companyPicker.x>=-1&&companyPicker.x+companyPicker.width<=width+1,'company picker fits the viewport');
+  assert.equal(await page.locator('#operatorDialogueCompanySearch').count(),0,'bound company hides the search');
+  const unlink=card.locator('.operator-company-unlink');
+  assert.equal(await unlink.textContent(),'×');
+  assert((await unlink.boundingBox()).width<=30);
   await page.keyboard.press('Escape');
   assert.equal(await card.isVisible(),false);
   for(const index of [1,0]){
@@ -105,6 +116,9 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.deepEqual(await header(),before);
   await search.click();
   const drop=page.locator('#operatorDialogueCompanySuggestions'),input=search;
+  assert(!await drop.isVisible(),'focusing an empty field does not open a list');
+  await input.fill('synthetic');
+  await drop.locator('[data-operator-account-results] button').first().waitFor();
   const geometry=await drop.boundingBox(),anchor=await search.boundingBox();
   assert(await drop.evaluate(node=>node.closest('dialog')?.id==='operatorClientCard'));
   assert(geometry.x>=-1&&geometry.x+geometry.width<=width+1&&geometry.y>=anchor.y+anchor.height-1,
@@ -122,13 +136,13 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert((await scroll.evaluate(n=>n.scrollTop))>0,'the panel content scrolls at a short viewport');
   assert.equal(await card.locator('header').evaluate(n=>n.getBoundingClientRect().top),headerTop);
   await page.setViewportSize({width,height:h});
-  await input.fill('synthetic');
   const result=drop.locator('[data-operator-account-results] button').first();
   await result.waitFor();
   assert.equal(await result.locator('strong').textContent(),'@synthetic_a');
   assert.equal(await page.evaluate(()=>window.accountCalls.filter(cmd=>cmd.operator_account).length),0);
   await result.click();
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent==='Selected Operator account');
+  assert.equal(await input.count(),0);
   const calls=await page.evaluate(()=>window.accountCalls.map(({operator_search,operator_account,channel_id,lead_id})=>[operator_search??null,operator_account??null,channel_id,lead_id]));
   assert.deepEqual(calls,[['synthetic',null,'b','42'],[null,'synthetic_a','b','42']]);
   if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}
