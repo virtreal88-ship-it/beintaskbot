@@ -99,6 +99,30 @@ func TestLateCallStateCannotResurrectEndedRegistry(t *testing.T) {
 	_ = core.EndCallReasonUserEnded
 }
 
+func TestFirstAndEndedSnapshotsRetainOfferIdentity(t *testing.T) {
+	g, s := testGateway(t)
+	g.cfg.Managed = true
+	peer := "111111111111111@lid"
+	proof := &callerIdentity{Phone: "994100000777@s.whatsapp.net", Name: "Synthetic Caller"}
+	cm := s.createCallWithCaller("offer-identity", proof)
+	cm.OnIncoming(&call.CallInfo{CallID: "offer-identity", PeerJid: peer})
+	first := g.snapshot(s)["active"].([]map[string]any)
+	if len(first) != 1 || first[0]["caller"] != proof {
+		t.Fatal("first snapshot lacks offer identity")
+	}
+	g.server.broker.upsertCall(CallRecord{SessionID: s.id, CallID: "offer-identity", Peer: peer, Direction: "inbound", Status: StatusConnected})
+	s.removeCall("offer-identity")
+	g.server.broker.endCall("offer-identity", "test")
+	ended := g.snapshot(s)["ended"].([]map[string]any)
+	if len(ended) != 1 || ended[0]["caller"] != proof {
+		t.Fatal("missed snapshot lost offer identity")
+	}
+	raw, _ := json.Marshal(g.server.broker.historyRows(s.id, 20))
+	if strings.Contains(string(raw), proof.Phone) {
+		t.Fatal("private offer proof leaked into public broker output")
+	}
+}
+
 func TestGatewayIdleSyncAlwaysUsesResultArray(t *testing.T) {
 	g, _ := testGateway(t)
 	seen := make(chan bool, 4)

@@ -17,16 +17,17 @@ const (
 )
 
 type CallRecord struct {
-	Recording bool       `json:"recording"`
-	SessionID string     `json:"sessionId"`
-	CallID    string     `json:"callId"`
-	Owner     *string    `json:"owner"`
-	Direction string     `json:"direction"`
-	Peer      string     `json:"peer"`
-	StartedAt int64      `json:"startedAt"`
-	Status    CallStatus `json:"status"`
-	EndedAt   *int64     `json:"endedAt,omitempty"`
-	EndReason string     `json:"endReason,omitempty"`
+	Caller    *callerIdentity `json:"-"` // immutable, private offer evidence
+	Recording bool            `json:"recording"`
+	SessionID string          `json:"sessionId"`
+	CallID    string          `json:"callId"`
+	Owner     *string         `json:"owner"`
+	Direction string          `json:"direction"`
+	Peer      string          `json:"peer"`
+	StartedAt int64           `json:"startedAt"`
+	Status    CallStatus      `json:"status"`
+	EndedAt   *int64          `json:"endedAt,omitempty"`
+	EndReason string          `json:"endReason,omitempty"`
 }
 
 type AuthSnapshot struct {
@@ -111,6 +112,9 @@ func (b *Broker) emitSessionQR(sessionID, qr string) {
 
 func (b *Broker) upsertCall(r CallRecord) {
 	b.mu.Lock()
+	if old := b.calls[r.CallID]; old != nil && old.SessionID == r.SessionID && old.Peer == r.Peer && old.Direction == r.Direction && r.Caller == nil {
+		r.Caller = old.Caller
+	}
 	cp := r
 	b.calls[r.CallID] = &cp
 	b.mu.Unlock()

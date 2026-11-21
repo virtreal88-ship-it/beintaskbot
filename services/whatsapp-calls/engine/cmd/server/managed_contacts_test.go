@@ -46,3 +46,36 @@ func TestCallerOnlyUsesReciprocalDeviceIdentity(t *testing.T) {
 		t.Fatal("group treated as caller")
 	}
 }
+
+func TestOfferIdentityPrecedesContactSyncAndRejectsConflicts(t *testing.T) {
+	peer := types.NewJID("111111111111111", types.HiddenUserServer)
+	phone := types.NewJID("994100000777", types.DefaultUserServer)
+	meta := types.BasicCallMeta{From: peer, CallCreator: peer, CallCreatorAlt: phone}
+	local := &callerTestStore{info: types.ContactInfo{PushName: "Synthetic Caller"}}
+	got := resolveOfferCaller(context.Background(), meta, local, local)
+	if got == nil || got.Phone != phone.String() || got.Name != "Synthetic Caller" {
+		t.Fatal("offer proof was delayed until contact sync")
+	}
+	if !local.phone.IsEmpty() || !local.lid.IsEmpty() {
+		t.Fatal("offer mutated routing store")
+	}
+	for _, field := range []string{"creator", "group", "alternate", "forward", "reverse"} {
+		bad := meta
+		store := *local
+		switch field {
+		case "creator":
+			bad.CallCreator = phone
+		case "group":
+			bad.GroupJID = types.NewJID("123456", types.GroupServer)
+		case "alternate":
+			bad.CallCreatorAlt = peer
+		case "forward":
+			store.phone = types.NewJID("994100000888", types.DefaultUserServer)
+		case "reverse":
+			store.lid = types.NewJID("222222222222222", types.HiddenUserServer)
+		}
+		if resolveOfferCaller(context.Background(), bad, &store, &store) != nil {
+			t.Fatal("accepted conflicting offer", field)
+		}
+	}
+}

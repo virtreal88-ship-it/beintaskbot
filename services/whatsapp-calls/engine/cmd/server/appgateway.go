@@ -209,9 +209,11 @@ func (g *appGateway) request(ctx context.Context, path, mime string, data []byte
 func (g *appGateway) snapshot(sess *Session) map[string]any {
 	active := []map[string]any{}
 	ended := []map[string]any{}
+	offerCallers := map[string]*callerIdentity{}
 	g.server.broker.mu.RLock()
 	for _, r := range g.server.broker.calls {
 		if r.SessionID == g.cfg.Session && g.allowed(r.Peer) {
+			offerCallers[r.CallID] = r.Caller
 			state := string(r.Status)
 			if state == "starting" {
 				state = "ringing"
@@ -222,6 +224,7 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	g.server.broker.mu.RUnlock()
 	for _, r := range g.server.broker.historyRows(g.cfg.Session, 20) {
 		if g.allowed(r.Peer) {
+			offerCallers[r.CallID] = r.Caller
 			ended = append(ended, map[string]any{"provider_id": r.CallID, "peer_jid": r.Peer, "state": "ended", "direction": r.Direction})
 		}
 	}
@@ -231,9 +234,17 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	identityCtx, identityCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	for _, rows := range [][]map[string]any{active, ended} {
 		for _, item := range rows {
+			if g.cfg.Managed && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account && item["direction"] == "inbound" {
+				if proof := offerCallers[item["provider_id"].(string)]; proof != nil {
+					item["caller"] = proof
+				}
+			}
 			if item["direction"] == "inbound" && identityCtx.Err() == nil {
 				if identity := g.caller(identityCtx, sess, item["peer_jid"].(string)); identity != nil {
-					item["caller"] = identity
+					proof, _ := item["caller"].(*callerIdentity)
+					if proof == nil || proof.Phone == identity.Phone && identity.Name != "" {
+						item["caller"] = identity
+					}
 				}
 			}
 		}
