@@ -215,8 +215,8 @@ def test_failed_close_rolls_back_new_binding_and_keeps_open_episode(companies,mo
     command(actor=33)
     grant(database,monkeypatch)
     require=completion.require_on_close
-    def fail_after_bind(*args):
-        assert require(*args)['company_id']==choice
+    def fail_after_bind(*args, **kwargs):
+        assert require(*args, **kwargs)['company_id']==choice
         raise TenantLinearError('synthetic close failure',503)
     monkeypatch.setattr(completion,'require_on_close',fail_after_bind)
     with pytest.raises(TenantLinearError) as failure:
