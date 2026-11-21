@@ -67,8 +67,11 @@
       const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);
     });
   }
+  const composerRoot=()=>document.querySelector('#view-dialogs.active #operatorConversationContent [data-operator-dialog] .operator-composer');
+  const canInsert=state=>state===mounted&&identity()?.key===state.identity&&window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates===true&&
+    state.input.isConnected&&state.root===composerRoot()&&!state.input.disabled&&!state.input.readOnly;
   function insert(item,state){
-    if(!state?.input?.isConnected)return;
+    if(!canInsert(state))return false;
     const current=state.input.value||'';
     const separator=current.trim()?(current.endsWith('\n')?'':'\n'):'';
     state.input.value=current+separator+item.body;
@@ -77,9 +80,10 @@
     try{state.input.setSelectionRange(state.input.value.length,state.input.value.length);}catch{}
     state.suggestions.hidden=true;
     state.suggestions.replaceChildren();
+    return true;
   }
   function renderSuggestions(state){
-    if(state!==mounted||!state.input.isConnected)return;
+    if(!canInsert(state)){state.suggestions.hidden=true;state.suggestions.replaceChildren();return;}
     const language=window.tenantI18n?.language;
     const locale=language==='en'||language==='ru'?language:'az';
     const alternate=locale==='az'?'en':'az';
@@ -206,7 +210,8 @@
         name.textContent=item.name+' · '+visibilityLabel(item.visibility);description.textContent=item.body;
         details.append(name,description);
         const controls=document.createElement('div');controls.className='operator-reply-template-row-actions';
-        const use=document.createElement('button');use.type='button';use.textContent=copy('use');use.addEventListener('click',()=>{insert(item,state);finish();});
+        const use=document.createElement('button');use.type='button';use.textContent=copy('use');
+        use.dataset.replyTemplateInsert='';use.disabled=!canInsert(state);use.addEventListener('click',()=>{if(insert(item,state))finish();});
         controls.append(use);
         if(item.can_edit){
           const edit=document.createElement('button');edit.type='button';edit.textContent=copy('edit');edit.addEventListener('click',()=>showEditor(item));controls.append(edit);
@@ -232,23 +237,28 @@
   }
   function teardown(){
     if(!mounted)return;
+    mounted.inputObserver.disconnect();
     mounted.input.removeEventListener('input',mounted.onInput);
     mounted.button.remove();mounted.suggestions.remove();
     mounted.root.classList.remove('operator-reply-template-root');
     mounted=null;modalClose?.();
   }
   async function attach(){
-    const actions=document.querySelector('.tc-legacy-composer .operator-composer-actions'),input=document.querySelector('.tc-legacy-composer #chatText'),owner=identity();
+    const root=composerRoot(),actions=root?.querySelector('.operator-composer-actions'),input=root?.querySelector('#chatText[data-operator-composer]'),owner=identity();
     if(!actions||!input||!owner||window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates!==true){teardown();return;}
     if(mounted?.actions===actions&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
-    const root=actions.closest('.operator-composer')||actions.parentElement;
-    if(!root)return;
     root.classList.add('operator-reply-template-root');
     const button=document.createElement('button');button.type='button';button.hidden=true;button.id='operatorReplyTemplatesOpen';button.className='outline';button.textContent=copy('button');button.title=copy('manage');button.setAttribute('aria-label',copy('manage'));
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
     const state={actions,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
     state.onInput=()=>renderSuggestions(state);
+    state.inputObserver=new MutationObserver(()=>{
+      if(state!==mounted)return;
+      renderSuggestions(state);
+      document.querySelectorAll('#operatorReplyTemplateModal [data-reply-template-insert]').forEach(node=>{node.disabled=!canInsert(state);});
+    });
+    state.inputObserver.observe(input,{attributes:true,attributeFilter:['disabled','readonly']});
     state.input.addEventListener('input',state.onInput);
     button.addEventListener('click',()=>openManager(state));
     actions.insertBefore(button,actions.firstChild);root.append(suggestions);mounted=state;
@@ -263,11 +273,10 @@
     if(key!==mounted.identity){teardown();void attach();return;}
     clearContext(mounted);void loadTemplates(mounted);
   });
-  document.addEventListener('tenant-chat-close',()=>{if(mounted)clearContext(mounted);});
-  document.addEventListener('tenant-auth-invalid',teardown);
+  for(const event of ['tenant-chat-close','tenant-auth-invalid','tenant-auth-pending'])document.addEventListener(event,teardown);
   document.addEventListener('tenant-view',event=>{
     if(event.detail?.view==='dialogs'){void attach();return;}
-    if(mounted)clearContext(mounted);
+    teardown();
   });
   document.addEventListener('pointerdown',event=>{
     if(mounted&&!mounted.suggestions.hidden&&!mounted.root.contains(event.target)){mounted.suggestions.hidden=true;}

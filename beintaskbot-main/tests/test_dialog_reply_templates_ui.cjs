@@ -3,16 +3,20 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,file),'utf8');
 const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{
+ await verifyRealDialogComposers();
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'});
  const w=dom.window,tenantA='00000000-0000-4000-8000-000000000101',tenantB='00000000-0000-4000-8000-000000000102';
  const profile=tenant=>({member:{tenant_id:tenant,telegram_id:33,role:'worker',active:true,permissions:['dialogs']},capabilities:{modules:{dialogs:true},dialog_reply_templates:tenant===tenantA}});
  w.tenantProfileSnapshot=profile(tenantA);w.tenantI18n={language:'en'};
- const composer=w.document.createElement('div');composer.className='tc-legacy-composer operator-composer';
- const chat=w.document.createElement('textarea');chat.id='chatText';composer.append(chat);
+ const view=w.document.getElementById('view-dialogs');view.classList.add('active');
+ const host=w.document.createElement('div');host.id='operatorConversationContent';view.append(host);
+ const shell=w.document.createElement('section');shell.dataset.operatorDialog='';host.append(shell);
+ const composer=w.document.createElement('div');composer.className='operator-composer';
+ const chat=w.document.createElement('textarea');chat.id='chatText';chat.dataset.operatorComposer='';composer.append(chat);
  const actions=w.document.createElement('div');actions.className='operator-composer-actions';composer.append(actions);
  const sendButton=w.document.createElement('button');sendButton.id='sendChat';sendButton.type='button';actions.append(sendButton);
- w.document.body.append(composer);
- const dealComposer=w.document.createElement('div');dealComposer.className='deal-composer';
+ shell.append(composer);
+ const dealComposer=w.document.createElement('div');dealComposer.className='tc-legacy-composer operator-composer';
  const dealChat=w.document.createElement('textarea');dealChat.id='chatText';dealComposer.append(dealChat);
  const dealActions=w.document.createElement('div');dealActions.className='operator-composer-actions';dealComposer.append(dealActions);
  w.document.body.append(dealComposer);
@@ -136,3 +140,66 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  dom.window.close();
  console.log('PASS: local suggestions and management never send messages or transmit draft text.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+async function verifyRealDialogComposers(){
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ try{
+  d.getElementById('view-dialogs').classList.add('active');
+  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'worker',permissions:['dialogs'],active:true},
+    capabilities:{modules:{dialogs:true},dialog_reply_templates:true}};
+  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+  let sendBindings=0;
+  w.tenantChatSend={bind(){sendBindings++;}};
+  const direct={provider:'connect',lead_id:41,channel_id:'canal',conversation_id:'direct',customer_kind:'contact',can_send:true,state:'human',
+    lifecycle_enabled:true,lifecycle:{state:'accepted',operator_id:33,revision:1,can_close:true}};
+  const group={...direct,lead_id:42,conversation_id:'group@g.us',customer_kind:'group'};
+  const kommo={...direct,provider:'kommo',lead_id:43,channel_id:'',conversation_id:'',lifecycle_enabled:false,lifecycle:null};
+  const waiting={...direct,lead_id:44,conversation_id:'waiting',can_send:false,send_block_reason:'dialog_accept_required',
+    lifecycle:{state:'waiting',revision:1,can_accept:true,last_inbound_id:'m'}};
+  const routes=[direct,group,kommo,waiting],calls=[];
+  w.fetch=async(url,opt={})=>{
+   const path=new URL(String(url),w.location.origin),method=opt.method||'GET';calls.push([path.pathname,method]);
+   if(path.pathname==='/api/platform/me')return{ok:true,json:async()=>profile};
+   let result;
+   if(path.pathname.endsWith('/dialogs/reply-templates')){
+    assert.equal(method,'GET','actual chat never performs template write merely by typing/inserting');
+    result={available:true,templates:[{id:'welcome',name:'Welcome',body:'Welcome back.',visibility:'personal'}],allowed_visibility:['personal']};
+   }else if(path.pathname.endsWith('/dialogs/history')){
+    result={dialog:routes.find(row=>String(row.lead_id)===path.searchParams.get('lead_id')),messages:[],next_before:null};
+   }else if(path.pathname.endsWith('/dialogs'))result={dialogs:routes,channels:[],agents:[],next_offset:null};
+   else if(path.pathname.endsWith('/dialogs/preferences'))result={};
+   else throw Error('Unexpected request '+path.pathname);
+   return{ok:true,status:200,json:async()=>({success:true,result})};
+  };
+  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-dialog-reply-templates.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+  w.tenantI18n.setLanguage('en');d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));
+  await w.tenantOperator.refresh();
+  for(const route of routes){
+   assert(await w.tenantOperator.openDialog(route));await tick();
+   const composer=d.querySelector('#operatorConversationContent [data-operator-dialog] .operator-composer');
+   const input=composer.querySelector('[data-operator-composer]'),button=composer.querySelector('#operatorReplyTemplatesOpen');
+   assert(button&&!button.hidden,route.provider+' '+route.customer_kind+' real rendered composer has Templates');
+   assert.equal(input.disabled,!route.can_send);
+   input.value='welcome - draft';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();
+   const suggestion=composer.querySelector('.operator-reply-template-suggestions button');
+   if(route.can_send){
+    assert(suggestion);
+    if(route===direct){
+     input.readOnly=true;suggestion.click();
+     assert.equal(input.value,'welcome - draft','stale suggestion respects readonly immediately');
+     await tick();assert(composer.querySelector('.operator-reply-template-suggestions').hidden);
+     input.readOnly=false;await tick();
+    }
+    composer.querySelector('.operator-reply-template-suggestions button').click();
+    assert.equal(input.value,'welcome - draft\nWelcome back.');
+   }else{
+    assert(!suggestion);button.click();await tick();
+    const use=d.querySelector('#operatorReplyTemplateModal [data-reply-template-insert]');
+    assert(use.disabled);use.dispatchEvent(new w.Event('click',{bubbles:true}));
+    assert.equal(input.value,'welcome - draft','even a forced click cannot change disabled draft');
+   }
+  }
+  assert.equal(sendBindings,3,'fixture initialized sending only on the three authorized composers');
+  assert(!calls.some(([path])=>path.includes('/send')),'templates insert only, never call customer send');
+ }finally{dom.window.close();}
+}
