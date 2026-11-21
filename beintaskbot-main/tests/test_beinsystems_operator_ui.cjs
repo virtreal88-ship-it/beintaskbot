@@ -430,8 +430,30 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(authPanel.querySelector('[data-message] img'),null,'account names render as text, not markup');
   assert(!requests.some(row=>/^https?:/.test(row.path)),'all Operator reads and local company creation use the same-origin backend only');
   assert.equal(authPanel.querySelector('[data-first-company-batch]').hidden,true);
-  mockIntegration={...mockIntegration,status:'not_connected',accounts_only_ready:true,
-    connected:false,configured:false,first_company_batch_preview_enabled:true};
+  mockIntegration={...mockIntegration,status:'not_connected',accounts_only_ready:false,
+    pending_auth_received:false,connected:false,configured:false,first_company_batch_preview_enabled:true};
+  await viewDemand.activate(profile);
+  let blockedPanel=window.document.querySelector('#operatorIntegrationSettings');
+  assert.equal(blockedPanel.querySelector('[data-first-company-batch]').hidden,true,'no current pending candidate');
+  mockIntegration={...mockIntegration,pending_auth_received:true};
+  await viewDemand.activate(profile);
+  blockedPanel=window.document.querySelector('#operatorIntegrationSettings');
+  const disabledBatch=blockedPanel.querySelector('[data-first-company-batch]');
+  const prerequisite=blockedPanel.querySelector('[data-first-batch-prerequisite]');
+  assert.equal(disabledBatch.hidden,false);
+  assert.equal(disabledBatch.disabled,true);
+  assert.equal(disabledBatch.textContent,'Предпросмотр партии до 100 аккаунтов');
+  assert.equal(prerequisite.hidden,false);
+  assert(prerequisite.textContent.includes('Проверить личность для аккаунтного доступа'));
+  assert.equal(disabledBatch.getAttribute('aria-describedby'),prerequisite.id);
+  const requestsBeforeBlockedClick=requests.length;
+  await disabledBatch.onclick({currentTarget:disabledBatch});
+  assert.equal(requests.length,requestsBeforeBlockedClick,'disabled preview does not call Operator');
+  assert.equal(disabledBatch.disabled,true);
+  mockIntegration={...mockIntegration,accounts_only_ready:true,configured:true};
+  await viewDemand.activate(profile);
+  assert.equal(window.document.querySelector('[data-first-company-batch]').hidden,true,'active or configured source stays excluded');
+  mockIntegration={...mockIntegration,configured:false};
   await viewDemand.activate(profile);
   const batchPanel=window.document.querySelector('#operatorIntegrationSettings');
   const batchButton=batchPanel.querySelector('[data-first-company-batch]');
@@ -439,6 +461,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const batchPosts=()=>requests.filter(row=>row.options.method==='POST').map(row=>JSON.parse(row.options.body))
     .filter(body=>body.action==='confirm_first_company_batch');
   assert.equal(batchButton.hidden,false);
+  assert.equal(batchButton.disabled,false);
+  assert.equal(batchPanel.querySelector('[data-first-batch-prerequisite]').hidden,true);
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
   assert(batchPreview.textContent.includes('CRM-компании не создаются'));
@@ -465,6 +489,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const readOnlyPanel=window.document.querySelector('#operatorIntegrationSettings');
   assert.equal(readOnlyPanel.querySelector('[data-link-controls]').hidden,true);
   assert.equal(readOnlyPanel.querySelector('[data-operator-password]'),null);
+  assert.equal(readOnlyPanel.querySelector('[data-first-company-batch]'),null);
   assert.equal(readOnlyPanel.querySelector('[data-create-companies]'),null,
     'the owner-only company action and collision list are not exposed to a read-only member');
   window.close();
