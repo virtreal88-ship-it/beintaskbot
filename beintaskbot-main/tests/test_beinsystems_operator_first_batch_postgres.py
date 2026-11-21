@@ -139,7 +139,7 @@ def test_mapping_rollback_clears_nonce_and_rotation_rejects_old_receipt(state, m
     with pytest.raises(batch.operator.OperatorError):
         run(["c"], next_receipt)
     with connect() as c:
-        assert c.execute("SELECT name FROM saas_crm_native_companies ORDER BY name").fetchall() == [
+        assert c.execute('SELECT name FROM saas_crm_native_companies ORDER BY name COLLATE "C"').fetchall() == [
             {"name": "a"}, {"name": "b"}]
 
 
@@ -178,7 +178,7 @@ def test_historical_company_identity_blocks_duplicates_without_rebinding(state):
           FROM saas_beinsystems_operator_company_imports WHERE external_account='stable'""").fetchone() == {
             "last_seen_generation": "old", "instance": old_instance}
         assert c.execute("SELECT count(*) AS n FROM saas_beinsystems_operator_links").fetchone()["n"] == 6
-        assert c.execute("""SELECT name FROM saas_crm_native_companies ORDER BY name""").fetchall() == [
+        assert c.execute('SELECT name FROM saas_crm_native_companies ORDER BY name COLLATE "C"').fetchall() == [
             {"name": "Existing CRM company"}, {"name": "Other CRM company"},
             {"name": "foreign"}, {"name": "revoked"}]
 
