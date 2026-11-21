@@ -9,7 +9,7 @@ const {window}=dom;
 let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
-let batchConfirmable=false;
+let batchConfirmable=false,batchSourceOnly=false;
 let loginMode='success';
 let probeMode='empty';
 let directorySource='pending',directoryReady=false,companyAddOutcome='create';
@@ -30,8 +30,10 @@ window.fetch=async(path,options={})=>{
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
   else if(options.method==='POST'&&JSON.parse(options.body).action==='preview_first_company_batch'){
-    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
-      rows:[{account:'<img src=x>',action:'create'}]}};
+    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,
+      ...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
+      ...(batchSourceOnly?{mode:'accounts_only'}:{}),
+      rows:[batchSourceOnly?{account:'<img src=x>'}:{account:'<img src=x>',action:'create'}]}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
     result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
@@ -411,7 +413,16 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
   assert(batchPreview.textContent.includes('CRM-компании не создаются'));
-  batchConfirmable=true;
+  batchSourceOnly=true;
+  batchConfirmable=true; // malformed server combination must never create a control in source-only mode
+  await batchButton.onclick({currentTarget:batchButton});
+  assert(batchPreview.textContent.includes('Показаны только аккаунты Operator'));
+  assert(batchPreview.textContent.includes('Компании CRM не проверялись и не создавались'));
+  assert.equal(batchPreview.querySelector('li').textContent,'<img src=x>');
+  assert.equal(batchPreview.querySelector('img'),null);
+  assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null);
+  assert.equal(batchPosts().length,0);
+  batchSourceOnly=false;
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPosts().length,0,'preview must never confirm automatically');
   assert(batchPreview.textContent.includes('не полный каталог'));

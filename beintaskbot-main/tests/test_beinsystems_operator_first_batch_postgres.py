@@ -85,9 +85,11 @@ def state(monkeypatch):
                 c.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
                   VALUES(%s,%s,%s,%s,NULL)""", (tenant, actor, received_at, envelope))
 
-            def run(accounts, receipt=None):
-                return batch._apply_company_import(profile, tenant, actor,
-                    [{"account": name} for name in accounts], credentials,
+            def run(accounts, receipt=None, *, source_only=False):
+                rows = [{"account": name} for name in accounts]
+                if source_only:
+                    return batch._preview_operator_accounts_only(profile, tenant, actor, rows, credentials)
+                return batch._apply_company_import(profile, tenant, actor, rows, credentials,
                     first_batch=True, preview_receipt=receipt, preview_scope="scope")
 
             yield connect, run, tenant
@@ -239,3 +241,24 @@ def test_preview_only_cannot_mint_or_commit_a_previous_receipt(state, monkeypatc
         for table in ("saas_crm_native_companies", "saas_tenant_audit_events",
                       "saas_beinsystems_operator_company_imports"):
             assert c.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"] == 0
+
+
+def test_source_preview_has_no_crm_table_dependency_and_rechecks_pending_rotation(state, monkeypatch):
+    connect, run, _ = state
+    monkeypatch.setattr(batch.operator, "first_company_batch_preview_enabled", lambda: True)
+    monkeypatch.setattr(batch.operator, "first_company_batch_confirm_enabled", lambda: False)
+    with connect() as c:
+        c.execute("DROP TABLE saas_crm_native_companies")
+        c.execute("DROP TABLE saas_beinsystems_operator_company_imports")
+        c.execute("DROP TABLE saas_beinsystems_operator_links")
+    assert run(["one", "two"], source_only=True) == {
+        "checked": 2, "partial": True, "limit": 100, "mode": "accounts_only",
+        "rows": [{"account": "one"}, {"account": "two"}],
+    }
+    assert run([], source_only=True)["rows"] == []
+    with connect() as c:
+        assert c.execute("SELECT count(*) AS n FROM saas_tenant_audit_events").fetchone()["n"] == 0
+        c.execute("UPDATE saas_beinsystems_operator_pending_auth_v2 SET received_at=received_at+interval '1 second'")
+    with pytest.raises(batch.operator.OperatorError) as err:
+        run(["one"], source_only=True)
+    assert err.value.status == 409

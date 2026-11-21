@@ -295,6 +295,17 @@
         const heading=document.createElement('p');
         heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
         const rows=document.createElement('ul');
+        if (preview.mode==='accounts_only') {
+          for(const row of preview.rows){
+            const item=document.createElement('li');item.textContent=row.account;rows.append(item);
+          }
+          const note=document.createElement('p');
+          const scopeNote='Показаны только аккаунты Operator. Компании CRM не проверялись и не создавались.';
+          note.textContent=preview.rows.length ? scopeNote :
+            'Operator не вернул аккаунтов в этой выборке. '+scopeNote;
+          batchHost.append(heading,note,rows);
+          return {message:note.textContent};
+        }
         const canConfirm=typeof preview.receipt==='string' && !!preview.receipt;
         const names={create:canConfirm?'Создать':'Кандидат на создание',reuse:'Уже есть, без изменений',manual_review:'Ручная проверка'};
         for(const row of preview.rows){
