@@ -34,6 +34,7 @@
   const icon={phone:'<path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/>',end:'<path d="M3 16v-4c5-5 13-5 18 0v4l-5-1v-3a13 13 0 0 0-8 0v3l-5 1Z"/>',mic:'<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',muted:'<path d="M9 9v3a3 3 0 0 0 5 2M15 9V5a3 3 0 0 0-6 0M5 10v2a7 7 0 0 0 12 5M19 12v-2M12 19v3M8 22h8M3 3l18 18"/>'};
   const buttonIcon=(button,kind,label)=>{button.setAttribute('aria-label',label);button.title=label;button.innerHTML='<span class="browser-call-control-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+icon[kind]+'</svg></span>';button.append(make('span',label,'browser-call-control-label'));};
   const contactName=(route,call)=>{const raw=String(call?.display_name||route?.customer_name||route?.display_name||route?.contact_name||'').trim();if(raw&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(raw))return raw.slice(0,120);const jid=String(route?.conversation_id||'');return /^[1-9][0-9]{5,21}@s\.whatsapp\.net$/.test(jid)?'+'+jid.split('@')[0]:'Контакт WhatsApp';};
+  const contactPhone=(route,call)=>{const phone=String(call?.phone||route?.phone||'');if(/^\+?[1-9][0-9]{6,14}$/.test(phone))return '+'+phone.replace(/^\+/,'');const jid=String(route?.conversation_id||'');return /^[1-9][0-9]{6,14}@s\.whatsapp\.net$/.test(jid)?'+'+jid.split('@')[0]:'';};
   const initials=name=>name.startsWith('+')||name==='Контакт WhatsApp'?'WA':name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>Array.from(part)[0]).join('').toLocaleUpperCase();
   const style=make('style');style.textContent=`
     .browser-call-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--line,#e6eeea);background:transparent;color:inherit;cursor:pointer;flex:none}.browser-call-button svg{width:19px;height:19px}.browser-call-button:disabled{opacity:.45;cursor:default}
@@ -100,7 +101,7 @@
     const sound=make('button','Включить звук звонка','browser-call-sound');sound.type='button';sound.hidden=true;sound.onclick=()=>void unlockRing();
     const duration=make('div','','browser-call-duration');duration.hidden=true;duration.setAttribute('role','timer');duration.setAttribute('aria-label','Длительность разговора');duration.setAttribute('aria-live','off');duration.style.cssText='font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:8px';
     node.append(close,kicker,title,phoneLine,state,duration,avatar,error,actions,sound);document.body.append(node);
-    modal={node,title,phoneLine,state,duration,clockCall:null,clockStart:null,clockEnd:null,clockTimer:null,error,start,reject,end,mute,kicker,avatar,sound,name:contactName(route,call),route:routeOf(route),call};
+    modal={node,title,phoneLine,state,duration,clockCall:null,clockStart:null,clockEnd:null,clockTimer:null,error,start,reject,end,mute,kicker,avatar,sound,name:contactName(route,call),route:routeOf(route),phone:contactPhone(route,call),call};
     close.onclick=()=>{if(busy())void stop(session,true);else if(modal?.call&&!terminal(modal.call))void rejectCall();else closeModal();};
     node.addEventListener('cancel',event=>{event.preventDefault();close.click();});
     start.onclick=()=>void begin();reject.onclick=()=>void rejectCall();end.onclick=()=>void stop();mute.onclick=()=>{const s=session;if(!s?.media||s.stopping)return;s.muted=!s.muted;s.media.setMuted(s.muted);draw();};
@@ -110,11 +111,13 @@
   function draw(){
     const m=modal;if(!m)return;const s=session,call=s?.call||m.call,active=!!s&&!terminal(s.call),pending=!!s&&!s.call;
     updateRing(call);updateDuration(m);m.sound.hidden=call?.state!=='incoming'||busy()||ringContext?.state==='running';
-    m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=call?.display_name?contactName(m.route,call):m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
+    if(call?.display_name)m.name=contactName(m.route,call);
+    m.kicker.textContent=call?.direction==='inbound'?'Входящий звонок':'Звонок WhatsApp';m.title.textContent=m.name;m.avatar.textContent=initials(m.title.textContent);m.node.dataset.state=s?.preparing?'starting':call?.state||'idle';
     const source=sourceOf(m.route);
     m.state.textContent=s?.preparing?'Подключаем микрофон…':s?.stopping&&!terminal(call)?'Микрофон выключен. Завершаем звонок…':call?labels[call.state]||'Проверяем состояние…':source.online?'Готов к звонку':'Источник звонков не подключён к серверу';
     // Only a phone-number JID is a customer phone; numeric LIDs are opaque IDs.
-    const jid=String(m.route.conversation_id||''),number=/^[1-9][0-9]{5,21}@s\.whatsapp\.net$/.test(jid)?'+'+jid.split('@')[0]:'';
+    const number=contactPhone(m.route,call)||m.phone;
+    if(number)m.phone=number;
     m.phoneLine.textContent=number;m.phoneLine.hidden=!number;
     m.error.textContent=[s?.error,!terminal(call)&&s?.controlWarning,!terminal(call)&&s?.closeError].filter(Boolean).join(' ');m.start.hidden=active||pending||!!s?.preparing||!!s?.stopping||!!call&&call.state!=='incoming';
     m.start.disabled=!source.online;m.reject.hidden=!call||call.state!=='incoming'||!!s;

@@ -52,8 +52,12 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 }
 
 func (s *Session) createCall(callID string) *call.CallManager {
+	return s.createCallWithCaller(callID, nil)
+}
+
+func (s *Session) createCallWithCaller(callID string, caller *callerIdentity) *call.CallManager {
 	cm := call.NewCallManager(wa.NewSocket(s.client), s.log)
-	s.wireCall(cm, callID)
+	s.wireCall(cm, callID, caller)
 	ac := &activeCall{cm: cm, id: callID}
 	if !s.reg.addBounded(callID, ac, s.mgr.maxCalls) {
 		return nil
@@ -69,12 +73,13 @@ func (s *Session) createCall(callID string) *call.CallManager {
 	return cm
 }
 
-func (s *Session) wireCall(cm *call.CallManager, callID string) {
+func (s *Session) wireCall(cm *call.CallManager, callID string, caller *callerIdentity) {
 	cm.OnIncoming = func(c *call.CallInfo) {
 		if ac, ok := s.reg.get(callID); !ok || ac.cm != cm {
 			return
 		}
 		s.mgr.broker.upsertCall(CallRecord{
+			Caller:    caller,
 			SessionID: s.id, CallID: c.CallID, Direction: "inbound", Peer: c.PeerJid,
 			StartedAt: time.Now().UnixMilli(), Status: StatusRinging,
 		})
@@ -193,7 +198,13 @@ func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
 		s.rejectOffer(ctx, node, evt.From)
 		return
 	}
-	cm := s.createCall(callID)
+	var caller *callerIdentity
+	if s.client != nil && s.client.Store != nil {
+		identityCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		caller = resolveOfferCaller(identityCtx, evt.BasicCallMeta, s.client.Store.LIDs, s.client.Store.Contacts)
+		cancel()
+	}
+	cm := s.createCallWithCaller(callID, caller)
 	if cm == nil {
 		return
 	}

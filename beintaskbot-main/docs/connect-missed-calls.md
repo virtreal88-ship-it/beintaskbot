@@ -164,3 +164,17 @@ An addressed historical repair uses `tenant_call_identity.refresh_call` with an
 owner profile and an exact call ID. It fetches fresh evidence from the private
 source-scoped endpoint and rechecks owner, binding and call identity before the
 transaction. It sends no WhatsApp message, places no call and replays no event.
+### Caller labels at arrival
+
+The managed gateway retains an exact direct call offer's creator/alternate PN
+as private per-call evidence, after rejecting group, creator and local mapping
+conflicts. This evidence accompanies the first snapshot even before contact
+sync fills the LID store, and survives the move to ended history. It does not
+write global identity mappings or change the dial target. Contact names remain
+optional: a missing provider name must never be invented.
+
+The authorized browser-call status includes the conversation's validated phone,
+so LID routes display the phone independently of their opaque routing ID. Late
+identity on an already-ended, exact tenant/source/boot/call/peer is allowed to
+fill missing labels without re-closing the call or inserting another timeline
+event. Normal periodic status refresh updates the open incoming panel.

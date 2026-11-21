@@ -170,6 +170,7 @@ def _public(row,actor):
     return {'id':str(row['id']),'state':row['state'],'direction':row['direction'],
         'channel_id':str(row['channel_id']),'conversation_id':row['conversation_id'],'lead_id':row['lead_id'],
         'display_name':str(row.get('display_name') or '')[:120],
+        'phone':str(row.get('phone') or '') if re.fullmatch(r'\+?[1-9][0-9]{6,14}',str(row.get('phone') or '')) else '',
         'owned':row['actor_id']==actor,'claimed':row['actor_id'] is not None,
         'created_at':row['created_at'].isoformat(),'recording_state':row['recording_state'],
         'recording_id':str(row['recording_id']) if row.get('recording_id') else None}
@@ -200,7 +201,7 @@ def status(profile,request_id=None,heartbeat=True):
 def _source_status(cur,profile,c,tenant,actor,request_id,heartbeat):
         cur.execute('SELECT *,last_seen>now()-interval \'10 seconds\' AS fresh FROM saas_browser_call_gateways WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid',(tenant,c['gateway_id']))
         gateway=cur.fetchone()
-        cur.execute('''SELECT bc.*,COALESCE(NULLIF(cv.manual_display_name,''),NULLIF(cv.display_name,''),cv.contact_name,'') AS display_name
+        cur.execute('''SELECT bc.*,cv.phone,COALESCE(NULLIF(cv.manual_display_name,''),NULLIF(cv.display_name,''),cv.contact_name,'') AS display_name
           FROM saas_browser_calls bc LEFT JOIN saas_connect_conversations cv
           ON cv.tenant_id=bc.tenant_id AND cv.connect_channel_id=bc.channel_id
             AND cv.conversation_id=bc.conversation_id AND cv.lead_id=bc.lead_id
@@ -431,9 +432,19 @@ def sync(c,data):
                   RETURNING id,tenant_id,channel_id,conversation_id,lead_id,direction,actor_id,ended_at''',
                   (c['tenant_id'],c['gateway_id'],boot,item['provider_id'],item['peer_jid']))
                 ended_call=cur.fetchone()
-                if ended_call and c.get('managed') and item.get('caller'):
+                if c.get('managed') and item.get('caller'):
                     from tenant_call_identity import enrich
-                    enrich(cur,c,item['peer_jid'],item['caller'],expected=ended_call['conversation_id'])
+                    # Identity can arrive after the first ended snapshot. Only
+                    # this exact fenced call may receive it; do not re-close or
+                    # recreate a call, or repeat the missed-call timeline event.
+                    cur.execute('''SELECT b.conversation_id FROM saas_browser_calls b JOIN saas_connect_conversations cv
+                      ON cv.tenant_id=b.tenant_id AND cv.connect_channel_id=b.channel_id AND cv.conversation_id=b.conversation_id AND cv.lead_id=b.lead_id
+                      WHERE b.tenant_id=%s AND b.gateway_id=%s AND b.boot_id=%s AND b.provider_id=%s AND b.peer_jid=%s
+                      AND b.direction='inbound' AND b.state='ended'
+                      AND (cv.phone='' OR (%s<>'' AND (cv.display_name='' OR cv.contact_name='')))''',
+                      (c['tenant_id'],c['gateway_id'],boot,item['provider_id'],item['peer_jid'],item['caller']['display_name']))
+                    identity_call=cur.fetchone()
+                    if identity_call:enrich(cur,c,item['peer_jid'],item['caller'],expected=identity_call['conversation_id'])
                 if ended_call and ended_call['direction']=='inbound' and ended_call['actor_id'] is None:
                     # A live inbound call that ends without an employee claiming
                     # it is a missed-call timeline event. The deterministic ID
