@@ -3,6 +3,9 @@ on:
   pull_request:
     paths:
       - 'beintaskbot-main/tenant_dialog_lifecycle.py'
+      - 'beintaskbot-main/tenant_dialog_company_binding.py'
+      - 'beintaskbot-main/tenant_dialog_company_completion.py'
+      - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_dialog_presence.py'
       - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
@@ -20,6 +23,8 @@ on:
       - 'beintaskbot-main/tenant_connect_transport.py'
       - 'beintaskbot-main/tenant_support_inbox_store.py'
       - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/docs/tenant-dialog-company.js'
+      - 'beintaskbot-main/tests/test_dialog_company_ui.cjs'
       - 'beintaskbot-main/tests/test_dialog_lifecycle*'
       - '.github/workflows/dialog-lifecycle.yml'
 permissions:
@@ -59,6 +64,7 @@ jobs:
       - name: UI lifecycle and repeated actions
         run: |
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_ui.cjs
+          NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_company_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_bulk_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_bulk_interrupted_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_group_cards_ui.cjs

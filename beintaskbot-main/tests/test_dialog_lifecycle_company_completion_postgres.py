@@ -32,3 +32,195 @@ def test_concurrent_close_choices_never_overwrite_the_winner(companies,monkeypat
     audit=database.execute("SELECT payload->'company_bound_on_close' AS change FROM saas_tenant_audit_events WHERE action='dialog_close'")
     assert audit==[{'change':{'previous_company_id':previous if archived else None,'company_id':company}}]
     database.commit()
+
+
+
+@pytest.mark.parametrize('required', [False, True])
+def test_explicit_no_company_is_scoped_fingerprinted_and_needs_no_crm_access(companies, monkeypatch, required):
+    from test_tenant_support_inbox import A, CA, PROFILE
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_linear_policy import TenantLinearError
+
+    db, company, *_ = companies
+    monkeypatch.setenv(completion.ENV, str(required).lower())
+    grant(db, monkeypatch, view='none', update='none')
+    command(actor=33)
+    route = {'provider':'connect', 'channel_id':CA, 'conversation_id':'client', 'lead_id':41, 'can_send':True}
+    with db.cursor() as cur:
+        preview = lifecycle.decorate(cur, A, 33, route, _can_update=True)
+    db.commit()
+    assert preview['lifecycle']['can_close'] is True
+    assert preview['lifecycle'].get('company_completion') == ({
+        'status':'missing' if required else 'choice_available',
+        'required':required,'can_choose':False,'can_skip':True,
+    })
+
+    bad_payloads = (
+        {'company_choice':None}, {'company_choice':'None'},
+        {'company_choice':'none', 'company_id':company},
+    )
+    for extra in bad_payloads:
+        with pytest.raises(TenantLinearError) as denied:
+            lifecycle.mutate(STAFF, payload('close', 1, **extra))
+        assert denied.value.status == 422
+    request = payload('close', 1, company_choice='none')
+    with pytest.raises(TenantLinearError) as denied:
+        lifecycle.mutate(PROFILE, request)
+    assert denied.value.status in {403, 404}
+    assert state(db)['state'] == 'accepted'
+    result = lifecycle.mutate(STAFF, request)
+    assert result['lifecycle']['state'] == 'closed'
+    assert lifecycle.mutate(STAFF, request) == result
+    with pytest.raises(TenantLinearError) as replay:
+        lifecycle.mutate(STAFF, {**request, 'company_choice':'different'})
+    assert replay.value.status == 409
+    assert bindings(db) == []
+    assert db.execute("SELECT payload->>'company_choice' AS choice FROM saas_tenant_audit_events WHERE action='dialog_close'") == [{'choice':'none'}]
+    db.commit()
+
+
+@pytest.mark.parametrize('view,explicit',[('none',True),('all',True),('all',False)])
+def test_optional_close_preserves_concurrently_added_company_without_disclosure(companies, monkeypatch,view,explicit):
+    from test_tenant_support_inbox import A, CA
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+
+    db, company, *_ = companies
+    monkeypatch.delenv(completion.ENV)
+    grant(db, monkeypatch, view=view, update='none')
+    command(actor=33)
+    db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+       (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+       VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,company))
+    db.commit()
+    if view=='all':
+        from tenant_scoped_access_store import read_access_profile
+        from tenant_policy import TenantPolicy
+        route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+        with db.cursor() as cur:
+            policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+            preview=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+        db.commit()
+        assert preview['lifecycle']['company_completion']=={
+            'status':'ready','required':False,'can_choose':False,'can_skip':False,
+        }
+    request = payload('close',1,**({'company_choice':'none'} if explicit else {}))
+    result = lifecycle.mutate(STAFF, request)
+    assert result['lifecycle']['state'] == 'closed'
+    assert company not in str(result)
+    assert bindings(db)[0]['company_id'] == company
+    audit = db.execute("SELECT payload FROM saas_tenant_audit_events WHERE action='dialog_close'")
+    assert len(audit) == 1 and company not in str(audit)
+    db.commit()
+
+
+@pytest.mark.parametrize('required',[False,True])
+def test_explicit_none_scoping_and_archived_preservation(companies,monkeypatch,required):
+    from test_tenant_support_inbox import A, B, CA
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+    from tenant_beinsystems_operator_access import WORKSPACE_ENV
+    from tenant_linear_policy import TenantLinearError
+
+    db, company, *_ = companies
+    monkeypatch.setenv(completion.ENV,str(required).lower())
+    grant(db, monkeypatch)
+    command(actor=33)
+    request = payload('close', 1, company_choice='none')
+    monkeypatch.setenv(WORKSPACE_ENV, B)
+    with pytest.raises(TenantLinearError) as out_of_scope:
+        lifecycle.mutate(STAFF, request)
+    assert out_of_scope.value.status == 422
+    assert state(db)['state'] == 'accepted'
+    assert not bindings(db)
+    monkeypatch.setenv(WORKSPACE_ENV, A)
+    db.execute("UPDATE saas_crm_native_companies SET archived_at=now() WHERE id=%s::uuid", (company,))
+    db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+       (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+       VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,company))
+    db.commit()
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    with db.cursor() as cur:
+        policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+        route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+        decorated=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+    db.commit()
+    assert decorated['lifecycle']['company_completion']['can_skip'] is (not required)
+    if required:
+        with pytest.raises(TenantLinearError) as archived:
+            lifecycle.mutate(STAFF,request)
+        assert archived.value.status==422
+        assert state(db)['state']=='accepted'
+    else:
+        assert lifecycle.mutate(STAFF,request)['lifecycle']['state']=='closed'
+    assert bindings(db)[0]['company_id']==company
+    db.commit()
+
+
+@pytest.mark.parametrize('bound',[False,True])
+def test_optional_readiness_is_neutral_for_row_scoped_viewer(companies,monkeypatch,bound):
+    from test_tenant_support_inbox import A, CA
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+
+    db,company,*_ = companies
+    monkeypatch.delenv(completion.ENV)
+    grant(db,monkeypatch,view='self',update='self')
+    command(actor=33)
+    if bound:
+        db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+          (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+          VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""",(A,CA,company))
+        db.commit()
+    route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+    with db.cursor() as cur:
+        policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+        preview=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+    db.commit()
+    assert preview['lifecycle']['can_close'] is True
+    assert preview['lifecycle']['company_completion']=={
+        'status':'choice_available','required':False,'can_choose':True,'can_skip':True,
+    }
+    assert company not in str(preview)
+    assert lifecycle.mutate(STAFF,payload('close',1,company_choice='none'))['lifecycle']['state']=='closed'
+    assert len(bindings(db))==bound
+    db.commit()
+
+
+@pytest.mark.parametrize('bound',[False,True])
+def test_scoped_operator_may_choose_only_accessible_company_and_never_overwrite(companies,monkeypatch,bound):
+    from test_tenant_support_inbox import A, CA
+    from tenant_linear_policy import TenantLinearError
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+
+    db,own,_,foreign,hidden=companies
+    monkeypatch.delenv(completion.ENV)
+    grant(db,monkeypatch,view='self',update='self')
+    command(actor=33)
+    if bound:
+        db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+          (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+          VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""",(A,CA,hidden))
+        db.commit()
+    for denied in (foreign,hidden):
+        with pytest.raises(TenantLinearError) as unavailable:
+            lifecycle.mutate(STAFF,payload('close',1,company_id=denied))
+        assert unavailable.value.status==422
+        assert str(unavailable.value)=='Компания недоступна для привязки по вашим правам.'
+        assert denied not in str(unavailable.value)
+    if bound:
+        with pytest.raises(TenantLinearError) as unsupported:
+            lifecycle.mutate(STAFF,payload('close',1,company_id=own))
+        assert unsupported.value.status==422
+        assert hidden not in str(unsupported.value)
+        assert bindings(db)[0]['company_id']==hidden
+        assert state(db)['state']=='accepted'
+    else:
+        assert lifecycle.mutate(STAFF,payload('close',1,company_id=own))['lifecycle']['state']=='closed'
+        assert bindings(db)[0]['company_id']==own
+    db.commit()
