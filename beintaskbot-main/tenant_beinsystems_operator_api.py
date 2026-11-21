@@ -258,6 +258,29 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint
 
+def dialog_company_public_link_handler(member: Callable, origin: str, logger):
+    async def endpoint(request: web.Request):
+        headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
+        profile = _profile(member, request)
+        if not profile:
+            return web.json_response({"success": False}, status=404, headers=headers)
+        try:
+            from tenant_dialog_company_public_link import issue_link
+            data = await _body(request, profile, origin)
+            fields = {"provider", "lead_id", "channel_id", "conversation_id", "expected_company_id"}
+            if set(data) != fields:
+                raise operator.OperatorError("Поля публичной ссылки некорректны.")
+            result = await asyncio.to_thread(issue_link, profile, **data)
+            return _json_response({"public_link": result})
+        except operator.OperatorError as error:
+            return web.json_response({"success": False}, status=error.status, headers=headers)
+        except Exception:
+            # No exception body, provider response, account, JWT, or public link in logs.
+            logger.error("Operator dialogue public link request failed")
+            return web.json_response({"success": False}, status=503, headers=headers)
+    return endpoint
+
+
 def links_handler(member: Callable, origin: str, logger):
     async def endpoint(request: web.Request):
         profile = _profile(member, request)
