@@ -17,17 +17,18 @@ const (
 )
 
 type CallRecord struct {
-	Caller    *callerIdentity `json:"-"` // immutable, private offer evidence
-	Recording bool            `json:"recording"`
-	SessionID string          `json:"sessionId"`
-	CallID    string          `json:"callId"`
-	Owner     *string         `json:"owner"`
-	Direction string          `json:"direction"`
-	Peer      string          `json:"peer"`
-	StartedAt int64           `json:"startedAt"`
-	Status    CallStatus      `json:"status"`
-	EndedAt   *int64          `json:"endedAt,omitempty"`
-	EndReason string          `json:"endReason,omitempty"`
+	RemoteAnswered bool            `json:"-"`
+	Caller         *callerIdentity `json:"-"` // immutable, private offer evidence
+	Recording      bool            `json:"recording"`
+	SessionID      string          `json:"sessionId"`
+	CallID         string          `json:"callId"`
+	Owner          *string         `json:"owner"`
+	Direction      string          `json:"direction"`
+	Peer           string          `json:"peer"`
+	StartedAt      int64           `json:"startedAt"`
+	Status         CallStatus      `json:"status"`
+	EndedAt        *int64          `json:"endedAt,omitempty"`
+	EndReason      string          `json:"endReason,omitempty"`
 }
 
 type AuthSnapshot struct {

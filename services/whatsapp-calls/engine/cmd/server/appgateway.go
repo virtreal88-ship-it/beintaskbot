@@ -215,10 +215,14 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 		if r.SessionID == g.cfg.Session && g.allowed(r.Peer) {
 			offerCallers[r.CallID] = r.Caller
 			state := string(r.Status)
-			if state == "starting" {
+			if r.Status == StatusStarting {
 				state = "ringing"
 			}
-			active = append(active, map[string]any{"provider_id": r.CallID, "peer_jid": r.Peer, "state": state, "direction": r.Direction})
+			item := map[string]any{"provider_id": r.CallID, "peer_jid": r.Peer, "state": state, "direction": r.Direction}
+			if r.Status == StatusRinging && r.RemoteAnswered && r.Direction == "outbound" {
+				item["remote_answered"] = true
+			}
+			active = append(active, item)
 		}
 	}
 	g.server.broker.mu.RUnlock()

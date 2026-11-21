@@ -49,6 +49,20 @@ def test_start_idempotency_busy_and_explicit_termination(gateway):
     assert calls.action(PROFILE,command())['id']!=one['id']
 
 
+def test_outgoing_answer_stops_ringing_before_media_connects(gateway):
+    _,_,cfg=gateway
+    calls.action(PROFILE,command())
+    outgoing=calls.sync(cfg,snapshot(2))['commands'][0]
+    ack={'id':outgoing['id'],'ok':True,'provider_id':'outgoing-test','sdp_answer':SDP}
+    ringing=provider('ringing',CONVERSATION,'outbound','outgoing-test')
+    calls.sync(cfg,snapshot(3,active=[ringing],results=[ack]))
+    assert calls.status(PROFILE)['calls'][0]['state']=='ringing'
+    calls.sync(cfg,snapshot(4,active=[{**ringing,'remote_answered':True}]))
+    assert calls.status(PROFILE)['calls'][0]['state']=='starting'
+    calls.sync(cfg,snapshot(5,active=[{**ringing,'state':'connected'}]))
+    assert calls.status(PROFILE)['calls'][0]['state']=='connected'
+
+
 def test_legacy_pilot_still_enforces_twenty_call_daily_limit(gateway):
     db,key,cfg=gateway
     db.execute('''INSERT INTO saas_browser_calls

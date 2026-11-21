@@ -131,7 +131,29 @@
   async function requestBrowserNoticePermission(){const button=$('operatorNotificationToggle'),status=$('operatorNotificationStatus'),copy=browserNoticeCopy();if(!window.Notification){if(status)status.textContent=copy.unsupported;updateBrowserNoticeButton();return;}if(Notification.permission==='denied'){if(status)status.textContent=copy.denied;updateBrowserNoticeButton();return;}if(button)button.disabled=true;if(status)status.textContent=copy.connecting;try{if(typeof window.tenantPushEnable!=='function'){if(status)status.textContent=copy.profile;return;}const result=await window.tenantPushEnable();pushDeviceConnected=typeof result==='boolean'?result:result?.connected===true;window.tenantPushConnected=pushDeviceConnected;if(status)status.textContent=pushDeviceConnected?copy.connected:(typeof result==='object'&&result?.message)||copy.profile;}catch{if(status)status.textContent=copy.profile;}finally{updateBrowserNoticeButton();if(button&&Notification.permission!=='denied'&&Notification.permission!=='unsupported')button.disabled=false;}}
   function notifyIncomingOnce(row,messageId){const activelyViewing=sameDialog(row,currentDialog)&&!document.hidden&&$('view-dialogs')?.classList.contains('active');if(pushDeviceConnected||window.tenantPushConnected===true||!window.Notification||Notification.permission!=='granted'||!messageId||activelyViewing)return;const owner=identity(member),receipt=String(messageId),key=notificationReceiptKey();if(notificationReceipts.has(receipt))return;notificationReceipts.add(receipt);try{const recent=JSON.parse(localStorage.getItem(key)||'[]');if(recent.includes(receipt))return;localStorage.setItem(key,JSON.stringify([...recent.slice(-99),receipt]));}catch{}if(owner!==identity(member)||!hasRight('dialogs')||activelyViewing)return;const body=String(row.last_message_text||row.last_message_preview||'New customer message').replace(/\s+/g,' ').trim().slice(0,180);try{const notification=new Notification(dialogTitle(row),{body:body||'New customer message',tag:'chat-'+String(row.lead_id||''),renotify:false,silent:true,icon:'/icon-192.png'});notification.onclick=()=>{notification.close?.();try{window.focus();}catch{}window.tenantAppNavigate?.('dialogs',false);if(!sameDialog(row,currentDialog))setTimeout(()=>{if(owner===identity(member)&&hasRight('dialogs'))void openDialog(row,true);},0);};}catch{}}
   async function unlockMessageSound(){if(!soundEnabled)return;try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;soundContext=soundContext||new Audio();await soundContext.resume();soundUnlocked=soundContext.state==='running';updateSoundButton();}catch{soundUnlocked=false;updateSoundButton();}}
-  function playMessageSound(){if(!soundEnabled)return;if(!soundUnlocked||!soundContext||soundContext.state!=='running'){const prompt=$('operatorSoundStatus');if(prompt)prompt.textContent=soundCopy().unlock;return;}try{const oscillator=soundContext.createOscillator(),gain=soundContext.createGain();oscillator.type='sine';oscillator.frequency.value=740;gain.gain.setValueAtTime(.0001,soundContext.currentTime);gain.gain.exponentialRampToValueAtTime(.055,soundContext.currentTime+.025);gain.gain.exponentialRampToValueAtTime(.0001,soundContext.currentTime+.19);oscillator.connect(gain);gain.connect(soundContext.destination);oscillator.start();oscillator.stop(soundContext.currentTime+.2);}catch{}}
+  let messageSoundUntil=0;
+  function playMessageSound(){
+    if(!soundEnabled)return;
+    if(!soundUnlocked||!soundContext||soundContext.state!=='running'){
+      const prompt=$('operatorSoundStatus');if(prompt)prompt.textContent=soundCopy().unlock;
+      return;
+    }
+    const now=soundContext.currentTime;
+    if(now<messageSoundUntil)return;
+    messageSoundUntil=now+.32; // A burst of incoming messages plays one clear chime.
+    try{
+      for(const [pitch,delay,duration] of [[950,0,.12],[1270,.105,.19]]){
+        const oscillator=soundContext.createOscillator(),gain=soundContext.createGain(),at=now+delay;
+        oscillator.type='triangle';oscillator.frequency.value=pitch;
+        gain.gain.setValueAtTime(.0001,at);
+        gain.gain.exponentialRampToValueAtTime(.145,at+.016);
+        gain.gain.exponentialRampToValueAtTime(.0001,at+duration);
+        oscillator.connect(gain);gain.connect(soundContext.destination);
+        oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};
+        oscillator.start(at);oscillator.stop(at+duration+.01);
+      }
+    }catch{}
+  }
   function soundOnce(row,messageId){
     const owner=identity(member),receipt=dialogKey(row)+':'+messageId,key='tenant.operator.sound-receipts.'+owner;
     const play=()=>{if(owner!==identity(member)||!soundEnabled||!soundUnlocked)return;try{const recent=JSON.parse(localStorage.getItem(key)||'[]');if(recent.includes(receipt))return;localStorage.setItem(key,JSON.stringify([...recent.slice(-99),receipt]));}catch{}playMessageSound();};
