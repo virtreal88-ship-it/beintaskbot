@@ -101,13 +101,24 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   await page.locator('#operatorDialogTitleText').click();
   assert.deepEqual(await header(),before);
   await edit.click();
-  const drop=page.locator('#operatorDialogueAccountPicker'),input=drop.locator('input');
+  const drop=page.locator('#operatorDialogueCompanyPicker'),input=drop.locator('input');
   const geometry=await drop.boundingBox(),anchor=await edit.boundingBox();
   assert(await drop.evaluate(node=>node.closest('dialog')?.id==='operatorClientCard'));
   assert(geometry.x>=-1&&geometry.x+geometry.width<=width+1&&geometry.y>=anchor.y+anchor.height-1,
    'Operator chooser stays in the right panel below the company control '+JSON.stringify({geometry,anchor,width}));
   assert.deepEqual(await header(),before,'opening the inline chooser leaves the header geometry and content intact');
   assert(await input.evaluate(node=>document.activeElement===node),'Operator search receives focus');
+  assert.equal(await drop.locator('button.primary,select').count(),0,'choosing a result is the only save action');
+  assert.equal(await card.locator('[data-group-participants]').count(),1,'group keeps its participant roster');
+  const scroll=card.locator('.operator-client-panel-content');
+  const h=(await page.viewportSize()).height;
+  await page.setViewportSize({width,height:300});
+  await page.waitForFunction(()=>{const n=document.querySelector('#operatorClientCard .operator-client-panel-content');return n.scrollHeight>n.clientHeight;});
+  const headerTop=await card.locator('header').evaluate(n=>n.getBoundingClientRect().top);
+  await scroll.evaluate(n=>{n.scrollTop=n.scrollHeight;});
+  assert((await scroll.evaluate(n=>n.scrollTop))>0,'the panel content scrolls at a short viewport');
+  assert.equal(await card.locator('header').evaluate(n=>n.getBoundingClientRect().top),headerTop);
+  await page.setViewportSize({width,height:h});
   await input.fill('synthetic');
   const result=drop.locator('[data-operator-account-results] button').first();
   await result.waitFor();
