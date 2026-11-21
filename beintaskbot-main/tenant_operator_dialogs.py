@@ -993,6 +993,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
             inbound=_completion_inbound_snapshot(cur,tenant,rows,presence_only=not completion_preview) if rollout.enforced else {}
             workflows={}
+            company_prelinked_for_bulk=None
             presence_online=False
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
@@ -1001,6 +1002,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
                 from tenant_dialog_presence import is_online
                 presence_online=is_online(cur,tenant,int(profile['telegram_id']))
+                if completion_preview:
+                    import tenant_dialog_company_completion as completion
+                    if completion.enabled(tenant):
+                        company_prelinked_for_bulk=completion.bulk_prelinked_routes(cur,tenant,int(profile['telegram_id']))
             for r in rows:
                 action_capabilities={}
                 # The legacy, unscoped capability path is a no-op; avoid its
@@ -1012,6 +1017,15 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),_online=presence_online,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
+                    if company_prelinked_for_bulk is not None and r.get('lifecycle_enabled'):
+                        row_lifecycle=r['lifecycle']
+                        bulk_gate='not_applicable'
+                        if row_lifecycle['state']=='waiting' and row_lifecycle['can_dismiss']:
+                            bulk_gate='no_reply_separate'
+                        elif row_lifecycle['state']=='accepted' and row_lifecycle['can_close']:
+                            bulk_gate=('prelinked_unverified' if (str(r['channel_id']),r['conversation_id'])
+                                       in company_prelinked_for_bulk else 'choose')
+                        row_lifecycle['bulk_company_gate']=bulk_gate
             # Mode is a read-only view over already-authorized physical routes.
             # Recheck lifecycle ownership from the later snapshot as well.
             rows=[r for r in rows if not (r.get('lifecycle') or {}).get('operator_id')
@@ -1291,7 +1305,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             action_capabilities={}
             apply_capabilities(cur,tenant,policy,dialog,_action_capabilities=action_capabilities)
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
-            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,_can_update=action_capabilities.get('update',False))
+            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,
+                _can_update=action_capabilities.get('update',False),_policy=policy)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
             if restricted_ai:
