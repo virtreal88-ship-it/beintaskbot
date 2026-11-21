@@ -62,7 +62,7 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  routingEnforced=true;await openTools();
  assert.match(button.textContent,/Lunch|Обед|Nahar/,'reopening tools shows stored manual choice');
  button.click();await tick();
- assert.match(w.document.getElementById('operatorPresenceModal').textContent,/Only employees|Только сотрудники|Yalnız/);
+ assert.match(w.document.getElementById('operatorPresenceModal').textContent,/Only operators|доступны операторам|operatorlara açıqdır/);
  w.document.getElementById('operatorPresenceModal').querySelector('button[type=button]').click();
  status=null;await openTools();button.click();await tick();
  assert.match(w.document.getElementById('operatorPresenceModal').textContent,/before receiving new dialogues|текущем режиме|Cari rejimdə/);
