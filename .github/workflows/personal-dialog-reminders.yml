@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/personal-dialog-reminders.yml'
       - 'beintaskbot-main/tenant_personal_dialog_reminders*.py'
+      - 'beintaskbot-main/tenant_ai_agent_startup.py'
       - 'beintaskbot-main/tenant_policy.py'
       - 'beintaskbot-main/tenant_operator_access.py'
       - 'beintaskbot-main/tenant_dialog_access.py'
@@ -22,6 +23,7 @@ on:
       - 'beintaskbot-main/tests/test_dialog_composer.cjs'
       - 'beintaskbot-main/tests/test_dialog_reply_templates_ui.cjs'
       - 'beintaskbot-main/tests/test_connect_channel_multiprocess.py'
+      - 'beintaskbot-main/tests/test_startup_transaction_budget_postgres.py'
       - 'beintaskbot-main/tests/test_tenant_support_inbox.py'
       - 'beintaskbot-main/tests/isolated_database_guard/**'
       - 'beintaskbot-main/requirements.txt'

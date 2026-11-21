@@ -369,6 +369,7 @@
     return d;
   };
   window.tenantReloadProfile=()=>api('/api/platform/me');
+  window.tenantApplyProfile=applyCapabilities;
   const canonicalView=view=>view==='settings'?'profile':view;const pageAllowed=view=>{view=canonicalView(view);return view==='profile'||!state.capabilities.pages||(state.capabilities.pages[view]===true&&(view!=='news'||window.tenantViewDemand.newsAvailable(window.tenantProfileSnapshot)));};window.tenantCanAccessCompanySettings=()=>{const pages=state.capabilities.pages,modules=state.capabilities.modules;if(pages)return pages.settings===true;if(modules&&Object.hasOwn(modules,'settings'))return modules.settings===true;return ['owner','admin'].includes(state.me?.role)};
   // These existing routes show an authorization-denied shell when access is
   // unavailable, without exposing employee/customer/task data.

@@ -228,7 +228,8 @@ async function focusTests(){
   reply(requests[0],list([row(1)]));await settle();
   const old=w.tenantOperator.refresh();const oldRequest=requests.at(-1);
   w.dispatchEvent(new w.Event('focus'));w.dispatchEvent(new w.Event('focus'));
-  assert.equal(w.document.getElementById('operatorDialogs').style.visibility,'hidden','conceal before reauthorization starts');
+  assert.notEqual(w.document.getElementById('operatorDialogs').style.visibility,'hidden','keep the authorized dialogs visible while focus is verified');
+  assert.match(w.document.getElementById('operatorRows').textContent,/Synthetic 1/);
   const profiles=requests.filter(r=>r.url==='/api/platform/me');assert.equal(profiles.length,1,'focus burst joins profile reauthorization');
   const switched={...profile,member:{...profile.member,tenant_id:'00000000-0000-0000-0000-000000000102',telegram_id:22}};
   profiles[0].resolve(response(switched));await settle();
@@ -237,10 +238,12 @@ async function focusTests(){
   assert.equal(next.options.headers['X-Tenant-Id'],switched.member.tenant_id);assert.equal(next.options.headers['X-User-Id'],'22');
   reply(next,list([row(9)]));await settle();reply(oldRequest,list([row(1)]));await old;
   assert.match(w.document.getElementById('operatorRows').textContent,/Synthetic 9/);assert.doesNotMatch(w.document.getElementById('operatorRows').textContent,/Synthetic 1/);
-  w.dispatchEvent(new w.Event('focus'));requests.at(-1).resolve(response({},401));await settle();
+  const revalidation=w.tenantRequestCoordinator.revalidateProfile().catch(()=>{});
+  assert.equal(w.document.getElementById('operatorDialogs').style.visibility,'hidden','an explicit security revalidation conceals the previous view immediately');
+  requests.at(-1).resolve(response({},401));await revalidation;await settle();
   assert.equal(w.document.getElementById('operatorRows').textContent,'');assert.equal(w.tenantOperator.member,null,'auth failure cannot reveal retained scope');
  }finally{w.close();}
- console.log('PASS focus: coalesced reauthorization, conceal, silent workspace switch, old response rejection, auth failure');
+ console.log('PASS focus: preserved view, coalesced verification, workspace switch, old response rejection, explicit conceal and auth failure');
 }
 async function deepLinkReadPollTests(){
  const target=row(7),b=browser('dialogs',`&open_dialog=1&provider=connect&lead_id=7&channel_id=${target.channel_id}&conversation_id=client7`),{w,requests,emit,reply}=b;

@@ -6,7 +6,7 @@ from aiohttp import web
 
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
-from tenant_personal_dialog_reminders import SessionUnavailable, enabled, execute
+from tenant_personal_dialog_reminders import SessionUnavailable, configured, enabled, execute
 
 
 def _check_identity(data, profile):
@@ -20,11 +20,13 @@ def handler(member_from_request, origin, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            if not enabled():
+            if not configured():
                 raise TenantLinearError('Напоминания недоступны.', 404)
             profile = member_from_request(request)
             if not profile:
                 raise SessionUnavailable('Нет доступа.', 403)
+            if not enabled(profile.get('tenant_id')):
+                raise TenantLinearError('Напоминания недоступны.', 404)
             if request.method == 'GET':
                 _check_identity(request.query, profile)
                 result = await asyncio.to_thread(execute, profile)

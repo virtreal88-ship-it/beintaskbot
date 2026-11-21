@@ -7,8 +7,22 @@ from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 
 
-def enabled():
-    return os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_ENABLED') == '1'
+LEGACY_ENABLE = 'TENANT_PERSONAL_DIALOG_REMINDERS_ENABLED'
+WORKSPACE_ENABLE = 'TENANT_PERSONAL_DIALOG_REMINDERS_BEINSYSTEMS_ENABLED'
+PROVISION_ON_STARTUP = 'TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP'
+
+
+def configured():
+    return os.environ.get(LEGACY_ENABLE) == '1' or os.environ.get(WORKSPACE_ENABLE) == '1'
+
+
+def enabled(tenant_id):
+    if os.environ.get(LEGACY_ENABLE) == '1':
+        return True
+    if os.environ.get(WORKSPACE_ENABLE) != '1':
+        return False
+    from tenant_beinsystems_operator_access import is_operator_workspace
+    return is_operator_workspace(tenant_id)
 
 
 class SessionUnavailable(TenantLinearError):
@@ -16,7 +30,7 @@ class SessionUnavailable(TenantLinearError):
 
 
 def capability(policy):
-    if not enabled():
+    if not enabled(policy.profile.get('tenant_id')):
         return False
     from tenant_scoped_access import ACTIVE_TENANT_STATUSES
     if (policy.profile.get('active') is not True
@@ -52,6 +66,67 @@ def migrate(cur):
         WHERE completed_at IS NULL""")
 
 
+_SCHEMA_COLUMNS = (
+    ('tenant_id','uuid',True), ('actor_id','bigint',True), ('id','uuid',True),
+    ('provider','text',False), ('channel_id','text',False), ('conversation_id','text',False),
+    ('lead_id','bigint',False), ('note','text',True),
+    ('due_at','timestamp with time zone',True), ('completed_at','timestamp with time zone',False),
+)
+_SCHEMA_CONSTRAINTS = frozenset({
+    'PRIMARY KEY (tenant_id, actor_id, id)',
+    'FOREIGN KEY (tenant_id, actor_id) REFERENCES saas_tenant_members(tenant_id, telegram_id) ON DELETE CASCADE',
+    'CHECK (((length(note) >= 1) AND (length(note) <= 280)))',
+    "CHECK ((((provider IS NULL) AND (channel_id IS NULL) AND (conversation_id IS NULL) AND (lead_id IS NULL)) OR ((provider IS NOT NULL) AND (provider = 'connect'::text) AND (channel_id IS NOT NULL) AND (channel_id <> ''::text) AND (conversation_id IS NOT NULL) AND (conversation_id <> ''::text) AND (lead_id IS NOT NULL) AND (lead_id > 0))))",
+})
+
+
+def provision_schema(cur):
+    """Create only missing private-reminder objects, or verify without repair."""
+    cur.execute("SELECT to_regclass('saas_personal_dialog_reminders') IS NULL AS absent")
+    if cur.fetchone()['absent']:
+        migrate(cur)
+    verify_provisioned_schema(cur)
+
+
+def verify_provisioned_schema(cur):
+    cur.execute("""SELECT c.oid, n.nspname FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.oid=to_regclass('saas_personal_dialog_reminders')
+        AND n.nspname=current_schema() AND c.relkind='r' AND c.relpersistence='p'
+        AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_trigger t
+                        WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i
+                        WHERE c.oid IN (i.inhrelid,i.inhparent))""")
+    table = cur.fetchone()
+    if not table:
+        raise RuntimeError('Unexpected personal-reminder table; provisioning rolled back.')
+    oid = table['oid']
+    cur.execute("""SELECT a.attname,format_type(a.atttypid,a.atttypmod) AS data_type,a.attnotnull,
+        (a.atthasdef OR a.attidentity<>'' OR a.attgenerated<>'') AS generated
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid=%s::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum""", (oid,))
+    cols = cur.fetchall()
+    if (tuple((r['attname'],r['data_type'],r['attnotnull']) for r in cols) != _SCHEMA_COLUMNS
+            or any(r['generated'] for r in cols)):
+        raise RuntimeError('Unexpected personal-reminder columns; provisioning rolled back.')
+    cur.execute("""SELECT pg_get_constraintdef(oid) AS definition,convalidated
+      FROM pg_catalog.pg_constraint WHERE conrelid=%s::oid AND contype IN ('c','f','p','u','x')""", (oid,))
+    constraints = cur.fetchall()
+    if (len(constraints) != len(_SCHEMA_CONSTRAINTS)
+            or frozenset(r['definition'] for r in constraints) != _SCHEMA_CONSTRAINTS
+            or not all(r['convalidated'] for r in constraints)):
+        raise RuntimeError('Unexpected personal-reminder constraints; provisioning rolled back.')
+    cur.execute("""SELECT 1 FROM pg_catalog.pg_index i
+      WHERE i.indexrelid=to_regclass('saas_personal_dialog_reminders_pending')
+        AND i.indrelid=%s::oid AND i.indisvalid AND i.indisready AND i.indislive
+        AND pg_get_indexdef(i.indexrelid)=format(
+           'CREATE INDEX saas_personal_dialog_reminders_pending ON %%I.saas_personal_dialog_reminders USING btree (tenant_id, actor_id, due_at, id) WHERE (completed_at IS NULL)',
+           %s::text)""", (oid,table['nspname']))
+    if not cur.fetchone():
+        raise RuntimeError('Unexpected personal-reminder index; provisioning rolled back.')
+
+
 def _uuid(value):
     return str(uuid.UUID(str(value)))
 
@@ -84,7 +159,7 @@ def _ready(cur):
 
 
 def execute(profile, data=None):
-    if not enabled():
+    if not enabled(profile.get('tenant_id')):
         raise TenantLinearError('Напоминания недоступны.', 404)
     from tenant_platform import _connect
     with _connect() as conn, conn.cursor() as cur:
@@ -94,7 +169,15 @@ def execute(profile, data=None):
             if error.status == 403:
                 raise SessionUnavailable(str(error), 403) from error
             raise
-        _ready(cur)
+        if os.environ.get(LEGACY_ENABLE) == '1':
+            _ready(cur)
+        else:
+            # An accidental pilot opt-in after a failed or skipped preflight
+            # must not expose content from an unverified relation.
+            try:
+                verify_provisioned_schema(cur)
+            except RuntimeError:
+                raise TenantLinearError('Напоминания ещё не доступны.', 503) from None
         if data is None:
             cur.execute("""SELECT id::text AS id,note,due_at, provider IS NOT NULL AS can_open,
                 due_at<=CURRENT_TIMESTAMP AS due, count(*) OVER () AS total,
