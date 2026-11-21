@@ -43,8 +43,7 @@ func resolveOfferCaller(ctx context.Context, meta types.BasicCallMeta, lids stor
 			return nil
 		}
 	}
-	result := resolveCaller(ctx, alternate, nil, contacts)
-	return result
+	return callerWithPhone(ctx, alternate, peer, contacts)
 }
 
 // Only the paired device's protocol mapping proves LID -> PN. Contact labels
@@ -71,6 +70,10 @@ func resolveCaller(ctx context.Context, peer types.JID, lids store.LIDStore, con
 	if phone.Server != types.DefaultUserServer {
 		return nil
 	}
+	return callerWithPhone(ctx, phone, peer, contacts)
+}
+
+func callerWithPhone(ctx context.Context, phone, peer types.JID, contacts store.ContactStore) *callerIdentity {
 	result := &callerIdentity{Phone: phone.String()}
 	if contacts != nil {
 		for _, jid := range []types.JID{phone, peer} {

@@ -9,8 +9,9 @@ import (
 
 type callerTestStore struct {
 	store.NoopStore
-	phone, lid types.JID
-	info       types.ContactInfo
+	phone, lid  types.JID
+	info        types.ContactInfo
+	onlyLIDName bool
 }
 
 func (s *callerTestStore) GetPNForLID(context.Context, types.JID) (types.JID, error) {
@@ -19,7 +20,10 @@ func (s *callerTestStore) GetPNForLID(context.Context, types.JID) (types.JID, er
 func (s *callerTestStore) GetLIDForPN(context.Context, types.JID) (types.JID, error) {
 	return s.lid, nil
 }
-func (s *callerTestStore) GetContact(context.Context, types.JID) (types.ContactInfo, error) {
+func (s *callerTestStore) GetContact(_ context.Context, jid types.JID) (types.ContactInfo, error) {
+	if s.onlyLIDName && jid.Server != types.HiddenUserServer {
+		return types.ContactInfo{}, nil
+	}
 	return s.info, nil
 }
 
@@ -51,7 +55,7 @@ func TestOfferIdentityPrecedesContactSyncAndRejectsConflicts(t *testing.T) {
 	peer := types.NewJID("111111111111111", types.HiddenUserServer)
 	phone := types.NewJID("994100000777", types.DefaultUserServer)
 	meta := types.BasicCallMeta{From: peer, CallCreator: peer, CallCreatorAlt: phone}
-	local := &callerTestStore{info: types.ContactInfo{PushName: "Synthetic Caller"}}
+	local := &callerTestStore{info: types.ContactInfo{PushName: "Synthetic Caller"}, onlyLIDName: true}
 	got := resolveOfferCaller(context.Background(), meta, local, local)
 	if got == nil || got.Phone != phone.String() || got.Name != "Synthetic Caller" {
 		t.Fatal("offer proof was delayed until contact sync")
