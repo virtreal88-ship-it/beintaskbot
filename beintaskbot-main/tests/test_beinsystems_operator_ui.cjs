@@ -9,13 +9,11 @@ const {window}=dom;
 let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
-let batchConfirmable=false;
+let batchConfirmable=false,batchSourceOnly=false;
 let loginMode='success';
 let probeMode='empty';
 let directorySource='pending',directoryReady=false,companyAddOutcome='create';
 let employeeLinks=[];
-let dialogBinding={company_id:null,company_name:null,can_manage:true};
-let companySearches=[];
 let holdDirectory=false,directoryResolvers=[];
 window.tenantViewDemand={watch(value){viewDemand=value;}};
 window.confirm=message=>{confirmMessages.push(message);return true;};
@@ -23,19 +21,6 @@ window.fetch=async(path,options={})=>{
   requests.push({path,options});
   let result;
   if(path==='/api/platform/members')result={success:true,members:[{telegram_id:42,display_name:'Workspace operator',role:'operator',active:true}]};
-  else if(path.startsWith('/api/platform/crm/native/companies?')){
-    const query=new URL(path,'https://beintaskbot.test').searchParams;
-    companySearches.push(query.get('search'));
-    result={success:true,companies:[{id:'company-synthetic',name:'Synthetic company'}]};
-  }
-  else if(path.startsWith('/api/platform/operator/dialog-company?'))result={success:true,binding:{...dialogBinding}};
-  else if(path==='/api/platform/operator/dialog-company'&&options.method==='POST'){
-    const body=JSON.parse(options.body);
-    dialogBinding=body.company_id
-      ? {company_id:body.company_id,company_name:'Synthetic company',can_manage:true}
-      : {company_id:null,company_name:null,can_manage:true};
-    result={success:true,binding:{...dialogBinding}};
-  }
   else if(path.startsWith('/api/platform/operator/accounts?')&&options.method!=='POST')result={success:true,accounts:[{account:'imported-synthetic'}]};
   else if(path==='/api/platform/operator/employee-users')result={success:true,users:[{login:'operator.login',bindable:true}]};
   else if(path==='/api/platform/operator/employee-links'&&options.method==='POST'){
@@ -45,8 +30,10 @@ window.fetch=async(path,options={})=>{
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
   else if(options.method==='POST'&&JSON.parse(options.body).action==='preview_first_company_batch'){
-    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
-      rows:[{account:'<img src=x>',action:'create'}]}};
+    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,
+      ...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
+      ...(batchSourceOnly?{mode:'accounts_only'}:{}),
+      rows:[batchSourceOnly?{account:'<img src=x>'}:{account:'<img src=x>',action:'create'}]}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
     result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
@@ -119,46 +106,6 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
     integrations:[{provider:'beinsystems_operator'}]};
   await viewDemand.activate(profile);
   const panel=window.document.querySelector('#operatorIntegrationSettings');
-  // The dialog-company picker only uses same-origin CRM reads and local binding writes.
-  const card=window.document.createElement('article');card.id='operatorClientCard';
-  const actions=window.document.createElement('div');actions.className='operator-client-card-actions';
-  card.append(actions);window.document.body.append(card);
-  window.document.dispatchEvent(new window.CustomEvent('tenant-beinsystems-dialog-card',{detail:{
-    route:{provider:'connect',channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',customer_kind:'person'},
-    card,scope:'scope-synthetic',isCurrent:()=>true,
-    member:{tenant_id:profile.member.tenant_id,telegram_id:profile.member.telegram_id},
-  }}));
-  await new Promise(resolve=>setTimeout(resolve,0));
-  const localPicker=card.querySelector('[data-operator-dialog-company]');
-  assert(localPicker,'company selector is mounted in the current dialog card');
-  assert(localPicker.textContent.includes('не отправляется в Operator'));
-  localPicker.querySelector('[data-company-search]').value='Synthetic';
-  await localPicker.querySelector('[data-company-search-button]').onclick({
-    currentTarget:localPicker.querySelector('[data-company-search-button]'),
-  });
-  assert.deepEqual(companySearches,['Synthetic']);
-  const companyOption=[...localPicker.querySelector('[data-company-results]').querySelectorAll('button')]
-    .find(button=>button.textContent==='Synthetic company');
-  assert(companyOption);
-  await companyOption.onclick({currentTarget:companyOption});
-  assert.equal(dialogBinding.company_id,'company-synthetic');
-  const bindingPost=requests.filter(row=>row.path==='/api/platform/operator/dialog-company'
-    &&row.options.method==='POST').at(-1);
-  assert.deepEqual(JSON.parse(bindingPost.options.body),{
-    channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',company_id:'company-synthetic',
-    expected_tenant_id:profile.member.tenant_id,expected_user_id:String(profile.member.telegram_id),
-  });
-  dialogBinding={company_id:'company-synthetic',company_name:'Synthetic company',can_manage:false};
-  window.document.dispatchEvent(new window.CustomEvent('tenant-beinsystems-dialog-card',{detail:{
-    route:{provider:'connect',channel_id:'channel-synthetic',conversation_id:'dialog-synthetic',customer_kind:'person'},
-    card,scope:'scope-synthetic-readonly',isCurrent:()=>true,
-    member:{tenant_id:profile.member.tenant_id,telegram_id:profile.member.telegram_id},
-  }}));
-  await new Promise(resolve=>setTimeout(resolve,0));
-  const readonlyPicker=card.querySelector('[data-operator-dialog-company]');
-  assert(readonlyPicker.textContent.includes('Изменять привязку может владелец workspace.'));
-  assert.equal(readonlyPicker.querySelector('[data-company-search]'),null,
-    'non-admins can see the local company but cannot change its binding');
   assert(!requests.some(row=>/^https?:/.test(row.path)),'the UI never calls Operator directly');
   assert(panel,'Operator settings panel is mounted in the existing integrations host');
   const login=panel.querySelector('[data-operator-login]');
@@ -466,7 +413,16 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
   assert(batchPreview.textContent.includes('CRM-компании не создаются'));
-  batchConfirmable=true;
+  batchSourceOnly=true;
+  batchConfirmable=true; // malformed server combination must never create a control in source-only mode
+  await batchButton.onclick({currentTarget:batchButton});
+  assert(batchPreview.textContent.includes('Показаны только аккаунты Operator'));
+  assert(batchPreview.textContent.includes('Компании CRM не проверялись и не создавались'));
+  assert.equal(batchPreview.querySelector('li').textContent,'<img src=x>');
+  assert.equal(batchPreview.querySelector('img'),null);
+  assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null);
+  assert.equal(batchPosts().length,0);
+  batchSourceOnly=false;
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPosts().length,0,'preview must never confirm automatically');
   assert(batchPreview.textContent.includes('не полный каталог'));

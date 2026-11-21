@@ -513,11 +513,11 @@
   function lifecycleUnavailable(error,route){
     if(route?.lifecycle_enabled&&[403,404,409].includes(error.status)){removeLifecycleDialog(route);notice(lifecycleText('unavailable'));return true;}return false;
   }
-  async function lifecycleAction(route,action,button,target,episodeId,companyId){
+  async function lifecycleAction(route,action,button,target,episodeId,companyId,companyChoice){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const owner=identity(member),key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+(companyId?'.company.'+companyId:'');
+    const owner=identity(member),key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+(companyId?'.company.'+companyId:companyChoice?'.company-choice.'+companyChoice:'');
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(companyId?{company_id:companyId}:{})};lifecycleRequests.set(key,payload);}
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(companyId?{company_id:companyId}:action==='close'&&companyChoice==='none'?{company_choice:'none'}:{})};lifecycleRequests.set(key,payload);}
     button.disabled=true;
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
@@ -540,7 +540,7 @@
         const unavailable=lifecycleUnavailable(error,route);
         if(unavailable){if(action==='start')void refresh();}
         else{const status=$('operatorLifecycleStatus')||$('operatorChatError');if(status)status.textContent=error.message;
-          button.disabled=false;button.textContent=lifecycleText('retry');}
+          button.disabled=false;if(!companyChoice)button.textContent=lifecycleText('retry');}
       }
     }
   }
@@ -579,6 +579,10 @@
     searching:{ru:'Ищем компании…',az:'Şirkətlər axtarılır…',en:'Searching companies…'},
     empty:{ru:'Компании с правом привязки не найдены.',az:'Bağlaya biləcəyiniz şirkət tapılmadı.',en:'No linkable companies found.'},
     choose:{ru:'Выберите компанию, чтобы завершить диалог.',az:'Dialoqu tamamlamaq üçün şirkət seçin.',en:'Choose a company to complete this dialogue.'},
+    chooseOrSkip:{ru:'Выберите компанию или завершите без неё.',az:'Şirkət seçin və ya şirkətsiz tamamlayın.',en:'Choose a company or complete without one.'},
+    skipOnly:{ru:'Диалог можно завершить без выбора компании.',az:'Dialoqu şirkət seçmədən tamamlamaq olar.',en:'You can complete the dialogue without choosing a company.'},
+    skip:{ru:'Без компании',az:'Şirkətsiz',en:'Without a company'},
+    archivedSkip:{ru:'Компания архивирована. Можно завершить диалог без выбора новой компании и сохранить текущую привязку.',az:'Şirkət arxivləşdirilib. Yeni şirkət seçmədən dialoqu tamamlayıb mövcud əlaqəni saxlamaq olar.',en:'The company is archived. You can complete without choosing a replacement and keep the current link.'},
     archived:{ru:'Компания диалога архивирована. Для завершения выберите действующую CRM-компанию.',az:'Dialoq şirkəti arxivləşdirilib. Tamamlamaq üçün aktiv CRM şirkəti seçin.',en:'The dialogue company is archived. Choose an active CRM company to complete it.'},
     locked:{ru:'Нет прав на привязку CRM-компании. Диалог остаётся в работе.',az:'CRM şirkətini bağlamaq icazəsi yoxdur. Dialoq işdə qalır.',en:'You cannot link a CRM company. The dialogue stays open.'},
     invalid:{ru:'Не удалось подтвердить прежнюю компанию. Диалог остаётся в работе до проверки администратором.',az:'Əvvəlki şirkət təsdiqlənmədi. İnzibatçı yoxlayana qədər dialoq işdə qalır.',en:'The previous company could not be verified. The dialogue stays open for administrator review.'},
@@ -593,19 +597,25 @@
     modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle"><h2 id="operatorLifecycleTitle">${esc(companyCloseText('title'))}</h2><form data-company-search><label>${esc(companyCloseText('search'))}<input type="search" maxlength="120"></label><button type="submit">${esc(companyCloseText('search'))}</button></form><label>${esc(companyCloseText('choose'))}<select data-company-choice disabled><option value=""></option></select></label><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="button" class="primary" data-company-complete disabled>${esc(lifecycleText('close'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></section>`;
     const form=modal.querySelector('form'),input=form.querySelector('input'),select=modal.querySelector('select'),
       done=modal.querySelector('[data-company-complete]'),status=modal.querySelector('[role=status]');
+    const company=route.lifecycle.company_completion,canChoose=company.can_choose===true,canSkip=company.can_skip===true;
+    const searchButton=form.querySelector('button');
+    const skip=document.createElement('button');skip.type='button';skip.className='outline';skip.dataset.companySkip='';skip.textContent=companyCloseText('skip');skip.hidden=!canSkip;done.after(skip);
+    form.hidden=!canChoose;select.closest('label').hidden=!canChoose;done.hidden=!canChoose;
+    if(canSkip&&(company.status==='archived'||!canChoose)){const hint=document.createElement('p');hint.className='sub';hint.textContent=companyCloseText(company.status==='archived'?'archivedSkip':'skipOnly');status.before(hint);}
+    if(canChoose&&canSkip)select.closest('label').firstChild.textContent=companyCloseText('chooseOrSkip');
     const owner=identity(member),focus=document.activeElement;
     let serial=0,submitting=false;
     const current=()=>modal.isConnected&&owner===identity(member)&&sameDialog(route,currentDialog);
-    const events=['tenant-chat-close','tenant-auth-invalid','tenant-profile','tenant-view'];
+    const events=['tenant-chat-close','tenant-chat-open','tenant-auth-invalid','tenant-auth-pending','tenant-profile','tenant-view'];
     const close=()=>{serial++;modal.remove();document.removeEventListener('keydown',key,true);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};if(focus?.isConnected)focus.focus();};
     const key=event=>{
       if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}
-      else if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button')].filter(node=>!node.disabled);if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}}
+      else if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button')].filter(node=>!node.disabled&&!node.closest('[hidden]'));if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}}
     };
     closeLifecycleModal=close;document.addEventListener('keydown',key,true);for(const name of events)document.addEventListener(name,close);
     modal.querySelector('[data-cancel]').onclick=close;modal.onclick=event=>{if(event.target===modal)close();};
     form.onsubmit=async event=>{
-      event.preventDefault();if(!current()||submitting)return;
+      event.preventDefault();if(!canChoose||!current()||submitting)return;
       const attempt=++serial;done.disabled=true;select.disabled=true;select.replaceChildren(new Option('',''));status.textContent=companyCloseText('searching');
       try{
         const query=new URLSearchParams({search:input.value.trim(),expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
@@ -617,24 +627,28 @@
       }catch(error){if(current()&&attempt===serial)status.textContent=error.message;}
     };
     select.onchange=()=>{done.disabled=!select.value;};
-    done.onclick=async()=>{
-      if(!current()||submitting||!select.value)return;
-      submitting=true;select.disabled=true;
-      try{await lifecycleAction(route,'close',done,null,null,select.value);}
-      finally{if(current()){submitting=false;select.disabled=false;done.disabled=!select.value;}}
+    const complete=async(withoutCompany)=>{
+      if(!current()||submitting||(withoutCompany?!canSkip:!canChoose||!select.value))return;
+      const selected=select.value,hadOptions=select.options.length>1;
+      submitting=true;serial++;select.disabled=true;searchButton.disabled=true;input.disabled=true;
+      const action=withoutCompany?skip:done;
+      (withoutCompany?done:skip).disabled=true;
+      try{await lifecycleAction(route,'close',action,null,null,withoutCompany?null:selected,withoutCompany?'none':null);}
+      finally{if(current()){submitting=false;select.disabled=!hadOptions;searchButton.disabled=false;input.disabled=false;done.disabled=!select.value;skip.disabled=false;}}
     };
-    document.body.append(modal);input.focus();
+    done.onclick=()=>void complete(false);skip.onclick=()=>void complete(true);
+    document.body.append(modal);(canChoose?input:skip).focus();
   }
   function renderLifecycleActions(route,host){
     const state=route.lifecycle||{},company=state.company_completion;
-    if(state.can_close&&company?.status&&company.status!=='ready'){
+    if(state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
       const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
-      reason.textContent=companyCloseText(['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
+      reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
-    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.status==='ready'||company.can_choose)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed)continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='close'&&company?.can_choose?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
+      button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
   function openCompletion(route){
@@ -1170,6 +1184,13 @@
     const titleText=$('operatorDialogTitleText');if(titleText&&editable){const trigger=document.createElement('button');trigger.type='button';trigger.id='operatorClientCardOpen';trigger.setAttribute('aria-label',clientCardText('open'));trigger.title=clientCardText('open');trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-controls','operatorClientCard');trigger.setAttribute('aria-expanded','false');const avatar=document.createElement('span');avatar.className='operator-row-avatar operator-header-avatar';avatar.setAttribute('aria-hidden','true');avatar.textContent=route.customer_kind==='group'?'◉':name.slice(0,1).toLocaleUpperCase();avatar.insertAdjacentHTML('beforeend',avatarMarkup(route,true));trigger.append(avatar);titleText.before(trigger);hydrateAvatars();}
     hydrateContactPhone(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
+    if(capabilities.dialog_company_binding===true){
+      const mountedHost=head.querySelector('.operator-dialog-head-main');
+      const sharedCurrent=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
+        owner===identity(member)&&mountedHost?.isConnected&&sameDialog(route,currentDialog);
+      window.tenantDialogueCompany?.mount({host:mountedHost,route,member,isCurrent:sharedCurrent,
+        onChanged:()=>sharedCurrent()?openDialog(route,true):undefined});
+    }else window.tenantDialogueCompany?.clear();
     const card=$('operatorClientCard'),trigger=$('operatorClientCardOpen');if(!card||!trigger)return;
     const form=$('operatorConversationName'),input=$('operatorConversationNameInput'),save=$('operatorSaveConversationName'),error=card.querySelector('[data-client-card-error]'),listeners=[];
     $('operatorClientDeveloperHost').append(...developerNodes);$('operatorClientDeveloperStatus').append(...developerStatus);
@@ -1177,11 +1198,6 @@
     if(snapshot?.error)error.textContent=snapshot.error;
     let authorized=true;
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&!!currentDialog&&scope===contextKey('client-card',currentDialog);
-    if(operatorWorkspaceAvailable)document.dispatchEvent(new CustomEvent('tenant-beinsystems-dialog-card',{detail:{
-      route:{provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,
-        customer_kind:route.customer_kind},scope,card,isCurrent:current,
-      member:{tenant_id:member?.tenant_id,telegram_id:member?.telegram_id},
-    }}));
     if(operatorWorkspaceAvailable&&hasOperatorDataRight())void renderOperatorDialogContext(route,scope,card,current);
     const position=()=>{if(!card.open)return;const v=window.visualViewport,width=v?.width||innerWidth,height=v?.height||innerHeight,left=v?.offsetLeft||0,top=v?.offsetTop||0;card.style.width=Math.max(1,Math.min(420,width-24))+'px';card.style.maxHeight=Math.max(1,height-24)+'px';const box=card.getBoundingClientRect();card.style.left=left+Math.max(12,(width-box.width)/2)+'px';card.style.top=top+Math.max(12,(height-box.height)/2)+'px';};
     const close=(restore=true)=>{if(card.open){if(card.close)card.close();else card.removeAttribute('open');}trigger.setAttribute('aria-expanded','false');if(restore){input.value=route.manual_display_name||name;error.textContent='';}if(restore&&trigger.isConnected)trigger.focus({preventScroll:true});};

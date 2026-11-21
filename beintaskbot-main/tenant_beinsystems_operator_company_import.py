@@ -109,6 +109,8 @@ def first_company_batch(profile, *, receipt=None):
         token=credentials["token"], base_url=credentials["base_url"], first_batch_accounts=True)
     accounts = _first_batch_payload(response)
     _selected_source_fence(profile, tenant, actor, source, credentials)
+    if receipt is None and not preview_may_mint:
+        return _preview_operator_accounts_only(profile, tenant, actor, accounts, credentials)
     return _apply_company_import(profile, tenant, actor, accounts, credentials,
         first_batch=True, preview_receipt=receipt, preview_scope=scope,
         preview_may_mint=preview_may_mint)
@@ -449,6 +451,21 @@ def _assert_first_batch_not_expired(cur, tenant, actor, credentials):
         (tenant, actor, credentials["generation"]))
     if not cur.fetchone():
         raise operator.OperatorError("Аккаунтный доступ Operator истёк. Откройте новый предпросмотр.", 409)
+
+
+def _preview_operator_accounts_only(profile, tenant, actor, accounts, credentials):
+    # Explicitly source-only. No CRM policy, planner, company/association lookup
+    # or import lock is necessary to display the bounded provider response.
+    with operator._connect() as conn:
+        with conn.cursor() as cur:
+            operator._lock_accounts_capability_scope(cur, tenant)
+            _owner(profile, operator._current_profile(cur, tenant, actor))
+            _lock_and_check_selected_source(cur, tenant, actor, "accounts_only", credentials)
+            _assert_first_batch_not_expired(cur, tenant, actor, credentials)
+            if not operator.first_company_batch_preview_enabled():
+                raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
+    return {"checked": len(accounts), "partial": True, "limit": FIRST_BATCH_LIMIT,
+            "mode": "accounts_only", "rows": [{"account": row["account"]} for row in accounts]}
 
 
 def _apply_company_import(profile, tenant, actor, accounts, credentials, *,

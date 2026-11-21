@@ -123,13 +123,22 @@ def test_personal_isolation_due_and_fresh_source_access(request, monkeypatch):
 
 @pytest.fixture
 def reminder_boot(startup_database, monkeypatch):
+    # Import normal application dependencies before the bootstrap helper puts
+    # its isolated connection stub in sys.modules.
+    import tenant_dialog_company_binding
     tenant=str(uuid.uuid4())
     monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', tenant)
-    for key in (store.LEGACY_ENABLE,store.WORKSPACE_ENABLE,store.PROVISION_ON_STARTUP):
+    for key in (store.LEGACY_ENABLE,store.WORKSPACE_ENABLE,store.PROVISION_ON_STARTUP,
+                'DIALOG_REPLY_TEMPLATES_ENABLED','DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP',
+                'DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP',
+                'BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'):
         monkeypatch.delenv(key, raising=False)
     def base(conn):
         conn.execute("""CREATE TABLE IF NOT EXISTS saas_tenant_members(
             tenant_id uuid, telegram_id bigint,PRIMARY KEY(tenant_id,telegram_id))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS saas_tenant_departments(
+            tenant_id uuid, id uuid, PRIMARY KEY(tenant_id,id))""")
+        conn.execute("CREATE TABLE IF NOT EXISTS saas_tenants(id uuid PRIMARY KEY)")
         conn.execute("INSERT INTO saas_tenant_members VALUES (%s,11) ON CONFLICT DO NOTHING",(tenant,))
         conn.execute("INSERT INTO budget_webhook VALUES(41) ON CONFLICT DO NOTHING")
     install_bootstrap(monkeypatch,startup_database,base)
@@ -243,4 +252,37 @@ def test_reminder_provision_and_template_observation_are_independent(reminder_bo
     with psycopg.connect(dsn) as conn:
         assert _objects(conn)==(True,True)
         assert conn.execute("SELECT to_regclass('saas_dialog_reply_templates') IS NULL").fetchone()==(True,)
+    assert_session_released(dsn)
+
+
+@pytest.mark.parametrize('malformed_template',[False,True])
+def test_legacy_optional_hooks_and_new_reminders_are_independent(reminder_boot,monkeypatch,caplog,malformed_template):
+    dsn,tenant=reminder_boot
+    if malformed_template:
+        with psycopg.connect(dsn) as conn:
+            conn.execute("CREATE TABLE saas_dialog_reply_templates(marker text)")
+            conn.execute("INSERT INTO saas_dialog_reply_templates VALUES ('synthetic private marker')")
+    for flag,value in ((store.PROVISION_ON_STARTUP,'1'),
+                       ('DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP','true'),
+                       ('BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP','true')):
+        monkeypatch.setenv(flag,value)
+    with caplog.at_level('INFO',logger=startup.__name__):
+        startup.prepare_database()
+        startup.prepare_database()
+    expected='unverified' if malformed_template else 'ready'
+    assert caplog.text.count('Reply template schema preflight: '+expected)==2
+    assert caplog.text.count('Optional Kommo dialogue company schema ready')==2
+    assert caplog.text.count('Personal reminders schema preflight: ready')==2
+    assert 'synthetic private marker' not in caplog.text
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM saas_beinsystems_kommo_dialog_company_bindings").fetchone()==(0,)
+        assert conn.execute("SELECT count(*) FROM saas_personal_dialog_reminders").fetchone()==(0,)
+        if malformed_template:
+            assert conn.execute("SELECT marker FROM saas_dialog_reply_templates").fetchall()==[('synthetic private marker',)]
+            assert conn.execute("SELECT to_regclass('saas_dialog_reply_templates_scope_idx') IS NULL").fetchone()==(True,)
+        else:
+            assert conn.execute("SELECT count(*) FROM saas_dialog_reply_templates").fetchone()==(0,)
+    from tenant_dialog_reply_templates import feature_ready
+    assert not feature_ready({'tenant_id':tenant})
+    assert not store.enabled(tenant)
     assert_session_released(dsn)
