@@ -1000,13 +1000,15 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             workflows={}
             company_prelinked_for_bulk=None
             presence_online=False
+            presence_sources=frozenset()
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
                 # Only entries matching already-authorized rows are projected.
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
-                from tenant_dialog_presence import is_online
+                from tenant_dialog_presence import is_online, work_status_routing_sources
                 presence_online=is_online(cur,tenant,int(profile['telegram_id']))
+                presence_sources=work_status_routing_sources(tenant)
                 if completion_preview:
                     import tenant_dialog_company_completion as completion
                     if completion.enabled(tenant):
@@ -1019,7 +1021,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
                     lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
-                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),_online=presence_online,
+                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
+                        _online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources),
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
                     if company_prelinked_for_bulk is not None and r.get('lifecycle_enabled'):

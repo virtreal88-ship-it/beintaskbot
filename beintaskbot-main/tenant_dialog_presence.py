@@ -7,6 +7,7 @@ from tenant_linear_policy import TenantLinearError
 from tenant_beinsystems_operator_access import is_operator_workspace
 
 ROUTING_ENV = "TENANT_DIALOG_PRESENCE_ROUTING_ENABLED"
+ROUTING_SOURCES_ENV = "TENANT_DIALOG_PRESENCE_ROUTING_SOURCE_IDS"
 STATUS_ENABLED_ENV = "TENANT_DIALOG_EMPLOYEE_STATUS_ENABLED"
 STATUS_PROVISION_ENV = "DIALOG_EMPLOYEE_STATUS_PROVISION_ON_STARTUP"
 DEFAULT_STATUS = "online"
@@ -45,20 +46,37 @@ def _routing_requested(tenant):
     return _routing_flag_enabled() and is_operator_workspace(tenant)
 
 
-def work_status_routing_requested(tenant):
-    return _routing_requested(tenant) and work_status_enabled()
+def work_status_routing_sources(tenant):
+    if not _routing_requested(tenant) or not work_status_enabled():
+        return frozenset()
+    configured = os.environ.get(ROUTING_SOURCES_ENV, "").strip()
+    if not configured:
+        return frozenset()
+    try:
+        return frozenset(str(uuid.UUID(source.strip())) for source in configured.split(","))
+    except ValueError:
+        return frozenset()
 
 
-def routing_enabled(cur, tenant):
-    """Keep the presence gate fail-closed when the four-state pilot is requested."""
-    return _routing_requested(tenant) and (work_status_enabled() or _available(cur))
+def work_status_routing_requested(tenant, source_channel=None):
+    sources = work_status_routing_sources(tenant)
+    return bool(sources) if source_channel is None else str(source_channel) in sources
+
+
+def routing_enabled(cur, tenant, source_channel=None):
+    """A configured four-state source needs a valid status schema at admission."""
+    if not _routing_requested(tenant):
+        return False
+    if work_status_enabled():
+        return work_status_routing_requested(tenant, source_channel)
+    # A scoped rollout must not turn into tenant-wide legacy routing if work
+    # status is rolled back while the source configuration is still present.
+    return ROUTING_SOURCES_ENV not in os.environ and _available(cur)
 
 
 def _routing_enforced(cur, tenant):
-    # Call from the enrollment endpoints only, with the rollout guard taken
-    # before membership checks. Admission already holds that guard and is
-    # only used in the enforced lifecycle.
-    if not _routing_requested(tenant):
+    # Call before taking membership locks, as in dialogue admission.
+    if not routing_enabled(cur, tenant):
         return False
     from tenant_dialog_rollout import guard
     return guard(cur, tenant).enforced
@@ -272,9 +290,9 @@ def is_effectively_online(cur, tenant, employee, *, lock=False):
 
 def is_online(cur, tenant, employee, *, lock=False, _routing=None, source_channel=None):
     """Admission predicate: legacy eligibility when routing is not enforced."""
-    if not (routing_enabled(cur, tenant) if _routing is None else _routing):
+    if not (routing_enabled(cur, tenant, source_channel) if _routing is None else _routing):
         return True
-    if work_status_routing_requested(tenant):
+    if work_status_enabled():
         return _authorized_status(cur, tenant, employee, lock=lock, require_update=True,
                                   absent=DEFAULT_STATUS, operators_only=True,
                                   source_channel=source_channel) == DEFAULT_STATUS
@@ -319,6 +337,8 @@ def get_status(profile, *, profile_only=False):
                 from tenant_operator_access import access
                 tenant, employee, policy = access(cur, profile, "dialogs")
                 can_update = _allows(policy, "update")
+                if work:
+                    enforced = enforced and policy.profile.get("role") == "operator"
             cur.execute("""SELECT status FROM saas_dialog_employee_presence
               WHERE tenant_id=%s::uuid AND employee_id=%s""", (tenant, employee))
             row = cur.fetchone()
@@ -375,6 +395,8 @@ def set_status(profile, payload, *, profile_only=False):
                 tenant, employee, policy = access(cur, profile, "dialogs", "view")
                 if not _allows(policy, "update"):
                     raise TenantLinearError("Владелец должен выдать доступ к этому разделу.", 403)
+                if work:
+                    enforced = enforced and policy.profile.get("role") == "operator"
             # Serializes with recipient eligibility and locks fresh membership
             # through the write. Status alone never adds broader permissions.
             _active_member(cur, tenant, employee, writing=True)
