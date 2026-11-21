@@ -18,6 +18,7 @@ OWNER_B = {'tenant_id':B,'telegram_id':22}
 def local(companies,monkeypatch):
     database,*_ = companies
     monkeypatch.setattr(store,'_connect',lambda:database)
+    monkeypatch.setattr(dialogs,'_connect',lambda:database)
     # Test only. The serving handler must not provision anything.
     yield companies
 
