@@ -372,6 +372,8 @@ def sync(c,data):
             if not isinstance(item,dict) or not ID.fullmatch(item['provider_id']) or not valid_peer:
                 raise ValueError()
             if item['direction'] not in {'inbound','outbound'} or item['state'] not in {'ringing','connected','ended'}:raise ValueError()
+            if 'remote_answered' in item and (item['remote_answered'] is not True or item['direction']!='outbound' or item['state']!='ringing'):
+                raise ValueError()
             if 'caller' in item:
                 from tenant_call_identity import valid
                 if not c.get('managed') or item['direction']!='inbound' or not valid(item['peer_jid'],item['caller']):raise ValueError()
@@ -469,7 +471,9 @@ def sync(c,data):
                         from tenant_call_identity import enrich
                         enrich(cur,c,item['peer_jid'],item['caller'],expected=row['conversation_id'])
                     if row['state'] not in {'incoming','ending','unknown'}:
-                        cur.execute('UPDATE saas_browser_calls SET state=%s,updated_at=now() WHERE id=%s::uuid',(item['state'],str(row['id'])))
+                        # A remote answer stops ringback while audio is still connecting.
+                        state='starting' if row['direction']=='outbound' and item.get('remote_answered') else item['state']
+                        cur.execute('UPDATE saas_browser_calls SET state=%s,updated_at=now() WHERE id=%s::uuid',(state,str(row['id'])))
                 elif item['direction']=='inbound':
                     cur.execute("SELECT 1 FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND state NOT IN ('ended','failed')",(c['tenant_id'],c['gateway_id']))
                     if cur.fetchone():continue

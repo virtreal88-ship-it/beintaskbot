@@ -123,6 +123,23 @@ func TestFirstAndEndedSnapshotsRetainOfferIdentity(t *testing.T) {
 	}
 }
 
+func TestOutgoingSnapshotSeparatesRemoteAnswerFromMediaConnection(t *testing.T) {
+	g, s := testGateway(t)
+	cm := s.createCall("outgoing-ringback")
+	info := call.NewOutgoingCall("outgoing-ringback", g.cfg.Peers[0], g.cfg.Account, core.CallMediaTypeAudio)
+	for i, transition := range []string{call.TransitionOfferSent, call.TransitionRemoteAccepted, call.TransitionMediaConnected} {
+		if err := info.ApplyTransition(call.Transition{Type: transition}); err != nil {
+			t.Fatal(err)
+		}
+		cm.OnStateChange(info)
+		item := g.snapshot(s)["active"].([]map[string]any)[0]
+		wantState := []string{"ringing", "ringing", "connected"}[i]
+		if item["state"] != wantState || (item["remote_answered"] == true) != (i == 1) {
+			t.Fatalf("transition %s yielded unexpected ringback state: %v", transition, item)
+		}
+	}
+}
+
 func TestGatewayIdleSyncAlwaysUsesResultArray(t *testing.T) {
 	g, _ := testGateway(t)
 	seen := make(chan bool, 4)
