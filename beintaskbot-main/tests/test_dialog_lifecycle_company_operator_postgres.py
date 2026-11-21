@@ -109,6 +109,22 @@ def test_exact_selection_creates_once_then_reuses_and_refuses_replacement(ready)
     db.commit()
 
 
+def test_inline_company_replacement_rejects_a_stale_link(ready):
+    db,_,_=ready
+    original=choose('inline-original',expected_company_id=None)
+    changed=choose('inline-next',expected_company_id=original['company_id'])
+    assert changed['company_name']=='inline-next'
+    with pytest.raises(provider.OperatorError) as stale:
+        choose('stale-inline',expected_company_id=original['company_id'])
+    assert stale.value.status==409
+    with pytest.raises(provider.OperatorError) as stale_unlink:
+        binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=original['company_id'])
+    assert stale_unlink.value.status==409
+    assert [row['company_id'] for row in bindings(db)]==[changed['company_id']]
+    assert binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=changed['company_id'])['company_id'] is None
+    assert count(db,'saas_beinsystems_operator_company_imports')==2
+
+
 def test_same_name_has_no_identity_evidence(ready):
     db,_,_=ready
     db.execute("INSERT INTO saas_crm_native_companies (id,tenant_id,name) VALUES(%s::uuid,%s::uuid,'Same Name')",(str(uuid.uuid4()),A))
