@@ -16,7 +16,10 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
   // Programmatic handlers cannot circumvent the permission guard either.
   d.getElementById('operatorCopilotVoiceToggle').onclick();await settle();
   assert.equal(calls.some(p=>p.includes('/copilot')||p.endsWith('/messages/send')),false);
-  if(assigned)assert.match(d.querySelector('.operator-conversation-header').textContent,/Support AI/);
+  if(assigned){
+    d.getElementById('operatorClientCardOpen').click();
+    assert.match(d.querySelector('#operatorClientCard .operator-agent-label').textContent,/Support AI/);
+  }
   dom.window.close();
  }
  console.log('Copilot permission labels: RU/AZ/EN, assigned and unassigned; no dispatch passed');

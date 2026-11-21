@@ -1114,7 +1114,7 @@
     }
     const rejected=m.message_type==='call_rejected',invalidated=m.message_type==='call_invalidated',observed=m.message_type==='call_observed';
     const missed=m.message_type==='call_missed'||rejected||invalidated||observed;
-    const media=isAttachmentMessage(m);
+    const media=m.source==='connect'&&!missed&&m.message_type!=='text'&&m.external_id;
     const transcript=m.has_transcription&&(m.audio_transcript||m.body)?`<details data-audio-transcript><summary>${t('showTranscript')}</summary><div data-user-content>${esc(m.audio_transcript||m.body)}</div></details>`:'';
     const participantMenu=!readOnly&&m.author_type==='participant'&&m.participant_jid;
     const author=participantMenu?`<span class="operator-participant-name" data-participant-menu="${esc(m.id)}" data-participant-jid="${esc(m.participant_jid)}" role="button" tabindex="0" aria-label="${esc(t('editParticipantName'))}" data-user-content>${esc(messageAuthor(m))}</span>`:`<span data-user-content>${esc(messageAuthor(m))}</span>`;const reply=!missed&&!readOnly&&route?.provider==='connect'&&m.id&&['incoming','outgoing'].includes(m.direction)?`<button type="button" class="operator-reply-action" data-reply-message="${esc(m.id)}" aria-label="${esc(replyText('action'))}" title="${esc(m.provider_message_id?replyText('action'):replyText('unavailable'))}"><span aria-hidden="true">${m.direction==='outgoing'?'→':'←'}</span></button>`:'';
@@ -1381,9 +1381,9 @@
     };
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
-    for(const target of [window,window.visualViewport])if(target){
+    for(const target of [window,window.visualViewport])if(target?.addEventListener){
       target.addEventListener('resize',resizePanel);
-      listeners.push(()=>target.removeEventListener('resize',resizePanel));
+      listeners.push(()=>target.removeEventListener?.('resize',resizePanel));
     }
     const listen=(type,fn,capture=false)=>{document.addEventListener(type,fn,capture);listeners.push(()=>document.removeEventListener(type,fn,capture));};
     listen('keydown',event=>{
