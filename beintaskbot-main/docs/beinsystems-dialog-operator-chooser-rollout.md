@@ -1,6 +1,6 @@
 # BeinSystems dialogue Operator chooser rollout
 
-This is a single-account chooser inside the existing dialogue Company picker. It is not an import, has no Operator write operations, and does not replace an existing different dialogue-company binding. Local CRM company search works independently.
+The dialogue Company field searches Operator accounts and local CRM companies. Selecting a result saves the binding. To replace a bound company, clear the field and select another result. If you leave the field empty, the interface asks before removing the binding. Changes apply to the CRM dialogue only.
 
 - `BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED` is off when unset. While off, the API omits `can_search_operator`, does not admit chooser requests, and leaves the existing ordinary CRM name-write behavior unchanged. The flag only applies to the exact configured `BEINSYSTEMS_OPERATOR_TENANT_ID` workspace, not to other tenants.
 - The live picker is offered only to an owner with current dialogue/source and local company permissions. The owner must have a verified connected integration or a current owner-confirmed `accounts_only` credential; a configured but not connected integration is not enough. An `accounts_only` candidate is verified against the saved identity fingerprint using `/v1/user/me` before `/v1/user/accounts`. The browser receives only account identifiers, never credentials, owner identity, or unverified customer names and phone numbers.

@@ -1171,7 +1171,7 @@
     try{sessionStorage.setItem(contextKey('route',route),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));}catch{}
     if(workspace)workspace.dataset.selected='true';if(operatorHost)operatorHost.dataset.conversationOpen='true';
     const cached=retained||route.lifecycle_enabled?null:cachedDialogPage(route);
-    if(cached){cached.dialog={...cached.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
+    if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
     try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
@@ -1191,7 +1191,7 @@
     #operatorConversationLayout{position:relative;display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
     #operatorConversationLayout>.operator-conversation-content{min-width:0}
     #operatorConversationHeader .operator-dialog-head-main{display:flex;align-items:flex-start;flex-wrap:nowrap;min-width:0;gap:8px}
-    #operatorConversationHeader .operator-dialog-title{flex:1;min-width:0;max-width:none;min-height:29px}
+    #operatorConversationHeader #operatorDialogTitleSlot{flex:1;min-width:0;max-width:none;min-height:29px}
     #operatorDialogCompanyName{flex:0 1 auto;min-width:0;max-width:min(180px,42%);padding-inline:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;font-size:11px;font-weight:600;line-height:16px;color:#1d4ed8;background:#e8f1ff}
     #operatorDialogCompanyName[hidden]{display:none!important}
     [data-theme="dark"] #operatorDialogCompanyName{color:#bfdbfe;background:#1e3a5f}

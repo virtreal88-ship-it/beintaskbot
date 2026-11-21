@@ -74,6 +74,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   });
   assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,noGrowth:true});
   assert.equal(await page.locator('#operatorRows .operator-row-status').count(),0);
+  assert(await companyCard.locator('.operator-row-company').evaluate(n=>n.nextElementSibling.matches('.operator-row-preview')),'company precedes the preview');
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));
@@ -100,7 +101,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
-  assert.equal(await page.locator('#operatorDialogueCompanySearch').count(),0,'bound company hides the search');
+  assert.match(await page.locator('#operatorDialogueCompanySearch').inputValue(),/^Company A/);
   const unlink=card.locator('.operator-company-unlink');
   assert.equal(await unlink.textContent(),'×');
   assert((await unlink.boundingBox()).width<=30);
@@ -158,7 +159,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await page.evaluate(()=>window.accountCalls.filter(cmd=>cmd.operator_account).length),0);
   await result.click();
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent==='Selected Operator account');
-  assert.equal(await input.count(),0);
+  assert.equal(await input.inputValue(),'Selected Operator account');
   const calls=await page.evaluate(()=>window.accountCalls.map(({operator_search,operator_account,channel_id,lead_id})=>[operator_search??null,operator_account??null,channel_id,lead_id]));
   assert.deepEqual(calls,[['synthetic',null,'b','42'],[null,'synthetic_a','b','42']]);
   if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}

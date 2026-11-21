@@ -23,7 +23,7 @@
   function paintHeader(s){
     const el=headerHosts.get(s.section);
     if(!el?.isConnected)return;
-    const name=current(s)?companyName(s.binding):'';
+    const name=current(s)?(s.binding===undefined?s.initialCompanyName:companyName(s.binding)):'';
     el.textContent=name;el.hidden=!name;
     if(name)el.title=name;else el.removeAttribute('title');
   }
@@ -99,7 +99,7 @@
     });
     unlink.className='operator-company-unlink';unlink.title=t('remove');unlink.setAttribute('aria-label',t('remove'));
     unlink.onpointerdown=event=>event.preventDefault();
-    field.append(input,unlink);label.append(field);panel.append(label);
+    field.append(input,unlink);panel.append(label,field);
     results.className='operator-dialog-company-results';
     const operatorRows=node('div'),localRows=node('div'),operatorStatus=node('p'),localStatus=node('p');
     operatorRows.dataset.operatorAccountResults='';localRows.dataset.localCompanyResults='';
@@ -213,8 +213,9 @@
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     status.className='operator-company-link-status';status.setAttribute('role','status');
-    const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,read:null};
-    section.append(value,status);host.append(section);state=s;mountEditor(s);
+    const initialCompanyName=String(route.dialog_company_name||'').trim();
+    const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
+    section.append(value,status);host.append(section);state=s;mountEditor(s);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
