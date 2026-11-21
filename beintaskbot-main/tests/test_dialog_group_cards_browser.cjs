@@ -14,7 +14,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    const member={tenant_id:'synthetic',telegram_id:11,role:'owner',active:true};
    window.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true},dialog_company_binding:true}};
    const source=(name,id)=>({provider:'connect',channel_id:id,channel_name:name,lead_id:id==='a'?41:42,conversation_id:'120363432608782851@g.us',customer_name:'Synthetic group',customer_kind:'group',can_send:false,lifecycle_enabled:true,lifecycle:{state:'waiting',revision:0,can_accept:true}});
-   const sources=[source('Huseyn','a'),source('Texniki Dəstək','b')];window.historyReads=[];window.accountCalls=[];
+   const sources=[source('Huseyn','a'),source('Texniki Dəstək','b')];window.historyReads=[];window.companyReads=[];window.accountCalls=[];
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
@@ -26,8 +26,9 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
       if(cmd.operator_account){window.boundOperator=true;return{ok:true,json:async()=>({success:true,binding:{company_id:'new',company_name:'Selected Operator account',can_manage:true}})};}
       throw Error('Unexpected mutation');
      }
+     window.companyReads.push(q.get('channel_id'));
      if(window.offerOperatorPicker&&q.get('channel_id')==='b'){
-      return{ok:true,json:async()=>({success:true,binding:window.boundOperator?{company_id:'new',company_name:'Selected Operator account',can_manage:true}:{company_id:null,can_manage:true,can_search_operator:true}})};
+      return{ok:true,json:async()=>({success:true,binding:window.boundOperator?{company_id:'new',company_name:'Selected Operator account',can_manage:true}:{company_id:null,can_manage:true,can_search_operator:window.offerOperatorPicker==='on'}})};
      }
      const name=(q.get('channel_id')==='a'?'Company A ':'Company B ')+'longname'.repeat(18);
      return{ok:true,json:async()=>({success:true,binding:{company_id:'test',company_name:name,can_manage:true}})};
@@ -81,7 +82,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    await page.waitForFunction(channel=>window.historyReads.at(-1)===channel,index===0?'a':'b');
    await page.waitForFunction(name=>document.querySelector('[data-company-value]')?.textContent.startsWith(name),index===0?'Company A':'Company B');
   }
-  await page.evaluate(()=>{window.offerOperatorPicker=true;});
+  await page.evaluate(()=>{window.offerOperatorPicker='off';});
   await page.locator('#operatorComposerSourceSelect').selectOption('1');
   await page.waitForFunction(()=>window.historyReads.at(-1)==='b'&&document.querySelector('[data-operator-dialog-company] button:not([hidden])')&&!document.querySelector('[data-company-value]').textContent.startsWith('Company'));
   await page.locator('#operatorDialogTitleText').click();
@@ -89,12 +90,23 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.match(await card.locator('[data-client-transfer]').innerText(),/Synthetic sender → Synthetic recipient/);
   assert.match(await card.innerText(),/Texniki Dəstək/);
   const edit=page.locator('[data-operator-dialog-company]>button');
+  const header=()=>page.locator('#operatorConversationHeader').evaluate(node=>[node.offsetWidth,node.offsetHeight,node.textContent]);
+  const before=await header();
+  await edit.click();
+  assert(await page.locator('#operatorDialogueCompanyPicker').isVisible(),'default-off still offers the inline CRM company picker');
+  await page.keyboard.press('Escape');
+  const priorReads=await page.evaluate(()=>window.companyReads.length);
+  await page.evaluate(()=>{window.offerOperatorPicker='on';document.dispatchEvent(new Event('tenant-dialog-reauthorized'));});
+  await page.waitForFunction(n=>window.companyReads.length>n,priorReads);
+  await page.locator('#operatorDialogTitleText').click();
+  assert.deepEqual(await header(),before);
   await edit.click();
   const drop=page.locator('#operatorDialogueAccountPicker'),input=drop.locator('input');
   const geometry=await drop.boundingBox(),anchor=await edit.boundingBox();
   assert(await drop.evaluate(node=>node.closest('dialog')?.id==='operatorClientCard'));
   assert(geometry.x>=-1&&geometry.x+geometry.width<=width+1&&geometry.y>=anchor.y+anchor.height-1,
    'Operator chooser stays in the right panel below the company control '+JSON.stringify({geometry,anchor,width}));
+  assert.deepEqual(await header(),before,'opening the inline chooser leaves the header geometry and content intact');
   assert(await input.evaluate(node=>document.activeElement===node),'Operator search receives focus');
   await input.fill('synthetic');
   const result=drop.locator('[data-operator-account-results] button').first();
