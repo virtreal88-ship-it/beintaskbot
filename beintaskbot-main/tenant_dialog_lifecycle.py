@@ -146,10 +146,21 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
-    return f"""({provider_expr}<>'connect' OR NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
+    from tenant_dialog_presence import is_online, work_status_routing_sources
+    sources = work_status_routing_sources(tenant)
+    ownership = f"""NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
-        AND dw.operator_id<>{actor}))"""
+        AND dw.operator_id<>{actor})"""
+    if not sources or is_online(cur,tenant,actor):
+        return f"({provider_expr}<>'connect' OR {ownership})"
+    # The literals have been normalized to UUIDs in work_status_routing_sources.
+    selected = ",".join(f"'{source}'" for source in sorted(sources))
+    owned = f"""EXISTS(SELECT 1 FROM saas_dialog_workflows dw
+      WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
+        AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
+        AND dw.operator_id={actor})"""
+    return f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
 
 
 def require_access(cur, tenant, actor, provider, channel, conversation, action='view'):
@@ -172,6 +183,10 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     row = _row(cur, tenant, channel, conversation)
     if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
+    if (not row or row['state'] == 'waiting') and action == 'view':
+        from tenant_dialog_presence import is_online, work_status_routing_requested
+        if work_status_routing_requested(tenant,channel) and not is_online(cur,tenant,actor,source_channel=channel):
+            raise TenantLinearError('Новые диалоги доступны операторам в статусе «В сети».', 404)
     if action != 'view' and (not row or row['state'] != 'accepted'):
         raise TenantLinearError('Сначала примите диалог.', 409)
     return True  # Active protection; callers may revalidate their original route proof.
@@ -181,6 +196,33 @@ def ai_blocked(cur, tenant, provider, channel, conversation):
     if not enabled(cur, tenant) or provider != 'connect': return False
     row = _row(cur, tenant, channel, conversation)
     return bool(row and row['state'] in {'accepted', 'closed', 'dismissed'})
+
+
+def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, message_id, event_at):
+    from tenant_dialog_presence import _work_ready, is_online, work_status_routing_requested
+    if not work_status_routing_requested(tenant,channel) or not _work_ready(cur):
+        return False
+    row = _row(cur,tenant,channel,conversation)
+    if not row or row['state'] != 'accepted':
+        return False
+    if is_online(cur,tenant,row['operator_id'],source_channel=channel):
+        return False
+    cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
+        id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
+        FROM saas_dialog_episodes e
+        WHERE w.tenant_id=%s::uuid AND w.channel_id=%s::uuid AND w.conversation_id=%s
+          AND w.id=e.id AND e.tenant_id=w.tenant_id AND w.state='accepted' AND e.closed_at IS NULL
+          AND w.last_inbound_id IS DISTINCT FROM %s
+          AND %s::timestamptz>GREATEST(e.accepted_at,w.updated_at)
+        RETURNING w.updated_at""",
+        (str(uuid.uuid4()),str(message_id),tenant,channel,conversation,str(message_id),event_at))
+    moved = cur.fetchone()
+    if not moved:
+        return False
+    cur.execute("""UPDATE saas_dialog_episodes SET closed_at=%s
+        WHERE tenant_id=%s::uuid AND id=%s::uuid AND closed_at IS NULL""",
+        (moved['updated_at'],tenant,row['id']))
+    return True
 
 
 def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is_replay=False):
@@ -194,6 +236,8 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     from tenant_connect_dialog_equivalence import canonical
     conversation=canonical(cur,tenant,channel,conversation)
     lock_dialog(cur, tenant, 'connect', channel, conversation)
+    if _return_unavailable_dialog_to_queue(cur,tenant,channel,conversation,message_id,event_at):
+        return
     cur.execute("""UPDATE saas_dialog_workflows SET
       state=CASE WHEN state IN ('closed','dismissed') THEN 'waiting' ELSE state END,
       operator_id=CASE WHEN state IN ('closed','dismissed') THEN NULL ELSE operator_id END,
@@ -237,7 +281,7 @@ def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True):
     from tenant_policy import TenantPolicy
     from tenant_dialog_access import require_source
     from tenant_dialog_presence import is_online, routing_enabled
-    routing = filter_presence and routing_enabled(cur,tenant)
+    routing = filter_presence and routing_enabled(cur,tenant,channel)
     cur.execute('SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id', (tenant,))
     members=cur.fetchall(); result=[]
     for member in members:
@@ -251,7 +295,7 @@ def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True):
             require_source(cur,tenant,p,'connect',channel,'view')
             require_source(cur,tenant,p,'connect',channel,'update')
         except TenantLinearError: continue
-        if routing and not is_online(cur,tenant,target,lock=True,_routing=routing): continue
+        if routing and not is_online(cur,tenant,target,lock=True,_routing=routing,source_channel=channel): continue
         result.append({'employee_id':target,'name':member.get('display_name') or str(target)})
     return result
 
@@ -308,7 +352,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
         needs_presence=(state=='waiting' and bool(dialog.get('can_send'))) or state in {'closed','dismissed'}
         if needs_presence:
             from tenant_dialog_presence import is_online
-            online=is_online(cur,tenant,actor)
+            online=is_online(cur,tenant,actor,source_channel=dialog['channel_id'])
         else:
             online=False
     else:
@@ -404,18 +448,18 @@ def _mutate_once(profile, payload):
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
-            from tenant_dialog_presence import is_online
+            from tenant_dialog_presence import is_online, work_status_routing_requested
             target = None
             eligible = True
-            if action in {'accept','start'}:
-                eligible = is_online(cur,tenant,actor,lock=True)
+            if action in {'accept','start'} or (action == 'dismiss' and work_status_routing_requested(tenant,channel)):
+                eligible = is_online(cur,tenant,actor,lock=True,source_channel=channel)
             if action == 'transfer':
                 target=payload.get('target_employee_id')
                 # Preserve all existing locked membership/source checks, but
                 # acquire them BEFORE the route lock to avoid lock inversion.
                 if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor,filter_presence=False)}:
                     raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
-                eligible = is_online(cur,tenant,target,lock=True)
+                eligible = is_online(cur,tenant,target,lock=True,source_channel=channel)
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)

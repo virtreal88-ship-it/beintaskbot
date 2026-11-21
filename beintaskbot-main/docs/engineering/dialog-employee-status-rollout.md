@@ -66,3 +66,20 @@ access. `is_recorded_online` still requires an explicit Online and current
 Dialogs update. Do not use the legacy routing helper `is_online` to infer
 work status. The role `saas_tenant_members.role='operator'` will be used
 only in a separately approved reception/routing slice.
+
+## Online operator routing
+
+The routing switch is independent of the four-state profile control. With both
+switches enabled, set `TENANT_DIALOG_PRESENCE_ROUTING_SOURCE_IDS` to the
+comma-separated UUIDs of the participating Connect sources. A missing or
+invalid list activates no four-state routing. Sources outside that list use
+their existing workflow and permissions. Eligible operators on listed sources
+need current dialogue view and update permissions plus access to the exact source. An operator with no saved choice
+defaults to Online. Away, Lunch and Offline remove the operator from the
+waiting queue and from transfer targets. Existing accepted dialogue access
+continues until a verified newer incoming message returns an unavailable
+operator's dialogue to the waiting queue. The earlier episode is kept.
+
+Before enabling routing, check Online operator coverage on the listed sources.
+Turning routing off restores the previous eligibility rules without changing
+stored statuses or moving conversations.
