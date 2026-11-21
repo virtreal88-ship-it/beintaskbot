@@ -38,6 +38,8 @@ def prepare_database() -> None:
     from tenant_ai_administrator_apply import ensure_schema as ensure_apply_schema
     from tenant_connect_health import prepare_database as prepare_connect_health
 
+    from tenant_dialog_company_binding import PROVISION_ENV
+
     _fernet()
     # This is a dedicated, non-pooled startup connection. Closing it releases
     # the session lock and rolls back any unfinished transaction, including
@@ -81,6 +83,14 @@ def prepare_database() -> None:
             with conn.cursor() as cur:
                 migrate(cur)
                 verify_provisioned_schema(cur)
+            conn.commit()
+        if os.environ.get(PROVISION_ENV, '').lower() == 'true':
+            from tenant_beinsystems_operator_access import configured_workspace_id
+            from tenant_dialog_company_binding import provision_kommo
+            if not configured_workspace_id():
+                raise RuntimeError('Dialogue company provisioning requires a configured BeinSystems workspace UUID.')
+            with conn.cursor() as cur:
+                provision_kommo(cur)
             conn.commit()
 
 

@@ -365,6 +365,9 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 context.list_integrations, tenant_id=profile["tenant_id"], telegram_id=telegram_id)
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
             capabilities = context.capabilities(profile)
+            from tenant_dialog_company_binding import feature_for as dialog_company_feature_for
+            if dialog_company_feature_for(profile):
+                capabilities["dialog_company_binding"] = True
             if context.dialog_reply_templates_ready:
                 try:
                     capabilities["dialog_reply_templates"] = await asyncio.to_thread(
