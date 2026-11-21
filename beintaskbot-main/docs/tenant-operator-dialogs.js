@@ -400,6 +400,7 @@
     rememberLifecycleListState(route,state);reconcileLifecycleRows();renderRows();
   }
   const completeAllCopy=key=>({
+    confirmCompany:{ru:'Попытаться завершить до {count} принятых диалогов с указанной компанией? Перед завершением сервер проверит привязку и адрес каждого диалога. Не прошедшие проверку и новые диалоги останутся в очереди.',az:'Şirkət əlaqəsi olan {count} qəbul edilmiş dialoqu tamamlamağa çalışaq? Server hər dialoqun şirkətini və ünvanını yoxlayacaq. Yoxlamadan keçməyən və yeni dialoqlar növbədə qalacaq.',en:'Try to complete up to {count} accepted dialogues with a company link? The server will verify each link and dialogue address before completing it. New dialogues and any that fail verification stay open.'},
     title:{ru:'Отметить все диалоги завершёнными',az:'Bütün dialoqları tamamlanmış işarələ',en:'Mark all dialogues completed'},
     loading:{ru:'Проверяю доступные диалоги…',az:'Əlçatan dialoqlar yoxlanılır…',en:'Checking accessible dialogues…'},
     checking:{ru:'Проверено источников: {count}. Пока ничего не изменено.',az:'Yoxlanılmış mənbələr: {count}. Hələ heç nə dəyişməyib.',en:'Sources checked: {count}. Nothing changed yet.'},
@@ -418,10 +419,12 @@
     if(completeAllBusy||!hasRight('dialogs'))return;
     const owner=identity(member),version=epoch,current=()=>owner===identity(member)&&version===epoch&&hasRight('dialogs');
     completeAllBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;
-    let done=0,skipped=0,unknown=0,remaining=0,applying=false;
-    const excluded={noInbound:0,otherOwner:0,unavailable:0};
+    let done=0,skipped=0,unknown=0,remaining=0,applying=false,companyGate=false;
+    const excluded={noInbound:0,otherOwner:0,unavailable:0,company:0,noReply:0};
     const exclusionSummary=()=>completeAllCopy('excluded').replace('{excluded}',String(Object.values(excluded).reduce((a,b)=>a+b,0))).replace('{noInbound}',String(excluded.noInbound)).replace('{otherOwner}',String(excluded.otherOwner)).replace('{unavailable}',String(excluded.unavailable));
-    const withExclusions=text=>text+' '+exclusionSummary();
+    const withExclusions=text=>text+' '+exclusionSummary()+
+      (excluded.company?' '+companyCloseText('bulkChoice').replace('{count}',String(excluded.company)):'')+
+      (excluded.noReply?' '+companyCloseText('bulkWaiting').replace('{count}',String(excluded.noReply)):'');
     try{
       completeAllNotice(completeAllCopy('loading'));
       // Snapshot every page before asking for confirmation. Never fetch more
@@ -447,6 +450,9 @@
         // Existing mutations still recheck ownership, source grants and tokens.
         const fresh=route,state=fresh?.lifecycle;
         if(!fresh.lifecycle_enabled||!Number.isInteger(state?.revision)){excluded.unavailable++;continue;}
+        if(state.bulk_company_gate)companyGate=true;
+        if(state.bulk_company_gate==='choose'){excluded.company++;continue;}
+        if(state.bulk_company_gate==='no_reply_separate'){excluded.noReply++;continue;}
         const action=state.state==='waiting'&&state.can_dismiss&&state.last_inbound_id?'dismiss':state.state==='accepted'&&state.can_close&&String(state.operator_id)===String(member.telegram_id)?'close':null;
         if(!action){
           if(state.state==='waiting'&&state.has_inbound===false)excluded.noInbound++;
@@ -458,7 +464,7 @@
       }
       if(!current())return;
       if(!candidates.length){completeAllNotice(withExclusions(completeAllCopy('empty')));return;}
-      if(!window.confirm(withExclusions(completeAllCopy('confirm').replace('{count}',String(candidates.length))))){completeAllNotice('');return;}
+      if(!window.confirm(withExclusions(completeAllCopy(companyGate?'confirmCompany':'confirm').replace('{count}',String(candidates.length))))){completeAllNotice('');return;}
       applying=true;remaining=candidates.length;
       for(const {route,payload} of candidates){
         if(!current())return;
@@ -480,7 +486,8 @@
           }
         }catch(error){
           if(!current())return;
-          if([403,404,409].includes(error.status))skipped++;
+          if(error.status===422&&route.lifecycle?.bulk_company_gate==='prelinked_unverified')excluded.company++;
+          else if([403,404,409].includes(error.status))skipped++;
           else {unknown++;break;} // Network ambiguity: do not blindly retry.
         }
       }
@@ -506,11 +513,11 @@
   function lifecycleUnavailable(error,route){
     if(route?.lifecycle_enabled&&[403,404,409].includes(error.status)){removeLifecycleDialog(route);notice(lifecycleText('unavailable'));return true;}return false;
   }
-  async function lifecycleAction(route,action,button,target,episodeId){
+  async function lifecycleAction(route,action,button,target,episodeId,companyId){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const owner=identity(member),key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
+    const owner=identity(member),key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+(companyId?'.company.'+companyId:'');
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id}:{}),...(episodeId?{episode_id:episodeId}:{})};lifecycleRequests.set(key,payload);}
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(companyId?{company_id:companyId}:{})};lifecycleRequests.set(key,payload);}
     button.disabled=true;
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
@@ -566,11 +573,68 @@
     select.onchange=()=>{submit.disabled=!select.value;};
     modal.querySelector('form').onsubmit=event=>{event.preventDefault();if(owner!==identity(member)||!sameDialog(route,currentDialog)){closeLifecycleModal();return;}const chosen=(route.lifecycle.completed_episodes||[]).find(episode=>String(episode.id)===select.value&&!episode.case_id);if(chosen)void lifecycleAction(route,'case',submit,null,chosen.id);};document.body.append(modal);
   }
+  const companyCloseText=key=>({
+    title:{ru:'Компания для завершения диалога',az:'Dialoqu tamamlamaq üçün şirkət',en:'Company for dialogue completion'},
+    search:{ru:'Найти CRM-компанию',az:'CRM şirkətini tap',en:'Find a CRM company'},
+    searching:{ru:'Ищем компании…',az:'Şirkətlər axtarılır…',en:'Searching companies…'},
+    empty:{ru:'Компании с правом привязки не найдены.',az:'Bağlaya biləcəyiniz şirkət tapılmadı.',en:'No linkable companies found.'},
+    choose:{ru:'Выберите компанию, чтобы завершить диалог.',az:'Dialoqu tamamlamaq üçün şirkət seçin.',en:'Choose a company to complete this dialogue.'},
+    archived:{ru:'Компания диалога архивирована. Для завершения выберите действующую CRM-компанию.',az:'Dialoq şirkəti arxivləşdirilib. Tamamlamaq üçün aktiv CRM şirkəti seçin.',en:'The dialogue company is archived. Choose an active CRM company to complete it.'},
+    locked:{ru:'Нет прав на привязку CRM-компании. Диалог остаётся в работе.',az:'CRM şirkətini bağlamaq icazəsi yoxdur. Dialoq işdə qalır.',en:'You cannot link a CRM company. The dialogue stays open.'},
+    invalid:{ru:'Не удалось подтвердить прежнюю компанию. Диалог остаётся в работе до проверки администратором.',az:'Əvvəlki şirkət təsdiqlənmədi. İnzibatçı yoxlayana qədər dialoq işdə qalır.',en:'The previous company could not be verified. The dialogue stays open for administrator review.'},
+    unavailable:{ru:'Проверка CRM-компании временно недоступна. Диалог остаётся в работе.',az:'CRM şirkətinin yoxlanması müvəqqəti əlçatan deyil. Dialoq işdə qalır.',en:'Company verification is unavailable. The dialogue stays open.'},
+    identity_unresolved:{ru:'Сначала нужно проверить адрес диалога WhatsApp.',az:'Əvvəlcə WhatsApp dialoqunun ünvanı yoxlanmalıdır.',en:'The WhatsApp dialogue address must be verified first.'},
+    bulkChoice:{ru:'Оставлено в работе, нужна проверка компании: {count}.',az:'Şirkət yoxlanmalıdır, işdə qaldı: {count}.',en:'Left open for company verification: {count}.'},
+    bulkWaiting:{ru:'Ожидают отдельного решения «Не требует ответа»: {count}.',az:'Ayrıca «Cavab tələb etmir» qərarı gözlənilir: {count}.',en:'Awaiting an individual No reply needed decision: {count}.'}
+  }[key]?.[i18n.language]||key);
+  function openLifecycleCompanyClose(route){
+    closeLifecycleModal();
+    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
+    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle"><h2 id="operatorLifecycleTitle">${esc(companyCloseText('title'))}</h2><form data-company-search><label>${esc(companyCloseText('search'))}<input type="search" maxlength="120"></label><button type="submit">${esc(companyCloseText('search'))}</button></form><label>${esc(companyCloseText('choose'))}<select data-company-choice disabled><option value=""></option></select></label><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="button" class="primary" data-company-complete disabled>${esc(lifecycleText('close'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></section>`;
+    const form=modal.querySelector('form'),input=form.querySelector('input'),select=modal.querySelector('select'),
+      done=modal.querySelector('[data-company-complete]'),status=modal.querySelector('[role=status]');
+    const owner=identity(member),focus=document.activeElement;
+    let serial=0,submitting=false;
+    const current=()=>modal.isConnected&&owner===identity(member)&&sameDialog(route,currentDialog);
+    const events=['tenant-chat-close','tenant-auth-invalid','tenant-profile','tenant-view'];
+    const close=()=>{serial++;modal.remove();document.removeEventListener('keydown',key,true);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};if(focus?.isConnected)focus.focus();};
+    const key=event=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}
+      else if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button')].filter(node=>!node.disabled);if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}}
+    };
+    closeLifecycleModal=close;document.addEventListener('keydown',key,true);for(const name of events)document.addEventListener(name,close);
+    modal.querySelector('[data-cancel]').onclick=close;modal.onclick=event=>{if(event.target===modal)close();};
+    form.onsubmit=async event=>{
+      event.preventDefault();if(!current()||submitting)return;
+      const attempt=++serial;done.disabled=true;select.disabled=true;select.replaceChildren(new Option('',''));status.textContent=companyCloseText('searching');
+      try{
+        const query=new URLSearchParams({search:input.value.trim(),expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+        const response=await rawApi('/api/platform/crm/native/companies?'+query);
+        if(!current()||attempt!==serial)return;
+        const companies=(response.companies||[]).filter(company=>company.actions?.update===true&&company.id);
+        for(const item of companies)select.append(new Option(String(item.name||''),String(item.id)));
+        select.disabled=!companies.length;status.textContent=companies.length?'':companyCloseText('empty');
+      }catch(error){if(current()&&attempt===serial)status.textContent=error.message;}
+    };
+    select.onchange=()=>{done.disabled=!select.value;};
+    done.onclick=async()=>{
+      if(!current()||submitting||!select.value)return;
+      submitting=true;select.disabled=true;
+      try{await lifecycleAction(route,'close',done,null,null,select.value);}
+      finally{if(current()){submitting=false;select.disabled=false;done.disabled=!select.value;}}
+    };
+    document.body.append(modal);input.focus();
+  }
   function renderLifecycleActions(route,host){
-    const state=route.lifecycle||{};
-    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    const state=route.lifecycle||{},company=state.company_completion;
+    if(state.can_close&&company?.status&&company.status!=='ready'){
+      const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
+      reason.textContent=companyCloseText(['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
+      $('operatorAcceptAction').append(reason);
+    }
+    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.status==='ready'||company.can_choose)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed)continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
+      button.onclick=()=>action==='close'&&company?.can_choose?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
   function openCompletion(route){

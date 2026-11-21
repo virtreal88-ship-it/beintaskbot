@@ -1225,8 +1225,13 @@ def imported_accounts(profile, *, search="", limit=100):
 def _dialog_company_route(cur, profile, channel, conversation, action):
     from tenant_operator_access import access, assert_route
     tenant, actor, policy = access(cur, profile, "dialogs", action)
+    from tenant_dialog_company_completion import enabled as company_completion_enabled
+    use_canonical = False
+    if company_completion_enabled(tenant):
+        from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+        use_canonical = lifecycle_enabled(cur, tenant)
     route = assert_route(cur, tenant, policy, "connect", conversation=conversation,
-                         channel=channel, action=action)
+                         channel=channel, action=action, allow_merged=use_canonical)
     return tenant, actor, route
 
 

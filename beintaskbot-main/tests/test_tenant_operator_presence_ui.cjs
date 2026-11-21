@@ -25,11 +25,23 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  const button=w.document.getElementById('operatorPresenceOpen');
  assert.ok(button&&button.hidden,'status is not fetched before the user opens tools');
  assert.equal(getCalls,0,'status is not read until the tools menu opens');
- const menu=w.document.getElementById('operatorToolsMenu'),trigger=menu.querySelector('summary');let toggleEvents=0;
- menu.addEventListener('toggle',()=>{toggleEvents++;});trigger.click();await tick();
+ const menu=w.document.getElementById('operatorToolsMenu'),trigger=menu.querySelector('summary');
+ async function openTools(){
+  const previousGets=getCalls;
+  // JSDOM queues toggle on a timer; setImmediate polling can see the open
+  // attribute before that event. Wait for the native event instead of firing a
+  // second synthetic event that can race the production event listener.
+  await new Promise((resolve,reject)=>{
+   const timeout=setTimeout(()=>{menu.removeEventListener('toggle',opened);reject(Error('Opening tools did not emit toggle'));},3000);
+   function opened(){if(!menu.open)return;clearTimeout(timeout);menu.removeEventListener('toggle',opened);resolve();}
+   menu.addEventListener('toggle',opened);
+   trigger.click();
+  });
+  await tick();
+  assert.equal(getCalls,previousGets+1,'each native menu opening fetches one tenant-scoped status');
+ }
+ await openTools();
  assert.equal(menu.open,true,'clicking the tools summary opens its menu');
- if(toggleEvents===0){menu.dispatchEvent(new w.Event('toggle'));await tick();}
- assert.equal(toggleEvents,1,'the test emits one opening toggle when JSDOM omits the native details event');
  assert.ok(button&&!button.hidden,'current employee status is available in the tools menu');
  assert.equal(getCalls,1,'the menu loads one tenant-scoped status snapshot');
  assert.match(button.textContent,/Not set|Не выбран|Seçilməyib/);
@@ -44,7 +56,7 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  assert.match(button.textContent,/Online|Онлайн|Onlayn/);
  assert.equal(w.document.getElementById('operatorPresenceModal'),null,'successful update closes the dialog');
  assert.ok(getCalls>=1,'status is read from the tenant-scoped server endpoint');
- routingEnforced=true;menu.open=true;menu.dispatchEvent(new w.Event('toggle'));await tick();
+ routingEnforced=true;await openTools();
  button.click();await tick();
  assert.match(w.document.getElementById('operatorPresenceModal').textContent,/Only employees|Только сотрудники|Yalnız/);
  const denied=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),dw=denied.window;
