@@ -10,11 +10,16 @@ import json
 import uuid
 
 import tenant_beinsystems_operator as operator
+from tenant_beinsystems_operator_access import dialogue_chooser_enabled
 from cryptography.fernet import InvalidToken
 from tenant_crm_native_access import (
+    CRMAccessError,
     authorize_create,
     current_access,
     locked_resource,
+)
+from tenant_operator_company_name_guard import (
+    lock_name_writes, require_unreserved_account_pair, require_unreserved_name,
 )
 from tenant_policy import TenantPolicy
 
@@ -384,7 +389,22 @@ def _name_collision_summary(plan):
     }
 
 
+def _require_import_name(cur, tenant, account, company_id):
+    # All import writers already hold the shared tenant namespace advisory lock.
+    try:
+        require_unreserved_name(cur,tenant,account,company_id)
+    except CRMAccessError:
+        raise operator.OperatorError('Название занято. Проверьте существующую компанию CRM.',409) from None
+
+
 def _put_mapping(cur, tenant, account, company_id, actor, credentials):
+    if dialogue_chooser_enabled(tenant):
+        # All mapping callers acquired the common namespace first. Also fence
+        # non-create paths that turn an existing explicit link into a mapping.
+        try:
+            require_unreserved_account_pair(cur,tenant,account,company_id)
+        except CRMAccessError:
+            return False
     cur.execute(
         """INSERT INTO saas_beinsystems_operator_company_imports
           (tenant_id,external_account,company_id,created_by,updated_by,
@@ -480,6 +500,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
     with operator._connect() as conn:
         operator._ensure_schema(conn)
         with conn.cursor() as cur:
+            namespace_locked=lock_name_writes(cur,tenant,wait=True)
             if first_batch:
                 operator._lock_accounts_capability_scope(cur, tenant)
             current = operator._current_profile(cur, tenant, actor)
@@ -521,10 +542,11 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
 
             # Serialize retries for this tenant. The stable account key and unique
             # mapping constraint make repeated imports idempotent.
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
-                (str(tenant) + ":operator-company-import",),
-            )
+            if not namespace_locked:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    (str(tenant) + ":operator-company-import",),
+                )
 
             account_ids = [item["account"] for item in accounts]
             mappings = {}
@@ -637,6 +659,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                     continue
                 if kind == "create":
                     company_id = str(uuid.uuid4())
+                    _require_import_name(cur,tenant,account,company_id)
                     cur.execute(
                         """INSERT INTO saas_crm_native_companies
                           (id,tenant_id,name,phone,email,description,responsible_id,
@@ -717,7 +740,7 @@ def _selected_source_fence(profile, tenant, actor, source, credentials):
         raise operator.OperatorError("Доступ только к аккаунтам изменился. Повторите попытку.", 409)
 
 
-def _verify_selected_account(profile, tenant, actor, source, credentials, account):
+def _verify_selected_identity(profile, tenant, actor, source, credentials):
     operator._record_operator_read(profile, "me", {})
     _selected_source_fence(profile, tenant, actor, source, credentials)
     identity = operator.operator_me_payload(operator._request_operator(
@@ -729,6 +752,9 @@ def _verify_selected_account(profile, tenant, actor, source, credentials, accoun
             != credentials["identity_fingerprint"]):
         raise operator.OperatorError("Подтверждённая учётная запись Operator изменилась.", 409)
 
+
+def _verify_selected_account(profile, tenant, actor, source, credentials, account):
+    _verify_selected_identity(profile,tenant,actor,source,credentials)
     operator._record_operator_read(profile, "accounts", {"account": account})
     _selected_source_fence(profile, tenant, actor, source, credentials)
     response = operator._request_operator(
@@ -803,6 +829,7 @@ def add_selected_account_company(profile, account):
     with operator._connect() as conn:
         operator._ensure_schema(conn)
         with conn.cursor() as cur:
+            namespace_locked=lock_name_writes(cur,tenant,wait=True)
             operator._lock_accounts_capability_scope(cur, tenant)
             current = operator._current_profile(cur, tenant, actor)
             _owner(profile, current)
@@ -815,8 +842,9 @@ def add_selected_account_company(profile, account):
                 raise operator.OperatorError(
                     "Для безопасного добавления нужен полный доступ к CRM-компаниям.", 403)
             authorize_create(cur, create_profile, "companies", tenant, actor)
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
-                        (str(tenant) + ":operator-company-import",))
+            if not namespace_locked:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                            (str(tenant) + ":operator-company-import",))
 
             cur.execute("""SELECT external_account,company_id::text AS company_id,
                 last_seen_connection_instance_id::text AS last_instance,
@@ -860,6 +888,7 @@ def add_selected_account_company(profile, account):
                 reason = action.get("reason") or "existing_identity_conflict"
             elif outcome == "create":
                 company_id = str(uuid.uuid4())
+                _require_import_name(cur,tenant,account,company_id)
                 cur.execute("""INSERT INTO saas_crm_native_companies
                   (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
                   VALUES(%s::uuid,%s::uuid,%s,'','','',NULL,%s) RETURNING id""",

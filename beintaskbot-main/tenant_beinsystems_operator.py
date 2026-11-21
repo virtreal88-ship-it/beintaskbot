@@ -1682,6 +1682,8 @@ def confirm_account_link(profile, *, local_entity_type, local_entity_id,
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_operator_company_name_guard import lock_name_writes, require_unreserved_account_pair
+            guarded=entity_type=='company' and lock_name_writes(cur,tenant,wait=True)
             current = _current_profile(cur, tenant, actor)
             if not TenantPolicy(current).allows_action("operator_data", "link"):
                 raise OperatorError("Недостаточно прав для подтверждения связей Operator.")
@@ -1702,7 +1704,13 @@ def confirm_account_link(profile, *, local_entity_type, local_entity_id,
                     "saas_crm_native_companies", tenant, local_id)
                 if not local:
                     raise OperatorError("CRM-компания недоступна по вашим правам.")
-                require_local_relation(access_profile, tenant, "company")
+                require_local_relation(cur, tenant, "company")
+                if guarded:
+                    from tenant_crm_native_access import CRMAccessError
+                    try:
+                        require_unreserved_account_pair(cur,tenant,account,local_id)
+                    except CRMAccessError:
+                        raise OperatorError('Связь аккаунта с CRM-компанией уже зарезервирована.',409) from None
             else:
                 from tenant_support_access import require as require_ticket
                 require_ticket(cur, {"tenant_id": tenant, "telegram_id": actor},
@@ -1843,6 +1851,16 @@ def revoke_link(profile, link_id):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_beinsystems_operator_access import dialogue_chooser_enabled
+            if dialogue_chooser_enabled(tenant):
+                # Identify immutable association kind without taking a row lock.
+                # Only company/account revocation participates in this fence.
+                cur.execute("""SELECT 1 FROM saas_beinsystems_operator_links
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND local_entity_type='company'
+                    AND external_entity_type='account' AND external_scope_id='' AND revoked_at IS NULL""",(tenant,ident))
+                if cur.fetchone():
+                    from tenant_operator_company_name_guard import lock_name_writes
+                    lock_name_writes(cur,tenant,wait=True)
             current = _current_profile(cur, tenant, actor)
             if not TenantPolicy(current).allows_action("operator_data", "link"):
                 raise OperatorError("Недостаточно прав для отзыва связей Operator.")

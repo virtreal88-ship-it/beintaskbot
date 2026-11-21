@@ -4,6 +4,9 @@ on:
     paths:
       - 'beintaskbot-main/tenant_dialog_lifecycle.py'
       - 'beintaskbot-main/tenant_dialog_company_binding.py'
+      - 'beintaskbot-main/tenant_dialog_company_operator.py'
+      - 'beintaskbot-main/tenant_operator_company_name_guard.py'
+      - 'beintaskbot-main/tenant_crm_native_companies.py'
       - 'beintaskbot-main/tenant_dialog_company_completion.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_dialog_presence.py'

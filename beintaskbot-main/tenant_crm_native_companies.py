@@ -4,6 +4,7 @@ import uuid
 from tenant_platform_core import _connect, _ensure_schema
 from tenant_policy import TenantPolicy
 from tenant_scoped_access import scoped_access_enabled
+from tenant_operator_company_name_guard import lock_name_writes, require_unreserved_name
 from tenant_crm_native_access import current_access, scoped_sql, authorize_create, locked_resource, action_columns, public_row, CRMAccessError, related_scope_sql, require_defined_relation, require_local_relation
 
 
@@ -25,6 +26,7 @@ def create_company(tenant_id,name,phone='',email='',description='',responsible_i
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            guarded=lock_name_writes(cur,tenant_id)
             profile = current_access(cur, tenant_id, actor_id, 'companies', 'create')
             authorize_create(cur, profile, 'companies', tenant_id, actor_id)
             if values[4]:
@@ -53,6 +55,8 @@ def create_company(tenant_id,name,phone='',email='',description='',responsible_i
                             raise ValueError('company already exists')
                     conn.commit()
                     return public_row(existing)
+            if guarded:
+                require_unreserved_name(cur,tenant_id,values[0],ident)
             cur.execute("""INSERT INTO saas_crm_native_companies(id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
                 VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING RETURNING id,name,phone,email,description,responsible_id""",(ident,tenant_id,*values,actor_id))
             row=cur.fetchone()
@@ -73,6 +77,7 @@ def find_or_create_company(tenant_id,name,phone='',email='',description='',respo
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            guarded=lock_name_writes(cur,tenant_id)
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(str(tenant_id)+':ai-company:'+values[0].casefold(),))
             cur.execute("SELECT id,name,phone,email,description,responsible_id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid AND archived_at IS NULL AND lower(name)=lower(%s) ORDER BY created_at,id LIMIT 2 FOR UPDATE",(tenant_id,values[0]))
             rows=cur.fetchall()
@@ -82,7 +87,10 @@ def find_or_create_company(tenant_id,name,phone='',email='',description='',respo
                 if values[4]:
                     cur.execute("SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant_id,values[4]))
                     if not cur.fetchone():raise ValueError('responsible unavailable')
-                cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name,phone,email,description,responsible_id) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s) RETURNING id,name,phone,email,description,responsible_id",(str(uuid.uuid4()),tenant_id,*values))
+                ident=str(uuid.uuid4())
+                if guarded:
+                    require_unreserved_name(cur,tenant_id,values[0],ident)
+                cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name,phone,email,description,responsible_id) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s) RETURNING id,name,phone,email,description,responsible_id",(ident,tenant_id,*values))
                 row=cur.fetchone()
         conn.commit()
     return row
@@ -147,6 +155,7 @@ def update_company(tenant_id,company_id,name,phone='',email='',description='',re
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            guarded=lock_name_writes(cur,tenant_id)
             profile = current_access(cur, tenant_id, actor_id, 'companies', 'update')
             if actor_id is not None and not locked_resource(cur, profile, 'companies', 'update',
                     'saas_crm_native_companies', tenant_id, ident):
@@ -154,6 +163,8 @@ def update_company(tenant_id,company_id,name,phone='',email='',description='',re
             if values[4]:
                 cur.execute("SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant_id,values[4]))
                 if not cur.fetchone():raise ValueError('responsible unavailable')
+            if guarded:
+                require_unreserved_name(cur,tenant_id,values[0],ident)
             cur.execute("UPDATE saas_crm_native_companies SET name=%s,phone=%s,email=%s,description=%s,responsible_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id,name,phone,email,description,responsible_id",(*values,tenant_id,ident)); row=cur.fetchone()
         conn.commit()
     return row

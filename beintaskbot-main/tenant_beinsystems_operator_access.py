@@ -35,3 +35,8 @@ def is_operator_workspace(tenant_id: object) -> bool:
 def api_base_url() -> str:
     """Return the exact HTTPS API base confirmed by BeinSystems."""
     return OPERATOR_API_BASE_URL
+
+
+def dialogue_chooser_enabled(tenant_id: object) -> bool:
+    return (os.environ.get('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED','').lower()=='true'
+            and is_operator_workspace(tenant_id))
