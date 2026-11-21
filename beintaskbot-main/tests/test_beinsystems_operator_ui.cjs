@@ -9,6 +9,7 @@ const {window}=dom;
 let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
+let batchConfirmable=false;
 let loginMode='success';
 let probeMode='empty';
 let directorySource='pending',directoryReady=false,companyAddOutcome='create';
@@ -43,6 +44,13 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='preview_first_company_batch'){
+    result={success:true,company_batch_preview:{partial:true,checked:1,limit:100,...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
+      rows:[{account:'<img src=x>',action:'create'}]}};
+  }
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
+    result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
+  }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='create_companies'){
     companyImports.push(JSON.parse(options.body));
     result={success:true,company_import:{checked:4,created:2,reused:1,manual_review:1,
@@ -421,6 +429,36 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(authPanel.querySelector('[data-message]').textContent.includes('synthetic-collision'));
   assert.equal(authPanel.querySelector('[data-message] img'),null,'account names render as text, not markup');
   assert(!requests.some(row=>/^https?:/.test(row.path)),'all Operator reads and local company creation use the same-origin backend only');
+  assert.equal(authPanel.querySelector('[data-first-company-batch]').hidden,true);
+  mockIntegration={...mockIntegration,status:'not_connected',accounts_only_ready:true,
+    connected:false,configured:false,first_company_batch_preview_enabled:true};
+  await viewDemand.activate(profile);
+  const batchPanel=window.document.querySelector('#operatorIntegrationSettings');
+  const batchButton=batchPanel.querySelector('[data-first-company-batch]');
+  const batchPreview=batchPanel.querySelector('[data-first-batch-preview]');
+  const batchPosts=()=>requests.filter(row=>row.options.method==='POST').map(row=>JSON.parse(row.options.body))
+    .filter(body=>body.action==='confirm_first_company_batch');
+  assert.equal(batchButton.hidden,false);
+  await batchButton.onclick({currentTarget:batchButton});
+  assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
+  assert(batchPreview.textContent.includes('CRM-компании не создаются'));
+  batchConfirmable=true;
+  await batchButton.onclick({currentTarget:batchButton});
+  assert.equal(batchPosts().length,0,'preview must never confirm automatically');
+  assert(batchPreview.textContent.includes('не полный каталог'));
+  assert(batchPreview.textContent.includes('<img src=x>'));
+  assert.equal(batchPreview.querySelector('img'),null);
+  const cancelled=batchPreview.querySelector('[data-first-batch-confirm]');
+  batchPreview.querySelector('[data-first-batch-cancel]').click();
+  await cancelled.onclick({currentTarget:cancelled});
+  assert.equal(batchPosts().length,0,'cancelled receipt is not submitted');
+  await batchButton.onclick({currentTarget:batchButton});
+  const confirmBatch=batchPreview.querySelector('[data-first-batch-confirm]');
+  await confirmBatch.onclick({currentTarget:confirmBatch});
+  assert.deepEqual(batchPosts(),[{action:'confirm_first_company_batch',receipt:'opaque-receipt',
+    expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id}]);
+  assert(batchPanel.querySelector('[data-message]').textContent.includes('Первая выборка (не весь каталог)'));
+  assert.equal(batchPreview.textContent,'');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);

@@ -7,6 +7,7 @@ idempotency contract are confirmed.
 from __future__ import annotations
 
 import json
+import os
 import hashlib
 import re
 import requests
@@ -233,6 +234,15 @@ def _lock_accounts_capability_scope(cur, tenant):
                 (str(tenant) + ":operator-accounts-capability",))
 
 
+def first_company_batch_preview_enabled():
+    return os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_PREVIEW") == "1"
+
+
+def first_company_batch_confirm_enabled():
+    return (first_company_batch_preview_enabled()
+            and os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM") == "1")
+
+
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
             pending_auth_me_verified=False, pending_auth_accounts_access_verified=False,
             legacy_pending_auth_received=False, accounts_only_ready=False):
@@ -255,6 +265,7 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "pending_auth_accounts_access_verified": bool(pending_auth_accounts_access_verified),
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "accounts_only_ready": bool(accounts_only_ready),
+        "first_company_batch_preview_enabled": first_company_batch_preview_enabled(),
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
             if hasattr(pending_auth_received_at, "isoformat")
@@ -679,12 +690,14 @@ def _request_me_with_requests(url, token):
 
 
 def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
-                      requests_me=False):
+                      requests_me=False, first_batch_accounts=False):
     """Call one allowlisted documented read method; never follows redirects."""
     if endpoint not in READ_ENDPOINTS:
         raise OperatorError("Операция Operator пока не поддерживается.")
     if requests_me and (endpoint != "me" or opener is not None):
         raise OperatorError("Операция Operator пока не поддерживается.")
+    if first_batch_accounts and (endpoint != "accounts" or payload != {"search": "", "limit": 100}):
+        raise OperatorError("Параметры запроса первой выборки Operator некорректны.")
     path, fields = READ_ENDPOINTS[endpoint]
     if not isinstance(payload, dict) or set(payload) - fields:
         raise OperatorError("Параметры запроса Operator некорректны.")
@@ -702,7 +715,7 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         if has_limit and (type(limit) is not int or not 1 <= limit <= 100):
             raise OperatorError("Размер списка Operator должен быть от 1 до 100.")
         payload = {}
-        if search:
+        if search or first_batch_accounts:
             payload["search"] = search
         if has_limit:
             payload["limit"] = limit

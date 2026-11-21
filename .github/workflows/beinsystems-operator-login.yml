@@ -58,7 +58,7 @@ jobs:
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save jsdom@26.1.0
       - name: Run Operator Python and PostgreSQL regressions
-        run: python -m pytest -q tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_tenant_web_routes.py
+        run: python -m pytest -q tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_beinsystems_operator_first_batch.py tests/test_beinsystems_operator_first_batch_postgres.py tests/test_tenant_web_routes.py
       - name: Run Operator settings UI regression
         run: |
           node tests/test_beinsystems_operator_ui.cjs
