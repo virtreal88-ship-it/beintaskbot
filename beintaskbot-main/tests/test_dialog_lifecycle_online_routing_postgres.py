@@ -21,7 +21,8 @@ def test_four_state_routing_keeps_an_open_dialogue_until_the_next_inbound(episod
         VALUES(%s::uuid,34,'operator','Available operator','["dialogs"]'::jsonb)""", (A,))
     db.commit()
     with db.cursor() as cur:
-        assert presence.is_online(cur,A,34)  # No saved choice defaults to Online.
+        assert presence.is_online(cur,A,34,source_channel=CA)  # No saved choice defaults to Online.
+        assert not presence.is_online(cur,A,34,source_channel=str(uuid.uuid4()))
         assert not presence.is_online(cur,A,11)  # Owner is not an operator.
     db.commit()
     accepted = command(actor=33)['lifecycle']

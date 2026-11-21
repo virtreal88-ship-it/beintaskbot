@@ -216,7 +216,8 @@ def _allows(policy, action):
     return scope != "none" if scope is not None else policy.legacy_allows("dialogs")
 
 
-def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, operators_only=False):
+def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, operators_only=False,
+                       source_channel=None):
     required = absent is not None
     if not (work_status_enabled() if required else _status_requested(tenant)):
         return None
@@ -237,6 +238,15 @@ def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, o
     policy = TenantPolicy({**profile, "tenant_id": tenant})
     if not _allows(policy, "view") or (require_update and not _allows(policy, "update")):
         return None
+    if source_channel is not None:
+        from tenant_dialog_access import sql_filter
+        view = sql_filter(policy, "'connect'", "c.connect_channel_id::text", "view")
+        update = sql_filter(policy, "'connect'", "c.connect_channel_id::text", "update")
+        cur.execute(f"""SELECT 1 FROM saas_connect_channels c
+          WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.active
+          AND ({view}) AND ({update})""", (tenant, source_channel))
+        if not cur.fetchone():
+            return None
     cur.execute("""SELECT status FROM saas_dialog_employee_presence
       WHERE tenant_id=%s::uuid AND employee_id=%s""" + (" FOR SHARE" if lock else ""),
       (tenant, employee))
@@ -260,13 +270,14 @@ def is_effectively_online(cur, tenant, employee, *, lock=False):
                               require_update=False, absent=DEFAULT_STATUS) == DEFAULT_STATUS
 
 
-def is_online(cur, tenant, employee, *, lock=False, _routing=None):
+def is_online(cur, tenant, employee, *, lock=False, _routing=None, source_channel=None):
     """Admission predicate: legacy eligibility when routing is not enforced."""
     if not (routing_enabled(cur, tenant) if _routing is None else _routing):
         return True
     if work_status_routing_requested(tenant):
         return _authorized_status(cur, tenant, employee, lock=lock, require_update=True,
-                                  absent=DEFAULT_STATUS, operators_only=True) == DEFAULT_STATUS
+                                  absent=DEFAULT_STATUS, operators_only=True,
+                                  source_channel=source_channel) == DEFAULT_STATUS
     clause = " FOR SHARE" if lock else ""
     cur.execute("""SELECT 1 FROM saas_tenant_members
       WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE""" + clause,
