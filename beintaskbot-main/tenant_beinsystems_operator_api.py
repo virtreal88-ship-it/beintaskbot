@@ -160,6 +160,10 @@ def accounts_handler(member: Callable, origin: str, logger):
             if data == {"action": "preview_first_company_batch"}:
                 result = await asyncio.to_thread(company_import.first_company_batch, profile)
                 return _json_response({"company_batch_preview": result})
+            if data == {"action": "preview_first_company_batch_plan"}:
+                result = await asyncio.to_thread(
+                    company_import.first_company_batch, profile, plan=True)
+                return _json_response({"company_batch_preview": result})
             if (set(data) == {"action", "receipt"} and action == "confirm_first_company_batch"
                     and isinstance(data["receipt"], str) and data["receipt"]):
                 result = await asyncio.to_thread(
@@ -182,7 +186,8 @@ def accounts_handler(member: Callable, origin: str, logger):
                                      status=error.status,
                                      headers={"Cache-Control": "no-store"})
         except Exception:
-            if action in {"create_companies", "preview_first_company_batch", "confirm_first_company_batch"}:
+            if action in {"create_companies", "preview_first_company_batch",
+                          "preview_first_company_batch_plan", "confirm_first_company_batch"}:
                 logger.error("Operator company creation failed")
             else:
                 logger.exception("Operator account request failed")

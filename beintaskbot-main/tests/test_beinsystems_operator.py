@@ -294,6 +294,32 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         search.assert_called_once_with(profile, "synthetic-account")
 
+    def test_account_list_plan_and_confirm_are_distinct_exact_actions(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.accounts_handler(lambda _: profile, "https://crm.example", MagicMock())
+        actions = (
+            ({"action": "preview_first_company_batch"}, {}, "company_batch_preview"),
+            ({"action": "preview_first_company_batch_plan"}, {"plan": True}, "company_batch_preview"),
+            ({"action": "confirm_first_company_batch", "receipt": "opaque"}, {"receipt": "opaque"}, "company_import"),
+        )
+        for body, arguments, key in actions:
+            with self.subTest(action=body["action"]), patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+                 patch.object(operator_api, "_body", new=AsyncMock(return_value=body)), \
+                 patch.object(company_import, "first_company_batch", return_value={"checked": 1}) as call:
+                result = asyncio.run(handler(request))
+                self.assertEqual(result.status, 200)
+                self.assertEqual(json.loads(result.text)[key], {"checked": 1})
+                self.assertEqual(result.headers["Cache-Control"], "no-store")
+                call.assert_called_once_with(profile, **arguments)
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={
+                "action": "preview_first_company_batch_plan", "accounts": ["untrusted"]})), \
+             patch.object(company_import, "first_company_batch") as call:
+            result = asyncio.run(handler(request))
+            self.assertEqual(result.status, 400)
+            call.assert_not_called()
+
     def test_add_account_company_requires_explicit_single_account_action(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         request = MagicMock(method="POST")

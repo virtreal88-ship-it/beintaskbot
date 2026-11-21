@@ -46,6 +46,24 @@ class FirstBatchTests(unittest.TestCase):
         }):
             self.assertFalse(batch.operator.first_company_batch_confirm_enabled())
 
+    def test_two_flags_and_exact_guard_tenant_required_before_provider_access(self):
+        tenant = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+        other = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        env = {"BEINSYSTEMS_OPERATOR_TENANT_ID": tenant,
+               "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_PREVIEW": "1",
+               "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM": "1",
+               "BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED": "false"}
+        with patch.dict(batch.operator.os.environ, env), patch.object(batch, "_selected_source_credentials") as source:
+            with self.assertRaises(batch.operator.OperatorError) as no_guard:
+                batch.first_company_batch({"tenant_id": tenant}, plan=True)
+            self.assertEqual(no_guard.exception.status, 403)
+            with patch.dict(batch.operator.os.environ, {"BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED": "true"}):
+                self.assertTrue(batch.operator.first_company_batch_plan_enabled(tenant))
+                self.assertFalse(batch.operator.first_company_batch_plan_enabled(other))
+                with self.assertRaises(batch.operator.OperatorError):
+                    batch.first_company_batch({"tenant_id": other}, receipt="opaque")
+            source.assert_not_called()
+
     def test_only_verified_source_then_exact_documented_read(self):
         ident = "owner@example"
         cred = {"token": "mock", "base_url": "https://example.invalid", "received_at": "rev",
@@ -58,8 +76,8 @@ class FirstBatchTests(unittest.TestCase):
                 patch.object(batch.operator, "_record_operator_read"), \
                 patch.object(batch.operator, "_request_operator", side_effect=[valid, response("b", "a")]) as read, \
                 patch.object(batch, "_apply_company_import") as apply, \
-                patch.object(batch.operator, "first_company_batch_confirm_enabled", return_value=True):
-            batch.first_company_batch({})
+                patch.object(batch.operator, "first_company_batch_plan_enabled", return_value=True):
+            batch.first_company_batch({}, plan=True)
             self.assertEqual(read.call_args.args, ("accounts", {"search": "", "limit": 100}))
             self.assertEqual(fence.call_count, 4)
             self.assertEqual(apply.call_args.args[3], [{"account": "a"}, {"account": "b"}])
@@ -68,7 +86,7 @@ class FirstBatchTests(unittest.TestCase):
             self.assertNotEqual(batch._first_batch_scope("t", 1, cred),
                                 batch._first_batch_scope("t", 1, {**cred, "token": "rotated"}))
 
-    def test_confirm_off_uses_only_source_read_and_never_invokes_crm_planning(self):
+    def test_explicit_source_read_never_invokes_crm_planning_even_if_confirmation_on(self):
         profile = {"role": "owner"}
         ident = "owner@example"
         cred = {"token": "mock", "base_url": "https://example.invalid", "received_at": "rev",
@@ -80,8 +98,8 @@ class FirstBatchTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(batch.operator, "first_company_batch_preview_enabled",
                                              return_value=True))
-            stack.enter_context(patch.object(batch.operator, "first_company_batch_confirm_enabled",
-                                             return_value=False))
+            stack.enter_context(patch.object(batch.operator, "first_company_batch_plan_enabled",
+                                             return_value=True))
             stack.enter_context(patch.object(batch, "_selected_source_credentials",
                                              return_value=("t", 1, "accounts_only", cred)))
             stack.enter_context(patch.object(batch, "_selected_source_fence"))
@@ -113,9 +131,14 @@ class FirstBatchTests(unittest.TestCase):
             self.assertEqual(transport.call_args.args[1], {"search": "", "limit": 100})
             batch.operator._request_operator("accounts", {"search": "", "limit": 1}, token="mock")
             self.assertEqual(transport.call_args.args[1], {"limit": 1})
+            calls_before = transport.call_count
+            for unsupported in (5, 101, 1000):
+                with self.assertRaises(batch.operator.OperatorError):
+                    batch.operator._request_operator("accounts", {"search": "", "limit": unsupported},
+                        token="mock", first_batch_accounts=True)
+            self.assertEqual(transport.call_count, calls_before)
             with self.assertRaises(batch.operator.OperatorError):
-                batch.operator._request_operator("accounts", {"search": "", "limit": 5},
-                    token="mock", first_batch_accounts=True)
+                batch._first_batch_payload({**response("a"), "complete": True})
 
     def test_preview_validates_again_and_consumes_nonce_before_company_write(self):
         profile = {"role": "owner"}
@@ -133,11 +156,15 @@ class FirstBatchTests(unittest.TestCase):
             stack.enter_context(patch.object(batch.operator, "_current_profile", return_value=profile))
             stack.enter_context(patch.object(batch.operator, "_fernet", return_value=Fernet(Fernet.generate_key())))
             stack.enter_context(patch.object(batch, "_assert_first_batch_not_expired"))
-            gate = stack.enter_context(patch.object(batch.operator, "first_company_batch_confirm_enabled",
+            gate = stack.enter_context(patch.object(batch.operator, "first_company_batch_plan_enabled",
                                                     return_value=False))
+            stack.enter_context(patch.object(batch, "lock_name_writes", return_value=True))
+            stack.enter_context(patch.object(batch, "require_unreserved_name"))
             locked = stack.enter_context(patch.object(batch, "_lock_and_check_selected_source"))
-            stack.enter_context(patch.object(batch, "current_access", return_value={}))
-            stack.enter_context(patch.object(batch, "TenantPolicy")).return_value.has_scoped_access.return_value = False
+            stack.enter_context(patch.object(batch, "current_access", return_value=profile))
+            policy = stack.enter_context(patch.object(batch, "TenantPolicy")).return_value
+            policy.allows_action.return_value = True
+            policy.action_scope.return_value = "all"
             stack.enter_context(patch.object(batch, "authorize_create"))
             mapping = stack.enter_context(patch.object(batch, "_put_mapping", return_value=True))
             def run(names, receipt=None, scope="scope"):
@@ -146,9 +173,9 @@ class FirstBatchTests(unittest.TestCase):
             def mutations():
                 return [call.args[0] for call in cur.execute.call_args_list
                         if "INSERT INTO" in call.args[0]]
-            preview_only = run(["a"])
-            self.assertNotIn("receipt", preview_only)
-            self.assertEqual(preview_only["rows"], [{"account": "a", "action": "create"}])
+            with self.assertRaises(batch.operator.OperatorError):
+                run(["a"])
+            self.assertFalse(mutations())
             gate.return_value = True
             preview = run(["a"])
             self.assertEqual(preview["rows"], [{"account": "a", "action": "create"}])
@@ -165,7 +192,7 @@ class FirstBatchTests(unittest.TestCase):
             self.assertIn("ON CONFLICT(id) DO NOTHING", mutations()[0])
             self.assertIn("INSERT INTO saas_crm_native_companies", mutations()[1])
             mapping.assert_called_once()
-            self.assertEqual(locked.call_count, 5)
+            self.assertEqual(locked.call_count, 4)
             conn.commit.assert_called_once()
             cur.fetchone.return_value = None
             before = len(mutations())

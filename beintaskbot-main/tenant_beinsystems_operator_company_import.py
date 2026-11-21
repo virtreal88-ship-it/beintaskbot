@@ -28,7 +28,7 @@ MANUAL_REVIEW_ACCOUNT_LIMIT = 20
 ACCOUNTS_CAPABILITY_TTL_HOURS = 24
 FIRST_BATCH_LIMIT = 100
 FIRST_BATCH_PREVIEW_TTL = 300
-_FIRST_BATCH_PURPOSE = "operator_first_company_batch_v1"
+_FIRST_BATCH_PURPOSE = "operator_first_company_batch_v2"
 
 
 def _first_batch_payload(response):
@@ -79,20 +79,18 @@ def _decode_first_batch_receipt(receipt):
     return claims
 
 
-def _require_first_batch_confirm_enabled(enabled=None):
-    if enabled is None:
-        enabled = operator.first_company_batch_confirm_enabled()
-    if not enabled:
+def _require_first_batch_plan_enabled(tenant):
+    if not operator.first_company_batch_plan_enabled(tenant):
         raise operator.OperatorError("Создание компаний из первой выборки отключено.", 403)
 
 
-def first_company_batch(profile, *, receipt=None):
-    """Explicit owner-only first batch; separate one-run consent from single-account grant."""
+def first_company_batch(profile, *, receipt=None, plan=False):
+    """Keep the source list read-only; only a separate guarded plan can mint a receipt."""
     if not operator.first_company_batch_preview_enabled():
         raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
-    preview_may_mint = operator.first_company_batch_confirm_enabled()
-    if receipt is not None:
-        _require_first_batch_confirm_enabled(preview_may_mint)
+    planning = plan or receipt is not None
+    if planning:
+        _require_first_batch_plan_enabled((profile or {}).get("tenant_id"))
     claims = None if receipt is None else _decode_first_batch_receipt(receipt)
     tenant, actor, source, credentials = _selected_source_credentials(profile)
     if source != "accounts_only":
@@ -114,11 +112,10 @@ def first_company_batch(profile, *, receipt=None):
         token=credentials["token"], base_url=credentials["base_url"], first_batch_accounts=True)
     accounts = _first_batch_payload(response)
     _selected_source_fence(profile, tenant, actor, source, credentials)
-    if receipt is None and not preview_may_mint:
+    if not planning:
         return _preview_operator_accounts_only(profile, tenant, actor, accounts, credentials)
     return _apply_company_import(profile, tenant, actor, accounts, credentials,
-        first_batch=True, preview_receipt=receipt, preview_scope=scope,
-        preview_may_mint=preview_may_mint)
+        first_batch=True, preview_receipt=receipt, preview_scope=scope)
 
 
 
@@ -489,8 +486,7 @@ def _preview_operator_accounts_only(profile, tenant, actor, accounts, credential
 
 
 def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
-                          first_batch=False, preview_receipt=None, preview_scope=None,
-                          preview_may_mint=True):
+                          first_batch=False, preview_receipt=None, preview_scope=None):
     try:
         instance_id = str(uuid.UUID(credentials["connection_instance_id"]))
     except (TypeError, ValueError, KeyError):
@@ -502,6 +498,9 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
         with conn.cursor() as cur:
             namespace_locked=lock_name_writes(cur,tenant,wait=True)
             if first_batch:
+                _require_first_batch_plan_enabled(tenant)
+                if not namespace_locked:
+                    raise operator.OperatorError("Защита имён компаний Operator отключена.", 403)
                 operator._lock_accounts_capability_scope(cur, tenant)
             current = operator._current_profile(cur, tenant, actor)
             _owner(profile, current)
@@ -531,14 +530,31 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                         "Подключение Operator изменилось во время импорта. Повторите попытку.", 409
                     )
 
-            create_profile = current_access(cur, tenant, actor, "companies", "create")
-            view_profile = current_access(cur, tenant, actor, "companies", "view")
-            if (TenantPolicy(create_profile).has_scoped_access("companies")
-                    or TenantPolicy(view_profile).has_scoped_access("companies")):
-                raise operator.OperatorError(
-                    "Для безопасного импорта нужен полный доступ к CRM-компаниям.", 403
-                )
-            authorize_create(cur, create_profile, "companies", tenant, actor)
+            if first_batch:
+                try:
+                    create_profile = current_access(cur, tenant, actor, "companies", "create")
+                    view_profile = current_access(cur, tenant, actor, "companies", "view")
+                    for p, action in ((create_profile, "create"), (view_profile, "view")):
+                        policy = TenantPolicy(p)
+                        # For an active owner, allowed legacy (None) is tenant-wide;
+                        # configured scopes already normalize to their effective value.
+                        if (p.get("role") != "owner" or not policy.allows_action("companies", action)
+                                or policy.action_scope("companies", action) not in {None, "all"}):
+                            raise CRMAccessError()
+                    authorize_create(cur, create_profile, "companies", tenant, actor)
+                except CRMAccessError:
+                    raise operator.OperatorError(
+                        "Для безопасного импорта нужен полный доступ к CRM-компаниям.", 403
+                    ) from None
+            else:
+                create_profile = current_access(cur, tenant, actor, "companies", "create")
+                view_profile = current_access(cur, tenant, actor, "companies", "view")
+                if (TenantPolicy(create_profile).has_scoped_access("companies")
+                        or TenantPolicy(view_profile).has_scoped_access("companies")):
+                    raise operator.OperatorError(
+                        "Для безопасного импорта нужен полный доступ к CRM-компаниям.", 403
+                    )
+                authorize_create(cur, create_profile, "companies", tenant, actor)
 
             # Serialize retries for this tenant. The stable account key and unique
             # mapping constraint make repeated imports idempotent.
@@ -583,16 +599,23 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                         confirmed_links.setdefault(str(row["external_id"]), []).append(
                             str(row["company_id"])
                         )
-                cur.execute(
-                    """SELECT lower(name) AS name_key
-                      FROM saas_crm_native_companies
-                      WHERE tenant_id=%s::uuid AND lower(name)=ANY(%s::text[])
-                      FOR UPDATE""",
-                    (tenant, [account.lower() for account in account_ids]),
-                )
-                existing_name_keys = {
-                    str(row["name_key"]) for row in cur.fetchall()
-                }
+                if first_batch:
+                    cur.execute("""SELECT a.account FROM unnest(%s::text[]) AS a(account)
+                        JOIN saas_crm_native_companies c
+                          ON c.tenant_id=%s::uuid AND lower(c.name)=lower(a.account)
+                        FOR UPDATE OF c""", (account_ids, tenant))
+                    existing_name_keys = {row["account"].lower() for row in cur.fetchall()}
+                else:
+                    cur.execute(
+                        """SELECT lower(name) AS name_key
+                          FROM saas_crm_native_companies
+                          WHERE tenant_id=%s::uuid AND lower(name)=ANY(%s::text[])
+                          FOR UPDATE""",
+                        (tenant, [account.lower() for account in account_ids]),
+                    )
+                    existing_name_keys = {
+                        str(row["name_key"]) for row in cur.fetchall()
+                    }
                 candidates = set(mappings.values())
                 candidates.update(
                     company_id
@@ -622,20 +645,31 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                           "reason": "prior_identity_conflict"}
                     for action in plan
                 ]
+                # A same-company case alias or conflicting reverse identity is
+                # manual too; matching company IDs cannot override exact pair evidence.
+                for index, action in enumerate(plan):
+                    account = action["account"]
+                    try:
+                        if action["action"] == "reuse":
+                            require_unreserved_account_pair(cur, tenant, account, action["company_id"])
+                        elif action["action"] == "create":
+                            require_unreserved_name(cur, tenant, account, str(uuid.uuid4()))
+                    except CRMAccessError:
+                        plan[index] = {"account": account, "action": "manual_review",
+                                       "reason": "prior_identity_conflict"}
                 _assert_first_batch_not_expired(cur, tenant, actor, credentials)
+                _require_first_batch_plan_enabled(tenant)
                 digest = _first_batch_digest(plan)
                 if preview_receipt is None:
                     preview = {"checked": len(accounts), "partial": True, "limit": FIRST_BATCH_LIMIT,
+                               "mode": "company_plan",
                                "rows": [{"account": a["account"], "action": a["action"]} for a in plan]}
-                    # Preview-only mode never mints a receipt that could become
-                    # usable when confirmation is eventually turned on.
-                    if preview_may_mint and operator.first_company_batch_confirm_enabled():
+                    if any(action["action"] == "create" for action in plan):
                         payload = {"purpose": _FIRST_BATCH_PURPOSE, "nonce": str(uuid.uuid4()),
                                    "scope": preview_scope, "digest": digest}
                         receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
                         preview["receipt"] = receipt.decode("ascii")
                     return preview
-                _require_first_batch_confirm_enabled()
                 claims = _decode_first_batch_receipt(preview_receipt)
                 if claims["scope"] != preview_scope or claims["digest"] != digest:
                     raise operator.OperatorError("Выборка или план изменились. Откройте новый предпросмотр.", 409)
