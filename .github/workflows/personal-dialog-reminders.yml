@@ -1,0 +1,79 @@
+name: Personal dialogue reminders
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/personal-dialog-reminders.yml'
+      - 'beintaskbot-main/tenant_personal_dialog_reminders*.py'
+      - 'beintaskbot-main/tenant_policy.py'
+      - 'beintaskbot-main/tenant_operator_access.py'
+      - 'beintaskbot-main/tenant_dialog_access.py'
+      - 'beintaskbot-main/tenant_dialog_lifecycle.py'
+      - 'beintaskbot-main/tenant_scoped_access*.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tenant_web_assets.py'
+      - 'beintaskbot-main/docs/tenant-app.html'
+      - 'beintaskbot-main/docs/tenant-personal-dialog-reminders.js'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/docs/tenant-dialog-composer.js'
+      - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
+      - 'beintaskbot-main/tests/test_personal_dialog_reminders*'
+      - 'beintaskbot-main/tests/test_tenant_web_routes.py'
+      - 'beintaskbot-main/tests/test_tenant_policy.py'
+      - 'beintaskbot-main/tests/test_dialog_composer.cjs'
+      - 'beintaskbot-main/tests/test_dialog_reply_templates_ui.cjs'
+      - 'beintaskbot-main/tests/test_connect_channel_multiprocess.py'
+      - 'beintaskbot-main/tests/test_tenant_support_inbox.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/**'
+      - 'beintaskbot-main/requirements.txt'
+permissions:
+  contents: read
+jobs:
+  personal-reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.
+      NODE_PATH: .support-test-deps/node_modules
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install test dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+          npm install --prefix .support-test-deps --no-save jsdom@26.1.0
+      - name: Native PostgreSQL, API identity guards and route catalogue
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_personal_dialog_reminders_postgres.py
+          tests/test_personal_dialog_reminders_api.py
+          tests/test_tenant_web_routes.py
+          tests/test_tenant_policy.py
+      - name: Reminders and neighboring composer UI regressions
+        run: |
+          node --check docs/tenant-personal-dialog-reminders.js
+          node tests/test_personal_dialog_reminders_ui.cjs
+          node tests/test_dialog_composer.cjs
+          node tests/test_dialog_reply_templates_ui.cjs
