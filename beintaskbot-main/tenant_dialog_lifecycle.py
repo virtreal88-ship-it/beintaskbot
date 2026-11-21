@@ -198,7 +198,9 @@ def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, mess
     if not work_status_routing_requested(tenant) or not _work_ready(cur):
         return False
     row = _row(cur,tenant,channel,conversation)
-    if not row or row['state'] != 'accepted' or is_online(cur,tenant,row['operator_id']):
+    if not row or row['state'] != 'accepted':
+        return False
+    if is_online(cur,tenant,row['operator_id'],source_channel=channel):
         return False
     cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
         id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
